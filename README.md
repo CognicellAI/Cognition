@@ -1,70 +1,129 @@
 # Cognition
 
-An OpenCode-style coding agent with **persistent multi-session support**, FastAPI WebSocket + Textual TUI.
+> OpenCode-style AI coding assistant. Local. Fast. Extensible.
+
+An open-source, self-hosted coding assistant inspired by Claude Code and OpenCode, built with **LangGraph**, **FastAPI**, and **Textual TUI**.
 
 ## Features
 
-- 🔄 **Persistent Projects** - Work survives disconnects and server restarts
-- 🧠 **Hybrid Memory** - Fast RAM + persistent disk storage for agent context
-- 🐳 **Container-per-Session** - Fresh, isolated execution environment
-- 🔌 **WebSocket API** - Real-time bidirectional communication
-- 🖥️ **Textual TUI** - Rich terminal interface
-- 🔧 **Multi-LLM Support** - OpenAI, Anthropic, AWS Bedrock, local models
+- 🧠 **LangGraph-Powered** - Advanced context management with state machines
+- 🔌 **Multi-LLM Support** - OpenAI, AWS Bedrock, OpenAI-compatible APIs
+- 💬 **Persistent Sessions** - Resume conversations across restarts
+- 🎨 **Beautiful TUI** - Terminal UI built with Textual
+- ⚡ **In-Process Agent** - No Docker overhead, immediate responses
+- 🔒 **Privacy-First** - Code never leaves your machine
+- 📊 **OTEL Ready** - Built-in observability for production deployments
 
 ## Quick Start
 
+See [GETTING_STARTED.md](./GETTING_STARTED.md) for detailed setup instructions.
+
+### 60-Second Setup
+
 ```bash
 # Install dependencies
-uv pip install -e ".[all]"
+uv pip install -r server/requirements.txt
+uv pip install -r client/requirements.txt
 
-# Copy environment config
-cp .env.example .env
-# Edit .env with your API keys
+# Configure LLM (OpenAI example)
+export OPENAI_API_KEY="sk-your-key"
+export LLM_PROVIDER="openai"
 
-# Build Docker agent image
-make build-agent-image
-
-# Start server
+# Start server (Terminal 1)
 cd server && uv run uvicorn app.main:app --reload --port 8000
 
-# In another terminal, start client
+# Start client (Terminal 2)
 cd client && uv run python -m tui.app
-
-# Create a persistent project
-> /create my-project
 ```
 
 ## Architecture
 
-- **Server**: FastAPI WebSocket API with LangGraph Deep Agents runtime
-- **Client**: Textual TUI for interactive sessions
-- **Execution**: Container-per-session with optional network isolation
-- **Persistence**: Projects with hybrid memory (RAM + disk) survive disconnects
-- **Scope**: Python repos only, pytest-based testing
+```
+TUI Client ←→ WebSocket ←→ FastAPI Server ←→ In-Process Agent ←→ LLM
+  (Textual)                 (Port 8000)        (LangGraph)      (OpenAI/Bedrock)
+```
 
-### Persistent Multi-Session Support
+**Key Design Decisions:**
+- ✅ In-process agents (no Docker complexity)
+- ✅ LangGraph for context management
+- ✅ Simple REST + WebSocket API
+- ✅ File-based projects, SQLite-ready for sessions
+- ✅ Support for client-server separation (PaaS-ready)
 
-Cognition now supports persistent projects:
-- Projects survive disconnects and server restarts
-- Agent memories accumulate across sessions
-- Automatic memory snapshots every 5 minutes
-- Configurable auto-cleanup (default: 30 days)
-- Fresh container on each reconnect (1-2s startup)
+## Project Structure
+
+```
+cognition/
+├── server/app/              # FastAPI + agent runtime
+│   ├── agent/               # InProcessAgent (LangGraph)
+│   ├── sessions/            # Session lifecycle
+│   ├── projects/            # Project metadata
+│   └── main.py              # API endpoints
+├── client/tui/              # Textual TUI
+│   ├── screens/             # Main screens
+│   ├── widgets/             # UI components
+│   ├── api.py               # REST client
+│   └── websocket.py         # WebSocket handler
+├── tests/                   # 156+ unit tests
+└── docs/                    # Architecture & guides
+```
 
 ## Development
 
 ```bash
-# Run tests
-uv run pytest -q
+# Run all tests
+uv run pytest tests/ --ignore=tests/e2e -v
 
 # Type checking
 uv run mypy server/ client/ --strict
 
-# Linting
-uv run ruff check server/ client/
+# Format & lint
 uv run ruff format server/ client/
+uv run ruff check server/ client/
 ```
+
+## Configuration
+
+See `.env.example` for all options:
+
+```bash
+# LLM Provider
+LLM_PROVIDER=openai              # or "bedrock", "openai_compatible"
+OPENAI_API_KEY=sk-...
+DEFAULT_MODEL=gpt-4-turbo-preview
+
+# Server
+PORT=8000
+LOG_LEVEL=info
+```
+
+## Status
+
+- ✅ Phase 1: In-process agent architecture (COMPLETE)
+- ✅ Phase 2: TUI client integration (COMPLETE)  
+- 🚀 Phase 3: Documentation & polish (IN PROGRESS)
+
+## Roadmap
+
+- [ ] OTEL observability integration
+- [ ] Code analysis tools (file read, search, etc)
+- [ ] Web UI (React)
+- [ ] Tool system (bash, file editing)
+- [ ] Agent templates
+- [ ] Multi-provider billing
+
+## Contributing
+
+Contributions welcome! Please read [CONTRIBUTING.md](./CONTRIBUTING.md) first.
 
 ## License
 
 MIT
+
+---
+
+**Quick Links:**
+- 📖 [Getting Started Guide](./GETTING_STARTED.md)
+- 🏗️ [Architecture Deep Dive](./docs/ARCHITECTURE.md)
+- 🧪 [Testing Guide](./docs/TESTING.md)
+- 🐛 [Troubleshooting](./GETTING_STARTED.md#troubleshooting)
