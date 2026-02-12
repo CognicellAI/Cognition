@@ -16,6 +16,7 @@ class Settings(BaseSettings):
         env_file=".env",
         env_file_encoding="utf-8",
         case_sensitive=False,
+        extra="ignore",  # Allow extra fields from old .env files
     )
 
     # Server settings
@@ -30,7 +31,7 @@ class Settings(BaseSettings):
     )
 
     # LLM settings
-    llm_provider: Literal["openai", "bedrock", "mock"] = Field(
+    llm_provider: Literal["openai", "bedrock", "mock", "openai_compatible"] = Field(
         default="mock",
         alias="COGNITION_LLM_PROVIDER",
     )
@@ -39,6 +40,14 @@ class Settings(BaseSettings):
     # OpenAI settings
     openai_api_key: Optional[str] = Field(default=None, alias="OPENAI_API_KEY")
     openai_api_base: Optional[str] = Field(default=None, alias="OPENAI_API_BASE")
+
+    # OpenAI Compatible settings
+    openai_compatible_base_url: Optional[str] = Field(
+        default=None, alias="COGNITION_OPENAI_COMPATIBLE_BASE_URL"
+    )
+    openai_compatible_api_key: str = Field(
+        default="sk-no-key-required", alias="COGNITION_OPENAI_COMPATIBLE_API_KEY"
+    )
 
     # Bedrock settings
     aws_region: str = Field(default="us-east-1", alias="AWS_REGION")
@@ -77,6 +86,14 @@ class Settings(BaseSettings):
                 model=self.llm_model,
                 api_key=self.openai_api_key,
                 base_url=self.openai_api_base,
+            )
+        elif self.llm_provider == "openai_compatible":
+            from langchain_openai import ChatOpenAI
+
+            return ChatOpenAI(
+                model=self.llm_model,
+                api_key=self.openai_compatible_api_key,
+                base_url=self.openai_compatible_base_url,
             )
         elif self.llm_provider == "bedrock":
             from langchain_aws import ChatBedrock

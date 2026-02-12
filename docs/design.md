@@ -105,11 +105,19 @@ Maps `session_id` → `thread_id` for LangGraph checkpointing. State persists au
 ### 6. Settings
 
 Environment-based config for:
-- LLM provider (`openai` or `bedrock`)
+- LLM provider (`openai`, `bedrock`, or `openai_compatible`)
 - API keys
 - Default model
 - Sandbox type
 - OTEL endpoint
+
+Example `.env` for OpenAI Compatible (e.g. Ollama):
+```bash
+COGNITION_LLM_PROVIDER=openai_compatible
+COGNITION_OPENAI_COMPATIBLE_BASE_URL=http://localhost:11434/v1
+COGNITION_OPENAI_COMPATIBLE_API_KEY=sk-no-key-required
+COGNITION_LLM_MODEL=llama3
+```
 
 ## Sandbox Backend Strategy
 
