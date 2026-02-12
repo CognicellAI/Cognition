@@ -146,9 +146,8 @@ async def health_check() -> JSONResponse:
 async def websocket_endpoint(websocket: WebSocket) -> None:
     """WebSocket endpoint for client communication.
 
-    Connects clients to agent containers. Messages are forwarded to the
-    agent runtime running inside the container, and events are streamed
-    back in real-time.
+    Connects clients to in-process agents. Messages are forwarded to the
+    agent runtime and responses are streamed back in real-time.
     """
     await websocket.accept()
     session_id: str | None = None

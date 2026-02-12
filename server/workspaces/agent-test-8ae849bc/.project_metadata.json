@@ -14,7 +14,7 @@
     {
       "session_id": "137e2f67-968e-4ee9-ac78-7fa7244bf626",
       "started_at": "2026-02-12T03:06:57.740273",
-      "ended_at": null,
+      "ended_at": "2026-02-12T03:08:14.865640",
       "messages": 0,
       "tasks_completed": []
     }
@@ -24,7 +24,7 @@
     "total_messages": 0,
     "files_modified": 0,
     "tests_run": 0,
-    "total_duration_seconds": 0
+    "total_duration_seconds": 77
   },
   "tags": [],
   "description": "",
