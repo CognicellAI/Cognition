@@ -21,6 +21,16 @@ from tenacity import (
 )
 
 from server.app.agent import create_cognition_agent
+from server.app.exceptions import (
+    CognitionError,
+    ErrorCode,
+    LLMUnavailableError,
+    ProjectError,
+    RateLimitError,
+    SessionError,
+    SessionNotFoundError,
+    ValidationError,
+)
 from server.app.middleware import ObservabilityMiddleware, SecurityHeadersMiddleware
 from server.app.observability import (
     LLM_CALL_DURATION,
@@ -34,8 +44,15 @@ from server.app.observability import (
     span,
     timed,
 )
+from server.app.rate_limiter import RateLimitConfig, get_rate_limiter
 from server.app.sessions import SessionManager, get_session_manager
 from server.app.settings import Settings, get_settings
+from server.app.validation import (
+    validate_message_content,
+    validate_project_name,
+    validate_project_path,
+    validate_session_id,
+)
 from shared import (
     CreateProject,
     CreateSession,
@@ -119,6 +136,15 @@ async def lifespan(app: FastAPI):
     session_manager = get_session_manager()
     await session_manager.start()
 
+    # Start rate limiter
+    rate_limiter = get_rate_limiter(
+        RateLimitConfig(
+            requests_per_minute=getattr(settings, "rate_limit_per_minute", 60),
+            burst_size=getattr(settings, "rate_limit_burst", 10),
+        )
+    )
+    await rate_limiter.start()
+
     logger.info(
         "Cognition server started",
         host=settings.host,
@@ -130,6 +156,7 @@ async def lifespan(app: FastAPI):
     # Shutdown
     logger.info("Shutting down Cognition server")
     await session_manager.stop()
+    await rate_limiter.stop()
     logger.info("Cognition server stopped")
 
 
@@ -177,6 +204,7 @@ async def websocket_endpoint(websocket: WebSocket):
     await websocket.accept()
     session_manager = get_session_manager()
     settings = get_settings()
+    rate_limiter = get_rate_limiter()
 
     client_id = str(uuid.uuid4())[:8]
     logger.info("Client connected", client_id=client_id)
@@ -186,6 +214,13 @@ async def websocket_endpoint(websocket: WebSocket):
             while True:
                 # Receive message from client
                 data = await websocket.receive_text()
+
+                # Check rate limit per client
+                try:
+                    await rate_limiter.check_rate_limit(f"client:{client_id}")
+                except RateLimitError as e:
+                    await send_error_from_exception(websocket, e)
+                    continue
 
                 with span("handle_message"):
                     try:
@@ -201,27 +236,43 @@ async def websocket_endpoint(websocket: WebSocket):
                             client_id=client_id,
                             error=str(e),
                         )
-                        await send_error(websocket, f"Invalid message: {e}", "INVALID_MESSAGE")
+                        await send_error(
+                            websocket,
+                            f"Invalid message: {e}",
+                            "INVALID_MESSAGE",
+                        )
                         continue
 
                     # Handle message based on type
-                    if isinstance(message, CreateProject):
-                        await handle_create_project(websocket, message, settings)
-                    elif isinstance(message, CreateSession):
-                        await handle_create_session(websocket, message, session_manager, settings)
-                    elif isinstance(message, UserMessage):
-                        await handle_user_message(websocket, message, session_manager)
-                    else:
+                    try:
+                        if isinstance(message, CreateProject):
+                            await handle_create_project(websocket, message, settings)
+                        elif isinstance(message, CreateSession):
+                            await handle_create_session(
+                                websocket, message, session_manager, settings
+                            )
+                        elif isinstance(message, UserMessage):
+                            await handle_user_message(websocket, message, session_manager)
+                        else:
+                            logger.warning(
+                                "Unknown message type",
+                                client_id=client_id,
+                                msg_type=message.msg_type,
+                            )
+                            await send_error(
+                                websocket,
+                                f"Unknown message type: {message.msg_type}",
+                                "UNKNOWN_TYPE",
+                            )
+                    except CognitionError as e:
+                        # Handle our custom exceptions with structured responses
                         logger.warning(
-                            "Unknown message type",
+                            "Request failed",
                             client_id=client_id,
-                            msg_type=message.msg_type,
+                            error_code=e.code,
+                            error_message=e.message,
                         )
-                        await send_error(
-                            websocket,
-                            f"Unknown message type: {message.msg_type}",
-                            "UNKNOWN_TYPE",
-                        )
+                        await send_error_from_exception(websocket, e)
 
     except WebSocketDisconnect:
         logger.info("Client disconnected", client_id=client_id)
@@ -233,7 +284,21 @@ async def websocket_endpoint(websocket: WebSocket):
 async def send_error(websocket: WebSocket, message: str, code: str) -> None:
     """Send error message to client."""
     try:
-        await websocket.send_text(message_to_json(Error(message=message, code=code)))
+        error_msg = Error(message=message, code=code)
+        await websocket.send_text(message_to_json(error_msg))
+    except Exception as e:
+        logger.error("Failed to send error to client", error=str(e))
+
+
+async def send_error_from_exception(websocket: WebSocket, error: CognitionError) -> None:
+    """Send structured error response from CognitionError."""
+    try:
+        error_data = error.to_dict()
+        error_msg = Error(
+            message=error_data["message"],
+            code=error_data["code"],
+        )
+        await websocket.send_text(message_to_json(error_msg))
     except Exception as e:
         logger.error("Failed to send error to client", error=str(e))
 
@@ -249,13 +314,24 @@ async def handle_create_project(
 
     with span("create_project", {"project_id": project_id}):
         try:
-            # Determine project path
+            # Validate project path if provided
             if message.project_path:
-                project_path = Path(message.project_path)
+                validated_path = validate_project_path(message.project_path)
+                project_path = settings.workspace_root / validated_path
             elif message.user_prefix:
-                project_path = settings.workspace_root / f"{message.user_prefix}-{project_id[:8]}"
+                # Validate user prefix (treat as project name)
+                validated_prefix = validate_project_name(message.user_prefix)
+                project_path = settings.workspace_root / f"{validated_prefix}-{project_id[:8]}"
             else:
                 project_path = settings.workspace_root / project_id
+
+            # Ensure project path is within workspace root
+            resolved_path = project_path.resolve()
+            resolved_workspace = settings.workspace_root.resolve()
+            try:
+                resolved_path.relative_to(resolved_workspace)
+            except ValueError:
+                raise ValidationError("project_path", "Project path must be within workspace root")
 
             # Create project directory
             project_path.mkdir(parents=True, exist_ok=True)
@@ -275,9 +351,15 @@ async def handle_create_project(
                 project_path=str(project_path),
             )
 
+        except CognitionError:
+            raise
         except Exception as e:
             logger.exception("Failed to create project", project_id=project_id, error=str(e))
-            await send_error(websocket, f"Failed to create project: {e}", "PROJECT_CREATE_FAILED")
+            raise ProjectError(
+                f"Failed to create project: {e}",
+                code=ErrorCode.PROJECT_PATH_INVALID,
+                details={"project_id": project_id},
+            ) from e
 
 
 async def handle_create_session(
@@ -289,21 +371,26 @@ async def handle_create_session(
     """Handle session creation request."""
     with span("create_session"):
         try:
+            # Validate project_id
+            if not message.project_id:
+                raise ValidationError("project_id", "Project ID is required")
+
             # Get model with circuit breaker
             if not llm_circuit_breaker.can_execute():
-                await send_error(
-                    websocket,
-                    "LLM service temporarily unavailable. Please try again later.",
-                    "LLM_UNAVAILABLE",
+                raise LLMUnavailableError(
+                    provider=settings.llm_provider,
+                    reason="Circuit breaker is open",
                 )
-                return
 
             try:
                 model = await get_llm_model_with_retry(settings)
                 llm_circuit_breaker.record_success()
             except Exception as e:
                 llm_circuit_breaker.record_failure()
-                raise
+                raise LLMUnavailableError(
+                    provider=settings.llm_provider,
+                    reason=str(e),
+                ) from e
 
             # Create agent
             workspace_path = settings.workspace_root / message.project_id
@@ -337,9 +424,14 @@ async def handle_create_session(
                 project_id=message.project_id,
             )
 
+        except CognitionError:
+            raise
         except Exception as e:
             logger.exception("Failed to create session", error=str(e))
-            await send_error(websocket, f"Failed to create session: {e}", "SESSION_CREATE_FAILED")
+            raise SessionError(
+                f"Failed to create session: {e}",
+                code=ErrorCode.INTERNAL_ERROR,
+            ) from e
 
 
 @retry(
@@ -359,18 +451,22 @@ async def handle_user_message(
     session_manager: SessionManager,
 ) -> None:
     """Handle user message and stream agent response."""
-    session = session_manager.get_session(message.session_id)
+    # Validate session ID
+    validated_session_id = validate_session_id(message.session_id)
+
+    # Validate message content
+    validated_content = validate_message_content(message.content)
+
+    session = session_manager.get_session(validated_session_id)
 
     if not session:
-        logger.warning("Session not found", session_id=message.session_id)
-        await send_error(websocket, "Session not found", "SESSION_NOT_FOUND")
-        return
+        raise SessionNotFoundError(validated_session_id)
 
-    with span("handle_user_message", {"session_id": message.session_id}):
+    with span("handle_user_message", {"session_id": validated_session_id}):
         try:
             # Run agent and stream events
             async for event in session.agent.astream_events(
-                {"messages": [{"role": "user", "content": message.content}]},
+                {"messages": [{"role": "user", "content": validated_content}]},
                 config={"configurable": {"thread_id": session.thread_id}},
             ):
                 await stream_event(websocket, event, session.session_id)
@@ -378,13 +474,19 @@ async def handle_user_message(
             # Send done event
             await websocket.send_text(message_to_json(Done()))
 
+        except CognitionError:
+            raise
         except Exception as e:
             logger.exception(
                 "Agent error",
-                session_id=message.session_id,
+                session_id=validated_session_id,
                 error=str(e),
             )
-            await send_error(websocket, str(e), "AGENT_ERROR")
+            raise SessionError(
+                f"Agent error: {e}",
+                code=ErrorCode.INTERNAL_ERROR,
+                details={"session_id": validated_session_id},
+            ) from e
 
 
 async def stream_event(

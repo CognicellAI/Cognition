@@ -18,15 +18,20 @@ class MessageType(str, Enum):
     CREATE_SESSION = "create_session"
     RESUME_SESSION = "resume_session"
     USER_MESSAGE = "user_message"
+    CONFIGURE_SESSION = "configure_session"
+    INIT_AGENTS_MD = "init_agents_md"
     DISCONNECT = "disconnect"
 
     # Server → Client
     PROJECT_CREATED = "project_created"
     SESSION_STARTED = "session_started"
     SESSION_RESUMED = "session_resumed"
+    SESSION_CONFIGURED = "session_configured"
+    AGENTS_MD_CREATED = "agents_md_created"
     TOKEN = "token"
     TOOL_CALL = "tool_call"
     TOOL_RESULT = "tool_result"
+    USAGE_UPDATE = "usage_update"
     DONE = "done"
     ERROR = "error"
 
@@ -82,6 +87,28 @@ class Disconnect(BaseMessage):
     session_id: str
 
 
+class ConfigureSession(BaseMessage):
+    """Configure model settings for a session (provider, temperature, etc.)."""
+
+    msg_type: Literal[MessageType.CONFIGURE_SESSION] = Field(
+        MessageType.CONFIGURE_SESSION, alias="type"
+    )
+    session_id: str
+    provider: Optional[str] = None
+    model: Optional[str] = None
+    temperature: Optional[float] = None
+    max_tokens: Optional[int] = None
+    system_prompt: Optional[str] = None
+
+
+class InitAgentsMd(BaseMessage):
+    """Initialize an AGENTS.md file in the project workspace."""
+
+    msg_type: Literal[MessageType.INIT_AGENTS_MD] = Field(MessageType.INIT_AGENTS_MD, alias="type")
+    project_id: str
+    force: bool = False
+
+
 # Server → Client Messages
 
 
@@ -116,6 +143,27 @@ class SessionResumed(BaseMessage):
     thread_id: str
 
 
+class SessionConfigured(BaseMessage):
+    """Session model configuration updated."""
+
+    msg_type: Literal[MessageType.SESSION_CONFIGURED] = Field(
+        MessageType.SESSION_CONFIGURED, alias="type"
+    )
+    session_id: str
+    provider: Optional[str] = None
+    model: Optional[str] = None
+
+
+class AgentsMdCreated(BaseMessage):
+    """AGENTS.md file created in project workspace."""
+
+    msg_type: Literal[MessageType.AGENTS_MD_CREATED] = Field(
+        MessageType.AGENTS_MD_CREATED, alias="type"
+    )
+    project_id: str
+    path: str
+
+
 class Token(BaseMessage):
     """LLM token (streaming)."""
 
@@ -147,6 +195,19 @@ class Done(BaseMessage):
     msg_type: Literal[MessageType.DONE] = Field(MessageType.DONE, alias="type")
 
 
+class UsageUpdate(BaseMessage):
+    """Token usage update for a session turn."""
+
+    msg_type: Literal[MessageType.USAGE_UPDATE] = Field(MessageType.USAGE_UPDATE, alias="type")
+    session_id: str
+    input_tokens: int = 0
+    output_tokens: int = 0
+    cached_tokens: int = 0
+    estimated_cost: float = 0.0
+    provider: Optional[str] = None
+    model: Optional[str] = None
+
+
 class Error(BaseMessage):
     """Error occurred."""
 
@@ -161,13 +222,18 @@ Message = (
     | CreateSession
     | ResumeSession
     | UserMessage
+    | ConfigureSession
+    | InitAgentsMd
     | Disconnect
     | ProjectCreated
     | SessionStarted
     | SessionResumed
+    | SessionConfigured
+    | AgentsMdCreated
     | Token
     | ToolCall
     | ToolResult
+    | UsageUpdate
     | Done
     | Error
 )
@@ -199,13 +265,18 @@ def parse_message(data: str | dict) -> Message:
         MessageType.CREATE_SESSION: CreateSession,
         MessageType.RESUME_SESSION: ResumeSession,
         MessageType.USER_MESSAGE: UserMessage,
+        MessageType.CONFIGURE_SESSION: ConfigureSession,
+        MessageType.INIT_AGENTS_MD: InitAgentsMd,
         MessageType.DISCONNECT: Disconnect,
         MessageType.PROJECT_CREATED: ProjectCreated,
         MessageType.SESSION_STARTED: SessionStarted,
         MessageType.SESSION_RESUMED: SessionResumed,
+        MessageType.SESSION_CONFIGURED: SessionConfigured,
+        MessageType.AGENTS_MD_CREATED: AgentsMdCreated,
         MessageType.TOKEN: Token,
         MessageType.TOOL_CALL: ToolCall,
         MessageType.TOOL_RESULT: ToolResult,
+        MessageType.USAGE_UPDATE: UsageUpdate,
         MessageType.DONE: Done,
         MessageType.ERROR: Error,
     }
