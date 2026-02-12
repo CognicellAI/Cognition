@@ -11,36 +11,86 @@ from contextlib import contextmanager
 from typing import Any, Callable, TypeVar
 
 import structlog
-from opentelemetry import trace
-from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
-from opentelemetry.sdk.resources import Resource
-from opentelemetry.sdk.trace import TracerProvider
-from opentelemetry.sdk.trace.export import BatchSpanProcessor
 from prometheus_client import Counter, Histogram, start_http_server
+
+# Optional imports with fallbacks
+try:
+    from prometheus_client import Counter, Histogram, start_http_server
+
+    PROMETHEUS_AVAILABLE = True
+except ImportError:
+    PROMETHEUS_AVAILABLE = False
+    Counter = None
+    Histogram = None
+    start_http_server = None
+
+try:
+    from opentelemetry import trace
+    from opentelemetry.sdk.resources import Resource
+    from opentelemetry.sdk.trace import TracerProvider
+    from opentelemetry.sdk.trace.export import BatchSpanProcessor
+
+    # Try different OTLP exporters
+    try:
+        from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
+    except ImportError:
+        try:
+            from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
+        except ImportError:
+            OTLPSpanExporter = None
+
+    OPENTELEMETRY_AVAILABLE = True
+except ImportError:
+    OPENTELEMETRY_AVAILABLE = False
+    trace = None
+    OTLPSpanExporter = None
+    Resource = None
+    TracerProvider = None
+    BatchSpanProcessor = None
 
 # Type variable for generic function decorator
 F = TypeVar("F", bound=Callable[..., Any])
 
-# Metrics
-REQUEST_COUNT = Counter(
-    "cognition_requests_total", "Total requests", ["method", "endpoint", "status"]
-)
+# Metrics (with fallback if prometheus not available)
+if PROMETHEUS_AVAILABLE:
+    REQUEST_COUNT = Counter(
+        "cognition_requests_total", "Total requests", ["method", "endpoint", "status"]
+    )
 
-REQUEST_DURATION = Histogram(
-    "cognition_request_duration_seconds", "Request duration in seconds", ["method", "endpoint"]
-)
+    REQUEST_DURATION = Histogram(
+        "cognition_request_duration_seconds", "Request duration in seconds", ["method", "endpoint"]
+    )
 
-LLM_CALL_DURATION = Histogram(
-    "cognition_llm_call_duration_seconds", "LLM API call duration", ["provider", "model"]
-)
+    LLM_CALL_DURATION = Histogram(
+        "cognition_llm_call_duration_seconds", "LLM API call duration", ["provider", "model"]
+    )
 
-TOOL_CALL_COUNT = Counter("cognition_tool_calls_total", "Total tool calls", ["tool_name", "status"])
+    TOOL_CALL_COUNT = Counter(
+        "cognition_tool_calls_total", "Total tool calls", ["tool_name", "status"]
+    )
 
-SESSION_COUNT = Counter(
-    "cognition_sessions_total",
-    "Session lifecycle events",
-    ["event_type"],  # created, resumed, closed, expired
-)
+    SESSION_COUNT = Counter(
+        "cognition_sessions_total",
+        "Session lifecycle events",
+        ["event_type"],  # created, resumed, closed, expired
+    )
+else:
+    # Dummy metrics that do nothing
+    class DummyMetric:
+        def labels(self, **kwargs):
+            return self
+
+        def inc(self, *args, **kwargs):
+            pass
+
+        def observe(self, *args, **kwargs):
+            pass
+
+    REQUEST_COUNT = DummyMetric()
+    REQUEST_DURATION = DummyMetric()
+    LLM_CALL_DURATION = DummyMetric()
+    TOOL_CALL_COUNT = DummyMetric()
+    SESSION_COUNT = DummyMetric()
 
 
 def setup_tracing(service_name: str = "cognition", endpoint: str | None = None) -> None:
@@ -50,15 +100,21 @@ def setup_tracing(service_name: str = "cognition", endpoint: str | None = None) 
         service_name: Name of the service for trace identification
         endpoint: OTLP endpoint URL (e.g., "http://localhost:4317")
     """
+    if not OPENTELEMETRY_AVAILABLE or Resource is None or TracerProvider is None:
+        logger = structlog.get_logger()
+        logger.debug("OpenTelemetry not available, skipping tracing setup")
+        return
+
     resource = Resource.create({"service.name": service_name})
     provider = TracerProvider(resource=resource)
 
-    if endpoint:
-        exporter = OTLPSpanExporter(endpoint=endpoint, insecure=True)
+    if endpoint and OTLPSpanExporter and BatchSpanProcessor:
+        exporter = OTLPSpanExporter(endpoint=endpoint)
         processor = BatchSpanProcessor(exporter)
         provider.add_span_processor(processor)
 
-    trace.set_tracer_provider(provider)
+    if trace:
+        trace.set_tracer_provider(provider)
 
 
 def setup_logging(log_level: str = "info", json_format: bool = False) -> None:
@@ -93,6 +149,10 @@ def setup_metrics(port: int = 9090) -> None:
     Args:
         port: Port to expose metrics on
     """
+    if not PROMETHEUS_AVAILABLE or start_http_server is None:
+        logger = structlog.get_logger()
+        logger.debug("Prometheus not available, skipping metrics server")
+        return
     start_http_server(port)
 
 
@@ -108,15 +168,17 @@ def get_logger(name: str | None = None) -> structlog.stdlib.BoundLogger:
     return structlog.get_logger(name)
 
 
-def get_tracer(name: str) -> trace.Tracer:
+def get_tracer(name: str) -> Any:
     """Get an OpenTelemetry tracer.
 
     Args:
         name: Tracer name
 
     Returns:
-        Tracer instance
+        Tracer instance or None if OpenTelemetry not available
     """
+    if not OPENTELEMETRY_AVAILABLE or trace is None:
+        return None
     return trace.get_tracer(name)
 
 
@@ -133,7 +195,14 @@ def traced(name: str | None = None) -> Callable[[F], F]:
     """
 
     def decorator(func: F) -> F:
+        # If OpenTelemetry not available, just return the function unchanged
+        if not OPENTELEMETRY_AVAILABLE:
+            return func
+
         tracer = get_tracer(func.__module__)
+        if tracer is None:
+            return func
+
         span_name = name or func.__name__
 
         @functools.wraps(func)
@@ -200,12 +269,17 @@ def span(name: str, attributes: dict[str, Any] | None = None):
         with span("database_query", {"query": "SELECT * FROM users"}):
             results = db.execute(query)
     """
+    # If OpenTelemetry not available, yield None
+    if not OPENTELEMETRY_AVAILABLE or trace is None:
+        yield None
+        return
+
     tracer = trace.get_tracer(__name__)
-    with tracer.start_as_current_span(name) as span:
+    with tracer.start_as_current_span(name) as span_obj:
         if attributes:
             for key, value in attributes.items():
-                span.set_attribute(key, value)
-        yield span
+                span_obj.set_attribute(key, value)
+        yield span_obj
 
 
 # Import asyncio here to avoid circular import issues
