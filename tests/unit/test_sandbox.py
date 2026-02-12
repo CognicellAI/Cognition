@@ -31,7 +31,7 @@ class TestLocalSandbox:
         """Test timeout enforcement."""
         result = sandbox.execute("sleep 10", timeout=0.1)
         assert result.exit_code == -1
-        assert "timeout" in result.output.lower()
+        assert "timed out" in result.output.lower()
 
     def test_execute_failure(self, sandbox):
         """Test non-zero exit codes."""

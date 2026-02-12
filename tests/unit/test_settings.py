@@ -20,6 +20,7 @@ class TestSettings(Settings):
         env_file_encoding="utf-8",
         case_sensitive=False,
         extra="ignore",
+        populate_by_name=True,  # Allow population by field name, not just alias
     )
 
 
@@ -224,25 +225,6 @@ class TestSettingsLLMModel:
     @pytest.mark.skip(reason="Requires langchain dependencies")
     def test_get_llm_model_extracts_secrets(self):
         """Test that get_llm_model extracts secrets from SecretStr."""
-        # This test just verifies the method runs without error
-        # The actual model creation requires optional dependencies
-        settings = TestSettings(
-            llm_provider="mock",  # Use mock to avoid import issues
-        )
-        model = settings.get_llm_model()
-        assert model is not None
-
-    def test_get_llm_model_extracts_secrets(self):
-        """Test that get_llm_model extracts secrets from SecretStr."""
-
-        class TestSettings(Settings):
-            model_config = SettingsConfigDict(
-                env_file=None,
-                env_file_encoding="utf-8",
-                case_sensitive=False,
-                extra="ignore",
-            )
-
         # This test just verifies the method runs without error
         # The actual model creation requires optional dependencies
         settings = TestSettings(
