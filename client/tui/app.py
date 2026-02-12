@@ -1,54 +1,20 @@
-"""Textual TUI client for Cognition."""
+"""Textual TUI client for Cognition with REST + SSE.
+
+Updated for Phase 5: Uses REST API and Server-Sent Events instead of WebSocket.
+"""
 
 from __future__ import annotations
 
 import asyncio
-import json
 import os
 from typing import Any
 
-import websockets
 from textual.app import App, ComposeResult
-from textual.containers import Container, Horizontal, Vertical
+from textual.containers import Container, Horizontal
 from textual.reactive import reactive
-from textual.widgets import (
-    Button,
-    Input,
-    Label,
-    RichLog,
-    Static,
-)
+from textual.widgets import Button, Input, Label, RichLog
 
-from client.tui.api import ApiClient
-from shared import (
-    CreateProject,
-    CreateSession,
-    Done,
-    Error,
-    ProjectCreated,
-    SessionStarted,
-    Token,
-    ToolCall,
-    ToolResult,
-    UserMessage,
-    message_to_json,
-    parse_message,
-)
-
-
-class MessageDisplay(Static):
-    """Display for a single message."""
-
-    def __init__(self, role: str, content: str, **kwargs):
-        super().__init__(**kwargs)
-        self.role = role
-        self.content = content
-
-    def compose(self) -> ComposeResult:
-        if self.role == "user":
-            yield Label(f"You: {self.content}", classes="user-message")
-        else:
-            yield Label(f"Agent: {self.content}", classes="agent-message")
+from client.tui.api import ApiClient, EventHandler
 
 
 class CognitionApp(App):
@@ -113,12 +79,10 @@ class CognitionApp(App):
     project_id: reactive[str | None] = reactive(None)
     connected: reactive[bool] = reactive(False)
 
-    def __init__(self, server_url: str = "ws://127.0.0.1:8000"):
+    def __init__(self, server_url: str = "http://127.0.0.1:8000"):
         super().__init__()
         self.server_url = server_url
-        self.ws_url = server_url.replace("http", "ws") + "/ws"
-        self.api = ApiClient(server_url.replace("ws", "http").rstrip("/ws"))
-        self.websocket: websockets.WebSocketClientProtocol | None = None
+        self.api = ApiClient(server_url)
         self.current_response: str = ""
         self.messages: list[dict] = []
 
@@ -142,88 +106,91 @@ class CognitionApp(App):
 
     async def on_unmount(self) -> None:
         """Called when app is unmounted."""
-        if self.websocket:
-            await self.websocket.close()
         await self.api.close()
 
     async def connect(self) -> None:
-        """Connect to the server and create session."""
+        """Connect to the server and create project + session."""
         try:
-            # Connect WebSocket
-            self.websocket = await websockets.connect(self.ws_url)
+            # Check server health
+            health = await self.api.health()
             self.connected = True
             self.update_status()
 
             # Create project
-            await self.websocket.send(message_to_json(CreateProject(user_prefix="tui-session")))
+            self.log_message("Creating project...")
+            project = await self.api.create_project(
+                name="tui-session",
+                description="TUI session project",
+            )
+            self.project_id = project["id"]
+            self.log_message(f"✓ Created project: {project['name']}")
 
-            response = await self.websocket.recv()
-            msg = parse_message(response)
+            # Create session
+            self.log_message("Creating session...")
+            session = await self.api.create_session(
+                project_id=self.project_id,
+                title="TUI Session",
+            )
+            self.session_id = session["id"]
+            self.log_message(f"✓ Started session: {session['id'][:8]}...")
+            self.update_status()
 
-            if isinstance(msg, ProjectCreated):
-                self.project_id = msg.project_id
-                self.log_message(f"Created project: {msg.project_id}")
-
-                # Create session
-                await self.websocket.send(message_to_json(CreateSession(project_id=msg.project_id)))
-
-                response = await self.websocket.recv()
-                msg = parse_message(response)
-
-                if isinstance(msg, SessionStarted):
-                    self.session_id = msg.session_id
-                    self.log_message(f"Started session: {msg.session_id}")
-                    self.update_status()
-
-                    # Start listening for messages
-                    asyncio.create_task(self.listen())
-                elif isinstance(msg, Error):
-                    self.log_message(f"Error: {msg.message}", error=True)
-            elif isinstance(msg, Error):
-                self.log_message(f"Error: {msg.message}", error=True)
+            self.log_message("Ready! Type a message to start.")
+            self.enable_input()
 
         except Exception as e:
-            self.log_message(f"Connection failed: {e}", error=True)
+            self.log_message(f"❌ Connection failed: {e}", error=True)
             self.connected = False
             self.update_status()
 
-    async def listen(self) -> None:
-        """Listen for incoming WebSocket messages."""
-        try:
-            while self.websocket:
-                message = await self.websocket.recv()
-                msg = parse_message(message)
-                await self.handle_message(msg)
-        except websockets.exceptions.ConnectionClosed:
-            self.log_message("Connection closed")
-            self.connected = False
-            self.update_status()
-        except Exception as e:
-            self.log_message(f"Listen error: {e}", error=True)
+    async def handle_sse_event(self, event: dict) -> None:
+        """Handle a single SSE event."""
+        event_type = event.get("event")
+        data = event.get("data", {})
 
-    async def handle_message(self, msg: Any) -> None:
-        """Handle incoming message from server."""
-        if isinstance(msg, Token):
+        if event_type == "token":
             # Accumulate tokens
-            self.current_response += msg.content
-        elif isinstance(msg, ToolCall):
+            self.current_response += data.get("content", "")
+            # Update display in real-time
+            messages = self.query_one("#messages", RichLog)
+            # Clear previous partial message and rewrite
+            # (In a real implementation, we'd update inline)
+
+        elif event_type == "tool_call":
             # Show tool call
             if self.current_response:
                 self.log_message(self.current_response)
                 self.current_response = ""
-            self.log_message(f"🛠️  {msg.name}({msg.args})", tool=True)
-        elif isinstance(msg, ToolResult):
+            name = data.get("name", "unknown")
+            args = data.get("args", {})
+            self.log_message(f"🛠️  {name}({args})", tool=True)
+
+        elif event_type == "tool_result":
             # Show tool result
-            output = msg.output[:200] + "..." if len(msg.output) > 200 else msg.output
+            output = data.get("output", "")
+            if len(output) > 200:
+                output = output[:200] + "..."
             self.log_message(f"📤 Result: {output}", tool_result=True)
-        elif isinstance(msg, Done):
+
+        elif event_type == "usage":
+            # Show usage info
+            cost = data.get("estimated_cost", 0)
+            input_tokens = data.get("input_tokens", 0)
+            output_tokens = data.get("output_tokens", 0)
+            self.log_message(
+                f"💰 Usage: ${cost:.4f} ({input_tokens} in, {output_tokens} out)",
+            )
+
+        elif event_type == "done":
             # Response complete
             if self.current_response:
                 self.log_message(self.current_response)
                 self.current_response = ""
             self.enable_input()
-        elif isinstance(msg, Error):
-            self.log_message(f"❌ Error: {msg.message}", error=True)
+
+        elif event_type == "error":
+            message = data.get("message", "Unknown error")
+            self.log_message(f"❌ Error: {message}", error=True)
             self.enable_input()
 
     def log_message(
@@ -279,8 +246,8 @@ class CognitionApp(App):
 
     async def send_message(self) -> None:
         """Send a message to the agent."""
-        if not self.websocket or not self.session_id:
-            self.log_message("Not connected", error=True)
+        if not self.session_id:
+            self.log_message("❌ Not connected", error=True)
             return
 
         input_widget = self.query_one("#message-input", Input)
@@ -295,25 +262,25 @@ class CognitionApp(App):
 
         # Show user message
         self.log_message(f"You: {message}")
+        self.current_response = ""
 
-        # Send to server
+        # Send to server and stream response
         try:
-            await self.websocket.send(
-                message_to_json(
-                    UserMessage(
-                        session_id=self.session_id,
-                        content=message,
-                    )
-                )
-            )
+            async for event in self.api.send_message(
+                session_id=self.session_id,
+                content=message,
+            ):
+                await self.handle_sse_event(event)
         except Exception as e:
-            self.log_message(f"Failed to send: {e}", error=True)
+            self.log_message(f"❌ Failed to send: {e}", error=True)
             self.enable_input()
 
 
 def main():
     """Entry point for the TUI client."""
-    server_url = os.getenv("COGNITION_SERVER_URL", "ws://127.0.0.1:8000")
+    server_url = os.getenv("COGNITION_SERVER_URL", "http://127.0.0.1:8000")
+    # Ensure URL uses http/https, not ws
+    server_url = server_url.replace("ws://", "http://").replace("wss://", "https://")
     app = CognitionApp(server_url=server_url)
     app.run()
 
