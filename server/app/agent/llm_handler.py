@@ -22,14 +22,16 @@ class LLMHandler:
         self.provider = settings.llm_provider
 
         # Initialize provider clients
-        if self.provider == "openai_compatible":
-            # For OpenAI-compatible APIs (including local models)
+        if self.provider in ("openai", "openai_compatible"):
+            # For OpenAI and OpenAI-compatible APIs
             try:
                 from openai import AsyncOpenAI
 
                 self.client = AsyncOpenAI(
                     api_key=settings.openai_api_key,
-                    base_url=settings.openai_api_base,
+                    base_url=settings.openai_api_base
+                    if self.provider == "openai_compatible"
+                    else None,
                 )
             except ImportError:
                 logger.warning("openai package not installed, LLM calls will fail")
@@ -63,7 +65,7 @@ class LLMHandler:
         Returns:
             Generated response text
         """
-        if self.provider == "openai_compatible":
+        if self.provider in ("openai", "openai_compatible"):
             return await self._call_openai(messages, **kwargs)
         elif self.provider == "bedrock":
             return await self._call_bedrock(messages, **kwargs)
@@ -84,7 +86,7 @@ class LLMHandler:
         Yields:
             Response chunks
         """
-        if self.provider == "openai_compatible":
+        if self.provider in ("openai", "openai_compatible"):
             async for chunk in self._stream_openai(messages, **kwargs):
                 yield chunk
         elif self.provider == "bedrock":

@@ -231,52 +231,58 @@ class TestSessionWorkspaceWithBackends:
     @pytest.mark.integration
     def test_session_workspace_paths_with_config(self, tmp_path: Path, monkeypatch: Any) -> None:
         """Test that session workspace paths work with backend configuration."""
+        from unittest.mock import patch, MagicMock
+
         monkeypatch.setenv("WORKSPACE_ROOT", str(tmp_path))
 
         settings = Settings(_env_file=None)
 
-        manager = SessionManager(settings)
+        # Mock the LLMHandler to avoid needing API keys
+        with patch("server.app.agent.runtime.LLMHandler") as mock_llm_handler:
+            mock_llm_handler.return_value = MagicMock()
+            manager = SessionManager(settings)
 
-        # Create a project with a session
-        session = manager.create_or_resume_session(user_prefix="test-project", network_mode="OFF")
+            # Create a project with a session
+            session = manager.create_or_resume_session(
+                user_prefix="test-project", network_mode="OFF"
+            )
 
-        # Verify workspace was created
-        assert session.workspace_path.startswith(str(tmp_path))
-        assert Path(session.workspace_path).exists()
+            # Verify workspace was created
+            assert session.workspace_path.startswith(str(tmp_path))
+            assert Path(session.workspace_path).exists()
 
-        # Verify repo path
-        repo_path = manager.workspace_manager.get_repo_path(session.project_id)
-        assert repo_path.exists()
-
-        # Cleanup - disconnect session and delete project
-        manager.disconnect_session(session.session_id)
-        manager.get_project_manager().delete_project(session.project_id, force=True)
+            # Verify repo path
+            repo_path = manager.workspace_manager.get_repo_path(session.project_id)
+            assert repo_path.exists()
 
     @pytest.mark.integration
     def test_absolute_path_resolution_for_backends(self, tmp_path: Path, monkeypatch: Any) -> None:
         """Test that workspace paths are resolved to absolute for backends."""
+        from unittest.mock import patch, MagicMock
+
         monkeypatch.setenv("WORKSPACE_ROOT", str(tmp_path))
 
         settings = Settings(_env_file=None)
 
-        manager = SessionManager(settings)
-        session = manager.create_or_resume_session(user_prefix="test-project", network_mode="OFF")
+        # Mock the LLMHandler to avoid needing API keys
+        with patch("server.app.agent.runtime.LLMHandler") as mock_llm_handler:
+            mock_llm_handler.return_value = MagicMock()
+            manager = SessionManager(settings)
+            session = manager.create_or_resume_session(
+                user_prefix="test-project", network_mode="OFF"
+            )
 
-        # Get repo path
-        repo_path = manager.workspace_manager.get_repo_path(session.project_id)
+            # Get repo path
+            repo_path = manager.workspace_manager.get_repo_path(session.project_id)
 
-        # Resolve to absolute
-        absolute_path = repo_path.resolve()
+            # Resolve to absolute
+            absolute_path = repo_path.resolve()
 
-        # Should be absolute
-        assert absolute_path.is_absolute()
+            # Should be absolute
+            assert absolute_path.is_absolute()
 
-        # Should exist
-        assert absolute_path.exists()
-
-        # Cleanup - disconnect session and delete project
-        manager.disconnect_session(session.session_id)
-        manager.get_project_manager().delete_project(session.project_id, force=True)
+            # Should exist
+            assert absolute_path.exists()
 
 
 class TestBackendRoutesComplexScenarios:

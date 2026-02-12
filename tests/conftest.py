@@ -197,6 +197,17 @@ def mock_container_executor():
     return executor
 
 
+@pytest.fixture
+def mock_agent_manager():
+    """Mock AgentManager for in-process agents."""
+    manager = MagicMock()
+    manager.create_agent = MagicMock()
+    manager.get_agent = MagicMock()
+    manager.delete_agent = MagicMock()
+    manager.process_message = AsyncMock(return_value="Mock agent response")
+    return manager
+
+
 # ============================================================================
 # E2E TEST FIXTURES
 # ============================================================================
