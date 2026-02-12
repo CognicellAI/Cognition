@@ -1,0 +1,6 @@
+# Project configuration
+llm:
+  system_prompt: |
+    You are helping with a Python project. 
+    Follow PEP 8 style guidelines and include type hints.
+    Write tests for new functions.

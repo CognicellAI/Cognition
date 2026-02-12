@@ -1,0 +1,7 @@
+# Python dependencies for the example project
+
+# No external dependencies required for this simple example
+# The project uses only Python standard library
+
+# For testing:
+# pytest>=8.0.0
