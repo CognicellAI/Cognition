@@ -104,7 +104,6 @@ async def agent_event_stream(
 
 @router.post(
     "",
-    response_class=SSEStream.create_response,
     status_code=status.HTTP_200_OK,
     responses={
         404: {"model": ErrorResponse, "description": "Session not found"},
