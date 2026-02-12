@@ -39,6 +39,11 @@ dependencies = [
     "pydantic-settings>=2.6.0",
     "structlog>=24.4.0",
     "python-dotenv>=1.0.0",
+    "pyyaml>=6.0.0",
+    
+    # CLI
+    "typer>=0.12.0",
+    "rich>=13.0.0",
     
     # Observability
     "opentelemetry-api>=1.28.0",
@@ -76,7 +81,8 @@ all = [
 ]
 
 [project.scripts]
-cognition-server = "server.app.main:main"
+cognition = "server.app.cli:main"
+cognition-server = "server.app.cli:main"
 cognition-client = "client.tui.app:main"
 
 [build-system]
