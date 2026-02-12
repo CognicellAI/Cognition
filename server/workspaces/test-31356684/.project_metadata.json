@@ -1,0 +1,40 @@
+{
+  "project_id": "test-31356684",
+  "user_prefix": "test",
+  "created_at": "2026-02-12T01:10:54.200700",
+  "last_accessed": "2026-02-12T01:22:35.255325",
+  "config": {
+    "network_mode": "OFF",
+    "repo_url": null,
+    "agent_model": "claude-haiku-4.5",
+    "container_image": "opencode-agent:py",
+    "agent_backend_routes": null
+  },
+  "sessions": [
+    {
+      "session_id": "1877af1c-bd05-4af0-8409-4ba921b81e13",
+      "started_at": "2026-02-12T01:10:54.443067",
+      "ended_at": "2026-02-12T01:16:35.994757",
+      "messages": 0,
+      "tasks_completed": []
+    },
+    {
+      "session_id": "59272e16-d21d-4e7f-83ca-4a3c4733babf",
+      "started_at": "2026-02-12T01:22:35.531094",
+      "ended_at": "2026-02-12T01:34:30.175537",
+      "messages": 0,
+      "tasks_completed": []
+    }
+  ],
+  "statistics": {
+    "total_sessions": 2,
+    "total_messages": 0,
+    "files_modified": 0,
+    "tests_run": 0,
+    "total_duration_seconds": 1055
+  },
+  "tags": [],
+  "description": "",
+  "pinned": false,
+  "cleanup_after_days": 30
+}

@@ -1,0 +1,229 @@
+/* Cognition TUI Styles */
+
+/* Base screen */
+Screen {
+    background: $surface-darken-1;
+}
+
+/* Status Bar */
+StatusBar {
+    dock: top;
+    height: 1;
+    background: $primary-darken-2;
+    color: $text;
+    text-style: bold;
+    padding: 0 1;
+}
+
+/* Connection indicator in status bar */
+.connection-indicator {
+    color: $success;
+}
+
+.connection-indicator.disconnected {
+    color: $error;
+}
+
+.connection-indicator.reconnecting {
+    color: $warning;
+}
+
+/* Chat container */
+#chat-container {
+    height: 1fr;
+    overflow-y: scroll;
+    padding: 0 1;
+}
+
+/* Chat messages */
+ChatMessage {
+    width: 100%;
+    height: auto;
+    margin: 1 0;
+}
+
+.chat-message-user {
+    background: $primary-darken-3;
+    border-left: solid $primary;
+    padding: 1;
+}
+
+.chat-message-assistant {
+    background: $surface;
+    border-left: solid $success;
+    padding: 1;
+}
+
+.chat-message-error {
+    background: $error-darken-3;
+    border-left: solid $error;
+    padding: 1;
+}
+
+.chat-message-role {
+    color: $text-disabled;
+    text-style: bold;
+    margin-bottom: 1;
+}
+
+/* Markdown content */
+Markdown {
+    background: transparent;
+    margin: 0;
+    padding: 0;
+}
+
+/* Tool blocks */
+ToolBlock {
+    width: 100%;
+    height: auto;
+    margin: 1 0;
+}
+
+.tool-block-collapsed {
+    background: $surface;
+    border: solid $primary-darken-2;
+    padding: 0 1;
+}
+
+.tool-block-expanded {
+    background: $surface-darken-1;
+    border: solid $primary;
+    padding: 0;
+}
+
+.tool-block-header {
+    height: 1;
+    color: $text;
+    text-style: bold;
+}
+
+.tool-block-header.running {
+    color: $warning;
+}
+
+.tool-block-header.success {
+    color: $success;
+}
+
+.tool-block-header.error {
+    color: $error;
+}
+
+.tool-block-content {
+    height: auto;
+    max-height: 20;
+    padding: 1;
+}
+
+.tool-block-output {
+    background: $surface-darken-2;
+    color: $text;
+    padding: 0 1;
+}
+
+.tool-block-output.error {
+    color: $error;
+}
+
+.tool-block-diff {
+    background: $surface-darken-2;
+    padding: 1;
+}
+
+/* Prompt input */
+PromptInput {
+    dock: bottom;
+    height: 3;
+    background: $surface;
+    border-top: solid $primary;
+    padding: 0 1;
+}
+
+PromptInput:focus {
+    border-top: solid $success;
+}
+
+PromptInput.disabled {
+    background: $surface-darken-2;
+    color: $text-disabled;
+}
+
+/* Project picker */
+ProjectPickerScreen {
+    align: center middle;
+}
+
+#project-picker-container {
+    width: 80;
+    height: 40;
+    border: solid $primary;
+    background: $surface;
+}
+
+#project-table {
+    width: 100%;
+    height: 1fr;
+}
+
+#project-picker-header {
+    height: 3;
+    background: $primary-darken-2;
+    content-align: center middle;
+    text-style: bold;
+}
+
+#project-picker-footer {
+    height: 1;
+    padding: 0 1;
+}
+
+/* New project dialog */
+#new-project-dialog {
+    width: 60;
+    height: auto;
+    border: solid $primary;
+    background: $surface;
+    padding: 1;
+    layer: dialog;
+}
+
+#new-project-dialog.hidden {
+    display: none;
+}
+
+#new-project-name {
+    margin-bottom: 1;
+}
+
+/* Loading indicator */
+LoadingIndicator {
+    color: $primary;
+}
+
+/* Footer help text */
+Footer {
+    background: $surface-darken-2;
+    color: $text;
+}
+
+/* Notifications */
+Notification {
+    background: $primary;
+    color: $text;
+    padding: 1;
+}
+
+Notification.error {
+    background: $error;
+}
+
+Notification.warning {
+    background: $warning;
+    color: $text;
+}
+
+Notification.success {
+    background: $success;
+    color: $text;
+}

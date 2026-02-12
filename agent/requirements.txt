@@ -1,0 +1,23 @@
+# Agent Runtime Dependencies
+# These are installed in the agent container
+
+# WebSocket server
+websockets>=12.0
+
+# Deep Agents and LangGraph
+deepagents>=0.3.3
+langgraph>=0.0.50
+langchain>=0.1.0
+
+# LLM Providers
+langchain-openai>=0.0.5
+langchain-anthropic>=0.1.0
+langchain-aws>=0.1.0
+
+# Structured logging
+structlog>=24.1.0
+
+# OpenTelemetry (for tracing inside container)
+opentelemetry-api>=1.22.0
+opentelemetry-sdk>=1.22.0
+opentelemetry-exporter-otlp-proto-http>=1.22.0

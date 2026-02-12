@@ -1,0 +1,126 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Cognition Protocol",
+  "description": "Canonical event/message spec for Cognition coding agent",
+  "definitions": {
+    "CreateSessionRequest": {
+      "type": "object",
+      "properties": {
+        "type": { "const": "create_session" },
+        "network_mode": { "enum": ["OFF", "ON"], "default": "OFF" },
+        "repo_url": { "type": "string", "description": "Optional git repo URL to clone" }
+      },
+      "required": ["type"]
+    },
+    "UserMessage": {
+      "type": "object",
+      "properties": {
+        "type": { "const": "user_msg" },
+        "session_id": { "type": "string" },
+        "content": { "type": "string" }
+      },
+      "required": ["type", "session_id", "content"]
+    },
+    "SessionStarted": {
+      "type": "object",
+      "properties": {
+        "event": { "const": "session_started" },
+        "session_id": { "type": "string" },
+        "network_mode": { "enum": ["OFF", "ON"] },
+        "workspace_path": { "type": "string" }
+      },
+      "required": ["event", "session_id", "network_mode", "workspace_path"]
+    },
+    "AssistantMessage": {
+      "type": "object",
+      "properties": {
+        "event": { "const": "assistant_message" },
+        "session_id": { "type": "string" },
+        "content": { "type": "string" }
+      },
+      "required": ["event", "session_id", "content"]
+    },
+    "ToolStart": {
+      "type": "object",
+      "properties": {
+        "event": { "const": "tool_start" },
+        "session_id": { "type": "string" },
+        "tool": { "type": "string" },
+        "input": { "type": "object" }
+      },
+      "required": ["event", "session_id", "tool", "input"]
+    },
+    "ToolOutput": {
+      "type": "object",
+      "properties": {
+        "event": { "const": "tool_output" },
+        "session_id": { "type": "string" },
+        "stream": { "enum": ["stdout", "stderr"] },
+        "chunk": { "type": "string" }
+      },
+      "required": ["event", "session_id", "stream", "chunk"]
+    },
+    "ToolEnd": {
+      "type": "object",
+      "properties": {
+        "event": { "const": "tool_end" },
+        "session_id": { "type": "string" },
+        "tool": { "type": "string" },
+        "exit_code": { "type": "integer" },
+        "artifacts": { "type": "object" }
+      },
+      "required": ["event", "session_id", "tool", "exit_code"]
+    },
+    "DiffApplied": {
+      "type": "object",
+      "properties": {
+        "event": { "const": "diff_applied" },
+        "session_id": { "type": "string" },
+        "files_changed": { "type": "array", "items": { "type": "string" } },
+        "diff_preview": { "type": "string" }
+      },
+      "required": ["event", "session_id", "files_changed", "diff_preview"]
+    },
+    "TestsFinished": {
+      "type": "object",
+      "properties": {
+        "event": { "const": "tests_finished" },
+        "session_id": { "type": "string" },
+        "exit_code": { "type": "integer" },
+        "summary": { "type": "string" }
+      },
+      "required": ["event", "session_id", "exit_code"]
+    },
+    "Error": {
+      "type": "object",
+      "properties": {
+        "event": { "const": "error" },
+        "session_id": { "type": "string" },
+        "message": { "type": "string" },
+        "code": { "type": "string" }
+      },
+      "required": ["event", "message"]
+    },
+    "Done": {
+      "type": "object",
+      "properties": {
+        "event": { "const": "done" },
+        "session_id": { "type": "string" }
+      },
+      "required": ["event"]
+    }
+  },
+  "oneOf": [
+    { "$ref": "#/definitions/CreateSessionRequest" },
+    { "$ref": "#/definitions/UserMessage" },
+    { "$ref": "#/definitions/SessionStarted" },
+    { "$ref": "#/definitions/AssistantMessage" },
+    { "$ref": "#/definitions/ToolStart" },
+    { "$ref": "#/definitions/ToolOutput" },
+    { "$ref": "#/definitions/ToolEnd" },
+    { "$ref": "#/definitions/DiffApplied" },
+    { "$ref": "#/definitions/TestsFinished" },
+    { "$ref": "#/definitions/Error" },
+    { "$ref": "#/definitions/Done" }
+  ]
+}

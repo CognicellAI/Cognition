@@ -1,0 +1,33 @@
+{
+  "project_id": "test-1770862149-54985513",
+  "user_prefix": "test-1770862149",
+  "created_at": "2026-02-12T02:09:09.935906",
+  "last_accessed": "2026-02-12T02:09:09.971700",
+  "config": {
+    "network_mode": "OFF",
+    "repo_url": null,
+    "agent_model": "claude-haiku-4.5",
+    "container_image": "opencode-agent:py",
+    "agent_backend_routes": null
+  },
+  "sessions": [
+    {
+      "session_id": "f56af745-14ca-41fd-abf5-0e4d86bac52e",
+      "started_at": "2026-02-12T02:09:10.223978",
+      "ended_at": "2026-02-12T02:13:57.476049",
+      "messages": 0,
+      "tasks_completed": []
+    }
+  ],
+  "statistics": {
+    "total_sessions": 1,
+    "total_messages": 0,
+    "files_modified": 0,
+    "tests_run": 0,
+    "total_duration_seconds": 287
+  },
+  "tags": [],
+  "description": "",
+  "pinned": false,
+  "cleanup_after_days": 30
+}
