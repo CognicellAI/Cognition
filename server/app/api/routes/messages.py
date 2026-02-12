@@ -47,8 +47,8 @@ async def agent_event_stream(
     4. Handle errors gracefully
     """
     try:
-        # Yield initial thinking event
-        yield EventBuilder.token("Let me help you with that.\n\n")
+        # Echo back that we received the message
+        yield EventBuilder.token(f"You said: {content}\n\n")
 
         # Simulate agent thinking and responding
         # In production, this would be replaced with actual agent streaming
@@ -75,15 +75,15 @@ async def agent_event_stream(
             yield EventBuilder.token("The main files are main.py and app.py. ")
             yield EventBuilder.token("Would you like me to examine any of them?")
         else:
-            # Simple response
-            response_text = f"I received your message: '{content}'\n\n"
-            response_text += "In a production implementation, this would invoke the actual "
-            response_text += "LangGraph agent with the configured LLM and stream real tokens."
-
-            # Stream tokens word by word
-            words = response_text.split()
-            for word in words:
-                yield EventBuilder.token(word + " ")
+            # Simple response acknowledging the message
+            yield EventBuilder.token("I received your message. ")
+            yield EventBuilder.token(
+                "In a production implementation, this would invoke the actual "
+            )
+            yield EventBuilder.token(
+                "LangGraph agent with the configured LLM and stream real tokens "
+            )
+            yield EventBuilder.token("based on your input.")
 
         # Yield usage info
         yield EventBuilder.usage(
