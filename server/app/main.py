@@ -198,7 +198,7 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
                 continue
 
             if isinstance(message, CreateSessionRequest):
-                # Create or resume session
+                # Create or resume session (in-process agent, no containers)
                 session_manager = get_session_manager()
                 session = session_manager.create_or_resume_session(
                     project_id=message.project_id,
@@ -215,17 +215,6 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
                 session_id = session.session_id
                 session_manager.attach_websocket(session_id, websocket)
 
-                # Initialize agent bridge (connect to agent container)
-                logger.info(
-                    "Initializing agent bridge",
-                    session_id=session_id,
-                    container_id=session.container_id[:12],
-                )
-                await session_manager.initialize_agent_bridge(
-                    session_id=session_id,
-                    on_event=handle_agent_event,
-                )
-
                 # Send session started event
                 await websocket.send_json(
                     {
@@ -237,7 +226,7 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
                 )
 
                 logger.info(
-                    "Session created and agent connected",
+                    "Session created with in-process agent",
                     session_id=session_id,
                     project_id=session.project_id,
                     network_mode=session.network_mode,
@@ -509,7 +498,6 @@ async def create_project_session(project_id: str, request: dict[str, Any]) -> JS
                 "project_id": session.project_id,
                 "network_mode": session.network_mode,
                 "workspace_path": session.workspace_path,
-                "container_id": session.container_id,
             }
         )
     except Exception as e:
