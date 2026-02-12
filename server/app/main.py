@@ -251,7 +251,9 @@ async def stream_event(websocket: WebSocket, event: dict[str, Any]) -> None:
         # LLM token
         chunk = event.get("data", {}).get("chunk", "")
         if chunk:
-            await websocket.send_text(message_to_json(Token(content=chunk)))
+            content = chunk.content if hasattr(chunk, "content") else str(chunk)
+            if content:
+                await websocket.send_text(message_to_json(Token(content=content)))
 
     elif event_type == "on_tool_start":
         # Tool call started
