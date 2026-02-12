@@ -2,7 +2,7 @@
   "project_id": "agent-test-89eb861a",
   "user_prefix": "agent-test",
   "created_at": "2026-02-12T03:07:07.259758",
-  "last_accessed": "2026-02-12T03:07:07.264906",
+  "last_accessed": "2026-02-12T03:10:59.004852",
   "config": {
     "network_mode": "OFF",
     "repo_url": null,
@@ -17,10 +17,17 @@
       "ended_at": "2026-02-12T03:08:14.870476",
       "messages": 0,
       "tasks_completed": []
+    },
+    {
+      "session_id": "cd8f7add-03c7-44e1-a1a8-06778a00f66a",
+      "started_at": "2026-02-12T03:11:01.196587",
+      "ended_at": null,
+      "messages": 0,
+      "tasks_completed": []
     }
   ],
   "statistics": {
-    "total_sessions": 1,
+    "total_sessions": 2,
     "total_messages": 0,
     "files_modified": 0,
     "tests_run": 0,
