@@ -230,4 +230,4 @@ def message_to_json(message: Message) -> str:
     Returns:
         JSON string.
     """
-    return message.model_dump_json()
+    return message.model_dump_json(by_alias=True)
