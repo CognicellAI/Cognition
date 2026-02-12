@@ -1,14 +1,14 @@
 [project]
 name = "cognition"
 version = "0.1.0"
-description = "OpenCode-style coding agent with FastAPI WebSocket + Textual TUI"
+description = "Local AI coding assistant built on LangGraph Deep Agents"
 readme = "README.md"
 requires-python = ">=3.11"
 license = {text = "MIT"}
 authors = [
-    {name = "Agentic Team"}
+    {name = "Cognition Team"}
 ]
-keywords = ["agent", "coding", "ai", "fastapi", "textual"]
+keywords = ["ai", "coding", "agent", "llm", "langgraph", "deep-agents"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
@@ -18,55 +18,59 @@ classifiers = [
     "Programming Language :: Python :: 3.12",
 ]
 
-dependencies = []
+dependencies = [
+    # Core framework
+    "deepagents>=0.1.0",
+    "langgraph>=0.2.0",
+    "langchain-core>=0.3.0",
+    
+    # Server
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.32.0",
+    "websockets>=13.0",
+    "python-multipart>=0.0.12",
+    
+    # Client
+    "textual>=0.85.0",
+    "httpx>=0.27.0",
+    
+    # Configuration & utilities
+    "pydantic>=2.9.0",
+    "pydantic-settings>=2.6.0",
+    "structlog>=24.4.0",
+    "python-dotenv>=1.0.0",
+    
+    # Observability
+    "opentelemetry-api>=1.28.0",
+    "opentelemetry-sdk>=1.28.0",
+    "opentelemetry-instrumentation-fastapi>=0.49b0",
+]
 
 [project.optional-dependencies]
-server = [
-    "fastapi>=0.109.0",
-    "uvicorn[standard]>=0.27.0",
-    "websockets>=12.0",
-    "pydantic>=2.5.0",
-    "pydantic-settings>=2.1.0",
-    "deepagents>=0.1.0",
-    "langgraph>=0.0.50",
-    "langchain>=0.1.0",
-    "langchain-openai>=0.0.5",
-    "langchain-anthropic>=0.1.0",
-    "langchain-aws>=0.1.0",
-    "openai>=1.10.0",
-    "anthropic>=0.18.0",
-    "boto3>=1.34.0",
-    "structlog>=24.1.0",
-    "opentelemetry-api>=1.22.0",
-    "opentelemetry-sdk>=1.22.0",
-    "opentelemetry-exporter-otlp-proto-http>=1.22.0",
-    "opentelemetry-instrumentation-fastapi>=0.43b0",
-    "opentelemetry-semantic-conventions>=0.43b0",
-    "docker>=7.0.0",
-    "python-multipart>=0.0.6",
-]
+# LLM providers (install as needed)
+openai = ["langchain-openai>=0.2.0", "openai>=1.52.0"]
+bedrock = ["langchain-aws>=0.2.0", "boto3>=1.35.0"]
 
-client = [
-    "textual>=0.80.0",
+# Testing
+test = [
+    "pytest>=8.3.0",
+    "pytest-asyncio>=0.24.0",
+    "pytest-timeout>=2.3.0",
+    "pytest-cov>=6.0.0",
     "httpx>=0.27.0",
-    "websockets>=12.0",
-    "rich>=13.7.0",
-    "pydantic>=2.5.0",
-    "pydantic-settings>=2.1.0",
 ]
 
+# Development
 dev = [
-    "pytest>=8.0.0",
-    "pytest-asyncio>=0.23.0",
-    "pytest-cov>=4.1.0",
-    "mypy>=1.8.0",
-    "ruff>=0.2.0",
-    "pre-commit>=3.6.0",
-    "httpx>=0.26.0",
+    "cognition[test,openai]",
+    "ruff>=0.7.0",
+    "mypy>=1.13.0",
+    "pre-commit>=4.0.0",
 ]
 
+# All extras
 all = [
-    "cognition[server,client,dev]"
+    "cognition[openai,bedrock,test]",
 ]
 
 [project.scripts]
@@ -78,33 +82,24 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["server", "client"]
+packages = ["server", "client", "shared"]
 
 [tool.ruff]
 target-version = "py311"
 line-length = 100
-
-[tool.ruff.lint]
 select = [
-    "E",   # pycodestyle errors
-    "F",   # Pyflakes
-    "I",   # isort
-    "N",   # pep8-naming
-    "W",   # pycodestyle warnings
-    "UP",  # pyupgrade
-    "B",   # flake8-bugbear
-    "C4",  # flake8-comprehensions
-    "SIM", # flake8-simplify
-    "TCH", # flake8-type-checking
-    "PTH", # flake8-use-pathlib
-    "RUF", # Ruff-specific rules
+    "E",  # pycodestyle errors
+    "W",  # pycodestyle warnings
+    "F",  # Pyflakes
+    "I",  # isort
+    "N",  # pep8-naming
+    "W",  # pycodestyle warnings
+    "UP", # pyupgrade
+    "B",  # flake8-bugbear
+    "C4", # flake8-comprehensions
+    "SIM",# flake8-simplify
 ]
-ignore = [
-    "E501",  # Line too long (handled by formatter)
-]
-
-[tool.ruff.lint.isort]
-known-first-party = ["server", "client", "shared"]
+ignore = ["E501"]  # Line too long (handled by formatter)
 
 [tool.ruff.format]
 quote-style = "double"
@@ -112,9 +107,14 @@ indent-style = "space"
 skip-magic-trailing-comma = false
 line-ending = "auto"
 
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.ruff.lint.isort]
+known-first-party = ["server", "client", "shared"]
+
 [tool.mypy]
 python_version = "3.11"
-strict = true
 warn_return_any = true
 warn_unused_configs = true
 disallow_untyped_defs = true
@@ -129,18 +129,24 @@ module = "tests.*"
 disallow_untyped_defs = false
 
 [tool.pytest.ini_options]
-minversion = "8.0"
-addopts = "-ra -q --strict-markers --tb=short"
 testpaths = ["tests"]
 asyncio_mode = "auto"
+timeout = 60
+addopts = [
+    "--strict-markers",
+    "--strict-config",
+    "-v",
+]
 markers = [
-    "integration: marks tests as integration tests (use test containers)",
-    "e2e: marks tests as end-to-end tests",
+    "unit: Unit tests (fast, isolated)",
+    "integration: Integration tests (test component interactions)",
+    "e2e: End-to-end tests (full workflow)",
+    "slow: Slow tests (skip with -m 'not slow')",
 ]
 
 [tool.coverage.run]
-source = ["server", "client"]
-omit = ["*/tests/*", "*/test_*.py"]
+source = ["server", "client", "shared"]
+branch = true
 
 [tool.coverage.report]
 exclude_lines = [
