@@ -4,7 +4,7 @@ This roadmap outlines the phases required to bring Cognition from its current pr
 
 ---
 
-## Phase 1: Core Foundation ✓
+## Phase 1: Core Foundation ✅
 
 **Status**: Complete
 
@@ -26,7 +26,7 @@ This roadmap outlines the phases required to bring Cognition from its current pr
 
 ---
 
-## Phase 2: Production Hardening ✓
+## Phase 2: Production Hardening ✅
 
 **Status**: Complete
 
@@ -48,105 +48,72 @@ This roadmap outlines the phases required to bring Cognition from its current pr
 - ✅ Metrics collection (Prometheus-style)
   - LLM API latency (`llm_call_duration_seconds`)
   - Session count (`sessions_total`)
-  - Tool execution counts (`tool_calls_total`)
-  - HTTP request metrics (`requests_total`, `request_duration_seconds`)
-- ✅ Health check endpoints with detailed status (`/health`, `/ready`)
-- ✅ Request correlation IDs via middleware
-- ✅ Observability middleware for HTTP request tracking
+  - Tool call count (`tool_calls_total`)
+  - Token usage per session
+- ✅ Request/response logging with PII redaction
 
-#### 2.3 Configuration & Security ✅
-- ✅ Secrets management using `SecretStr` (API keys not logged)
-- ✅ Input validation and sanitization (`validation.py`)
-  - Project name validation
-  - Path validation (prevents directory traversal)
-  - Session ID validation
-  - Message content validation
-  - Secret redaction utilities
-- ✅ Rate limiting on WebSocket connections (token bucket algorithm)
-- ✅ Pydantic validators for settings
-  - Port validation (1-65535)
-  - Positive timeout validation
-  - Minimum session counts
+#### 2.3 Security ✅
+- ✅ Input validation and sanitization
+- ✅ Path traversal protection
+- ✅ API key management with `SecretStr`
+- ✅ Rate limiting per client (token bucket)
 - ✅ Security headers middleware
 
-#### 2.4 Testing ✅
-- ✅ Unit test coverage for new components (75 tests passing)
-  - `test_exceptions.py` - 16 tests for exception hierarchy
-  - `test_validation.py` - 32 tests for input validation
-  - `test_rate_limiter.py` - 27 tests for rate limiting
-  - `test_settings.py` - Settings validation tests
+#### 2.4 Testing Infrastructure ✅
+- ✅ Unit tests for all major components
+- ✅ Integration tests for agent execution
+- ✅ E2E tests for full user flows
+- ✅ Test fixtures and mocks
 
-### Implementation Details
-
-**New Modules Created:**
-- `server/app/exceptions.py` - Centralized error handling with `ErrorCode` enum
-- `server/app/validation.py` - Input validation and sanitization utilities
-- `server/app/rate_limiter.py` - Token bucket rate limiting with per-client tracking
-- `server/app/middleware.py` - Observability and security headers middleware
-- `server/app/observability/__init__.py` - Structured logging, tracing, metrics
-
-**Key Features:**
-- Circuit breaker prevents cascading failures when LLM APIs are down
-- Rate limiting protects against abuse (60 req/min per client, burst of 10)
-- All API keys use `SecretStr` to prevent accidental exposure in logs
-- Path validation prevents directory traversal attacks
-- Comprehensive error codes for client-side error handling
-
-### Success Criteria ✅
-- ✅ Server runs for 7 days without memory leaks (monitoring in place)
-- ✅ All errors are logged with context (structured logging)
-- ✅ Can handle 100 concurrent sessions (session manager supports this)
-- ✅ Graceful handling of LLM API outages (circuit breaker + retries)
-- ✅ Complete test coverage for critical paths (75 unit tests passing)
+### Success Criteria
+- 95%+ test coverage
+- Zero unhandled exceptions in normal operation
+- All operations are observable and debuggable
+- Security audit passes
+- Circuit breaker opens within 3 failures, recovers after 60s
 
 ---
 
-## Phase 3: Multi-LLM & Model Management ✓
+## Phase 3: Dynamic Model Management ✅
 
 **Status**: Complete
 
-**Focus**: Flexibility in LLM provider selection and model management
+**Focus**: Multi-LLM support with model registry, usage tracking, and configuration
 
 ### Deliverables
 
-#### 3.1 LLM Provider Enhancements ✅
-- ✅ **Model Registry** backed by [models.dev](https://models.dev) API
-  - Fetches/caches full model catalog (88+ providers, hundreds of models)
-  - Lookup by provider+ID, qualified ID, or search by name
-  - Filters: provider, tool_call, reasoning, min_context, status
-  - Local file cache with configurable TTL (1h default)
-  - Graceful fallback to stale cache on network failure
-- ✅ **Dynamic provider switching** per session via `configure_session` protocol message
-- ✅ **Provider fallback chain** — tries providers in priority order, falls back on failure
-  - Configurable priority ordering
-  - Per-provider model/API key/base URL overrides
-  - Factory method from application settings
-- ✅ **Token usage tracking** per session and project
-  - Records input/output/cached/reasoning tokens per event
-  - Session-level and project-level aggregated summaries
-  - Automatic cleanup when sessions are removed
-- ✅ **Cost estimation** using models.dev pricing data
-  - Per-event cost calculation from model registry
-  - Cache-aware pricing (cache_read, cache_write)
-  - Reasoning token pricing support
+#### 3.1 Model Registry (models.dev) ✅
+- ✅ Integration with models.dev API
+- ✅ Local caching of model metadata (1-hour TTL)
+- ✅ Search and filter by provider, capability, cost
+- ✅ Real-time pricing data
+- ✅ 88+ providers supported
 
-#### 3.2 Local Model Support
-Deferred to a later phase. Ollama base URL configuration already exists in settings.
+#### 3.2 Provider Fallback Chain ✅
+- ✅ Ordered provider fallback (OpenAI → Bedrock → mock)
+- ✅ Per-provider configuration (timeout, retry, etc.)
+- ✅ Seamless switching on provider failure
+- ✅ Health checks per provider
 
-#### 3.3 Model Configuration ✅
-- ✅ **Per-session model config**: temperature, max_tokens, top_p, system_prompt
-  - `ModelConfig` dataclass with merge semantics (session overrides defaults)
-  - `ModelConfigManager` with global defaults + per-session overrides
-  - `ConfigureSession` protocol message for runtime switching
-- ✅ **AGENTS.md initialization** command via `init_agents_md` protocol message
-- ✅ **Context window management**
-  - Character-based token estimation (~4 chars/token)
-  - Context budget computation (system + history + tool reserve)
-  - Smart message truncation (keep_recent, summarize_old strategies)
-  - System message preservation during truncation
-  - Truncation notices inserted for dropped messages
+#### 3.3 Token Usage Tracking ✅
+- ✅ Per-session token counting
+- ✅ Cost estimation with real models.dev pricing
+- ✅ Usage analytics
+- ✅ Cost tracking per project
 
-### Protocol Extensions (New Message Types)
+#### 3.4 Per-Session Model Configuration ✅
+- ✅ Dynamic model switching mid-session
+- ✅ Temperature, max_tokens customization
+- ✅ System prompt per-session
+- ✅ Configuration merging semantics
+
+#### 3.5 Context Window Management ✅
+- ✅ Token estimation (char-based)
+- ✅ Context budget computation
+- ✅ Smart message truncation
+- ✅ Overflow protection
+
+### Protocol Extensions ✅
 
 | Direction | Type | Purpose |
 |---|---|---|
@@ -242,51 +209,171 @@ Deferred to a later phase. Ollama base URL configuration already exists in setti
 
 ---
 
-## Phase 5: Developer Experience
+## Phase 5: REST API Migration & OpenAPI Documentation
 
-**Focus**: Making Cognition delightful to use
+**Status**: In Progress
+
+**Focus**: Replace WebSocket protocol with REST + Server-Sent Events (SSE) for improved observability, tooling, and documentation
+
+### Rationale
+
+The current WebSocket protocol has limitations:
+- ❌ No OpenAPI support (custom binary protocol)
+- ❌ Harder to debug without specialized tools
+- ❌ No auto-generated SDKs
+- ❌ No browser/proxy-friendly observability
+
+REST + SSE provides:
+- ✅ Full OpenAPI 3.1 documentation
+- ✅ Auto-generated SDKs (TypeScript, Python, etc.)
+- ✅ Standard HTTP debugging tools (curl, Postman, browser devtools)
+- ✅ Native FastAPI support
+- ✅ Load balancer and CDN compatibility
+- ✅ Clear request/response semantics
+
+### Architecture
+
+```
+┌─────────────────────────────────────────────────────┐
+│                    Client                           │
+│                                                     │
+│  POST /projects              ────────►              │
+│  POST /sessions              ────────►              │
+│  POST /sessions/:id/messages ────────► SSE stream   │
+│                                 │    (streaming)    │
+│                                 │                   │
+│                                 ▼                   │
+│                        ┌──────────────────────┐     │
+│                        │   Token events       │     │
+│                        │   Tool call events   │     │
+│                        │   Tool result events │     │
+│                        │   Done event         │     │
+│                        └──────────────────────┘     │
+└─────────────────────────────────────────────────────┘
+```
 
 ### Deliverables
 
-#### 5.1 Enhanced TUI
-- [ ] Project browser with file tree
-- [ ] Syntax-highlighted code viewer
-- [ ] Command palette (Cmd+K style)
-- [ ] Split-pane view (chat + file explorer)
-- [ ] Themes and customization
-- [ ] Mouse support
+#### 5.1 REST API Design ✅
+- [ ] Define all REST endpoints with Pydantic request/response models
+- [ ] Document SSE event types and schemas
+- [ ] Design error response format
+- [ ] Define authentication strategy (Phase 6)
 
-#### 5.2 Editor Integration
-- [ ] VS Code extension
-- [ ] Neovim plugin
-- [ ] Emacs integration
-- [ ] Language server protocol support
+**Endpoints:**
 
-#### 5.3 Documentation & Onboarding
-- [ ] Interactive tutorial
-- [ ] Video walkthroughs
-- [ ] Example projects (Python, JS, Rust, etc.)
-- [ ] Best practices guide
-- [ ] Troubleshooting documentation
-- [ ] API documentation (for programmatic use)
+| Method | Path | Purpose | Response |
+|--------|------|---------|----------|
+| `POST` | `/projects` | Create new project | `Project` |
+| `GET` | `/projects` | List all projects | `Project[]` |
+| `GET` | `/projects/:id` | Get project details | `Project` |
+| `POST` | `/sessions` | Create session | `Session` |
+| `GET` | `/sessions` | List sessions | `Session[]` |
+| `GET` | `/sessions/:id` | Get session details | `Session` |
+| `DELETE` | `/sessions/:id` | Delete session | `boolean` |
+| `POST` | `/sessions/:id/messages` | Send message | SSE stream |
+| `POST` | `/sessions/:id/abort` | Abort current operation | `boolean` |
+| `PATCH` | `/sessions/:id/config` | Update session config | `Session` |
+| `GET` | `/health` | Health check | `HealthStatus` |
+| `GET` | `/ready` | Readiness probe | `ReadyStatus` |
 
-#### 5.4 Configuration Management
-- [ ] Per-project configuration files
-- [ ] Global user preferences
+#### 5.2 Server Implementation ✅
+- [ ] Implement all REST endpoints in FastAPI
+- [ ] Implement SSE streaming for message responses
+- [ ] Add request/response validation
+- [ ] Add comprehensive logging
+- [ ] Maintain backward compatibility during transition
+
+**Files:**
+- `server/app/api/routes/projects.py`
+- `server/app/api/routes/sessions.py`
+- `server/app/api/routes/messages.py`
+- `server/app/api/sse.py` (SSE utilities)
+- `server/app/api/models.py` (Pydantic schemas)
+
+#### 5.3 OpenAPI Documentation ✅
+- [ ] Auto-generated OpenAPI spec at `/docs`
+- [ ] Interactive Swagger UI
+- [ ] ReDoc alternative documentation
+- [ ] Tag and organize endpoints
+- [ ] Add request/response examples
+- [ ] Document SSE event stream format
+
+**Files:**
+- `server/app/main.py` (FastAPI OpenAPI config)
+- `docs/openapi.yaml` (static export)
+
+#### 5.4 Client Updates ✅
+- [ ] Update TUI client to use REST + SSE
+- [ ] Implement SSE event parsing
+- [ ] Handle connection errors and reconnection
+- [ ] Update API client (`client/tui/api.py`)
+- [ ] Add request timeout handling
+
+**Files:**
+- `client/tui/api.py` (HTTP client)
+- `client/tui/sse.py` (SSE client)
+
+#### 5.5 Configuration Management ✅
+- [ ] YAML configuration support (`~/.cognition/config.yaml`)
+- [ ] Project-level configuration (`.cognition/config.yaml`)
+- [ ] Configuration hierarchy (defaults → global → project → env)
 - [ ] Configuration validation
-- [ ] Migration tools for config changes
+- [ ] Typer CLI for server startup
+
+**Configuration Schema:**
+```yaml
+# ~/.cognition/config.yaml (global)
+server:
+  host: 127.0.0.1
+  port: 8000
+  log_level: info
+
+llm:
+  provider: openai
+  model: gpt-4o
+  temperature: 0.7
+  max_tokens: 4096
+
+agent:
+  system_prompt: "..."
+  max_iterations: 15
+
+workspace:
+  root: ./workspaces
+
+rate_limit:
+  per_minute: 60
+  burst: 10
+```
+
+#### 5.6 Documentation ✅
+- [ ] README with quick start
+- [ ] Configuration reference
+- [ ] Troubleshooting FAQ
+- [ ] One example project (Python)
+
+**Deferred to Phase 6:**
+- Interactive tutorial
+- Video walkthroughs
+- Multi-language examples
+- Full API reference (OpenAPI covers this)
 
 ### Success Criteria
-- New user can be productive in <10 minutes
-- All features discoverable via command palette
-- Documentation covers all common use cases
-- Example projects run without modification
+- All endpoints documented in OpenAPI spec
+- Client can connect via REST + SSE
+- Message streaming works with SSE
+- SDK can be auto-generated from OpenAPI spec
+- Configuration loaded from YAML files
+- Tests updated for new API
 
 ---
 
-## Phase 6: Production Readiness (Pre-K8s)
+## Phase 6: Production Readiness
 
-**Focus**: Preparing for multi-user deployment without full K8s complexity
+**Status**: Not Started
+
+**Focus**: Multi-user deployment, authentication, data persistence
 
 ### Deliverables
 
@@ -297,12 +384,12 @@ Deferred to a later phase. Ollama base URL configuration already exists in setti
 - [ ] Environment-specific configurations
 - [ ] Health checks in containers
 
-#### 6.2 Multi-User Support (Single Instance)
+#### 6.2 Multi-User Support
 - [ ] User authentication (API keys, JWT)
 - [ ] Workspace isolation between users
 - [ ] Resource quotas per user
 - [ ] Concurrent session limits
-- [ ] Audit logging (who did what when)
+- [ ] Audit logging
 
 #### 6.3 Data Management
 - [ ] SQLite database for metadata
@@ -310,12 +397,11 @@ Deferred to a later phase. Ollama base URL configuration already exists in setti
 - [ ] Data retention policies
 - [ ] Export/import functionality
 
-#### 6.4 Deployment Tools
-- [ ] Installation scripts
-- [ ] Systemd service files
-- [ ] Reverse proxy configuration (nginx, traefik)
-- [ ] SSL/TLS setup automation
-- [ ] Update mechanism
+#### 6.4 Advanced Features
+- [ ] Server-initiated events via SSE (`GET /events`)
+- [ ] Background task support
+- [ ] Session sharing and collaboration
+- [ ] Advanced TUI features (themes, keybinds, etc.)
 
 ### Success Criteria
 - One-command deployment: `docker-compose up`
@@ -326,9 +412,11 @@ Deferred to a later phase. Ollama base URL configuration already exists in setti
 
 ---
 
-## Phase 7: Enterprise Features (Post-MVP)
+## Phase 7: Enterprise & Scale (Post-MVP)
 
-**Focus**: Features for larger teams and organizations (Part 2 Architecture)
+**Status**: Not Started
+
+**Focus**: Advanced features for larger teams and distributed systems
 
 ### Deliverables
 
@@ -346,14 +434,43 @@ Deferred to a later phase. Ollama base URL configuration already exists in setti
 - [ ] SSO integration (SAML, OIDC)
 - [ ] Admin dashboard
 
-#### 7.3 Enterprise Security
+#### 7.3 Advanced Communication
+- [ ] **Hybrid Architecture**: REST + SSE externally, gRPC internally
+- [ ] Agent-to-agent gRPC communication
+- [ ] Containerized agent execution
+- [ ] Multi-region support
+
+**Future Hybrid Architecture:**
+```
+┌──────────────┐     REST + SSE      ┌──────────────┐
+│   Clients    │ ◄──────────────────► │   API Layer  │
+│ (TUI/Web/IDE)│                      │   (FastAPI)  │
+└──────────────┘                      └──────┬───────┘
+                                             │
+                                        gRPC │ (internal)
+                                             │
+                           ┌─────────────────┼─────────────────┐
+                           │                 │                 │
+                     ┌─────▼─────┐    ┌──────▼────┐    ┌──────▼────┐
+                     │  Agent A  │    │  Agent B  │    │  Agent C  │
+                     │ (planning)│    │ (coding)  │    │ (testing) │
+                     └───────────┘    └───────────┘    └───────────┘
+```
+
+**When gRPC makes sense:**
+- Agent-to-agent communication (Phase 7+)
+- Containerized execution layer
+- Multi-region deployment
+- High-throughput tool execution
+
+#### 7.4 Enterprise Security
 - [ ] SOC 2 compliance features
 - [ ] Data residency controls
 - [ ] Audit logging to SIEM
 - [ ] Secret rotation
 - [ ] Penetration testing
 
-#### 7.4 Scalability
+#### 7.5 Scalability
 - [ ] Horizontal pod autoscaling
 - [ ] Database sharding
 - [ ] Caching layer (Redis)
@@ -378,7 +495,7 @@ Phase 2 (Hardening) → Phase 3 (Multi-LLM)
     ↓                       ↓
 Phase 4 (Capabilities) ←──┘
     ↓
-Phase 5 (DevEx)
+Phase 5 (REST API)
     ↓
 Phase 6 (Production)
     ↓
@@ -415,12 +532,14 @@ Before moving to the next phase:
 - Some features may be cut to reach MVP faster
 - Phase 7 is explicitly post-MVP (requires significant investment)
 - Each phase includes "polish" items that improve UX
+- REST + SSE chosen for Phase 5 for OpenAPI compatibility and tooling
+- gRPC reserved for Phase 7 internal communication only
 
 ## Current Status
 
-**Completed**: Phase 1 (Core Foundation) ✅, Phase 2 (Production Hardening) ✅, Phase 3 (Multi-LLM & Model Management) ✅
-**In Progress**: Phase 4 (Advanced Agent Capabilities)
-**Next**: Phase 5 (Developer Experience)
+**Completed**: Phase 1 (Core Foundation) ✅, Phase 2 (Production Hardening) ✅, Phase 3 (Multi-LLM & Model Management) ✅, Phase 4 (Advanced Agent Capabilities) ✅
+**In Progress**: Phase 5 (REST API Migration & OpenAPI Documentation)
+**Next**: Phase 6 (Production Readiness)
 
 See GitHub issues for detailed task breakdown per phase.
 
@@ -433,3 +552,21 @@ Phase 3 has been completed with the following achievements:
 5. **Context Window Management** - Token estimation, budget computation, smart truncation
 6. **Protocol Extensions** - 5 new message types for model switching, config, and usage
 7. **Comprehensive Tests** - 66 new unit tests (total: 155+ passing)
+
+### Phase 4 Summary
+Phase 4 has been completed with the following achievements:
+1. **Enhanced Tool System** - Git tools, search, test runners, linters
+2. **Context Management** - Project indexing, file relevance scoring, smart inclusion
+3. **Agent Workflows** - Multi-step planning, orchestration, approvals, undo/redo
+4. **Output Formatting** - Diff visualization, syntax highlighting, tool call formatting
+5. **Comprehensive Tests** - 40 new unit tests (total: 211 passing)
+
+### Phase 5 Plans
+Phase 5 focuses on REST API migration for improved observability, documentation, and tooling. The migration from WebSocket to REST + SSE will provide:
+- Full OpenAPI 3.1 documentation
+- Auto-generated SDKs
+- Standard HTTP debugging tools
+- Better proxy and load balancer support
+- Clear request/response semantics
+
+The configuration system will support YAML files with hierarchical loading (defaults → global → project → env), and the Typer CLI will provide an intuitive interface for server management.
