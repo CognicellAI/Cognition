@@ -87,7 +87,7 @@ async def create_session(
     store = get_session_store(workspace_path)
 
     # Create session
-    session = store.create_session(
+    session = await store.create_session(
         session_id=session_id,
         thread_id=thread_id,
         config=config,
@@ -114,7 +114,7 @@ async def list_sessions(
     """
     workspace_path = str(settings.workspace_path)
     store = get_session_store(workspace_path)
-    sessions = store.list_sessions()
+    sessions = await store.list_sessions()
 
     return SessionList(
         sessions=[SessionResponse.from_core(s) for s in sessions], total=len(sessions)
@@ -139,7 +139,7 @@ async def get_session(
     """
     workspace_path = str(settings.workspace_path)
     store = get_session_store(workspace_path)
-    session = store.get_session(session_id)
+    session = await store.get_session(session_id)
 
     if session is None:
         raise HTTPException(
@@ -170,7 +170,7 @@ async def update_session(
     workspace_path = str(settings.workspace_path)
     store = get_session_store(workspace_path)
 
-    session = store.update_session(
+    session = await store.update_session(
         session_id=session_id,
         title=request.title,
         config=None,  # Server doesn't accept config updates from client
@@ -205,7 +205,7 @@ async def delete_session(
     store = get_session_store(workspace_path)
 
     # Check if session exists
-    if store.get_session(session_id) is None:
+    if await store.get_session(session_id) is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Session not found: {session_id}",
@@ -215,7 +215,7 @@ async def delete_session(
     llm_manager.unregister_session(session_id)
 
     # Delete session
-    store.delete_session(session_id)
+    await store.delete_session(session_id)
 
 
 @router.post(
@@ -236,7 +236,7 @@ async def abort_session(
     workspace_path = str(settings.workspace_path)
     store = get_session_store(workspace_path)
 
-    if store.get_session(session_id) is None:
+    if await store.get_session(session_id) is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Session not found: {session_id}",

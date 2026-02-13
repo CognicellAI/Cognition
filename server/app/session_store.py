@@ -1,7 +1,7 @@
-"""Local session storage.
+"""SQLite session storage.
 
-Stores sessions in .cognition/sessions.json within each workspace.
-Each workspace is isolated - sessions don't leak between directories.
+Stores session metadata in the same SQLite database as LangGraph checkpoints.
+Replaces the old JSON-based LocalSessionStore.
 """
 
 from __future__ import annotations
@@ -11,6 +11,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
+import aiosqlite
 import structlog
 
 from server.app.models import Session, SessionConfig, SessionStatus
@@ -18,74 +19,53 @@ from server.app.models import Session, SessionConfig, SessionStatus
 logger = structlog.get_logger(__name__)
 
 
-class LocalSessionStore:
-    """File-based session storage per workspace.
+class SqliteSessionStore:
+    """SQLite-based session storage per workspace."""
 
-    Each workspace has its own .cognition/sessions.json file.
-    Sessions are isolated per workspace directory.
-    """
-
-    COGNITION_DIR = ".cognition"
-    SESSIONS_FILE = "sessions.json"
-
-    def __init__(self, workspace_path: str):
+    def __init__(self, workspace_path: str, db_path: str = ".cognition/state.db"):
         """Initialize store for a workspace.
 
         Args:
             workspace_path: Absolute path to the workspace directory.
+            db_path: Path to the database file relative to workspace.
         """
         self.workspace_path = Path(workspace_path).resolve()
-        self.storage_path = self.workspace_path / self.COGNITION_DIR / self.SESSIONS_FILE
+        self.db_path = self.workspace_path / db_path
         self._ensure_storage()
 
     def _ensure_storage(self) -> None:
-        """Ensure the storage directory and file exist."""
-        config_dir = self.workspace_path / self.COGNITION_DIR
-        config_dir.mkdir(parents=True, exist_ok=True)
+        """Ensure the storage directory exists."""
+        self.db_path.parent.mkdir(parents=True, exist_ok=True)
 
-        if not self.storage_path.exists():
-            self.storage_path.write_text("{}")
+    async def _init_db(self) -> None:
+        """Initialize the database schema."""
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute(
+                """
+                CREATE TABLE IF NOT EXISTS sessions (
+                    id TEXT PRIMARY KEY,
+                    workspace_path TEXT NOT NULL,
+                    title TEXT,
+                    thread_id TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    config TEXT NOT NULL,
+                    message_count INTEGER DEFAULT 0,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                )
+                """
+            )
+            await db.commit()
 
-    def _load_all(self) -> dict[str, dict]:
-        """Load all sessions from file.
-
-        Returns:
-            Dictionary mapping session_id to session data.
-        """
-        try:
-            content = self.storage_path.read_text()
-            return json.loads(content)
-        except (json.JSONDecodeError, FileNotFoundError):
-            logger.warning("Failed to load sessions", path=str(self.storage_path))
-            return {}
-
-    def _save_all(self, sessions: dict[str, dict]) -> None:
-        """Save all sessions to file.
-
-        Args:
-            sessions: Dictionary mapping session_id to session data.
-        """
-        self._ensure_storage()
-        self.storage_path.write_text(json.dumps(sessions, indent=2, default=str))
-
-    def create_session(
+    async def create_session(
         self,
         session_id: str,
         thread_id: str,
         config: SessionConfig,
         title: Optional[str] = None,
     ) -> Session:
-        """Create a new session.
-
-        Args:
-            session_id: Unique session identifier.
-            thread_id: Thread identifier for checkpointing.
-            config: Session configuration.
-            title: Optional session title.
-
-        Returns:
-            Created session.
-        """
+        """Create a new session."""
+        await self._init_db()
         now = datetime.utcnow().isoformat()
 
         session = Session(
@@ -100,158 +80,200 @@ class LocalSessionStore:
             message_count=0,
         )
 
-        sessions = self._load_all()
-        sessions[session_id] = session.to_dict()
-        self._save_all(sessions)
-
-        logger.info(
-            "Session created",
-            session_id=session_id,
-            workspace=str(self.workspace_path),
-        )
-
-        return session
-
-    def get_session(self, session_id: str) -> Optional[Session]:
-        """Get a session by ID.
-
-        Args:
-            session_id: Session identifier.
-
-        Returns:
-            Session if found, None otherwise.
-        """
-        sessions = self._load_all()
-        data = sessions.get(session_id)
-
-        if data:
-            return Session.from_dict(data)
-
-        return None
-
-    def list_sessions(self) -> list[Session]:
-        """List all sessions for this workspace.
-
-        Returns:
-            List of sessions, sorted by updated_at descending.
-        """
-        sessions = self._load_all()
-
-        results = [Session.from_dict(data) for data in sessions.values()]
-
-        # Sort by updated_at descending (most recent first)
-        results.sort(key=lambda s: s.updated_at, reverse=True)
-
-        return results
-
-    def update_session(
-        self,
-        session_id: str,
-        title: Optional[str] = None,
-        config: Optional[SessionConfig] = None,
-    ) -> Optional[Session]:
-        """Update a session.
-
-        Args:
-            session_id: Session to update.
-            title: New title (if provided).
-            config: New config (if provided).
-
-        Returns:
-            Updated session if found, None otherwise.
-        """
-        sessions = self._load_all()
-        data = sessions.get(session_id)
-
-        if not data:
-            return None
-
-        # Update fields
-        if title is not None:
-            data["title"] = title
-
-        if config is not None:
-            data["config"] = {
+        config_json = json.dumps(
+            {
                 "provider": config.provider,
                 "model": config.model,
                 "temperature": config.temperature,
                 "max_tokens": config.max_tokens,
                 "system_prompt": config.system_prompt,
             }
+        )
 
-        data["updated_at"] = datetime.utcnow().isoformat()
-
-        sessions[session_id] = data
-        self._save_all(sessions)
-
-        return Session.from_dict(data)
-
-    def update_message_count(self, session_id: str, count: int) -> None:
-        """Update the message count for a session.
-
-        Args:
-            session_id: Session to update.
-            count: New message count.
-        """
-        sessions = self._load_all()
-        data = sessions.get(session_id)
-
-        if data:
-            data["message_count"] = count
-            data["updated_at"] = datetime.utcnow().isoformat()
-            sessions[session_id] = data
-            self._save_all(sessions)
-
-    def delete_session(self, session_id: str) -> bool:
-        """Delete a session.
-
-        Args:
-            session_id: Session to delete.
-
-        Returns:
-            True if deleted, False if not found.
-        """
-        sessions = self._load_all()
-
-        if session_id in sessions:
-            del sessions[session_id]
-            self._save_all(sessions)
-
-            logger.info(
-                "Session deleted",
-                session_id=session_id,
-                workspace=str(self.workspace_path),
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute(
+                """
+                INSERT INTO sessions (
+                    id, workspace_path, title, thread_id, status, 
+                    config, message_count, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    session.id,
+                    session.workspace_path,
+                    session.title,
+                    session.thread_id,
+                    session.status.value,
+                    config_json,
+                    session.message_count,
+                    session.created_at,
+                    session.updated_at,
+                ),
             )
-            return True
+            await db.commit()
 
+        logger.info(
+            "Session created (SQLite)",
+            session_id=session_id,
+            workspace=str(self.workspace_path),
+        )
+
+        return session
+
+    async def get_session(self, session_id: str) -> Optional[Session]:
+        """Get a session by ID."""
+        await self._init_db()
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            async with db.execute("SELECT * FROM sessions WHERE id = ?", (session_id,)) as cursor:
+                row = await cursor.fetchone()
+                if row:
+                    config_data = json.loads(row["config"])
+                    config = SessionConfig(
+                        provider=config_data.get("provider"),
+                        model=config_data.get("model"),
+                        temperature=config_data.get("temperature"),
+                        max_tokens=config_data.get("max_tokens"),
+                        system_prompt=config_data.get("system_prompt"),
+                    )
+                    return Session(
+                        id=row["id"],
+                        workspace_path=row["workspace_path"],
+                        title=row["title"],
+                        thread_id=row["thread_id"],
+                        status=SessionStatus(row["status"]),
+                        config=config,
+                        created_at=row["created_at"],
+                        updated_at=row["updated_at"],
+                        message_count=row["message_count"],
+                    )
+        return None
+
+    async def list_sessions(self) -> list[Session]:
+        """List all sessions for this workspace."""
+        await self._init_db()
+        sessions = []
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            async with db.execute("SELECT * FROM sessions ORDER BY updated_at DESC") as cursor:
+                async for row in cursor:
+                    config_data = json.loads(row["config"])
+                    config = SessionConfig(
+                        provider=config_data.get("provider"),
+                        model=config_data.get("model"),
+                        temperature=config_data.get("temperature"),
+                        max_tokens=config_data.get("max_tokens"),
+                        system_prompt=config_data.get("system_prompt"),
+                    )
+                    sessions.append(
+                        Session(
+                            id=row["id"],
+                            workspace_path=row["workspace_path"],
+                            title=row["title"],
+                            thread_id=row["thread_id"],
+                            status=SessionStatus(row["status"]),
+                            config=config,
+                            created_at=row["created_at"],
+                            updated_at=row["updated_at"],
+                            message_count=row["message_count"],
+                        )
+                    )
+        return sessions
+
+    async def update_session(
+        self,
+        session_id: str,
+        title: Optional[str] = None,
+        config: Optional[SessionConfig] = None,
+    ) -> Optional[Session]:
+        """Update a session."""
+        session = await self.get_session(session_id)
+        if not session:
+            return None
+
+        updates = []
+        params = []
+
+        if title is not None:
+            updates.append("title = ?")
+            params.append(title)
+            session.title = title
+
+        if config is not None:
+            config_json = json.dumps(
+                {
+                    "provider": config.provider,
+                    "model": config.model,
+                    "temperature": config.temperature,
+                    "max_tokens": config.max_tokens,
+                    "system_prompt": config.system_prompt,
+                }
+            )
+            updates.append("config = ?")
+            params.append(config_json)
+            session.config = config
+
+        if not updates:
+            return session
+
+        updates.append("updated_at = ?")
+        now = datetime.utcnow().isoformat()
+        params.append(now)
+        session.updated_at = now
+
+        params.append(session_id)
+
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute(f"UPDATE sessions SET {', '.join(updates)} WHERE id = ?", params)
+            await db.commit()
+
+        return session
+
+    async def update_message_count(self, session_id: str, count: int) -> None:
+        """Update the message count for a session."""
+        now = datetime.utcnow().isoformat()
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute(
+                "UPDATE sessions SET message_count = ?, updated_at = ? WHERE id = ?",
+                (count, now, session_id),
+            )
+            await db.commit()
+
+    async def delete_session(self, session_id: str) -> bool:
+        """Delete a session."""
+        async with aiosqlite.connect(self.db_path) as db:
+            cursor = await db.execute("DELETE FROM sessions WHERE id = ?", (session_id,))
+            await db.commit()
+            if cursor.rowcount > 0:
+                logger.info(
+                    "Session deleted (SQLite)",
+                    session_id=session_id,
+                    workspace=str(self.workspace_path),
+                )
+                return True
         return False
 
-    def get_most_recent_session(self) -> Optional[Session]:
-        """Get the most recently updated session.
 
-        Returns:
-            Most recent session, or None if no sessions exist.
-        """
-        sessions = self.list_sessions()
-        return sessions[0] if sessions else None
+# Backward compatibility alias
+LocalSessionStore = SqliteSessionStore
 
 
 # Global cache of stores per workspace path
-_store_cache: dict[str, LocalSessionStore] = {}
+_store_cache: dict[str, SqliteSessionStore] = {}
 
 
-def get_session_store(workspace_path: str) -> LocalSessionStore:
+def get_session_store(workspace_path: str) -> SqliteSessionStore:
     """Get or create a session store for a workspace.
 
     Args:
         workspace_path: Absolute path to the workspace.
 
     Returns:
-        LocalSessionStore for the workspace.
+        SqliteSessionStore for the workspace.
     """
     resolved = str(Path(workspace_path).resolve())
 
     if resolved not in _store_cache:
-        _store_cache[resolved] = LocalSessionStore(resolved)
+        _store_cache[resolved] = SqliteSessionStore(resolved)
 
     return _store_cache[resolved]

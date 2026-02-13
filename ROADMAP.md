@@ -418,20 +418,28 @@ make docker-up
 - `server/app/llm/deep_agent_service.py`
 - `docs/sandbox/`
 
-#### 6.3 Multi-User Support
+#### 6.3 Persistence & Data Management ✅
+- [x] **Pluggable Persistence Layer**: Abstract `PersistenceBackend` interface
+- [x] **SQLite Backend**: `SqliteBackend` using `AsyncSqliteSaver` for agent state
+- [x] **Session Storage Migration**: Consolidated `LocalSessionStore` to SQLite (`.cognition/state.db`)
+- [x] **Resilience**: Chat history and sessions survive server restarts
+- [ ] **Database Migration Tool**: (Deferred until schema stabilizes)
+
+**Files:**
+- `server/app/persistence/`
+- `server/app/session_store.py` (SQLite implementation)
+
+#### 6.4 Client Architecture (CLI)
+- [ ] Lightweight CLI client using `httpx` and `typer`
+- [ ] Interactive chat mode
+- [ ] Session management commands
+- [ ] Output formatting (markdown, syntax highlighting)
+
+#### 6.5 Multi-User Support (Deferred)
+Moved to future Enterprise/Cloud phase.
 - [ ] User authentication (API keys, JWT)
 - [ ] Workspace isolation between users
 - [ ] Resource quotas per user
-- [ ] Concurrent session limits
-- [ ] Audit logging
-
-#### 6.3 Data Management
-- [ ] SQLite database for metadata
-- [ ] Backup and restore utilities
-- [ ] Data retention policies
-- [ ] Export/import functionality
-
-#### 6.4 Advanced Features
 - [ ] Server-initiated events via SSE (`GET /events`)
 - [ ] Background task support
 - [ ] Session sharing and collaboration
@@ -571,9 +579,9 @@ Before moving to the next phase:
 
 ## Current Status
 
-**Completed**: Phase 1 (Core Foundation) ✅, Phase 2 (Production Hardening) ✅, Phase 3 (Multi-LLM & Model Management) ✅, Phase 4 (Advanced Agent Capabilities) ✅, Phase 5 (REST API Server) ✅, Phase 6.1 (Containerization & Observability) ✅, Phase 6.2 (Sandbox Execution) ✅
-**In Progress**: Phase 6.3 (Multi-User Support)
-**Deferred**: TUI client (too complex for MVP)
+**Completed**: Phase 1 (Core Foundation) ✅, Phase 2 (Production Hardening) ✅, Phase 3 (Multi-LLM & Model Management) ✅, Phase 4 (Advanced Agent Capabilities) ✅, Phase 5 (REST API Server) ✅, Phase 6.1 (Containerization & Observability) ✅, Phase 6.2 (Sandbox Execution) ✅, Phase 6.3 (Persistence) ✅
+**In Progress**: Phase 6.4 (CLI Client)
+**Deferred**: Multi-User Support, TUI client
 
 See GitHub issues for detailed task breakdown per phase.
 

@@ -83,7 +83,7 @@ async def agent_event_stream(
 
         # Get session from store
         store = get_session_store(workspace_path)
-        session = store.get_session(session_id)
+        session = await store.get_session(session_id)
 
         if not session:
             yield EventBuilder.error("Session not found", code="SESSION_NOT_FOUND")
@@ -183,7 +183,7 @@ async def send_message(
 
     # Check if session exists using the store
     store = get_session_store(workspace_path)
-    session = store.get_session(session_id)
+    session = await store.get_session(session_id)
 
     if session is None:
         raise HTTPException(
@@ -216,7 +216,7 @@ async def send_message(
     _messages[session_id].append(user_message)
 
     # Update session message count in store
-    store.update_message_count(session_id, len(_messages[session_id]))
+    await store.update_message_count(session_id, len(_messages[session_id]))
 
     # Create SSE stream with DeepAgents (multi-step support)
     event_stream = agent_event_stream(
@@ -244,7 +244,7 @@ async def list_messages(
 
     # Check if session exists
     store = get_session_store(workspace_path)
-    if store.get_session(session_id) is None:
+    if await store.get_session(session_id) is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Session not found: {session_id}",
@@ -285,7 +285,7 @@ async def get_message(
 
     # Check if session exists
     store = get_session_store(workspace_path)
-    if store.get_session(session_id) is None:
+    if await store.get_session(session_id) is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Session not found: {session_id}",

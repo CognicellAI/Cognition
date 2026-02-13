@@ -18,6 +18,7 @@ from langchain_core.messages import HumanMessage, SystemMessage
 
 from server.app.settings import Settings
 from server.app.agent import create_cognition_agent
+from server.app.persistence.factory import create_persistence_backend
 
 logger = structlog.get_logger(__name__)
 
@@ -122,6 +123,7 @@ class DeepAgentStreamingService:
             settings: Application settings for LLM configuration.
         """
         self.settings = settings
+        self.persistence_backend = create_persistence_backend(settings)
 
     async def stream_response(
         self,
@@ -147,11 +149,15 @@ class DeepAgentStreamingService:
             # Get the model first
             model = await self._get_model()
 
+            # Get checkpointer from persistence backend
+            checkpointer = await self.persistence_backend.get_checkpointer()
+
             # Create the deep agent for this session with the model
             agent = create_cognition_agent(
                 project_path=project_path,
                 model=model,
-                store=None,  # State is persisted via thread_id checkpointing
+                store=None,
+                checkpointer=checkpointer,
             )
 
             # Build the input with enhanced system prompt

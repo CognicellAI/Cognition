@@ -49,9 +49,11 @@ dependencies = [
     "opentelemetry-api>=1.28.0",
     "opentelemetry-sdk>=1.28.0",
     "opentelemetry-instrumentation-fastapi>=0.49b0",
+    "opentelemetry-instrumentation-langchain>=0.28b0",
     "opentelemetry-exporter-otlp>=1.28.0",
     "prometheus-client>=0.21.0",
     "langsmith[otel]>=0.4.25",
+    "langgraph-checkpoint-sqlite>=1.0.0",
 ]
 
 [project.optional-dependencies]

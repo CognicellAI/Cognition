@@ -83,6 +83,16 @@ class Settings(BaseSettings):
     otel_endpoint: Optional[str] = Field(default=None, alias="COGNITION_OTEL_ENDPOINT")
     metrics_port: int = Field(default=9090, alias="COGNITION_METRICS_PORT")
 
+    # Persistence settings
+    persistence_backend: Literal["sqlite", "memory", "postgres"] = Field(
+        default="sqlite",
+        alias="COGNITION_PERSISTENCE_BACKEND",
+    )
+    persistence_uri: str = Field(
+        default=".cognition/state.db",
+        alias="COGNITION_PERSISTENCE_URI",
+    )
+
     # Test settings
     test_llm_mode: Literal["mock", "openai", "ollama"] = Field(
         default="mock",

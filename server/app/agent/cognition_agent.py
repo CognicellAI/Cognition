@@ -49,6 +49,7 @@ def create_cognition_agent(
     project_path: str | Path,
     model: Any = None,
     store: Any = None,  # LangGraph store, unused with sandbox backend
+    checkpointer: Any = None,  # LangGraph checkpointer
     system_prompt: str | None = None,
 ) -> Any:
     """Create a Deep Agent for the Cognition system.
@@ -63,6 +64,7 @@ def create_cognition_agent(
         project_path: Path to the project workspace directory.
         model: LLM model to use. If None, uses default from settings.
         store: Optional LangGraph store (currently unused with sandbox backend).
+        checkpointer: Optional LangGraph checkpoint saver for state persistence.
         system_prompt: Optional custom system prompt. Uses default if not provided.
 
     Returns:
@@ -90,6 +92,7 @@ def create_cognition_agent(
         model=model,
         system_prompt=prompt,
         backend=backend,
+        checkpointer=checkpointer,
     )
 
     return agent
