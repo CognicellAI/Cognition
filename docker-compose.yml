@@ -35,13 +35,9 @@ services:
       - COGNITION_WORKSPACE_ROOT=/workspace
       - COGNITION_OTEL_ENDPOINT=http://jaeger:4317
       - COGNITION_METRICS_PORT=9090
-      # LangSmith OpenTelemetry Export to Jaeger (Option 2)
-      # This exports LangSmith traces in OTLP format to Jaeger
-      - LANGSMITH_OTEL_ENABLED=true
-      - LANGSMITH_TRACING=true
-      - LANGSMITH_OTEL_ONLY=true
-      - LANGSMITH_PROJECT=cognition
-      # OpenTelemetry OTLP Configuration pointing to Jaeger
+      # OpenTelemetry Configuration for Jaeger
+      # Disable LangSmith proprietary API, use OTLP only
+      - LANGSMITH_TRACING=false
       - OTEL_EXPORTER_OTLP_ENDPOINT=http://jaeger:4318
       - OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf
       - OTEL_SERVICE_NAME=cognition

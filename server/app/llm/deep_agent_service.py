@@ -144,14 +144,15 @@ class DeepAgentStreamingService:
             Stream events (tokens, tool calls, planning, completion, etc.)
         """
         try:
-            # Create the deep agent for this session
+            # Get the model first
+            model = await self._get_model()
+
+            # Create the deep agent for this session with the model
             agent = create_cognition_agent(
                 project_path=project_path,
+                model=model,
                 store=None,  # State is persisted via thread_id checkpointing
             )
-
-            # Use the agent's model
-            model = await self._get_model()
 
             # Build the input with enhanced system prompt
             messages = self._build_messages(content, system_prompt)

@@ -5,6 +5,7 @@ built on top of the deepagents foundation.
 """
 
 from server.app.agent.cognition_agent import create_cognition_agent
+from server.app.agent.sandbox_backend import CognitionSandboxBackend
 from server.app.agent.tools import (
     ToolRegistry,
     ToolCategory,
@@ -29,6 +30,7 @@ from server.app.agent.output import (
 
 __all__ = [
     "create_cognition_agent",
+    "CognitionSandboxBackend",
     "ToolRegistry",
     "ToolCategory",
     "register_enhanced_tools",
