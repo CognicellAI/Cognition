@@ -383,7 +383,7 @@ rate_limit:
 **Observability Stack:**
 - **Grafana** (port 3000) - Pre-built Cognition dashboard
 - **Prometheus** (port 9091) - Metrics collection
-- **Jaeger** (port 16686) - Distributed tracing via OTLP
+- **Jaeger** (port 16686) - Distributed tracing via OTLP (full agent internals)
 - **Loki + Promtail** - Log aggregation from containers
 
 **Quick Start:**
@@ -401,7 +401,24 @@ make docker-up
 # - Prometheus: http://localhost:9091
 ```
 
-#### 6.2 Multi-User Support
+#### 6.2 Agent Execution Environment (Sandbox) ✅
+- [x] **Local Sandbox Backend**: Hybrid native/shell isolation
+  - Inherits from `FilesystemBackend` for robust, native file operations
+  - Uses `LocalSandbox` for safe shell command execution via `subprocess`
+  - Safe path resolution (prevents escaping workspace)
+- [x] **Multi-step Task Completion**: Automatic ReAct loop via `deepagents`
+  - Planning with `write_todos`
+  - Tool chaining and error recovery
+  - Automatic state persistence via `thread_id`
+- [x] **Observability Integration**: Full tracing of agent internals via OpenTelemetry auto-instrumentation
+
+**Files:**
+- `server/app/agent/sandbox_backend.py`
+- `server/app/agent/cognition_agent.py`
+- `server/app/llm/deep_agent_service.py`
+- `docs/sandbox/`
+
+#### 6.3 Multi-User Support
 - [ ] User authentication (API keys, JWT)
 - [ ] Workspace isolation between users
 - [ ] Resource quotas per user
@@ -554,8 +571,8 @@ Before moving to the next phase:
 
 ## Current Status
 
-**Completed**: Phase 1 (Core Foundation) ✅, Phase 2 (Production Hardening) ✅, Phase 3 (Multi-LLM & Model Management) ✅, Phase 4 (Advanced Agent Capabilities) ✅, Phase 5 (REST API Server) ✅, Phase 6.1 (Containerization & Observability) ✅
-**In Progress**: Phase 6 (Production Readiness - remaining items)
+**Completed**: Phase 1 (Core Foundation) ✅, Phase 2 (Production Hardening) ✅, Phase 3 (Multi-LLM & Model Management) ✅, Phase 4 (Advanced Agent Capabilities) ✅, Phase 5 (REST API Server) ✅, Phase 6.1 (Containerization & Observability) ✅, Phase 6.2 (Sandbox Execution) ✅
+**In Progress**: Phase 6.3 (Multi-User Support)
 **Deferred**: TUI client (too complex for MVP)
 
 See GitHub issues for detailed task breakdown per phase.
@@ -589,11 +606,15 @@ Phase 5 server-side REST API migration completed with:
 **Note**: TUI client was abandoned - too complex. Will use simpler CLI approach in Phase 6.
 
 ### Phase 6 Plans
-Phase 5 focuses on REST API migration for improved observability, documentation, and tooling. The migration from WebSocket to REST + SSE will provide:
-- Full OpenAPI 3.1 documentation
-- Auto-generated SDKs
-- Standard HTTP debugging tools
-- Better proxy and load balancer support
-- Clear request/response semantics
+Phase 6 focuses on Production Readiness, including containerization, advanced agent execution environments, and multi-user support.
 
-The configuration system will support YAML files with hierarchical loading (defaults → global → project → env), and the Typer CLI will provide an intuitive interface for server management.
+**Completed so far (6.1 - 6.2):**
+1. **Full Observability Stack**: Docker Compose with Jaeger, Prometheus, Grafana, Loki.
+2. **Auto-Instrumentation**: Full internal tracing of LangChain/DeepAgents components.
+3. **Local Sandbox Backend**: Robust hybrid backend combining native Python file I/O with isolated shell execution.
+4. **Autonomous Execution**: Automatic multi-step ReAct loop with error recovery and planning.
+
+**Next Steps (6.3+):**
+- Implement user authentication and isolation.
+- Develop the lightweight CLI client.
+- Add database persistence (SQLite/Postgres).
