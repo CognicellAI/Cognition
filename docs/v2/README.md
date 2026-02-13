@@ -94,6 +94,7 @@ Cognition is domain-agnostic. It powers platforms such as:
 *   **[StarKeep (SpaceOps):](./blueprints/starkeep.md)** An orbital administrator for autonomous satellite repair and edge computing.
 *   **[ZeroOne (DeFi):](./blueprints/zeroone.md)** An algorithmic CEO for managing decentralized capital with transparent logic.
 *   **[BreachLens (Security):](./blueprints/cyber-investigation.md)** A forensic investigation platform for safely analyzing malware and breach logs.
+*   **[DataLens (Analytics):](./blueprints/data-analyst.md)** A headless data scientist for securely analyzing and visualizing business data.
 
 ## Getting Started
 
