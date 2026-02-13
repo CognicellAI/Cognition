@@ -30,15 +30,28 @@ services:
       - COGNITION_HOST=0.0.0.0
       - COGNITION_PORT=8000
       - COGNITION_LOG_LEVEL=info
-      - COGNITION_LLM_PROVIDER=mock
+      - COGNITION_LOG_FORMAT=json
+      - COGNITION_LLM_PROVIDER=openai_compatible
       - COGNITION_WORKSPACE_ROOT=/workspace
       - COGNITION_OTEL_ENDPOINT=http://jaeger:4317
       - COGNITION_METRICS_PORT=9090
+      # LangSmith OpenTelemetry Export to Jaeger (Option 2)
+      # This exports LangSmith traces in OTLP format to Jaeger
+      - LANGSMITH_OTEL_ENABLED=true
+      - LANGSMITH_TRACING=true
+      - LANGSMITH_OTEL_ONLY=true
+      - LANGSMITH_PROJECT=cognition
+      # OpenTelemetry OTLP Configuration pointing to Jaeger
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://jaeger:4318
+      - OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf
+      - OTEL_SERVICE_NAME=cognition
+      - OTEL_TRACES_EXPORTER=otlp
+      - OTEL_LOG_LEVEL=debug
       # Add your API keys here or in .env file
-      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - COGNITION_LLM_MODEL=google/gemini-3-flash-preview
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
-      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID:-}
-      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY:-}
+      - COGNITION_OPENAI_COMPATIBLE_BASE_URL=https://openrouter.ai/api/v1
+      - COGNITION_OPENAI_COMPATIBLE_API_KEY=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
     volumes:
       - ./workspaces:/workspace
       - ./.cognition:/app/.cognition
@@ -134,7 +147,6 @@ services:
       - ./docker/promtail-config.yml:/etc/promtail/config.yml:ro
       - /var/log:/var/log:ro
       - /var/lib/docker/containers:/var/lib/docker/containers:ro
-      - /var/run/docker.sock:/var/run/docker.sock:ro
     networks:
       - cognition-network
     depends_on:

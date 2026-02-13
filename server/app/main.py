@@ -20,9 +20,11 @@ from server.app.middleware import ObservabilityMiddleware, SecurityHeadersMiddle
 from server.app.observability import get_logger, setup_logging, setup_metrics, setup_tracing
 from server.app.rate_limiter import get_rate_limiter
 from server.app.settings import get_settings
+import os
 
-# Setup logging on module import
-setup_logging()
+# Setup logging on module import - check for JSON format env var
+json_format = os.getenv("COGNITION_LOG_FORMAT", "").lower() == "json"
+setup_logging(json_format=json_format)
 logger = get_logger(__name__)
 
 

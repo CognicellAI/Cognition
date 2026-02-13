@@ -25,16 +25,18 @@ from server.app.api.models import (
 from server.app.api.sse import SSEStream, EventBuilder
 from server.app.session_store import get_session_store
 from server.app.settings import Settings, get_settings
-from server.app.llm.streaming_service import (
-    get_session_llm_manager,
-    StreamingConfig,
-    SessionLLMManager,
+from server.app.llm.deep_agent_service import (
+    get_session_agent_manager,
+    DeepAgentStreamingService,
+    SessionAgentManager,
     TokenEvent,
     ToolCallEvent,
     ToolResultEvent,
     UsageEvent,
     DoneEvent,
     ErrorEvent,
+    PlanningEvent,
+    StepCompleteEvent,
 )
 
 router = APIRouter(prefix="/sessions/{session_id}/messages", tags=["messages"])
@@ -49,35 +51,35 @@ def get_settings_dependency() -> Settings:
     return get_settings()
 
 
-def get_llm_manager(settings: Settings = Depends(get_settings_dependency)) -> SessionLLMManager:
-    """Get the session LLM manager."""
-    return get_session_llm_manager(settings)
+def get_agent_manager(settings: Settings = Depends(get_settings_dependency)) -> SessionAgentManager:
+    """Get the session agent manager."""
+    return get_session_agent_manager(settings)
 
 
 async def agent_event_stream(
     session_id: str,
+    thread_id: str,
     content: str,
     workspace_path: str,
     settings: Settings,
-    llm_manager: SessionLLMManager,
+    agent_manager: SessionAgentManager,
 ) -> AsyncGenerator[dict, None]:
-    """Generate agent events as SSE.
+    """Generate agent events as SSE using DeepAgents.
 
-    Uses the real LLM streaming service to:
-    1. Call the configured LLM provider
-    2. Stream tokens as they are generated
-    3. Handle tool calls and execute them
-    4. Track usage and costs
-    5. Yield events for SSE
+    Uses DeepAgents for multi-step task completion:
+    1. Automatic ReAct loop (LLM → tool → LLM until complete)
+    2. State persistence via thread_id checkpointing
+    3. Built-in planning with write_todos
+    4. Context management and streaming
     """
     try:
-        # Get or create LLM service for this session
-        service = llm_manager.get_service(session_id)
+        # Get or create agent service for this session
+        service = agent_manager.get_service(session_id)
 
         if not service:
-            # Session not registered with LLM manager yet
+            # Session not registered with agent manager yet
             # Register with workspace path
-            service = llm_manager.register_session(session_id, workspace_path)
+            service = agent_manager.register_session(session_id, workspace_path)
 
         # Get session from store
         store = get_session_store(workspace_path)
@@ -87,34 +89,19 @@ async def agent_event_stream(
             yield EventBuilder.error("Session not found", code="SESSION_NOT_FOUND")
             return
 
-        # Build streaming config from session settings
-        config = StreamingConfig(
-            system_prompt=session.config.system_prompt
-            if session and session.config.system_prompt
-            else (
-                "You are Cognition, an expert AI coding assistant.\n\n"
-                "Your goal is to help users write, edit, and understand code. "
-                "You have access to a filesystem and can execute commands.\n\n"
-                "Key capabilities:\n"
-                "- Read and write files in the workspace\n"
-                "- List directory contents\n"
-                "- Search files using patterns\n"
-                "- Execute shell commands (tests, git, etc.)\n\n"
-                "Best practices:\n"
-                "1. Always check what files exist before making changes\n"
-                "2. Read relevant files before editing\n"
-                "3. Use edit_file for precise changes\n"
-                "4. Run tests after making changes\n"
-                "5. Explain your reasoning before taking actions"
-            ),
-            temperature=session.config.temperature
-            if session and session.config.temperature
-            else 0.7,
-            max_tokens=session.config.max_tokens if session and session.config.max_tokens else None,
-        )
+        # Get system prompt from session or use default
+        system_prompt = None
+        if session and session.config.system_prompt:
+            system_prompt = session.config.system_prompt
 
-        # Stream LLM response
-        async for event in service.stream_response(session_id, content, config):
+        # Stream response using DeepAgents with multi-step support
+        async for event in service.stream_response(
+            session_id=session_id,
+            thread_id=thread_id,
+            project_path=workspace_path,
+            content=content,
+            system_prompt=system_prompt,
+        ):
             if isinstance(event, TokenEvent):
                 yield EventBuilder.token(event.content)
 
@@ -130,6 +117,16 @@ async def agent_event_stream(
                     tool_call_id=event.tool_call_id,
                     output=event.output,
                     exit_code=event.exit_code,
+                )
+
+            elif isinstance(event, PlanningEvent):
+                yield EventBuilder.planning(event.todos)
+
+            elif isinstance(event, StepCompleteEvent):
+                yield EventBuilder.step_complete(
+                    step_number=event.step_number,
+                    total_steps=event.total_steps,
+                    description=event.description,
                 )
 
             elif isinstance(event, UsageEvent):
@@ -166,7 +163,7 @@ async def send_message(
     request: MessageCreate,
     http_request: Request,
     settings: Settings = Depends(get_settings_dependency),
-    llm_manager: SessionLLMManager = Depends(get_llm_manager),
+    agent_manager: SessionAgentManager = Depends(get_agent_manager),
 ):
     """Send a message to the agent.
 
@@ -176,6 +173,8 @@ async def send_message(
     - `token`: Streaming LLM token
     - `tool_call`: Agent invoking a tool
     - `tool_result`: Tool execution result
+    - `planning`: Agent is creating a plan for complex tasks
+    - `step_complete`: A step in the plan has been completed
     - `usage`: Token usage and cost information
     - `error`: Error occurred
     - `done`: Stream complete
@@ -191,6 +190,14 @@ async def send_message(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Session not found: {session_id}",
         )
+
+    # Get thread_id from session for state persistence
+    # The session should have a thread_id for DeepAgents checkpointing
+    thread_id = getattr(session, "thread_id", None)
+    if not thread_id:
+        thread_id = str(uuid.uuid4())
+        # Store thread_id on session for persistence
+        session.thread_id = thread_id
 
     # Create user message
     message_id = str(uuid.uuid4())
@@ -211,9 +218,9 @@ async def send_message(
     # Update session message count in store
     store.update_message_count(session_id, len(_messages[session_id]))
 
-    # Create SSE stream with real LLM
+    # Create SSE stream with DeepAgents (multi-step support)
     event_stream = agent_event_stream(
-        session_id, request.content, workspace_path, settings, llm_manager
+        session_id, thread_id, request.content, workspace_path, settings, agent_manager
     )
 
     return SSEStream.create_response(event_stream, http_request)

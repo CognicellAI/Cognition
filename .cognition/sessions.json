@@ -1630,5 +1630,22 @@
     "created_at": "2026-02-13T05:29:38.142607",
     "updated_at": "2026-02-13T05:29:38.144918",
     "message_count": 1
+  },
+  "7757e9b6-7bb9-4007-8797-fbb24bebe13d": {
+    "id": "7757e9b6-7bb9-4007-8797-fbb24bebe13d",
+    "workspace_path": "/app",
+    "title": "test",
+    "thread_id": "4621f672-a37e-43de-83bd-fdc8a497d3fb",
+    "status": "active",
+    "config": {
+      "provider": "mock",
+      "model": "gpt-4o",
+      "temperature": null,
+      "max_tokens": null,
+      "system_prompt": null
+    },
+    "created_at": "2026-02-13T07:28:01.202618",
+    "updated_at": "2026-02-13T08:17:27.306424",
+    "message_count": 8
   }
 }

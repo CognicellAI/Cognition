@@ -6,6 +6,7 @@ Streams tokens, tool calls, and usage info via async generators.
 
 from __future__ import annotations
 
+import time
 import uuid
 from dataclasses import dataclass, field
 from typing import Any, AsyncGenerator, Callable, Optional, Sequence
@@ -23,8 +24,10 @@ from langchain_core.tools import BaseTool, tool
 from server.app.settings import Settings
 from server.app.sandbox import LocalSandbox
 from server.app.llm.provider_fallback import ProviderFallbackChain
+from server.app.observability import get_tracer, span
 
 logger = structlog.get_logger(__name__)
+tracer = get_tracer(__name__)
 
 
 @dataclass

@@ -141,3 +141,20 @@ class EventBuilder:
                 "model": model,
             },
         }
+
+    @staticmethod
+    def planning(todos: list[dict]) -> dict:
+        """Create a planning event showing the task breakdown."""
+        return {"event": "planning", "data": {"todos": todos}}
+
+    @staticmethod
+    def step_complete(step_number: int, total_steps: int, description: str) -> dict:
+        """Create a step completion event."""
+        return {
+            "event": "step_complete",
+            "data": {
+                "step_number": step_number,
+                "total_steps": total_steps,
+                "description": description,
+            },
+        }

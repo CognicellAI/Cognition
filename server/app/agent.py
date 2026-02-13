@@ -36,20 +36,24 @@ def create_cognition_agent(
     project_path: str | Path,
     model: Any = None,
     store: BaseStore | None = None,
+    system_prompt: str | None = None,
 ) -> Any:
     """Create a Deep Agent for the Cognition system.
 
     This factory creates an agent with:
     - LocalSandbox for filesystem access and command execution
     - CompositeBackend routing workspace to LocalSandbox and memories to Store
+    - Multi-step ReAct loop with write_todos support
+    - State checkpointing via thread_id
 
     Args:
         project_path: Path to the project workspace directory.
         model: LLM model to use. If None, uses default from settings.
         store: Optional store for persistent memories across sessions.
+        system_prompt: Optional custom system prompt. Uses default if not provided.
 
     Returns:
-        Configured Deep Agent ready to handle coding tasks.
+        Configured Deep Agent ready to handle coding tasks with multi-step support.
     """
     from deepagents.backends import CompositeBackend, StoreBackend
 
@@ -68,10 +72,13 @@ def create_cognition_agent(
             routes=routes,
         )
 
-    # Create the agent
+    # Use provided system prompt or default
+    prompt = system_prompt if system_prompt else SYSTEM_PROMPT
+
+    # Create the agent with multi-step support
     agent = create_deep_agent(
         model=model,
-        system_prompt=SYSTEM_PROMPT,
+        system_prompt=prompt,
         backend=backend_factory,
         store=store,
     )

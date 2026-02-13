@@ -14,14 +14,14 @@ RUN python -m venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 
 # Copy and install dependencies
-COPY pyproject.toml .
+COPY pyproject.toml README.md .
 RUN pip install --no-cache-dir -e ".[all]"
 
 # Production stage
 FROM python:3.11-slim AS production
 
-# Security: Run as non-root user
-RUN groupadd -r cognition && useradd -r -g cognition -u 1000 cognition
+# Security: Run as non-root user with home directory
+RUN groupadd -r cognition && useradd -r -g cognition -u 1000 -m cognition
 
 # Install runtime dependencies only
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -43,11 +43,17 @@ COPY client/ ./client/
 COPY shared/ ./shared/
 COPY pyproject.toml .
 
-# Create workspace directory
-RUN mkdir -p /workspace && chown -R cognition:cognition /workspace /app
+# Create workspace directory and set permissions
+RUN mkdir -p /workspace /home/cognition/.cache && \
+    chown -R cognition:cognition /workspace /app /home/cognition
 
 # Switch to non-root user
 USER cognition
+
+# Set cache directories to avoid permission issues
+ENV UV_CACHE_DIR=/tmp/uv-cache
+ENV PIP_CACHE_DIR=/tmp/pip-cache
+ENV PYTHONDONTWRITEBYTECODE=1
 
 # Expose ports
 # 8000 - FastAPI server
