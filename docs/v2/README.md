@@ -63,7 +63,7 @@ graph TD
         
         subgraph "Trust Layer"
             Audit[OTLP Tracer]
-            State[Persistence (SQLite/Postgres)]
+            State[Persistence - SQLite/Postgres]
         end
         
         subgraph "Execution Layer"
@@ -90,10 +90,10 @@ graph TD
 
 Cognition is domain-agnostic. It powers platforms such as:
 
-*   **Security Operations (SOC):** Platforms where agents safely analyze breach logs and detonated malware.
-*   **Infrastructure Automation:** DevOps platforms where agents manage K8s clusters or cloud resources.
-*   **Legal Discovery:** Platforms where agents search and summarize millions of sensitive contracts.
-*   **Data Science:** Platforms where agents generate and run Python analysis code on proprietary datasets.
+*   **[GeneSmith (BioTech):](./blueprints/genesmith.md)** A biological foundry for designing and simulating proteins in a secure, audited environment.
+*   **[StarKeep (SpaceOps):](./blueprints/starkeep.md)** An orbital administrator for autonomous satellite repair and edge computing.
+*   **[ZeroOne (DeFi):](./blueprints/zeroone.md)** An algorithmic CEO for managing decentralized capital with transparent logic.
+*   **[BreachLens (Security):](./blueprints/cyber-investigation.md)** A forensic investigation platform for safely analyzing malware and breach logs.
 
 ## Getting Started
 
