@@ -1681,5 +1681,158 @@
     "created_at": "2026-02-13T14:06:52.094582",
     "updated_at": "2026-02-13T14:12:20.121520",
     "message_count": 1
+  },
+  "307e0cb8-358c-42e6-b6d8-271e08ab1467": {
+    "id": "307e0cb8-358c-42e6-b6d8-271e08ab1467",
+    "workspace_path": "/Users/dubh3124/workspace/cognition",
+    "title": null,
+    "thread_id": "285dd55a-769e-49ae-a6b5-d3c1c02a9019",
+    "status": "active",
+    "config": {
+      "provider": "openai_compatible",
+      "model": "google/gemini-3-flash-preview",
+      "temperature": null,
+      "max_tokens": null,
+      "system_prompt": null
+    },
+    "created_at": "2026-02-13T14:43:47.280147",
+    "updated_at": "2026-02-13T14:43:47.297777",
+    "message_count": 1
+  },
+  "f77ea37e-9053-4ce2-b36c-284f86f579e4": {
+    "id": "f77ea37e-9053-4ce2-b36c-284f86f579e4",
+    "workspace_path": "/Users/dubh3124/workspace/cognition",
+    "title": null,
+    "thread_id": "c4975466-38ca-42f4-b7a3-20261446e72c",
+    "status": "active",
+    "config": {
+      "provider": "openai_compatible",
+      "model": "google/gemini-3-flash-preview",
+      "temperature": null,
+      "max_tokens": null,
+      "system_prompt": null
+    },
+    "created_at": "2026-02-13T14:43:56.684877",
+    "updated_at": "2026-02-13T14:43:56.699995",
+    "message_count": 1
+  },
+  "e3112c77-a44f-40c0-b700-510e5e971151": {
+    "id": "e3112c77-a44f-40c0-b700-510e5e971151",
+    "workspace_path": "/Users/dubh3124/workspace/cognition",
+    "title": null,
+    "thread_id": "5c931108-dc7b-418f-9f66-e0a290912d10",
+    "status": "active",
+    "config": {
+      "provider": "openai_compatible",
+      "model": "google/gemini-3-flash-preview",
+      "temperature": null,
+      "max_tokens": null,
+      "system_prompt": null
+    },
+    "created_at": "2026-02-13T14:44:00.892657",
+    "updated_at": "2026-02-13T14:44:00.908191",
+    "message_count": 1
+  },
+  "7f626ab7-21c5-4128-bb0f-549efa567c62": {
+    "id": "7f626ab7-21c5-4128-bb0f-549efa567c62",
+    "workspace_path": "/Users/dubh3124/workspace/cognition",
+    "title": null,
+    "thread_id": "23d6b5d7-1d19-49b2-b45a-c8ab04e68fa0",
+    "status": "active",
+    "config": {
+      "provider": "openai_compatible",
+      "model": "google/gemini-3-flash-preview",
+      "temperature": null,
+      "max_tokens": null,
+      "system_prompt": null
+    },
+    "created_at": "2026-02-13T14:48:50.383982",
+    "updated_at": "2026-02-13T14:48:50.399030",
+    "message_count": 1
+  },
+  "b5dd69c6-8a3b-4ec1-8a9d-3acf2e950039": {
+    "id": "b5dd69c6-8a3b-4ec1-8a9d-3acf2e950039",
+    "workspace_path": "/Users/dubh3124/workspace/cognition",
+    "title": null,
+    "thread_id": "5f2afba5-365a-4ad1-afe3-b8c52ee9cae6",
+    "status": "active",
+    "config": {
+      "provider": "openai_compatible",
+      "model": "google/gemini-3-flash-preview",
+      "temperature": null,
+      "max_tokens": null,
+      "system_prompt": null
+    },
+    "created_at": "2026-02-13T14:48:54.230018",
+    "updated_at": "2026-02-13T14:48:54.244634",
+    "message_count": 1
+  },
+  "a07518b8-f205-4e3e-a3de-644e15dfb4f7": {
+    "id": "a07518b8-f205-4e3e-a3de-644e15dfb4f7",
+    "workspace_path": "/Users/dubh3124/workspace/cognition",
+    "title": null,
+    "thread_id": "d8d8c63f-2d17-459e-8ed4-6b8fe54cb681",
+    "status": "active",
+    "config": {
+      "provider": "openai_compatible",
+      "model": "google/gemini-3-flash-preview",
+      "temperature": null,
+      "max_tokens": null,
+      "system_prompt": null
+    },
+    "created_at": "2026-02-13T14:49:00.073009",
+    "updated_at": "2026-02-13T14:49:00.089511",
+    "message_count": 1
+  },
+  "40ce7899-6e2f-410e-a2b8-3ddc9ee4b98f": {
+    "id": "40ce7899-6e2f-410e-a2b8-3ddc9ee4b98f",
+    "workspace_path": "/Users/dubh3124/workspace/cognition",
+    "title": null,
+    "thread_id": "701da57f-3b54-43e2-a148-796a51cfde14",
+    "status": "active",
+    "config": {
+      "provider": "openai_compatible",
+      "model": "google/gemini-3-flash-preview",
+      "temperature": null,
+      "max_tokens": null,
+      "system_prompt": null
+    },
+    "created_at": "2026-02-13T14:49:23.233427",
+    "updated_at": "2026-02-13T14:49:23.248324",
+    "message_count": 1
+  },
+  "5ec0d259-a4f0-4958-9f8d-95239e658fe3": {
+    "id": "5ec0d259-a4f0-4958-9f8d-95239e658fe3",
+    "workspace_path": "/Users/dubh3124/workspace/cognition",
+    "title": null,
+    "thread_id": "0fc2f11e-75b4-4984-9ffb-f9a34298331b",
+    "status": "active",
+    "config": {
+      "provider": "openai_compatible",
+      "model": "google/gemini-3-flash-preview",
+      "temperature": null,
+      "max_tokens": null,
+      "system_prompt": null
+    },
+    "created_at": "2026-02-13T14:49:27.937421",
+    "updated_at": "2026-02-13T14:49:27.951806",
+    "message_count": 1
+  },
+  "bf847638-5b90-4847-b532-c1ac5d384a66": {
+    "id": "bf847638-5b90-4847-b532-c1ac5d384a66",
+    "workspace_path": "/Users/dubh3124/workspace/cognition",
+    "title": null,
+    "thread_id": "928d1d46-26fd-4b9d-9671-8a5127387664",
+    "status": "active",
+    "config": {
+      "provider": "openai_compatible",
+      "model": "google/gemini-3-flash-preview",
+      "temperature": null,
+      "max_tokens": null,
+      "system_prompt": null
+    },
+    "created_at": "2026-02-13T14:49:32.238561",
+    "updated_at": "2026-02-13T14:49:32.253233",
+    "message_count": 1
   }
 }

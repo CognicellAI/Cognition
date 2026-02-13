@@ -39,8 +39,7 @@ async def lifespan(app: FastAPI):
 
     settings = get_settings()
 
-    # Setup observability
-    setup_tracing(endpoint=settings.otel_endpoint)
+    setup_tracing(endpoint=settings.otel_endpoint, app=app)
     setup_metrics()
 
     # Initialize rate limiter

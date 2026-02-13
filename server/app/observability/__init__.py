@@ -39,6 +39,17 @@ try:
         except ImportError:
             OTLPSpanExporter = None
 
+    # Instrumentation imports
+    try:
+        from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
+    except ImportError:
+        FastAPIInstrumentor = None
+
+    try:
+        from opentelemetry.instrumentation.langchain import LangchainInstrumentor
+    except ImportError:
+        LangchainInstrumentor = None
+
     OPENTELEMETRY_AVAILABLE = True
 except ImportError:
     OPENTELEMETRY_AVAILABLE = False
@@ -47,6 +58,8 @@ except ImportError:
     Resource = None
     TracerProvider = None
     BatchSpanProcessor = None
+    FastAPIInstrumentor = None
+    LangchainInstrumentor = None
 
 # Type variable for generic function decorator
 F = TypeVar("F", bound=Callable[..., Any])
@@ -93,12 +106,17 @@ else:
     SESSION_COUNT = DummyMetric()
 
 
-def setup_tracing(service_name: str = "cognition", endpoint: str | None = None) -> None:
+def setup_tracing(
+    service_name: str = "cognition",
+    endpoint: str | None = None,
+    app: Any | None = None,
+) -> None:
     """Initialize OpenTelemetry tracing.
 
     Args:
         service_name: Name of the service for trace identification
         endpoint: OTLP endpoint URL (e.g., "http://localhost:4317")
+        app: FastAPI application instance to instrument
     """
     if not OPENTELEMETRY_AVAILABLE or Resource is None or TracerProvider is None:
         logger = structlog.get_logger()
@@ -109,12 +127,26 @@ def setup_tracing(service_name: str = "cognition", endpoint: str | None = None) 
     provider = TracerProvider(resource=resource)
 
     if endpoint and OTLPSpanExporter and BatchSpanProcessor:
+        # Check if using HTTP or gRPC based on endpoint schema
+        if "http" in endpoint and not endpoint.endswith("/v1/traces"):
+            # Append path for HTTP exporter if missing
+            if ":4318" in endpoint:
+                endpoint = f"{endpoint}/v1/traces"
+
         exporter = OTLPSpanExporter(endpoint=endpoint)
         processor = BatchSpanProcessor(exporter)
         provider.add_span_processor(processor)
 
     if trace:
         trace.set_tracer_provider(provider)
+
+    # Instrument FastAPI
+    if app and FastAPIInstrumentor:
+        FastAPIInstrumentor.instrument_app(app, tracer_provider=provider)
+
+    # Instrument LangChain
+    if LangchainInstrumentor:
+        LangchainInstrumentor().instrument(tracer_provider=provider)
 
 
 def setup_logging(log_level: str = "info", json_format: bool = False) -> None:

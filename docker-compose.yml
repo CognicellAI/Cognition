@@ -14,8 +14,6 @@
 #   - loki:         Log aggregation
 #   - promtail:     Log shipping
 
-version: "3.8"
-
 services:
   # Cognition Server
   cognition:
@@ -38,6 +36,7 @@ services:
       # OpenTelemetry Configuration for Jaeger
       # Disable LangSmith proprietary API, use OTLP only
       - LANGSMITH_TRACING=false
+      - OTEL_ENABLED=true
       - OTEL_EXPORTER_OTLP_ENDPOINT=http://jaeger:4318
       - OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf
       - OTEL_SERVICE_NAME=cognition

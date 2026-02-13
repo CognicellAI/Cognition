@@ -153,7 +153,12 @@ class TestSandboxWorkflow:
             tool_results = [e for e in events if e["type"] == "tool_result"]
 
             print(f"   ✓ Agent made {len(tool_calls)} tool calls")
+            for tc in tool_calls:
+                print(f"     - Tool: {tc['data']['name']} Args: {tc['data']['args']}")
+
             print(f"   ✓ Got {len(tool_results)} tool results")
+            for tr in tool_results:
+                print(f"     - Result: {tr['data']['output']}")
 
             # Verify the file was created in the workspace
             print("\n🔍 Step 2: Verifying file in workspace...")
