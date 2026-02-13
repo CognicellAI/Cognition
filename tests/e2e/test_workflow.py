@@ -3,16 +3,14 @@
 These tests verify the complete system works together:
 1. Server startup
 2. Client connection
-3. Project creation
-4. Session creation
-5. Message sending with SSE streaming
-6. Error handling
+3. Session creation (workspace-based)
+4. Message sending with SSE streaming
+5. Error handling
 """
 
 import asyncio
 import json
 import os
-import signal
 import subprocess
 import sys
 import time
@@ -101,97 +99,9 @@ class TestServerLifecycle:
             assert response.status_code == 200
             spec = response.json()
             assert spec["openapi"].startswith("3.")
-            assert "/projects" in str(spec["paths"])
+            # No more projects endpoint - sessions are workspace-based
             assert "/sessions" in str(spec["paths"])
-
-
-class TestProjectWorkflow:
-    """Test complete project workflow."""
-
-    @pytest_asyncio.fixture
-    async def server(self, unused_tcp_port):
-        """Start server and return base URL."""
-        port = unused_tcp_port
-        env = os.environ.copy()
-        env["COGNITION_PORT"] = str(port)
-        env["COGNITION_HOST"] = "127.0.0.1"
-        env["COGNITION_LLM_PROVIDER"] = "mock"
-
-        process = subprocess.Popen(
-            [sys.executable, "-m", "uvicorn", "server.app.main:app", "--port", str(port)],
-            env=env,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            cwd=str(Path(__file__).parent.parent.parent),
-        )
-
-        base_url = f"http://127.0.0.1:{port}"
-        start_time = time.time()
-        while time.time() - start_time < 10:
-            try:
-                async with httpx.AsyncClient() as client:
-                    response = await client.get(f"{base_url}/ready")
-                    if response.status_code == 200:
-                        break
-            except Exception:
-                await asyncio.sleep(0.1)
-        else:
-            process.terminate()
-            process.wait(timeout=5)
-            raise RuntimeError("Server failed to start")
-
-        yield base_url
-
-        process.terminate()
-        try:
-            process.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            process.kill()
-            process.wait()
-
-    async def test_create_and_list_projects(self, server):
-        """Test creating a project and listing it."""
-        async with httpx.AsyncClient() as client:
-            # Create project
-            create_resp = await client.post(
-                f"{server}/projects",
-                json={"name": "e2e-test-project", "description": "Test project"},
-            )
-            assert create_resp.status_code == 201
-            project = create_resp.json()
-            assert project["name"] == "e2e-test-project"
-            assert "id" in project
-            project_id = project["id"]
-
-            # List projects
-            list_resp = await client.get(f"{server}/projects")
-            assert list_resp.status_code == 200
-            data = list_resp.json()
-            assert data["total"] >= 1
-            # Check project exists by name prefix (directory name includes ID suffix)
-            assert any(p["name"].startswith("e2e-test-project") for p in data["projects"])
-
-            # Get specific project
-            get_resp = await client.get(f"{server}/projects/{project_id}")
-            # Note: Get might return 404 in current implementation
-            # as it's not fully implemented
-
-    async def test_project_validation(self, server):
-        """Test project creation validation."""
-        async with httpx.AsyncClient() as client:
-            # Empty name should fail
-            response = await client.post(
-                f"{server}/projects",
-                json={"name": ""},
-            )
-            assert response.status_code == 422
-
-            # Missing name should fail
-            response = await client.post(
-                f"{server}/projects",
-                json={},
-            )
-            assert response.status_code == 422
+            assert "/sessions/{session_id}/messages" in str(spec["paths"])
 
 
 class TestSessionWorkflow:
@@ -238,42 +148,29 @@ class TestSessionWorkflow:
             process.kill()
             process.wait()
 
-    @pytest_asyncio.fixture
-    async def project(self, server):
-        """Create a project and return its ID."""
-        async with httpx.AsyncClient() as client:
-            response = await client.post(
-                f"{server}/projects",
-                json={"name": "e2e-session-test"},
-            )
-            assert response.status_code == 201
-            return response.json()["id"]
-
-    async def test_create_session(self, server, project):
+    async def test_create_session(self, server):
         """Test creating a session."""
         async with httpx.AsyncClient() as client:
             response = await client.post(
                 f"{server}/sessions",
                 json={
-                    "project_id": project,
                     "title": "E2E Test Session",
-                    "config": {"provider": "mock", "temperature": 0.5},
                 },
             )
             assert response.status_code == 201
             session = response.json()
-            assert session["project_id"] == project
             assert session["title"] == "E2E Test Session"
             assert "id" in session
             assert "thread_id" in session
+            # Note: No workspace_path or config (server uses global settings)
 
-    async def test_list_sessions(self, server, project):
+    async def test_list_sessions(self, server):
         """Test listing sessions."""
         async with httpx.AsyncClient() as client:
             # Create a session first
             create_resp = await client.post(
                 f"{server}/sessions",
-                json={"project_id": project, "title": "List Test"},
+                json={"title": "List Test"},
             )
             assert create_resp.status_code == 201
 
@@ -282,21 +179,16 @@ class TestSessionWorkflow:
             assert list_resp.status_code == 200
             data = list_resp.json()
             assert data["total"] >= 1
+            # Check session exists by title
+            assert any(s["title"] == "List Test" for s in data["sessions"])
 
-            # Filter by project
-            filtered_resp = await client.get(
-                f"{server}/sessions",
-                params={"project_id": project},
-            )
-            assert filtered_resp.status_code == 200
-
-    async def test_update_session(self, server, project):
+    async def test_update_session(self, server):
         """Test updating a session."""
         async with httpx.AsyncClient() as client:
             # Create session
             create_resp = await client.post(
                 f"{server}/sessions",
-                json={"project_id": project, "title": "Original"},
+                json={"title": "Original"},
             )
             session_id = create_resp.json()["id"]
 
@@ -308,13 +200,13 @@ class TestSessionWorkflow:
             assert update_resp.status_code == 200
             assert update_resp.json()["title"] == "Updated"
 
-    async def test_delete_session(self, server, project):
+    async def test_delete_session(self, server):
         """Test deleting a session."""
         async with httpx.AsyncClient() as client:
             # Create session
             create_resp = await client.post(
                 f"{server}/sessions",
-                json={"project_id": project},
+                json={"title": "Delete Test"},
             )
             session_id = create_resp.json()["id"]
 
@@ -373,19 +265,12 @@ class TestMessageWorkflow:
 
     @pytest_asyncio.fixture
     async def session(self, server):
-        """Create a project and session, return session ID."""
+        """Create a session, return session ID."""
         async with httpx.AsyncClient() as client:
-            # Create project
-            project_resp = await client.post(
-                f"{server}/projects",
-                json={"name": "e2e-message-test"},
-            )
-            project_id = project_resp.json()["id"]
-
-            # Create session
+            # Create session directly (no project needed)
             session_resp = await client.post(
                 f"{server}/sessions",
-                json={"project_id": project_id, "title": "Message Test"},
+                json={"title": "Message Test"},
             )
             return session_resp.json()["id"]
 
@@ -484,36 +369,28 @@ class TestErrorHandling:
             process.wait()
 
     async def test_404_errors(self, server):
-        """Test 404 error responses."""
+        """Test 404 error handling."""
         async with httpx.AsyncClient() as client:
-            # Non-existent project
-            response = await client.get(f"{server}/projects/non-existent")
-            assert response.status_code == 404
-
             # Non-existent session
-            response = await client.get(f"{server}/sessions/non-existent")
-            assert response.status_code == 404
-
-            # Non-existent message
-            response = await client.get(f"{server}/sessions/non-existent/messages/msg-id")
+            response = await client.get(f"{server}/sessions/non-existent-id")
             assert response.status_code == 404
 
     async def test_validation_errors(self, server):
-        """Test validation error responses."""
+        """Test validation error handling."""
         async with httpx.AsyncClient() as client:
-            # Invalid session config
+            # Title too long
             response = await client.post(
                 f"{server}/sessions",
-                json={"project_id": "test", "config": {"temperature": 5.0}},  # Invalid: > 2.0
+                json={"title": "x" * 201},
             )
             assert response.status_code == 422
 
     async def test_session_not_found_for_message(self, server):
-        """Test sending message to non-existent session."""
+        """Test error when sending message to non-existent session."""
         async with httpx.AsyncClient() as client:
             response = await client.post(
                 f"{server}/sessions/non-existent/messages",
-                json={"content": "Hello"},
+                json={"content": "Test"},
             )
             assert response.status_code == 404
 
@@ -563,33 +440,24 @@ class TestFullWorkflow:
             process.wait()
 
     async def test_complete_conversation(self, server):
-        """Test complete conversation workflow.
-
-        1. Create project
-        2. Create session
-        3. Send multiple messages
-        4. Verify responses
-        5. Clean up
-        """
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            # 1. Create project
-            project_resp = await client.post(
-                f"{server}/projects",
-                json={"name": "e2e-full-workflow", "description": "Complete test"},
-            )
-            assert project_resp.status_code == 201
-            project_id = project_resp.json()["id"]
-
-            # 2. Create session
+        """Test a complete conversation workflow."""
+        async with httpx.AsyncClient() as client:
+            # Create session
             session_resp = await client.post(
                 f"{server}/sessions",
-                json={"project_id": project_id, "title": "Conversation"},
+                json={
+                    "title": "Complete Test",
+                    "config": {"provider": "mock", "temperature": 0.7},
+                },
             )
             assert session_resp.status_code == 201
             session_id = session_resp.json()["id"]
 
-            # 3. Send first message
-            events1 = []
+            # List sessions
+            list_resp = await client.get(f"{server}/sessions")
+            assert list_resp.status_code == 200
+
+            # Send a message
             async with client.stream(
                 "POST",
                 f"{server}/sessions/{session_id}/messages",
@@ -597,48 +465,30 @@ class TestFullWorkflow:
                 headers={"Accept": "text/event-stream"},
             ) as response:
                 assert response.status_code == 200
+
+                # Collect events
+                events = []
                 async for line in response.aiter_lines():
                     if line.startswith("event: "):
                         event_type = line[7:]
                     elif line.startswith("data: "):
                         data = json.loads(line[6:])
-                        events1.append({"event": event_type, "data": data})
+                        events.append({"event": event_type, "data": data})
 
-            # Verify first response
-            done_events = [e for e in events1 if e["event"] == "done"]
-            assert len(done_events) == 1
+                # Verify stream completed
+                done_events = [e for e in events if e["event"] == "done"]
+                assert len(done_events) == 1
 
-            # 4. Send second message
-            events2 = []
-            async with client.stream(
-                "POST",
-                f"{server}/sessions/{session_id}/messages",
-                json={"content": "What files are in this project?"},
-                headers={"Accept": "text/event-stream"},
-            ) as response:
-                assert response.status_code == 200
-                async for line in response.aiter_lines():
-                    if line.startswith("event: "):
-                        event_type = line[7:]
-                    elif line.startswith("data: "):
-                        data = json.loads(line[6:])
-                        events2.append({"event": event_type, "data": data})
-
-            # Verify second response
-            done_events = [e for e in events2 if e["event"] == "done"]
-            assert len(done_events) == 1
-
-            # 5. List messages
+            # List messages
             messages_resp = await client.get(f"{server}/sessions/{session_id}/messages")
             assert messages_resp.status_code == 200
-            messages_data = messages_resp.json()
-            assert messages_data["total"] >= 2  # At least 2 user messages
+            data = messages_resp.json()
+            assert data["total"] >= 1
 
-            # 6. Clean up
-            await client.delete(f"{server}/sessions/{session_id}")
-            await client.delete(f"{server}/projects/{project_id}")
+            # Clean up - delete session
+            delete_resp = await client.delete(f"{server}/sessions/{session_id}")
+            assert delete_resp.status_code == 204
 
-            print(f"✅ Complete workflow test passed!")
-            print(f"   - Project: {project_id}")
-            print(f"   - Session: {session_id}")
-            print(f"   - Messages: {messages_data['total']}")
+            # Verify deletion
+            get_resp = await client.get(f"{server}/sessions/{session_id}")
+            assert get_resp.status_code == 404

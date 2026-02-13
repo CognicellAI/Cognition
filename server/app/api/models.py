@@ -1,6 +1,7 @@
 """Pydantic models for REST API.
 
-All request/response models for the REST API.
+API request/response models using Pydantic.
+These wrap the core domain models from server.app.models.
 """
 
 from __future__ import annotations
@@ -10,36 +11,7 @@ from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, Field
 
-
-# ============================================================================
-# Project Models
-# ============================================================================
-
-
-class ProjectCreate(BaseModel):
-    """Request to create a new project."""
-
-    name: str = Field(..., min_length=1, max_length=100, description="Project name")
-    description: Optional[str] = Field(None, max_length=500, description="Project description")
-    path: Optional[str] = Field(None, description="Custom path for project workspace")
-
-
-class ProjectResponse(BaseModel):
-    """Project information response."""
-
-    id: str = Field(..., description="Unique project identifier")
-    name: str = Field(..., description="Project name")
-    description: Optional[str] = Field(None, description="Project description")
-    path: str = Field(..., description="Absolute path to project workspace")
-    created_at: datetime = Field(..., description="Project creation timestamp")
-    updated_at: datetime = Field(..., description="Last modification timestamp")
-
-
-class ProjectList(BaseModel):
-    """List of projects response."""
-
-    projects: list[ProjectResponse] = Field(default_factory=list)
-    total: int = Field(..., description="Total number of projects")
+from server.app.models import Session as CoreSession
 
 
 # ============================================================================
@@ -48,35 +20,37 @@ class ProjectList(BaseModel):
 
 
 class SessionCreate(BaseModel):
-    """Request to create a new session."""
+    """Request to create a new session.
 
-    project_id: str = Field(..., description="ID of the project for this session")
+    Server uses global settings exclusively - no per-session config.
+    """
+
     title: Optional[str] = Field(None, max_length=200, description="Optional session title")
-    config: Optional[SessionConfig] = Field(None, description="Session configuration")
-
-
-class SessionConfig(BaseModel):
-    """Session configuration options."""
-
-    provider: Optional[Literal["openai", "bedrock", "mock", "openai_compatible"]] = None
-    model: Optional[str] = None
-    temperature: Optional[float] = Field(None, ge=0.0, le=2.0)
-    max_tokens: Optional[int] = Field(None, ge=1)
-    system_prompt: Optional[str] = None
 
 
 class SessionResponse(BaseModel):
     """Session information response."""
 
     id: str = Field(..., description="Unique session identifier")
-    project_id: str = Field(..., description="Associated project ID")
     title: Optional[str] = Field(None, description="Session title")
     thread_id: str = Field(..., description="LangGraph thread ID for checkpointing")
     status: Literal["active", "inactive", "error"] = Field(..., description="Session status")
-    config: SessionConfig = Field(..., description="Current session configuration")
-    created_at: datetime = Field(..., description="Session creation timestamp")
-    updated_at: datetime = Field(..., description="Last activity timestamp")
+    created_at: str = Field(..., description="Session creation timestamp (ISO format)")
+    updated_at: str = Field(..., description="Last activity timestamp (ISO format)")
     message_count: int = Field(0, description="Number of messages in session")
+
+    @classmethod
+    def from_core(cls, session: CoreSession) -> "SessionResponse":
+        """Create from core domain model."""
+        return cls(
+            id=session.id,
+            title=session.title,
+            thread_id=session.thread_id,
+            status=session.status.value,
+            created_at=session.created_at,
+            updated_at=session.updated_at,
+            message_count=session.message_count,
+        )
 
 
 class SessionList(BaseModel):
@@ -87,10 +61,12 @@ class SessionList(BaseModel):
 
 
 class SessionUpdate(BaseModel):
-    """Request to update a session."""
+    """Request to update a session.
+
+    Server uses global settings exclusively - no per-session config.
+    """
 
     title: Optional[str] = Field(None, max_length=200)
-    config: Optional[SessionConfig] = None
 
 
 # ============================================================================
@@ -103,6 +79,10 @@ class MessageCreate(BaseModel):
 
     content: str = Field(..., min_length=1, description="Message content")
     parent_id: Optional[str] = Field(None, description="ID of parent message for threading")
+    model: Optional[str] = Field(
+        None,
+        description="Model to use for this message (e.g., 'gpt-4o', 'claude-3-sonnet'). Uses server default if not specified.",
+    )
 
 
 class MessageResponse(BaseModel):
@@ -113,6 +93,7 @@ class MessageResponse(BaseModel):
     role: Literal["user", "assistant", "system"] = Field(..., description="Message role")
     content: Optional[str] = Field(None, description="Message content (if complete)")
     parent_id: Optional[str] = Field(None, description="Parent message ID")
+    model: Optional[str] = Field(None, description="Model used for this message")
     created_at: datetime = Field(..., description="Message creation timestamp")
 
 
@@ -219,8 +200,17 @@ class ConfigResponse(BaseModel):
     rate_limit: dict = Field(..., description="Rate limiting configuration")
 
 
-class ConfigUpdate(BaseModel):
-    """Configuration update request."""
+class ProviderInfo(BaseModel):
+    """Information about an available LLM provider."""
 
-    llm: Optional[dict] = None
-    rate_limit: Optional[dict] = None
+    id: str = Field(..., description="Provider identifier")
+    name: str = Field(..., description="Display name")
+    models: list[str] = Field(default_factory=list, description="Available models")
+
+
+class ProviderList(BaseModel):
+    """List of available providers and models."""
+
+    providers: list[ProviderInfo] = Field(default_factory=list)
+    default_provider: Optional[str] = Field(None, description="Default provider ID")
+    default_model: Optional[str] = Field(None, description="Default model ID")

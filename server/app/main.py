@@ -15,7 +15,7 @@ from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 
 from server.app.api.models import HealthStatus, ReadyStatus, ErrorResponse
-from server.app.api.routes import config, messages, projects, sessions
+from server.app.api.routes import config, messages, sessions
 from server.app.middleware import ObservabilityMiddleware, SecurityHeadersMiddleware
 from server.app.observability import get_logger, setup_logging, setup_metrics, setup_tracing
 from server.app.rate_limiter import get_rate_limiter
@@ -80,7 +80,6 @@ app.add_middleware(ObservabilityMiddleware)
 
 
 # Include API routes
-app.include_router(projects.router)
 app.include_router(sessions.router)
 app.include_router(messages.router)
 app.include_router(config.router)

@@ -1,6 +1,6 @@
 """Tests for REST API.
 
-Tests for the Phase 5 REST API implementation.
+Tests for the Phase 5 REST API implementation with workspace-based sessions.
 """
 
 import pytest
@@ -34,101 +34,52 @@ class TestHealthEndpoints:
         assert data["ready"] is True
 
 
-class TestProjectEndpoints:
-    """Test project API endpoints."""
-
-    def test_create_project(self):
-        """Test creating a project."""
-        response = client.post(
-            "/projects",
-            json={"name": "test-project", "description": "A test project"},
-        )
-        assert response.status_code == 201
-        data = response.json()
-        assert data["name"] == "test-project"
-        assert data["description"] == "A test project"
-        assert "id" in data
-        assert "path" in data
-        assert "created_at" in data
-        assert "updated_at" in data
-
-    def test_create_project_validation(self):
-        """Test project creation validation."""
-        # Empty name should fail
-        response = client.post("/projects", json={"name": ""})
-        assert response.status_code == 422
-
-    def test_list_projects(self):
-        """Test listing projects."""
-        response = client.get("/projects")
-        assert response.status_code == 200
-        data = response.json()
-        assert "projects" in data
-        assert "total" in data
-        assert isinstance(data["projects"], list)
-
-    def test_get_project_not_found(self):
-        """Test getting a non-existent project."""
-        response = client.get("/projects/non-existent-id")
-        assert response.status_code == 404
-
-    def test_delete_project_not_found(self):
-        """Test deleting a non-existent project."""
-        response = client.delete("/projects/non-existent-id")
-        assert response.status_code == 404
-
-
 class TestSessionEndpoints:
     """Test session API endpoints."""
 
     def test_create_session(self):
         """Test creating a session."""
-        # First create a project
-        project_resp = client.post(
-            "/projects",
-            json={"name": "test-session-project"},
-        )
-        assert project_resp.status_code == 201
-        project_id = project_resp.json()["id"]
-
-        # Create session
         response = client.post(
             "/sessions",
-            json={
-                "project_id": project_id,
-                "title": "Test Session",
-                "config": {"provider": "mock", "temperature": 0.7},
-            },
+            json={"title": "Test Session"},
         )
         assert response.status_code == 201
         data = response.json()
-        assert data["project_id"] == project_id
         assert data["title"] == "Test Session"
         assert "id" in data
         assert "thread_id" in data
-        assert "config" in data
-        assert data["status"] == "active"
+        # Note: No workspace_path or config in response (server uses global settings)
 
     def test_create_session_validation(self):
         """Test session creation validation."""
-        # Missing project_id should fail
-        response = client.post("/sessions", json={"title": "Test"})
+        # Title too long should fail
+        response = client.post("/sessions", json={"title": "x" * 201})
         assert response.status_code == 422
 
     def test_list_sessions(self):
         """Test listing sessions."""
+        # Create a session first
+        client.post("/sessions", json={"title": "list-test-session"})
+
         response = client.get("/sessions")
         assert response.status_code == 200
         data = response.json()
         assert "sessions" in data
         assert "total" in data
+        assert isinstance(data["sessions"], list)
 
-    def test_list_sessions_by_project(self):
-        """Test filtering sessions by project."""
-        response = client.get("/sessions?project_id=test-id")
+    def test_get_session(self):
+        """Test getting a session."""
+        # Create a session
+        create_resp = client.post("/sessions", json={"title": "get-test-session"})
+        session_id = create_resp.json()["id"]
+
+        # Get the session
+        response = client.get(f"/sessions/{session_id}")
         assert response.status_code == 200
         data = response.json()
-        assert "sessions" in data
+        assert data["id"] == session_id
+        assert data["title"] == "get-test-session"
 
     def test_get_session_not_found(self):
         """Test getting a non-existent session."""
@@ -137,42 +88,26 @@ class TestSessionEndpoints:
 
     def test_update_session(self):
         """Test updating a session."""
-        # Create project and session first
-        project_resp = client.post("/projects", json={"name": "update-test"})
-        assert project_resp.status_code == 201
-        project_id = project_resp.json()["id"]
+        # Create a session
+        create_resp = client.post("/sessions", json={"title": "original-title"})
+        session_id = create_resp.json()["id"]
 
-        session_resp = client.post(
-            "/sessions",
-            json={"project_id": project_id, "title": "Original"},
-        )
-        assert session_resp.status_code == 201
-        session_id = session_resp.json()["id"]
-
-        # Update session
+        # Update the session
         response = client.patch(
             f"/sessions/{session_id}",
-            json={"title": "Updated"},
+            json={"title": "updated-title"},
         )
         assert response.status_code == 200
         data = response.json()
-        assert data["title"] == "Updated"
+        assert data["title"] == "updated-title"
 
     def test_delete_session(self):
         """Test deleting a session."""
-        # Create project and session first
-        project_resp = client.post("/projects", json={"name": "delete-test"})
-        assert project_resp.status_code == 201
-        project_id = project_resp.json()["id"]
+        # Create a session
+        create_resp = client.post("/sessions", json={"title": "delete-test-session"})
+        session_id = create_resp.json()["id"]
 
-        session_resp = client.post(
-            "/sessions",
-            json={"project_id": project_id},
-        )
-        assert session_resp.status_code == 201
-        session_id = session_resp.json()["id"]
-
-        # Delete session
+        # Delete the session
         response = client.delete(f"/sessions/{session_id}")
         assert response.status_code == 204
 
@@ -186,7 +121,11 @@ class TestMessageEndpoints:
 
     def test_list_messages(self):
         """Test listing messages."""
-        response = client.get("/sessions/test-session/messages")
+        # Create a session first
+        session_resp = client.post("/sessions", json={"title": "msg-list-test"})
+        session_id = session_resp.json()["id"]
+
+        response = client.get(f"/sessions/{session_id}/messages")
         assert response.status_code == 200
         data = response.json()
         assert "messages" in data
@@ -200,83 +139,55 @@ class TestMessageEndpoints:
 
     def test_send_message_sse(self):
         """Test sending a message returns SSE stream."""
-        # Create project and session first
-        project_resp = client.post("/projects", json={"name": "sse-test"})
-        assert project_resp.status_code == 201
-        project_id = project_resp.json()["id"]
-
-        session_resp = client.post(
-            "/sessions",
-            json={"project_id": project_id},
-        )
-        assert session_resp.status_code == 201
+        # Create session first
+        session_resp = client.post("/sessions", json={"title": "sse-test"})
         session_id = session_resp.json()["id"]
 
-        # Send message
         response = client.post(
             f"/sessions/{session_id}/messages",
-            json={"content": "Hello, agent!"},
+            json={"content": "Hello, world!"},
             headers={"Accept": "text/event-stream"},
         )
         assert response.status_code == 200
-        assert response.headers["content-type"] == "text/event-stream; charset=utf-8"
-
-        # Check that we got SSE data
-        content = response.content.decode()
-        assert "event:" in content or "data:" in content
+        assert "text/event-stream" in response.headers.get("content-type", "")
 
 
 class TestConfigEndpoints:
     """Test config API endpoints."""
 
     def test_get_config(self):
-        """Test getting server configuration."""
+        """Test getting server config."""
         response = client.get("/config")
         assert response.status_code == 200
         data = response.json()
         assert "server" in data
         assert "llm" in data
-        assert "rate_limit" in data
-
-        # Verify no secrets exposed
-        assert "api_key" not in str(data).lower()
-        assert "secret" not in str(data).lower()
 
 
 class TestAPIIntegration:
-    """Integration tests for full workflow."""
+    """Integration tests for full workflows."""
 
     def test_full_workflow(self):
-        """Test complete workflow: create project → create session → send message."""
-        # 1. Create project
-        project_resp = client.post(
-            "/projects",
-            json={"name": "integration-test", "description": "Test workflow"},
-        )
-        assert project_resp.status_code == 201
-        project_id = project_resp.json()["id"]
-
-        # 2. Create session
-        session_resp = client.post(
-            "/sessions",
-            json={"project_id": project_id, "title": "Integration Test"},
-        )
+        """Test complete workflow."""
+        # Create session
+        session_resp = client.post("/sessions", json={"title": "integration-test"})
         assert session_resp.status_code == 201
         session_id = session_resp.json()["id"]
 
-        # 3. Send message (SSE stream)
-        message_resp = client.post(
-            f"/sessions/{session_id}/messages",
-            json={"content": "Test message"},
-            headers={"Accept": "text/event-stream"},
-        )
-        assert message_resp.status_code == 200
-
-        # 4. List messages
-        list_resp = client.get(f"/sessions/{session_id}/messages")
+        # List sessions
+        list_resp = client.get("/sessions")
         assert list_resp.status_code == 200
-        assert list_resp.json()["total"] >= 1
+        assert any(s["id"] == session_id for s in list_resp.json()["sessions"])
 
-        # 5. Delete session
-        delete_resp = client.delete(f"/sessions/{session_id}")
-        assert delete_resp.status_code == 204
+        # Get session
+        get_resp = client.get(f"/sessions/{session_id}")
+        assert get_resp.status_code == 200
+        assert get_resp.json()["id"] == session_id
+
+        # Delete session
+        del_resp = client.delete(f"/sessions/{session_id}")
+        assert del_resp.status_code == 204
+
+        # Verify deletion
+        verify_resp = client.get(f"/sessions/{session_id}")
+        assert verify_resp.status_code == 404

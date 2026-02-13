@@ -1,36 +1,52 @@
 """Session API routes.
 
 REST endpoints for session management.
+Each workspace (directory) has isolated sessions stored in .cognition/sessions.json
+
+Git-Style Workspace Model:
+  The server's current working directory (CWD) is the workspace.
+  Start the server in a directory = that directory becomes the workspace.
+  Example:
+    cd ~/projects/my-app
+    cognition serve
+    → Workspace is ~/projects/my-app
 """
 
 from __future__ import annotations
 
+import os
 import uuid
-from datetime import datetime
+from pathlib import Path
+from typing import Optional
 
-from fastapi import APIRouter, HTTPException, Depends, status
+from fastapi import APIRouter, HTTPException, Query, Depends, status
 
 from server.app.api.models import (
     SessionCreate,
     SessionResponse,
     SessionList,
     SessionUpdate,
-    SessionConfig,
     ErrorResponse,
 )
+from server.app.models import SessionConfig
+from server.app.session_store import get_session_store, LocalSessionStore
 from server.app.settings import Settings, get_settings
-# Agent import removed - using placeholder implementation
+from server.app.llm.streaming_service import (
+    get_session_llm_manager,
+    SessionLLMManager,
+)
 
 router = APIRouter(prefix="/sessions", tags=["sessions"])
-
-
-# In-memory session store (replace with database in production)
-_sessions: dict[str, SessionResponse] = {}
 
 
 def get_settings_dependency() -> Settings:
     """Get settings dependency."""
     return get_settings()
+
+
+def get_llm_manager(settings: Settings = Depends(get_settings_dependency)) -> SessionLLMManager:
+    """Get the session LLM manager."""
+    return get_session_llm_manager(settings)
 
 
 @router.post(
@@ -39,52 +55,49 @@ def get_settings_dependency() -> Settings:
     status_code=status.HTTP_201_CREATED,
     responses={
         400: {"model": ErrorResponse, "description": "Bad request"},
-        404: {"model": ErrorResponse, "description": "Project not found"},
     },
 )
 async def create_session(
     request: SessionCreate,
     settings: Settings = Depends(get_settings_dependency),
+    llm_manager: SessionLLMManager = Depends(get_llm_manager),
 ) -> SessionResponse:
     """Create a new session.
 
-    Creates a new agent session for a project.
+    Creates a new agent session for the server's current workspace.
+    The workspace is determined by where the server was started (CWD).
+    Sessions are stored in .cognition/sessions.json within the workspace.
+
+    Note: Server uses global settings exclusively. No per-session configuration.
     """
     session_id = str(uuid.uuid4())
     thread_id = str(uuid.uuid4())  # For LangGraph checkpointing
+    workspace_path = str(settings.workspace_path)
 
-    # Build config from request or use defaults
+    # Use server settings exclusively (no client-provided config)
     config = SessionConfig(
-        provider=request.config.provider if request.config else settings.llm_provider,
-        model=request.config.model if request.config else settings.llm_model,
-        temperature=request.config.temperature if request.config else None,
-        max_tokens=request.config.max_tokens if request.config else None,
-        system_prompt=request.config.system_prompt if request.config else None,
+        provider=settings.llm_provider,
+        model=settings.llm_model,
+        temperature=getattr(settings, "llm_temperature", None),
+        max_tokens=getattr(settings, "llm_max_tokens", None),
+        system_prompt=getattr(settings, "llm_system_prompt", None),
     )
 
-    now = datetime.utcnow()
+    # Get session store for this workspace
+    store = get_session_store(workspace_path)
 
-    session = SessionResponse(
-        id=session_id,
-        project_id=request.project_id,
-        title=request.title,
+    # Create session
+    session = store.create_session(
+        session_id=session_id,
         thread_id=thread_id,
-        status="active",
         config=config,
-        created_at=now,
-        updated_at=now,
-        message_count=0,
+        title=request.title,
     )
 
-    # Store session
-    _sessions[session_id] = session
+    # Register session with LLM manager
+    llm_manager.register_session(session_id, workspace_path)
 
-    # In a real implementation:
-    # 1. Create the agent with appropriate configuration
-    # 2. Store session in database
-    # 3. Set up checkpointing
-
-    return session
+    return SessionResponse.from_core(session)
 
 
 @router.get(
@@ -92,18 +105,20 @@ async def create_session(
     response_model=SessionList,
 )
 async def list_sessions(
-    project_id: str | None = None,
+    settings: Settings = Depends(get_settings_dependency),
 ) -> SessionList:
-    """List all sessions.
+    """List all sessions for the workspace.
 
-    Returns a list of all sessions, optionally filtered by project.
+    Returns sessions only for the server's current workspace directory.
+    Sessions are isolated per workspace - they don't appear in other workspaces.
     """
-    sessions = list(_sessions.values())
+    workspace_path = str(settings.workspace_path)
+    store = get_session_store(workspace_path)
+    sessions = store.list_sessions()
 
-    if project_id:
-        sessions = [s for s in sessions if s.project_id == project_id]
-
-    return SessionList(sessions=sessions, total=len(sessions))
+    return SessionList(
+        sessions=[SessionResponse.from_core(s) for s in sessions], total=len(sessions)
+    )
 
 
 @router.get(
@@ -113,18 +128,26 @@ async def list_sessions(
         404: {"model": ErrorResponse, "description": "Session not found"},
     },
 )
-async def get_session(session_id: str) -> SessionResponse:
+async def get_session(
+    session_id: str,
+    settings: Settings = Depends(get_settings_dependency),
+) -> SessionResponse:
     """Get session details.
 
     Returns detailed information about a specific session.
+    Only returns sessions from the server's current workspace.
     """
-    if session_id not in _sessions:
+    workspace_path = str(settings.workspace_path)
+    store = get_session_store(workspace_path)
+    session = store.get_session(session_id)
+
+    if session is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Session not found: {session_id}",
         )
 
-    return _sessions[session_id]
+    return SessionResponse.from_core(session)
 
 
 @router.patch(
@@ -137,39 +160,29 @@ async def get_session(session_id: str) -> SessionResponse:
 async def update_session(
     session_id: str,
     request: SessionUpdate,
+    settings: Settings = Depends(get_settings_dependency),
 ) -> SessionResponse:
     """Update a session.
 
-    Updates session configuration or metadata.
+    Updates session metadata (title only).
+    Server uses global settings exclusively - no per-session config changes.
     """
-    if session_id not in _sessions:
+    workspace_path = str(settings.workspace_path)
+    store = get_session_store(workspace_path)
+
+    session = store.update_session(
+        session_id=session_id,
+        title=request.title,
+        config=None,  # Server doesn't accept config updates from client
+    )
+
+    if session is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Session not found: {session_id}",
         )
 
-    session = _sessions[session_id]
-
-    # Update fields
-    if request.title is not None:
-        session.title = request.title
-
-    if request.config is not None:
-        # Merge configs
-        if request.config.provider is not None:
-            session.config.provider = request.config.provider
-        if request.config.model is not None:
-            session.config.model = request.config.model
-        if request.config.temperature is not None:
-            session.config.temperature = request.config.temperature
-        if request.config.max_tokens is not None:
-            session.config.max_tokens = request.config.max_tokens
-        if request.config.system_prompt is not None:
-            session.config.system_prompt = request.config.system_prompt
-
-    session.updated_at = datetime.utcnow()
-
-    return session
+    return SessionResponse.from_core(session)
 
 
 @router.delete(
@@ -179,18 +192,30 @@ async def update_session(
         404: {"model": ErrorResponse, "description": "Session not found"},
     },
 )
-async def delete_session(session_id: str) -> None:
+async def delete_session(
+    session_id: str,
+    settings: Settings = Depends(get_settings_dependency),
+    llm_manager: SessionLLMManager = Depends(get_llm_manager),
+) -> None:
     """Delete a session.
 
     Deletes a session and all associated messages.
     """
-    if session_id not in _sessions:
+    workspace_path = str(settings.workspace_path)
+    store = get_session_store(workspace_path)
+
+    # Check if session exists
+    if store.get_session(session_id) is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Session not found: {session_id}",
         )
 
-    del _sessions[session_id]
+    # Unregister from LLM manager
+    llm_manager.unregister_session(session_id)
+
+    # Delete session
+    store.delete_session(session_id)
 
 
 @router.post(
@@ -200,12 +225,18 @@ async def delete_session(session_id: str) -> None:
         404: {"model": ErrorResponse, "description": "Session not found"},
     },
 )
-async def abort_session(session_id: str) -> dict:
+async def abort_session(
+    session_id: str,
+    settings: Settings = Depends(get_settings_dependency),
+) -> dict:
     """Abort the current operation in a session.
 
     Cancels any in-progress agent operation.
     """
-    if session_id not in _sessions:
+    workspace_path = str(settings.workspace_path)
+    store = get_session_store(workspace_path)
+
+    if store.get_session(session_id) is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Session not found: {session_id}",

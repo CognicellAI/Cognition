@@ -211,7 +211,7 @@ This roadmap outlines the phases required to bring Cognition from its current pr
 
 ## Phase 5: REST API Migration & OpenAPI Documentation
 
-**Status**: In Progress
+**Status**: Complete (Server-side only, client deferred)
 
 **Focus**: Replace WebSocket protocol with REST + Server-Sent Events (SSE) for improved observability, tooling, and documentation
 
@@ -303,16 +303,12 @@ REST + SSE provides:
 - `server/app/main.py` (FastAPI OpenAPI config)
 - `docs/openapi.yaml` (static export)
 
-#### 5.4 Client Updates ✅
-- [ ] Update TUI client to use REST + SSE
-- [ ] Implement SSE event parsing
-- [ ] Handle connection errors and reconnection
-- [ ] Update API client (`client/tui/api.py`)
-- [ ] Add request timeout handling
+#### 5.4 Client Architecture (Deferred) ❌
+- ❌ ~~Update TUI client to use REST + SSE~~
+- ❌ ~~Implement SSE event parsing~~
+- ❌ ~~Handle connection errors and reconnection~~
 
-**Files:**
-- `client/tui/api.py` (HTTP client)
-- `client/tui/sse.py` (SSE client)
+**Decision**: TUI client approach abandoned - too complex for MVP. Will use simpler CLI + web client approach in Phase 6.
 
 #### 5.5 Configuration Management ✅
 - [ ] YAML configuration support (`~/.cognition/config.yaml`)
@@ -359,13 +355,13 @@ rate_limit:
 - Multi-language examples
 - Full API reference (OpenAPI covers this)
 
-### Success Criteria
-- All endpoints documented in OpenAPI spec
-- Client can connect via REST + SSE
-- Message streaming works with SSE
-- SDK can be auto-generated from OpenAPI spec
-- Configuration loaded from YAML files
-- Tests updated for new API
+### Success Criteria ✅
+- ✅ All endpoints documented in OpenAPI spec
+- ✅ Message streaming works with SSE
+- ✅ SDK can be auto-generated from OpenAPI spec
+- ✅ Configuration loaded from YAML files
+- ✅ Tests updated for new API
+- ❌ ~~TUI client connects via REST + SSE~~ (deferred - will use simpler CLI)
 
 ---
 
@@ -537,9 +533,9 @@ Before moving to the next phase:
 
 ## Current Status
 
-**Completed**: Phase 1 (Core Foundation) ✅, Phase 2 (Production Hardening) ✅, Phase 3 (Multi-LLM & Model Management) ✅, Phase 4 (Advanced Agent Capabilities) ✅
-**In Progress**: Phase 5 (REST API Migration & OpenAPI Documentation)
-**Next**: Phase 6 (Production Readiness)
+**Completed**: Phase 1 (Core Foundation) ✅, Phase 2 (Production Hardening) ✅, Phase 3 (Multi-LLM & Model Management) ✅, Phase 4 (Advanced Agent Capabilities) ✅, Phase 5 (REST API Server) ✅
+**In Progress**: Phase 6 (Production Readiness - simplified CLI client)
+**Deferred**: TUI client (too complex for MVP)
 
 See GitHub issues for detailed task breakdown per phase.
 
@@ -561,7 +557,17 @@ Phase 4 has been completed with the following achievements:
 4. **Output Formatting** - Diff visualization, syntax highlighting, tool call formatting
 5. **Comprehensive Tests** - 40 new unit tests (total: 211 passing)
 
-### Phase 5 Plans
+### Phase 5 Summary
+Phase 5 server-side REST API migration completed with:
+1. **REST API Design** - 11 endpoints with Pydantic models
+2. **SSE Streaming** - Real-time message streaming via Server-Sent Events
+3. **OpenAPI Documentation** - Auto-generated spec at `/docs`, Swagger UI
+4. **Configuration System** - YAML config with hierarchical loading
+5. **Comprehensive Tests** - E2E and unit tests for REST API
+
+**Note**: TUI client was abandoned - too complex. Will use simpler CLI approach in Phase 6.
+
+### Phase 6 Plans
 Phase 5 focuses on REST API migration for improved observability, documentation, and tooling. The migration from WebSocket to REST + SSE will provide:
 - Full OpenAPI 3.1 documentation
 - Auto-generated SDKs

@@ -1,0 +1,1634 @@
+{
+  "aefff2a4-8180-462a-b879-5e26fca443d9": {
+    "id": "aefff2a4-8180-462a-b879-5e26fca443d9",
+    "workspace_path": "/Users/dubh3124/workspace/cognition",
+    "title": "Test",
+    "thread_id": "e3d9c2e2-e68e-49b3-bae1-052b77f414d5",
+    "status": "active",
+    "config": {
+      "provider": "openai_compatible",
+      "model": "google/gemini-3-flash-preview",
+      "temperature": null,
+      "max_tokens": null,
+      "system_prompt": null
+    },
+    "created_at": "2026-02-13T02:20:58.131836",
+    "updated_at": "2026-02-13T02:20:58.131836",
+    "message_count": 0
+  },
+  "afb0aa90-a024-4dc6-a080-696abfe9f5d3": {
+    "id": "afb0aa90-a024-4dc6-a080-696abfe9f5d3",
+    "workspace_path": "/Users/dubh3124/workspace/cognition",
+    "title": "Test Session",
+    "thread_id": "b122e20f-4665-4a52-9ed0-9ff0ebdcfaca",
+    "status": "active",
+    "config": {
+      "provider": "mock",
+      "model": null,
+      "temperature": 0.7,
+      "max_tokens": null,
+      "system_prompt": null
+    },
+    "created_at": "2026-02-13T02:23:56.046113",
+    "updated_at": "2026-02-13T02:23:56.046113",
+    "message_count": 0
+  },
+  "f26bb092-1b6d-40bb-8b65-c8e752a497d4": {
+    "id": "f26bb092-1b6d-40bb-8b65-c8e752a497d4",
+    "workspace_path": "/Users/dubh3124/workspace/cognition",
+    "title": "list-test-session",
+    "thread_id": "2d1bc736-e0fb-4b19-98d3-0d4bc93eea03",
+    "status": "active",
+    "config": {
+      "provider": "openai_compatible",
+      "model": "google/gemini-3-flash-preview",
+      "temperature": null,
+      "max_tokens": null,
+      "system_prompt": null
+    },
+    "created_at": "2026-02-13T02:23:56.054295",
+    "updated_at": "2026-02-13T02:23:56.054295",
+    "message_count": 0
+  },
+  "41d15070-9df7-4f43-bf73-88091b314fd9": {
+    "id": "41d15070-9df7-4f43-bf73-88091b314fd9",
+    "workspace_path": "/Users/dubh3124/workspace/cognition",
+    "title": "get-test-session",
+    "thread_id": "958fae65-afa3-406a-a30b-5546e3d7fbe3",
+    "status": "active",
+    "config": {
+      "provider": "openai_compatible",
+      "model": "google/gemini-3-flash-preview",
+      "temperature": null,
+      "max_tokens": null,
+      "system_prompt": null
+    },
+    "created_at": "2026-02-13T02:23:56.062569",
+    "updated_at": "2026-02-13T02:23:56.062569",
+    "message_count": 0
+  },
+  "ffce4fda-fd4d-4ba2-80da-a24c54ece22d": {
+    "id": "ffce4fda-fd4d-4ba2-80da-a24c54ece22d",
+    "workspace_path": "/Users/dubh3124/workspace/cognition",
+    "title": "updated-title",
+    "thread_id": "7ce5a980-4fcc-4cf3-b995-92f910ed0d8a",
+    "status": "active",
+    "config": {
+      "provider": "openai_compatible",
+      "model": "google/gemini-3-flash-preview",
+      "temperature": null,
+      "max_tokens": null,
+      "system_prompt": null
+    },
+    "created_at": "2026-02-13T02:23:56.069023",
+    "updated_at": "2026-02-13T02:23:56.070818",
+    "message_count": 0
+  },
+  "45a014ca-9002-4aa7-8f2c-dcb8c4f5b08c": {
+    "id": "45a014ca-9002-4aa7-8f2c-dcb8c4f5b08c",
+    "workspace_path": "/Users/dubh3124/workspace/cognition",
+    "title": "msg-list-test",
+    "thread_id": "a1b279cb-ba3f-48ac-b20a-8cd8947a981d",
+    "status": "active",
+    "config": {
+      "provider": "openai_compatible",
+      "model": "google/gemini-3-flash-preview",
+      "temperature": null,
+      "max_tokens": null,
+      "system_prompt": null
+    },
+    "created_at": "2026-02-13T02:23:56.077643",
+    "updated_at": "2026-02-13T02:23:56.077643",
+    "message_count": 0
+  },
+  "7a27c9c9-819d-44d3-beae-3374d4670851": {
+    "id": "7a27c9c9-819d-44d3-beae-3374d4670851",
+    "workspace_path": "/Users/dubh3124/workspace/cognition",
+    "title": "sse-test",
+    "thread_id": "051888db-e755-4e8b-becf-ddf6cc17b48e",
+    "status": "active",
+    "config": {
+      "provider": "openai_compatible",
+      "model": "google/gemini-3-flash-preview",
+      "temperature": null,
+      "max_tokens": null,
+      "system_prompt": null
+    },
+    "created_at": "2026-02-13T02:23:56.083242",
+    "updated_at": "2026-02-13T02:23:56.085318",
+    "message_count": 1
+  },
+  "5a4ef87f-d4e4-41b4-a248-13a1bdb137db": {
+    "id": "5a4ef87f-d4e4-41b4-a248-13a1bdb137db",
+    "workspace_path": "/Users/dubh3124/workspace/cognition",
+    "title": "E2E Test Session",
+    "thread_id": "3d59ca31-8579-46d9-9a3f-c5f92ae3426c",
+    "status": "active",
+    "config": {
+      "provider": "mock",
+      "model": null,
+      "temperature": 0.5,
+      "max_tokens": null,
+      "system_prompt": null
+    },
+    "created_at": "2026-02-13T02:24:08.531049",
+    "updated_at": "2026-02-13T02:24:08.531049",
+    "message_count": 0
+  },
+  "2c4dace8-a598-4252-a0ce-a1ae998bcdbc": {
+    "id": "2c4dace8-a598-4252-a0ce-a1ae998bcdbc",
+    "workspace_path": "/Users/dubh3124/workspace/cognition",
+    "title": "List Test",
+    "thread_id": "6e9b2b3d-f4d0-4186-b763-53dcec5a1889",
+    "status": "active",
+    "config": {
+      "provider": "mock",
+      "model": "google/gemini-3-flash-preview",
+      "temperature": null,
+      "max_tokens": null,
+      "system_prompt": null
+    },
+    "created_at": "2026-02-13T02:24:09.260644",
+    "updated_at": "2026-02-13T02:24:09.260644",
+    "message_count": 0
+  },
+  "cec69912-a919-4309-961f-6961b352a05f": {
+    "id": "cec69912-a919-4309-961f-6961b352a05f",
+    "workspace_path": "/Users/dubh3124/workspace/cognition",
+    "title": "Updated",
+    "thread_id": "dff2f85d-1480-454e-ba98-f2f6a4a49db4",
+    "status": "active",
+    "config": {
+      "provider": "mock",
+      "model": "google/gemini-3-flash-preview",
+      "temperature": null,
+      "max_tokens": null,
+      "system_prompt": null
+    },
+    "created_at": "2026-02-13T02:24:09.989951",
+    "updated_at": "2026-02-13T02:24:09.991664",
+    "message_count": 0
+  },
+  "c7ce6c5b-ca7f-444d-988c-6feeb29a813d": {
+    "id": "c7ce6c5b-ca7f-444d-988c-6feeb29a813d",
+    "workspace_path": "/Users/dubh3124/workspace/cognition",
+    "title": "Message Test",
+    "thread_id": "0f3ca034-72fd-49ae-ad33-747692a3e377",
+    "status": "active",
+    "config": {
+      "provider": "mock",
+      "model": "google/gemini-3-flash-preview",
+      "temperature": null,
+      "max_tokens": null,
+      "system_prompt": null
+    },
+    "created_at": "2026-02-13T02:24:11.451746",
+    "updated_at": "2026-02-13T02:24:11.466348",
+    "message_count": 1
+  },
+  "da5f38ff-022e-4a77-b26b-ff8ca06a0cdc": {
+    "id": "da5f38ff-022e-4a77-b26b-ff8ca06a0cdc",
+    "workspace_path": "/Users/dubh3124/workspace/cognition",
+    "title": "Message Test",
+    "thread_id": "a59c8b2f-15dd-40b7-aeb5-d1e358415c2a",
+    "status": "active",
+    "config": {
+      "provider": "mock",
+      "model": "google/gemini-3-flash-preview",
+      "temperature": null,
+      "max_tokens": null,
+      "system_prompt": null
+    },
+    "created_at": "2026-02-13T02:24:12.031849",
+    "updated_at": "2026-02-13T02:24:12.044724",
+    "message_count": 1
+  },
+  "ef419afe-a889-4e49-8177-c57868b8ed73": {
+    "id": "ef419afe-a889-4e49-8177-c57868b8ed73",
+    "workspace_path": "/Users/dubh3124/workspace/cognition",
+    "title": "E2E Test Session",
+    "thread_id": "992bdf8e-fcb1-49ee-a68f-4248a63148d1",
+    "status": "active",
+    "config": {
+      "provider": "mock",
+      "model": null,
+      "temperature": 0.5,
+      "max_tokens": null,
+      "system_prompt": null
+    },
+    "created_at": "2026-02-13T02:24:26.535906",
+    "updated_at": "2026-02-13T02:24:26.535906",
+    "message_count": 0
+  },
+  "4567e440-8d0c-4d3f-8ee1-8e3ca8ca6bdb": {
+    "id": "4567e440-8d0c-4d3f-8ee1-8e3ca8ca6bdb",
+    "workspace_path": "/Users/dubh3124/workspace/cognition",
+    "title": "List Test",
+    "thread_id": "df62dd45-1d45-4536-a0ec-c1f5ff1d43fd",
+    "status": "active",
+    "config": {
+      "provider": "mock",
+      "model": "google/gemini-3-flash-preview",
+      "temperature": null,
+      "max_tokens": null,
+      "system_prompt": null
+    },
+    "created_at": "2026-02-13T02:24:27.263661",
+    "updated_at": "2026-02-13T02:24:27.263661",
+    "message_count": 0
+  },
+  "c09f5e0b-dfcc-42de-ac30-cdb737f8b975": {
+    "id": "c09f5e0b-dfcc-42de-ac30-cdb737f8b975",
+    "workspace_path": "/Users/dubh3124/workspace/cognition",
+    "title": "Updated",
+    "thread_id": "f606f521-6da6-4137-92c4-a473658246a4",
+    "status": "active",
+    "config": {
+      "provider": "mock",
+      "model": "google/gemini-3-flash-preview",
+      "temperature": null,
+      "max_tokens": null,
+      "system_prompt": null
+    },
+    "created_at": "2026-02-13T02:24:27.949792",
+    "updated_at": "2026-02-13T02:24:27.953224",
+    "message_count": 0
+  },
+  "b44de7b3-966d-4ad3-9623-d3a77b79e939": {
+    "id": "b44de7b3-966d-4ad3-9623-d3a77b79e939",
+    "workspace_path": "/Users/dubh3124/workspace/cognition",
+    "title": "Message Test",
+    "thread_id": "a35fe10a-84a4-4d74-87a2-0f5aa31a46e7",
+    "status": "active",
+    "config": {
+      "provider": "mock",
+      "model": "google/gemini-3-flash-preview",
+      "temperature": null,
+      "max_tokens": null,
+      "system_prompt": null
+    },
+    "created_at": "2026-02-13T02:24:29.130619",
+    "updated_at": "2026-02-13T02:24:29.144300",
+    "message_count": 1
+  },
+  "a2799dde-e374-42a2-97bb-1861b8540acb": {
+    "id": "a2799dde-e374-42a2-97bb-1861b8540acb",
+    "workspace_path": "/Users/dubh3124/workspace/cognition",
+    "title": "Message Test",
+    "thread_id": "47f57f70-3b18-485d-a1ec-008988dcb568",
+    "status": "active",
+    "config": {
+      "provider": "mock",
+      "model": "google/gemini-3-flash-preview",
+      "temperature": null,
+      "max_tokens": null,
+      "system_prompt": null
+    },
+    "created_at": "2026-02-13T02:24:29.824812",
+    "updated_at": "2026-02-13T02:24:29.839998",
+    "message_count": 1
+  },
+  "a05a4ecb-d986-44fd-97bb-4933600349b4": {
+    "id": "a05a4ecb-d986-44fd-97bb-4933600349b4",
+    "workspace_path": "/Users/dubh3124/workspace/cognition",
+    "title": "Test Session",
+    "thread_id": "f5b273d6-e2bf-4e5f-8e70-a5f9bab2cc12",
+    "status": "active",
+    "config": {
+      "provider": "mock",
+      "model": null,
+      "temperature": 0.7,
+      "max_tokens": null,
+      "system_prompt": null
+    },
+    "created_at": "2026-02-13T02:24:34.006722",
+    "updated_at": "2026-02-13T02:24:34.006722",
+    "message_count": 0
+  },
+  "654f9d7e-48c4-4468-bdfd-7dc9c5d0589c": {
+    "id": "654f9d7e-48c4-4468-bdfd-7dc9c5d0589c",
+    "workspace_path": "/Users/dubh3124/workspace/cognition",
+    "title": "list-test-session",
+    "thread_id": "0bbd6ff1-910b-4229-ac7c-9c22d164a684",
+    "status": "active",
+    "config": {
+      "provider": "openai_compatible",
+      "model": "google/gemini-3-flash-preview",
+      "temperature": null,
+      "max_tokens": null,
+      "system_prompt": null
+    },
+    "created_at": "2026-02-13T02:24:34.013668",
+    "updated_at": "2026-02-13T02:24:34.013668",
+    "message_count": 0
+  },
+  "d08de018-4933-4219-ae10-95c8a59cd7cb": {
+    "id": "d08de018-4933-4219-ae10-95c8a59cd7cb",
+    "workspace_path": "/Users/dubh3124/workspace/cognition",
+    "title": "get-test-session",
+    "thread_id": "38a1cf55-e4e5-425d-9780-f45b215f90a0",
+    "status": "active",
+    "config": {
+      "provider": "openai_compatible",
+      "model": "google/gemini-3-flash-preview",
+      "temperature": null,
+      "max_tokens": null,
+      "system_prompt": null
+    },
+    "created_at": "2026-02-13T02:24:34.018220",
+    "updated_at": "2026-02-13T02:24:34.018220",
+    "message_count": 0
+  },
+  "a3bd3480-6c59-4113-8b9c-1a949035f5be": {
+    "id": "a3bd3480-6c59-4113-8b9c-1a949035f5be",
+    "workspace_path": "/Users/dubh3124/workspace/cognition",
+    "title": "updated-title",
+    "thread_id": "309fe6b2-126f-4e1d-a9a6-1aa6e3eca768",
+    "status": "active",
+    "config": {
+      "provider": "openai_compatible",
+      "model": "google/gemini-3-flash-preview",
+      "temperature": null,
+      "max_tokens": null,
+      "system_prompt": null
+    },
+    "created_at": "2026-02-13T02:24:34.024543",
+    "updated_at": "2026-02-13T02:24:34.026618",
+    "message_count": 0
+  },
+  "c8e3dfd6-a66c-459a-bf0b-644b83783d45": {
+    "id": "c8e3dfd6-a66c-459a-bf0b-644b83783d45",
+    "workspace_path": "/Users/dubh3124/workspace/cognition",
+    "title": "msg-list-test",
+    "thread_id": "542f6190-f7c9-4dd7-bfb6-a4a1c4c69c90",
+    "status": "active",
+    "config": {
+      "provider": "openai_compatible",
+      "model": "google/gemini-3-flash-preview",
+      "temperature": null,
+      "max_tokens": null,
+      "system_prompt": null
+    },
+    "created_at": "2026-02-13T02:24:34.034654",
+    "updated_at": "2026-02-13T02:39:31.829196",
+    "message_count": 3
+  },
+  "e19be713-6861-4869-b171-54e1623a003d": {
+    "id": "e19be713-6861-4869-b171-54e1623a003d",
+    "workspace_path": "/Users/dubh3124/workspace/cognition",
+    "title": "sse-test",
+    "thread_id": "023ae2e7-11f4-4dce-b1d2-32928e04ffb4",
+    "status": "active",
+    "config": {
+      "provider": "openai_compatible",
+      "model": "google/gemini-3-flash-preview",
+      "temperature": null,
+      "max_tokens": null,
+      "system_prompt": null
+    },
+    "created_at": "2026-02-13T02:24:34.040368",
+    "updated_at": "2026-02-13T02:24:34.042467",
+    "message_count": 1
+  },
+  "34327c5e-a80a-41e4-be01-0bafe17a2850": {
+    "id": "34327c5e-a80a-41e4-be01-0bafe17a2850",
+    "workspace_path": "/Users/dubh3124/workspace/cognition",
+    "title": "New Session",
+    "thread_id": "eed4a2ad-7584-48ec-b68f-0e207118c121",
+    "status": "active",
+    "config": {
+      "provider": "mock",
+      "model": "gpt-4o",
+      "temperature": null,
+      "max_tokens": null,
+      "system_prompt": null
+    },
+    "created_at": "2026-02-13T02:34:55.259042",
+    "updated_at": "2026-02-13T02:34:59.652275",
+    "message_count": 1
+  },
+  "ad10398e-53df-4cdf-a3d9-83c7d56c8e18": {
+    "id": "ad10398e-53df-4cdf-a3d9-83c7d56c8e18",
+    "workspace_path": "/Users/dubh3124/workspace/cognition",
+    "title": "Test Session",
+    "thread_id": "a5f8bbff-9ff5-40ef-bc32-878bb121ade6",
+    "status": "active",
+    "config": {
+      "provider": "mock",
+      "model": null,
+      "temperature": 0.7,
+      "max_tokens": null,
+      "system_prompt": null
+    },
+    "created_at": "2026-02-13T03:50:16.927027",
+    "updated_at": "2026-02-13T03:50:16.927027",
+    "message_count": 0
+  },
+  "3ecfddca-4aa4-4cf8-a46c-7c6eb0509c0c": {
+    "id": "3ecfddca-4aa4-4cf8-a46c-7c6eb0509c0c",
+    "workspace_path": "/Users/dubh3124/workspace/cognition",
+    "title": "list-test-session",
+    "thread_id": "6b943fe2-42c4-4e94-bc4a-47cf3f89759d",
+    "status": "active",
+    "config": {
+      "provider": "openai_compatible",
+      "model": "google/gemini-3-flash-preview",
+      "temperature": null,
+      "max_tokens": null,
+      "system_prompt": null
+    },
+    "created_at": "2026-02-13T03:50:16.931692",
+    "updated_at": "2026-02-13T03:50:16.931692",
+    "message_count": 0
+  },
+  "bd0f2283-978f-4c33-9d2e-a987fcb0c5e7": {
+    "id": "bd0f2283-978f-4c33-9d2e-a987fcb0c5e7",
+    "workspace_path": "/Users/dubh3124/workspace/cognition",
+    "title": "get-test-session",
+    "thread_id": "8f07eb34-4b22-49c1-b2e5-074305cb84b5",
+    "status": "active",
+    "config": {
+      "provider": "openai_compatible",
+      "model": "google/gemini-3-flash-preview",
+      "temperature": null,
+      "max_tokens": null,
+      "system_prompt": null
+    },
+    "created_at": "2026-02-13T03:50:16.934785",
+    "updated_at": "2026-02-13T03:50:16.934785",
+    "message_count": 0
+  },
+  "6a6e1eaf-0962-4fe8-a22e-b21e143b0116": {
+    "id": "6a6e1eaf-0962-4fe8-a22e-b21e143b0116",
+    "workspace_path": "/Users/dubh3124/workspace/cognition",
+    "title": "updated-title",
+    "thread_id": "694d844f-cda0-4040-a305-c2ad289e86ce",
+    "status": "active",
+    "config": {
+      "provider": "openai_compatible",
+      "model": "google/gemini-3-flash-preview",
+      "temperature": null,
+      "max_tokens": null,
+      "system_prompt": null
+    },
+    "created_at": "2026-02-13T03:50:16.939554",
+    "updated_at": "2026-02-13T03:50:16.941436",
+    "message_count": 0
+  },
+  "b0f91517-bee3-4564-9396-a0f4320d1045": {
+    "id": "b0f91517-bee3-4564-9396-a0f4320d1045",
+    "workspace_path": "/Users/dubh3124/workspace/cognition",
+    "title": "msg-list-test",
+    "thread_id": "fea2e442-a806-4cc8-98f8-99b9fb83178f",
+    "status": "active",
+    "config": {
+      "provider": "openai_compatible",
+      "model": "google/gemini-3-flash-preview",
+      "temperature": null,
+      "max_tokens": null,
+      "system_prompt": null
+    },
+    "created_at": "2026-02-13T03:50:16.948724",
+    "updated_at": "2026-02-13T03:50:16.948724",
+    "message_count": 0
+  },
+  "6752bec8-9831-4110-ba54-7aa5146b6a96": {
+    "id": "6752bec8-9831-4110-ba54-7aa5146b6a96",
+    "workspace_path": "/Users/dubh3124/workspace/cognition",
+    "title": "sse-test",
+    "thread_id": "1e2ff723-723e-4aa4-8928-cd538afbfe14",
+    "status": "active",
+    "config": {
+      "provider": "openai_compatible",
+      "model": "google/gemini-3-flash-preview",
+      "temperature": null,
+      "max_tokens": null,
+      "system_prompt": null
+    },
+    "created_at": "2026-02-13T03:50:16.953865",
+    "updated_at": "2026-02-13T03:50:16.955867",
+    "message_count": 1
+  },
+  "1ea403dd-c83b-41cb-9be8-75b52bd24f34": {
+    "id": "1ea403dd-c83b-41cb-9be8-75b52bd24f34",
+    "workspace_path": "/Users/dubh3124/workspace/cognition",
+    "title": "Test Session",
+    "thread_id": "c186eaca-dfbc-40a6-89af-58e0e1057789",
+    "status": "active",
+    "config": {
+      "provider": "mock",
+      "model": null,
+      "temperature": 0.7,
+      "max_tokens": null,
+      "system_prompt": null
+    },
+    "created_at": "2026-02-13T03:52:43.206401",
+    "updated_at": "2026-02-13T03:52:43.206401",
+    "message_count": 0
+  },
+  "2d06c623-af6d-4492-9421-5461608077b6": {
+    "id": "2d06c623-af6d-4492-9421-5461608077b6",
+    "workspace_path": "/Users/dubh3124/workspace/cognition",
+    "title": "list-test-session",
+    "thread_id": "782a64e8-1e4e-4027-9f91-332286b9e652",
+    "status": "active",
+    "config": {
+      "provider": "openai_compatible",
+      "model": "google/gemini-3-flash-preview",
+      "temperature": null,
+      "max_tokens": null,
+      "system_prompt": null
+    },
+    "created_at": "2026-02-13T03:52:43.212289",
+    "updated_at": "2026-02-13T03:52:43.212289",
+    "message_count": 0
+  },
+  "ee20b78f-515d-4fd6-9cfc-effb1a141c4e": {
+    "id": "ee20b78f-515d-4fd6-9cfc-effb1a141c4e",
+    "workspace_path": "/Users/dubh3124/workspace/cognition",
+    "title": "get-test-session",
+    "thread_id": "6caa74bd-54a5-459f-ac51-73d2f2fe4f94",
+    "status": "active",
+    "config": {
+      "provider": "openai_compatible",
+      "model": "google/gemini-3-flash-preview",
+      "temperature": null,
+      "max_tokens": null,
+      "system_prompt": null
+    },
+    "created_at": "2026-02-13T03:52:43.216163",
+    "updated_at": "2026-02-13T03:52:43.216163",
+    "message_count": 0
+  },
+  "70ff1a52-22bd-49b9-b79c-5568940fcf64": {
+    "id": "70ff1a52-22bd-49b9-b79c-5568940fcf64",
+    "workspace_path": "/Users/dubh3124/workspace/cognition",
+    "title": "updated-title",
+    "thread_id": "4f679785-ff09-4be9-9420-b4c6a8652dc4",
+    "status": "active",
+    "config": {
+      "provider": "openai_compatible",
+      "model": "google/gemini-3-flash-preview",
+      "temperature": null,
+      "max_tokens": null,
+      "system_prompt": null
+    },
+    "created_at": "2026-02-13T03:52:43.223554",
+    "updated_at": "2026-02-13T03:52:43.226990",
+    "message_count": 0
+  },
+  "ea1ceb7a-fdaa-4fc6-b1be-54cb224b35f7": {
+    "id": "ea1ceb7a-fdaa-4fc6-b1be-54cb224b35f7",
+    "workspace_path": "/Users/dubh3124/workspace/cognition",
+    "title": "msg-list-test",
+    "thread_id": "d0604f9a-4f38-4730-8f34-dfc6294358d0",
+    "status": "active",
+    "config": {
+      "provider": "openai_compatible",
+      "model": "google/gemini-3-flash-preview",
+      "temperature": null,
+      "max_tokens": null,
+      "system_prompt": null
+    },
+    "created_at": "2026-02-13T03:52:43.236219",
+    "updated_at": "2026-02-13T03:52:43.236219",
+    "message_count": 0
+  },
+  "59a4635e-f36e-471a-99bd-7e2c784caff9": {
+    "id": "59a4635e-f36e-471a-99bd-7e2c784caff9",
+    "workspace_path": "/Users/dubh3124/workspace/cognition",
+    "title": "sse-test",
+    "thread_id": "1549bd1e-0c23-4ef8-95ea-f7a2498c25af",
+    "status": "active",
+    "config": {
+      "provider": "openai_compatible",
+      "model": "google/gemini-3-flash-preview",
+      "temperature": null,
+      "max_tokens": null,
+      "system_prompt": null
+    },
+    "created_at": "2026-02-13T03:52:43.241472",
+    "updated_at": "2026-02-13T03:52:43.243377",
+    "message_count": 1
+  },
+  "c9232f86-6cec-4cdd-91d0-37c2ab8e5e87": {
+    "id": "c9232f86-6cec-4cdd-91d0-37c2ab8e5e87",
+    "workspace_path": "/Users/dubh3124/workspace/cognition",
+    "title": "Test Session",
+    "thread_id": "81b4c3cb-5efe-4d1d-8043-78520f96bee8",
+    "status": "active",
+    "config": {
+      "provider": "mock",
+      "model": null,
+      "temperature": 0.7,
+      "max_tokens": null,
+      "system_prompt": null
+    },
+    "created_at": "2026-02-13T04:15:19.851143",
+    "updated_at": "2026-02-13T04:15:19.851143",
+    "message_count": 0
+  },
+  "48d44e78-f8cc-4893-954a-d6c1a29db368": {
+    "id": "48d44e78-f8cc-4893-954a-d6c1a29db368",
+    "workspace_path": "/Users/dubh3124/workspace/cognition",
+    "title": "list-test-session",
+    "thread_id": "2673f90d-f118-41b5-977a-97fb34b12a8f",
+    "status": "active",
+    "config": {
+      "provider": "openai_compatible",
+      "model": "google/gemini-3-flash-preview",
+      "temperature": null,
+      "max_tokens": null,
+      "system_prompt": null
+    },
+    "created_at": "2026-02-13T04:15:19.855511",
+    "updated_at": "2026-02-13T04:15:19.855511",
+    "message_count": 0
+  },
+  "1520d656-e460-45ea-909c-ac49c4178d58": {
+    "id": "1520d656-e460-45ea-909c-ac49c4178d58",
+    "workspace_path": "/Users/dubh3124/workspace/cognition",
+    "title": "get-test-session",
+    "thread_id": "a7a68558-e919-46c1-9ab6-6364207be032",
+    "status": "active",
+    "config": {
+      "provider": "openai_compatible",
+      "model": "google/gemini-3-flash-preview",
+      "temperature": null,
+      "max_tokens": null,
+      "system_prompt": null
+    },
+    "created_at": "2026-02-13T04:15:19.858769",
+    "updated_at": "2026-02-13T04:15:19.858769",
+    "message_count": 0
+  },
+  "53eb2bba-fddf-4846-876f-ba6b87387cb0": {
+    "id": "53eb2bba-fddf-4846-876f-ba6b87387cb0",
+    "workspace_path": "/Users/dubh3124/workspace/cognition",
+    "title": "updated-title",
+    "thread_id": "ba7c1ff3-ad96-4def-be2a-91d071f800e6",
+    "status": "active",
+    "config": {
+      "provider": "openai_compatible",
+      "model": "google/gemini-3-flash-preview",
+      "temperature": null,
+      "max_tokens": null,
+      "system_prompt": null
+    },
+    "created_at": "2026-02-13T04:15:19.863296",
+    "updated_at": "2026-02-13T04:15:19.865162",
+    "message_count": 0
+  },
+  "8dd06f2b-29aa-437a-9968-306a14f79f41": {
+    "id": "8dd06f2b-29aa-437a-9968-306a14f79f41",
+    "workspace_path": "/Users/dubh3124/workspace/cognition",
+    "title": "msg-list-test",
+    "thread_id": "7cf5404a-019a-460c-92fd-ab129247f8f2",
+    "status": "active",
+    "config": {
+      "provider": "openai_compatible",
+      "model": "google/gemini-3-flash-preview",
+      "temperature": null,
+      "max_tokens": null,
+      "system_prompt": null
+    },
+    "created_at": "2026-02-13T04:15:19.874340",
+    "updated_at": "2026-02-13T04:15:19.874340",
+    "message_count": 0
+  },
+  "20928a43-181e-4a7f-8eff-3a00c46f0a41": {
+    "id": "20928a43-181e-4a7f-8eff-3a00c46f0a41",
+    "workspace_path": "/Users/dubh3124/workspace/cognition",
+    "title": "sse-test",
+    "thread_id": "236317f5-e3e3-461e-bfae-ff34540e0e98",
+    "status": "active",
+    "config": {
+      "provider": "openai_compatible",
+      "model": "google/gemini-3-flash-preview",
+      "temperature": null,
+      "max_tokens": null,
+      "system_prompt": null
+    },
+    "created_at": "2026-02-13T04:15:19.879470",
+    "updated_at": "2026-02-13T04:15:19.881337",
+    "message_count": 1
+  },
+  "01598707-ea37-41f8-bf77-9a7edf860b70": {
+    "id": "01598707-ea37-41f8-bf77-9a7edf860b70",
+    "workspace_path": "/Users/dubh3124/workspace/cognition",
+    "title": "Test Session",
+    "thread_id": "bb53f4f8-1016-4eb3-829f-da748449e231",
+    "status": "active",
+    "config": {
+      "provider": "openai_compatible",
+      "model": "google/gemini-3-flash-preview",
+      "temperature": null,
+      "max_tokens": null,
+      "system_prompt": null
+    },
+    "created_at": "2026-02-13T04:38:16.224731",
+    "updated_at": "2026-02-13T04:38:16.224731",
+    "message_count": 0
+  },
+  "91cbf672-0811-49fa-b6b9-a91cea81253a": {
+    "id": "91cbf672-0811-49fa-b6b9-a91cea81253a",
+    "workspace_path": "/Users/dubh3124/workspace/cognition",
+    "title": "list-test-session",
+    "thread_id": "7dd1952a-b75a-4ef6-bc19-b70aab675582",
+    "status": "active",
+    "config": {
+      "provider": "openai_compatible",
+      "model": "google/gemini-3-flash-preview",
+      "temperature": null,
+      "max_tokens": null,
+      "system_prompt": null
+    },
+    "created_at": "2026-02-13T04:38:16.255163",
+    "updated_at": "2026-02-13T04:38:16.255163",
+    "message_count": 0
+  },
+  "f2004986-4ec8-4325-bdeb-6a0d5ce8557d": {
+    "id": "f2004986-4ec8-4325-bdeb-6a0d5ce8557d",
+    "workspace_path": "/Users/dubh3124/workspace/cognition",
+    "title": "get-test-session",
+    "thread_id": "038eab14-1633-4e08-ac99-0145784e1df8",
+    "status": "active",
+    "config": {
+      "provider": "openai_compatible",
+      "model": "google/gemini-3-flash-preview",
+      "temperature": null,
+      "max_tokens": null,
+      "system_prompt": null
+    },
+    "created_at": "2026-02-13T04:38:16.258661",
+    "updated_at": "2026-02-13T04:38:16.258661",
+    "message_count": 0
+  },
+  "2cb14f9d-c438-47d4-a7cd-eff6b03ab832": {
+    "id": "2cb14f9d-c438-47d4-a7cd-eff6b03ab832",
+    "workspace_path": "/Users/dubh3124/workspace/cognition",
+    "title": "updated-title",
+    "thread_id": "ab79d6ee-2397-4b80-8f4e-1723738a5abe",
+    "status": "active",
+    "config": {
+      "provider": "openai_compatible",
+      "model": "google/gemini-3-flash-preview",
+      "temperature": null,
+      "max_tokens": null,
+      "system_prompt": null
+    },
+    "created_at": "2026-02-13T04:38:16.263796",
+    "updated_at": "2026-02-13T04:38:16.266017",
+    "message_count": 0
+  },
+  "5ddd7283-7d93-4bec-9f3a-1f5a850841de": {
+    "id": "5ddd7283-7d93-4bec-9f3a-1f5a850841de",
+    "workspace_path": "/Users/dubh3124/workspace/cognition",
+    "title": "msg-list-test",
+    "thread_id": "fbd107cc-d7b6-445d-9d39-317e0fa13eae",
+    "status": "active",
+    "config": {
+      "provider": "openai_compatible",
+      "model": "google/gemini-3-flash-preview",
+      "temperature": null,
+      "max_tokens": null,
+      "system_prompt": null
+    },
+    "created_at": "2026-02-13T04:38:16.275567",
+    "updated_at": "2026-02-13T04:38:16.275567",
+    "message_count": 0
+  },
+  "2db86408-5b40-4cc3-b0a7-383e21bc3091": {
+    "id": "2db86408-5b40-4cc3-b0a7-383e21bc3091",
+    "workspace_path": "/Users/dubh3124/workspace/cognition",
+    "title": "sse-test",
+    "thread_id": "d182586f-80f1-41d0-b772-c6559aed8ce4",
+    "status": "active",
+    "config": {
+      "provider": "openai_compatible",
+      "model": "google/gemini-3-flash-preview",
+      "temperature": null,
+      "max_tokens": null,
+      "system_prompt": null
+    },
+    "created_at": "2026-02-13T04:38:16.283338",
+    "updated_at": "2026-02-13T04:38:16.286244",
+    "message_count": 1
+  },
+  "90c4c936-6242-4b32-820f-14cbe0ca4ad7": {
+    "id": "90c4c936-6242-4b32-820f-14cbe0ca4ad7",
+    "workspace_path": "/Users/dubh3124/workspace/cognition",
+    "title": "Test Session",
+    "thread_id": "585c22a7-c503-4439-906d-b7cae7e19920",
+    "status": "active",
+    "config": {
+      "provider": "openai_compatible",
+      "model": "google/gemini-3-flash-preview",
+      "temperature": null,
+      "max_tokens": null,
+      "system_prompt": null
+    },
+    "created_at": "2026-02-13T04:38:50.643432",
+    "updated_at": "2026-02-13T04:38:50.643432",
+    "message_count": 0
+  },
+  "46101401-103c-4da2-88a3-527617667a0b": {
+    "id": "46101401-103c-4da2-88a3-527617667a0b",
+    "workspace_path": "/Users/dubh3124/workspace/cognition",
+    "title": "list-test-session",
+    "thread_id": "fe8581fd-1023-407e-b956-966f6b3d8538",
+    "status": "active",
+    "config": {
+      "provider": "openai_compatible",
+      "model": "google/gemini-3-flash-preview",
+      "temperature": null,
+      "max_tokens": null,
+      "system_prompt": null
+    },
+    "created_at": "2026-02-13T04:38:50.647798",
+    "updated_at": "2026-02-13T04:38:50.647798",
+    "message_count": 0
+  },
+  "0d429519-d45a-459e-a852-0324bcf98935": {
+    "id": "0d429519-d45a-459e-a852-0324bcf98935",
+    "workspace_path": "/Users/dubh3124/workspace/cognition",
+    "title": "get-test-session",
+    "thread_id": "909f8c72-ab11-4bf4-a9b6-48fa22277af6",
+    "status": "active",
+    "config": {
+      "provider": "openai_compatible",
+      "model": "google/gemini-3-flash-preview",
+      "temperature": null,
+      "max_tokens": null,
+      "system_prompt": null
+    },
+    "created_at": "2026-02-13T04:38:50.651339",
+    "updated_at": "2026-02-13T04:38:50.651339",
+    "message_count": 0
+  },
+  "e950c4ac-ea4b-4269-b135-f7ae2571104f": {
+    "id": "e950c4ac-ea4b-4269-b135-f7ae2571104f",
+    "workspace_path": "/Users/dubh3124/workspace/cognition",
+    "title": "updated-title",
+    "thread_id": "0a6586c7-259c-419d-9fb2-70fa9e55cb91",
+    "status": "active",
+    "config": {
+      "provider": "openai_compatible",
+      "model": "google/gemini-3-flash-preview",
+      "temperature": null,
+      "max_tokens": null,
+      "system_prompt": null
+    },
+    "created_at": "2026-02-13T04:38:50.656300",
+    "updated_at": "2026-02-13T04:38:50.658430",
+    "message_count": 0
+  },
+  "60d725da-9787-40fc-b300-3006d81d0e89": {
+    "id": "60d725da-9787-40fc-b300-3006d81d0e89",
+    "workspace_path": "/Users/dubh3124/workspace/cognition",
+    "title": "msg-list-test",
+    "thread_id": "0dd5ca7b-cf8e-4dfb-a531-dc34c82784da",
+    "status": "active",
+    "config": {
+      "provider": "openai_compatible",
+      "model": "google/gemini-3-flash-preview",
+      "temperature": null,
+      "max_tokens": null,
+      "system_prompt": null
+    },
+    "created_at": "2026-02-13T04:38:50.666160",
+    "updated_at": "2026-02-13T04:38:50.666160",
+    "message_count": 0
+  },
+  "087b888a-5996-4d81-8e8f-e23682a4f600": {
+    "id": "087b888a-5996-4d81-8e8f-e23682a4f600",
+    "workspace_path": "/Users/dubh3124/workspace/cognition",
+    "title": "sse-test",
+    "thread_id": "c43f2f29-72f2-45f7-a50d-7a621fc0c1a0",
+    "status": "active",
+    "config": {
+      "provider": "openai_compatible",
+      "model": "google/gemini-3-flash-preview",
+      "temperature": null,
+      "max_tokens": null,
+      "system_prompt": null
+    },
+    "created_at": "2026-02-13T04:38:50.672920",
+    "updated_at": "2026-02-13T04:38:50.675339",
+    "message_count": 1
+  },
+  "f684f629-5429-4062-9908-23af9192342e": {
+    "id": "f684f629-5429-4062-9908-23af9192342e",
+    "workspace_path": "/Users/dubh3124/workspace/cognition",
+    "title": "E2E Test Session",
+    "thread_id": "d20516e6-6454-476e-b523-556baee48df0",
+    "status": "active",
+    "config": {
+      "provider": "mock",
+      "model": "google/gemini-3-flash-preview",
+      "temperature": null,
+      "max_tokens": null,
+      "system_prompt": null
+    },
+    "created_at": "2026-02-13T04:39:03.842535",
+    "updated_at": "2026-02-13T04:39:03.842535",
+    "message_count": 0
+  },
+  "34f8ff02-a18a-4e09-a79d-afaee504df38": {
+    "id": "34f8ff02-a18a-4e09-a79d-afaee504df38",
+    "workspace_path": "/Users/dubh3124/workspace/cognition",
+    "title": "E2E Test Session",
+    "thread_id": "0c7817ef-1797-4fc5-b324-c60162989e89",
+    "status": "active",
+    "config": {
+      "provider": "mock",
+      "model": "google/gemini-3-flash-preview",
+      "temperature": null,
+      "max_tokens": null,
+      "system_prompt": null
+    },
+    "created_at": "2026-02-13T04:39:52.503486",
+    "updated_at": "2026-02-13T04:39:52.503486",
+    "message_count": 0
+  },
+  "ea750192-dc74-4ed4-8e07-bad4196c27ae": {
+    "id": "ea750192-dc74-4ed4-8e07-bad4196c27ae",
+    "workspace_path": "/Users/dubh3124/workspace/cognition",
+    "title": "List Test",
+    "thread_id": "18d74dc0-5092-4298-b36a-e95293625994",
+    "status": "active",
+    "config": {
+      "provider": "mock",
+      "model": "google/gemini-3-flash-preview",
+      "temperature": null,
+      "max_tokens": null,
+      "system_prompt": null
+    },
+    "created_at": "2026-02-13T04:39:53.186324",
+    "updated_at": "2026-02-13T04:39:53.186324",
+    "message_count": 0
+  },
+  "f83f757c-cb50-474f-b522-1141c102b5c2": {
+    "id": "f83f757c-cb50-474f-b522-1141c102b5c2",
+    "workspace_path": "/Users/dubh3124/workspace/cognition",
+    "title": "Updated",
+    "thread_id": "e139c565-8735-416a-b71b-398c531715bb",
+    "status": "active",
+    "config": {
+      "provider": "mock",
+      "model": "google/gemini-3-flash-preview",
+      "temperature": null,
+      "max_tokens": null,
+      "system_prompt": null
+    },
+    "created_at": "2026-02-13T04:39:53.750605",
+    "updated_at": "2026-02-13T04:39:53.753253",
+    "message_count": 0
+  },
+  "0c7b1fb6-f8ca-48c6-a0e0-b40586e19770": {
+    "id": "0c7b1fb6-f8ca-48c6-a0e0-b40586e19770",
+    "workspace_path": "/Users/dubh3124/workspace/cognition",
+    "title": "Message Test",
+    "thread_id": "88efe1f6-8b3c-4e7a-9593-aa42ca676451",
+    "status": "active",
+    "config": {
+      "provider": "mock",
+      "model": "google/gemini-3-flash-preview",
+      "temperature": null,
+      "max_tokens": null,
+      "system_prompt": null
+    },
+    "created_at": "2026-02-13T04:39:55.235933",
+    "updated_at": "2026-02-13T04:39:55.251379",
+    "message_count": 1
+  },
+  "4b4c324d-e1a1-48a3-9a99-7e7566aaf115": {
+    "id": "4b4c324d-e1a1-48a3-9a99-7e7566aaf115",
+    "workspace_path": "/Users/dubh3124/workspace/cognition",
+    "title": "Message Test",
+    "thread_id": "276f59d4-4d37-4dbe-b0a8-dbb98cffdca0",
+    "status": "active",
+    "config": {
+      "provider": "mock",
+      "model": "google/gemini-3-flash-preview",
+      "temperature": null,
+      "max_tokens": null,
+      "system_prompt": null
+    },
+    "created_at": "2026-02-13T04:39:55.935660",
+    "updated_at": "2026-02-13T04:39:55.950831",
+    "message_count": 1
+  },
+  "28f45678-119e-44c2-a3d7-dc25207832b9": {
+    "id": "28f45678-119e-44c2-a3d7-dc25207832b9",
+    "workspace_path": "/Users/dubh3124/workspace/cognition",
+    "title": "Test Session",
+    "thread_id": "712f9680-d45a-4d84-b04f-627a691564e1",
+    "status": "active",
+    "config": {
+      "provider": "openai_compatible",
+      "model": "google/gemini-3-flash-preview",
+      "temperature": null,
+      "max_tokens": null,
+      "system_prompt": null
+    },
+    "created_at": "2026-02-13T04:40:00.135334",
+    "updated_at": "2026-02-13T04:40:00.135334",
+    "message_count": 0
+  },
+  "51159f79-1a5a-4f8f-9513-f82919976aa6": {
+    "id": "51159f79-1a5a-4f8f-9513-f82919976aa6",
+    "workspace_path": "/Users/dubh3124/workspace/cognition",
+    "title": "list-test-session",
+    "thread_id": "6e780cca-529c-4d5c-9bc7-34ca433e4b6e",
+    "status": "active",
+    "config": {
+      "provider": "openai_compatible",
+      "model": "google/gemini-3-flash-preview",
+      "temperature": null,
+      "max_tokens": null,
+      "system_prompt": null
+    },
+    "created_at": "2026-02-13T04:40:00.141536",
+    "updated_at": "2026-02-13T04:40:00.141536",
+    "message_count": 0
+  },
+  "4cc17914-66f0-4ca3-8348-422ca283e685": {
+    "id": "4cc17914-66f0-4ca3-8348-422ca283e685",
+    "workspace_path": "/Users/dubh3124/workspace/cognition",
+    "title": "get-test-session",
+    "thread_id": "f783699e-0710-40d9-934f-8861cb919e61",
+    "status": "active",
+    "config": {
+      "provider": "openai_compatible",
+      "model": "google/gemini-3-flash-preview",
+      "temperature": null,
+      "max_tokens": null,
+      "system_prompt": null
+    },
+    "created_at": "2026-02-13T04:40:00.147374",
+    "updated_at": "2026-02-13T04:40:00.147374",
+    "message_count": 0
+  },
+  "af1e82ce-5a2c-4217-a288-be3b4dc3ec12": {
+    "id": "af1e82ce-5a2c-4217-a288-be3b4dc3ec12",
+    "workspace_path": "/Users/dubh3124/workspace/cognition",
+    "title": "updated-title",
+    "thread_id": "55e4b7db-d582-4d2f-b4c7-9f0c8a54d7cd",
+    "status": "active",
+    "config": {
+      "provider": "openai_compatible",
+      "model": "google/gemini-3-flash-preview",
+      "temperature": null,
+      "max_tokens": null,
+      "system_prompt": null
+    },
+    "created_at": "2026-02-13T04:40:00.153815",
+    "updated_at": "2026-02-13T04:40:00.156270",
+    "message_count": 0
+  },
+  "c4067ce8-4a17-49e2-91d5-5f25331fadef": {
+    "id": "c4067ce8-4a17-49e2-91d5-5f25331fadef",
+    "workspace_path": "/Users/dubh3124/workspace/cognition",
+    "title": "msg-list-test",
+    "thread_id": "f407d175-9fa2-4438-920a-e6cebcaa65ec",
+    "status": "active",
+    "config": {
+      "provider": "openai_compatible",
+      "model": "google/gemini-3-flash-preview",
+      "temperature": null,
+      "max_tokens": null,
+      "system_prompt": null
+    },
+    "created_at": "2026-02-13T04:40:00.164564",
+    "updated_at": "2026-02-13T04:40:00.164564",
+    "message_count": 0
+  },
+  "03ff5991-8da5-4b6b-9ba5-86e2a1aac8ea": {
+    "id": "03ff5991-8da5-4b6b-9ba5-86e2a1aac8ea",
+    "workspace_path": "/Users/dubh3124/workspace/cognition",
+    "title": "sse-test",
+    "thread_id": "e5e7b9c5-95a5-48f8-b21f-4a564baafd60",
+    "status": "active",
+    "config": {
+      "provider": "openai_compatible",
+      "model": "google/gemini-3-flash-preview",
+      "temperature": null,
+      "max_tokens": null,
+      "system_prompt": null
+    },
+    "created_at": "2026-02-13T04:40:00.170489",
+    "updated_at": "2026-02-13T04:40:00.173207",
+    "message_count": 1
+  },
+  "c10e1445-5753-4b0e-bf7d-c65a8b88c754": {
+    "id": "c10e1445-5753-4b0e-bf7d-c65a8b88c754",
+    "workspace_path": "/Users/dubh3124/workspace/cognition",
+    "title": "Test Session",
+    "thread_id": "160f502a-f4e6-422a-b802-bef318bffc6c",
+    "status": "active",
+    "config": {
+      "provider": "openai_compatible",
+      "model": "google/gemini-3-flash-preview",
+      "temperature": null,
+      "max_tokens": null,
+      "system_prompt": null
+    },
+    "created_at": "2026-02-13T04:44:53.519888",
+    "updated_at": "2026-02-13T04:44:53.519888",
+    "message_count": 0
+  },
+  "afd15ccf-b8ee-4c21-aefb-881b676faf00": {
+    "id": "afd15ccf-b8ee-4c21-aefb-881b676faf00",
+    "workspace_path": "/Users/dubh3124/workspace/cognition",
+    "title": "list-test-session",
+    "thread_id": "afb3fb8c-66a2-4da5-82fb-c59e5841ac26",
+    "status": "active",
+    "config": {
+      "provider": "openai_compatible",
+      "model": "google/gemini-3-flash-preview",
+      "temperature": null,
+      "max_tokens": null,
+      "system_prompt": null
+    },
+    "created_at": "2026-02-13T04:44:53.524757",
+    "updated_at": "2026-02-13T04:44:53.524757",
+    "message_count": 0
+  },
+  "71ff9004-0fc7-4d4a-b188-94447dc52abe": {
+    "id": "71ff9004-0fc7-4d4a-b188-94447dc52abe",
+    "workspace_path": "/Users/dubh3124/workspace/cognition",
+    "title": "get-test-session",
+    "thread_id": "85b214d3-6e97-4b1a-a5c2-9f26d6bf6148",
+    "status": "active",
+    "config": {
+      "provider": "openai_compatible",
+      "model": "google/gemini-3-flash-preview",
+      "temperature": null,
+      "max_tokens": null,
+      "system_prompt": null
+    },
+    "created_at": "2026-02-13T04:44:53.529189",
+    "updated_at": "2026-02-13T04:44:53.529189",
+    "message_count": 0
+  },
+  "7f60b6c5-db8d-427a-a3fa-cd3ad573bc79": {
+    "id": "7f60b6c5-db8d-427a-a3fa-cd3ad573bc79",
+    "workspace_path": "/Users/dubh3124/workspace/cognition",
+    "title": "updated-title",
+    "thread_id": "f67c09bf-722f-4709-bf60-e34e3b59eb20",
+    "status": "active",
+    "config": {
+      "provider": "openai_compatible",
+      "model": "google/gemini-3-flash-preview",
+      "temperature": null,
+      "max_tokens": null,
+      "system_prompt": null
+    },
+    "created_at": "2026-02-13T04:44:53.533628",
+    "updated_at": "2026-02-13T04:44:53.535665",
+    "message_count": 0
+  },
+  "5d40af05-301f-4c1e-84e4-9aa173b5ade9": {
+    "id": "5d40af05-301f-4c1e-84e4-9aa173b5ade9",
+    "workspace_path": "/Users/dubh3124/workspace/cognition",
+    "title": "msg-list-test",
+    "thread_id": "78ff1b4e-e6bb-4b1c-9dce-6b0a2d7ef24c",
+    "status": "active",
+    "config": {
+      "provider": "openai_compatible",
+      "model": "google/gemini-3-flash-preview",
+      "temperature": null,
+      "max_tokens": null,
+      "system_prompt": null
+    },
+    "created_at": "2026-02-13T04:44:53.543235",
+    "updated_at": "2026-02-13T04:44:53.543235",
+    "message_count": 0
+  },
+  "a3f6b606-69a0-4464-89c7-26ec22e2197b": {
+    "id": "a3f6b606-69a0-4464-89c7-26ec22e2197b",
+    "workspace_path": "/Users/dubh3124/workspace/cognition",
+    "title": "sse-test",
+    "thread_id": "a465f50e-6288-4e77-9454-a7dbd32c026c",
+    "status": "active",
+    "config": {
+      "provider": "openai_compatible",
+      "model": "google/gemini-3-flash-preview",
+      "temperature": null,
+      "max_tokens": null,
+      "system_prompt": null
+    },
+    "created_at": "2026-02-13T04:44:53.548093",
+    "updated_at": "2026-02-13T04:44:53.550645",
+    "message_count": 1
+  },
+  "52784dda-e3d9-47eb-8e7d-ed3b3af51de5": {
+    "id": "52784dda-e3d9-47eb-8e7d-ed3b3af51de5",
+    "workspace_path": "/Users/dubh3124/workspace/cognition",
+    "title": "Test Session",
+    "thread_id": "a85c1d3a-23b5-4cc1-813d-02426bb5ef4a",
+    "status": "active",
+    "config": {
+      "provider": "openai_compatible",
+      "model": "google/gemini-3-flash-preview",
+      "temperature": null,
+      "max_tokens": null,
+      "system_prompt": null
+    },
+    "created_at": "2026-02-13T04:51:40.117826",
+    "updated_at": "2026-02-13T04:51:40.117826",
+    "message_count": 0
+  },
+  "c25741b9-b8d9-42df-baf7-8f5f36c2f73a": {
+    "id": "c25741b9-b8d9-42df-baf7-8f5f36c2f73a",
+    "workspace_path": "/Users/dubh3124/workspace/cognition",
+    "title": "list-test-session",
+    "thread_id": "c5b8ea9b-973b-4494-b91d-b5345439e589",
+    "status": "active",
+    "config": {
+      "provider": "openai_compatible",
+      "model": "google/gemini-3-flash-preview",
+      "temperature": null,
+      "max_tokens": null,
+      "system_prompt": null
+    },
+    "created_at": "2026-02-13T04:51:40.125464",
+    "updated_at": "2026-02-13T04:51:40.125464",
+    "message_count": 0
+  },
+  "54ad1908-48ac-425e-8870-6c108066db7c": {
+    "id": "54ad1908-48ac-425e-8870-6c108066db7c",
+    "workspace_path": "/Users/dubh3124/workspace/cognition",
+    "title": "get-test-session",
+    "thread_id": "12745ce0-99e4-4bb4-84ef-0be2162e8092",
+    "status": "active",
+    "config": {
+      "provider": "openai_compatible",
+      "model": "google/gemini-3-flash-preview",
+      "temperature": null,
+      "max_tokens": null,
+      "system_prompt": null
+    },
+    "created_at": "2026-02-13T04:51:40.130920",
+    "updated_at": "2026-02-13T04:51:40.130920",
+    "message_count": 0
+  },
+  "e29e43be-03a7-4b8e-9b0d-9e01782dece8": {
+    "id": "e29e43be-03a7-4b8e-9b0d-9e01782dece8",
+    "workspace_path": "/Users/dubh3124/workspace/cognition",
+    "title": "updated-title",
+    "thread_id": "999e0d66-6163-464e-897d-b784e0f8ee61",
+    "status": "active",
+    "config": {
+      "provider": "openai_compatible",
+      "model": "google/gemini-3-flash-preview",
+      "temperature": null,
+      "max_tokens": null,
+      "system_prompt": null
+    },
+    "created_at": "2026-02-13T04:51:40.137641",
+    "updated_at": "2026-02-13T04:51:40.140092",
+    "message_count": 0
+  },
+  "30e87114-df6e-4d06-b614-1f30722b71fc": {
+    "id": "30e87114-df6e-4d06-b614-1f30722b71fc",
+    "workspace_path": "/Users/dubh3124/workspace/cognition",
+    "title": "msg-list-test",
+    "thread_id": "a4aaf1b1-9248-45f1-983c-a0ddb780aa25",
+    "status": "active",
+    "config": {
+      "provider": "openai_compatible",
+      "model": "google/gemini-3-flash-preview",
+      "temperature": null,
+      "max_tokens": null,
+      "system_prompt": null
+    },
+    "created_at": "2026-02-13T04:51:40.148454",
+    "updated_at": "2026-02-13T04:51:40.148454",
+    "message_count": 0
+  },
+  "aa44b4bf-ab8e-42a5-978c-e07a42fa9d5d": {
+    "id": "aa44b4bf-ab8e-42a5-978c-e07a42fa9d5d",
+    "workspace_path": "/Users/dubh3124/workspace/cognition",
+    "title": "sse-test",
+    "thread_id": "f22d128d-a07d-4acb-aa9e-44920cba404b",
+    "status": "active",
+    "config": {
+      "provider": "openai_compatible",
+      "model": "google/gemini-3-flash-preview",
+      "temperature": null,
+      "max_tokens": null,
+      "system_prompt": null
+    },
+    "created_at": "2026-02-13T04:51:40.154428",
+    "updated_at": "2026-02-13T04:51:40.157339",
+    "message_count": 1
+  },
+  "f40066d1-69b4-4a59-b21b-1ebe12437f0e": {
+    "id": "f40066d1-69b4-4a59-b21b-1ebe12437f0e",
+    "workspace_path": "/Users/dubh3124/workspace/cognition",
+    "title": "Test Session",
+    "thread_id": "7417cbf7-b8e9-46ac-b491-5ad3cddabcc4",
+    "status": "active",
+    "config": {
+      "provider": "openai_compatible",
+      "model": "google/gemini-3-flash-preview",
+      "temperature": null,
+      "max_tokens": null,
+      "system_prompt": null
+    },
+    "created_at": "2026-02-13T05:16:26.685044",
+    "updated_at": "2026-02-13T05:16:26.685044",
+    "message_count": 0
+  },
+  "7f8abb23-d41d-4a3a-a234-63ad90a42a35": {
+    "id": "7f8abb23-d41d-4a3a-a234-63ad90a42a35",
+    "workspace_path": "/Users/dubh3124/workspace/cognition",
+    "title": "list-test-session",
+    "thread_id": "1bb51ba3-d741-4630-a147-77ecf9893973",
+    "status": "active",
+    "config": {
+      "provider": "openai_compatible",
+      "model": "google/gemini-3-flash-preview",
+      "temperature": null,
+      "max_tokens": null,
+      "system_prompt": null
+    },
+    "created_at": "2026-02-13T05:16:26.690748",
+    "updated_at": "2026-02-13T05:16:26.690748",
+    "message_count": 0
+  },
+  "2259715b-db95-4010-a449-50b49c380596": {
+    "id": "2259715b-db95-4010-a449-50b49c380596",
+    "workspace_path": "/Users/dubh3124/workspace/cognition",
+    "title": "get-test-session",
+    "thread_id": "d98c6bad-fe3f-49d4-9783-28455be9a818",
+    "status": "active",
+    "config": {
+      "provider": "openai_compatible",
+      "model": "google/gemini-3-flash-preview",
+      "temperature": null,
+      "max_tokens": null,
+      "system_prompt": null
+    },
+    "created_at": "2026-02-13T05:16:26.695204",
+    "updated_at": "2026-02-13T05:16:26.695204",
+    "message_count": 0
+  },
+  "1c902f6c-a9d2-4370-836a-21c75f7a9796": {
+    "id": "1c902f6c-a9d2-4370-836a-21c75f7a9796",
+    "workspace_path": "/Users/dubh3124/workspace/cognition",
+    "title": "updated-title",
+    "thread_id": "4883c09d-5bd2-44ef-853f-720bcb911e46",
+    "status": "active",
+    "config": {
+      "provider": "openai_compatible",
+      "model": "google/gemini-3-flash-preview",
+      "temperature": null,
+      "max_tokens": null,
+      "system_prompt": null
+    },
+    "created_at": "2026-02-13T05:16:26.700596",
+    "updated_at": "2026-02-13T05:16:26.702669",
+    "message_count": 0
+  },
+  "5e6dbe09-a6e3-4404-8055-8b07d87bce6e": {
+    "id": "5e6dbe09-a6e3-4404-8055-8b07d87bce6e",
+    "workspace_path": "/Users/dubh3124/workspace/cognition",
+    "title": "msg-list-test",
+    "thread_id": "4b4464c1-f65c-48f3-b473-a3a3bad052ec",
+    "status": "active",
+    "config": {
+      "provider": "openai_compatible",
+      "model": "google/gemini-3-flash-preview",
+      "temperature": null,
+      "max_tokens": null,
+      "system_prompt": null
+    },
+    "created_at": "2026-02-13T05:16:26.710753",
+    "updated_at": "2026-02-13T05:16:26.710753",
+    "message_count": 0
+  },
+  "b654adaa-89b1-41d8-a702-1b7d666fce75": {
+    "id": "b654adaa-89b1-41d8-a702-1b7d666fce75",
+    "workspace_path": "/Users/dubh3124/workspace/cognition",
+    "title": "sse-test",
+    "thread_id": "2c8b0c16-6e81-4ced-9c21-3699de433184",
+    "status": "active",
+    "config": {
+      "provider": "openai_compatible",
+      "model": "google/gemini-3-flash-preview",
+      "temperature": null,
+      "max_tokens": null,
+      "system_prompt": null
+    },
+    "created_at": "2026-02-13T05:16:26.716159",
+    "updated_at": "2026-02-13T05:16:26.718647",
+    "message_count": 1
+  },
+  "fbe01705-293a-4d0c-86a6-bbbc74420c72": {
+    "id": "fbe01705-293a-4d0c-86a6-bbbc74420c72",
+    "workspace_path": "/Users/dubh3124/workspace/cognition",
+    "title": "Test Session",
+    "thread_id": "58a7744e-01a0-4f7e-8276-fbb52275bbce",
+    "status": "active",
+    "config": {
+      "provider": "openai_compatible",
+      "model": "google/gemini-3-flash-preview",
+      "temperature": null,
+      "max_tokens": null,
+      "system_prompt": null
+    },
+    "created_at": "2026-02-13T05:24:57.402223",
+    "updated_at": "2026-02-13T05:24:57.402223",
+    "message_count": 0
+  },
+  "7869a8e9-b9e3-4704-aab6-2da4b6838f65": {
+    "id": "7869a8e9-b9e3-4704-aab6-2da4b6838f65",
+    "workspace_path": "/Users/dubh3124/workspace/cognition",
+    "title": "list-test-session",
+    "thread_id": "8329138e-3b3a-4593-a135-2562f5b71550",
+    "status": "active",
+    "config": {
+      "provider": "openai_compatible",
+      "model": "google/gemini-3-flash-preview",
+      "temperature": null,
+      "max_tokens": null,
+      "system_prompt": null
+    },
+    "created_at": "2026-02-13T05:24:57.407790",
+    "updated_at": "2026-02-13T05:24:57.407790",
+    "message_count": 0
+  },
+  "4d8a81c0-0c29-444c-b30a-239c5e1d51da": {
+    "id": "4d8a81c0-0c29-444c-b30a-239c5e1d51da",
+    "workspace_path": "/Users/dubh3124/workspace/cognition",
+    "title": "get-test-session",
+    "thread_id": "5728e486-47d7-49a2-9b3f-de4f4c2b4821",
+    "status": "active",
+    "config": {
+      "provider": "openai_compatible",
+      "model": "google/gemini-3-flash-preview",
+      "temperature": null,
+      "max_tokens": null,
+      "system_prompt": null
+    },
+    "created_at": "2026-02-13T05:24:57.415262",
+    "updated_at": "2026-02-13T05:24:57.415262",
+    "message_count": 0
+  },
+  "e941a90a-87a6-4d07-921c-c2667636d52c": {
+    "id": "e941a90a-87a6-4d07-921c-c2667636d52c",
+    "workspace_path": "/Users/dubh3124/workspace/cognition",
+    "title": "updated-title",
+    "thread_id": "8403f871-2de4-4447-acc9-eb31f5b564a1",
+    "status": "active",
+    "config": {
+      "provider": "openai_compatible",
+      "model": "google/gemini-3-flash-preview",
+      "temperature": null,
+      "max_tokens": null,
+      "system_prompt": null
+    },
+    "created_at": "2026-02-13T05:24:57.420386",
+    "updated_at": "2026-02-13T05:24:57.422410",
+    "message_count": 0
+  },
+  "15e1d766-b8b6-486c-90bc-f964aa4e6dcf": {
+    "id": "15e1d766-b8b6-486c-90bc-f964aa4e6dcf",
+    "workspace_path": "/Users/dubh3124/workspace/cognition",
+    "title": "msg-list-test",
+    "thread_id": "cee4b490-cd77-4275-8ea7-6d6cf556052d",
+    "status": "active",
+    "config": {
+      "provider": "openai_compatible",
+      "model": "google/gemini-3-flash-preview",
+      "temperature": null,
+      "max_tokens": null,
+      "system_prompt": null
+    },
+    "created_at": "2026-02-13T05:24:57.431225",
+    "updated_at": "2026-02-13T05:24:57.431225",
+    "message_count": 0
+  },
+  "36a17296-d13a-4379-ba46-a848470722ef": {
+    "id": "36a17296-d13a-4379-ba46-a848470722ef",
+    "workspace_path": "/Users/dubh3124/workspace/cognition",
+    "title": "sse-test",
+    "thread_id": "b6c842a5-8344-407f-9002-5ac456569c2b",
+    "status": "active",
+    "config": {
+      "provider": "openai_compatible",
+      "model": "google/gemini-3-flash-preview",
+      "temperature": null,
+      "max_tokens": null,
+      "system_prompt": null
+    },
+    "created_at": "2026-02-13T05:24:57.437056",
+    "updated_at": "2026-02-13T05:24:57.439651",
+    "message_count": 1
+  },
+  "7d3ee1a0-466a-4cae-a09f-5e003717aea2": {
+    "id": "7d3ee1a0-466a-4cae-a09f-5e003717aea2",
+    "workspace_path": "/Users/dubh3124/workspace/cognition",
+    "title": "Test Session",
+    "thread_id": "fd040700-481b-485b-813f-f507c43a22f6",
+    "status": "active",
+    "config": {
+      "provider": "openai_compatible",
+      "model": "google/gemini-3-flash-preview",
+      "temperature": null,
+      "max_tokens": null,
+      "system_prompt": null
+    },
+    "created_at": "2026-02-13T05:29:38.110791",
+    "updated_at": "2026-02-13T05:29:38.110791",
+    "message_count": 0
+  },
+  "c07cbabf-33ed-4216-97ae-b29be2c0fe20": {
+    "id": "c07cbabf-33ed-4216-97ae-b29be2c0fe20",
+    "workspace_path": "/Users/dubh3124/workspace/cognition",
+    "title": "list-test-session",
+    "thread_id": "76560054-e062-4b78-b9bc-f91708b3f440",
+    "status": "active",
+    "config": {
+      "provider": "openai_compatible",
+      "model": "google/gemini-3-flash-preview",
+      "temperature": null,
+      "max_tokens": null,
+      "system_prompt": null
+    },
+    "created_at": "2026-02-13T05:29:38.115420",
+    "updated_at": "2026-02-13T05:29:38.115420",
+    "message_count": 0
+  },
+  "70676a42-083f-4a8a-b542-0bfe8833f841": {
+    "id": "70676a42-083f-4a8a-b542-0bfe8833f841",
+    "workspace_path": "/Users/dubh3124/workspace/cognition",
+    "title": "get-test-session",
+    "thread_id": "3a767a88-26c4-481e-a455-c3f567c6b606",
+    "status": "active",
+    "config": {
+      "provider": "openai_compatible",
+      "model": "google/gemini-3-flash-preview",
+      "temperature": null,
+      "max_tokens": null,
+      "system_prompt": null
+    },
+    "created_at": "2026-02-13T05:29:38.119485",
+    "updated_at": "2026-02-13T05:29:38.119485",
+    "message_count": 0
+  },
+  "cdb401d3-848b-4ff4-b871-88ba6a9e5ce2": {
+    "id": "cdb401d3-848b-4ff4-b871-88ba6a9e5ce2",
+    "workspace_path": "/Users/dubh3124/workspace/cognition",
+    "title": "updated-title",
+    "thread_id": "d46bd350-68b6-478f-bebf-4f8cad31a7b5",
+    "status": "active",
+    "config": {
+      "provider": "openai_compatible",
+      "model": "google/gemini-3-flash-preview",
+      "temperature": null,
+      "max_tokens": null,
+      "system_prompt": null
+    },
+    "created_at": "2026-02-13T05:29:38.124570",
+    "updated_at": "2026-02-13T05:29:38.126953",
+    "message_count": 0
+  },
+  "0cec057d-4cdb-4c4a-acd3-a2b2256d2552": {
+    "id": "0cec057d-4cdb-4c4a-acd3-a2b2256d2552",
+    "workspace_path": "/Users/dubh3124/workspace/cognition",
+    "title": "msg-list-test",
+    "thread_id": "4cfd91e3-29fe-4bd1-95d3-cf6b4daa75f0",
+    "status": "active",
+    "config": {
+      "provider": "openai_compatible",
+      "model": "google/gemini-3-flash-preview",
+      "temperature": null,
+      "max_tokens": null,
+      "system_prompt": null
+    },
+    "created_at": "2026-02-13T05:29:38.136782",
+    "updated_at": "2026-02-13T05:29:38.136782",
+    "message_count": 0
+  },
+  "bc7cddc5-d07f-4c88-90e7-f92662add811": {
+    "id": "bc7cddc5-d07f-4c88-90e7-f92662add811",
+    "workspace_path": "/Users/dubh3124/workspace/cognition",
+    "title": "sse-test",
+    "thread_id": "08535026-17e6-4494-8bed-8fd93ce4b55a",
+    "status": "active",
+    "config": {
+      "provider": "openai_compatible",
+      "model": "google/gemini-3-flash-preview",
+      "temperature": null,
+      "max_tokens": null,
+      "system_prompt": null
+    },
+    "created_at": "2026-02-13T05:29:38.142607",
+    "updated_at": "2026-02-13T05:29:38.144918",
+    "message_count": 1
+  }
+}

@@ -258,11 +258,16 @@ class ConfigLoader:
             ("server", "session_timeout_seconds"): "COGNITION_SESSION_TIMEOUT_SECONDS",
             ("llm", "provider"): "COGNITION_LLM_PROVIDER",
             ("llm", "model"): "COGNITION_LLM_MODEL",
+            ("llm", "temperature"): "COGNITION_LLM_TEMPERATURE",
+            ("llm", "max_tokens"): "COGNITION_LLM_MAX_TOKENS",
+            ("llm", "system_prompt"): "COGNITION_LLM_SYSTEM_PROMPT",
             ("workspace", "root"): "COGNITION_WORKSPACE_ROOT",
             ("rate_limit", "per_minute"): "COGNITION_RATE_LIMIT_PER_MINUTE",
             ("rate_limit", "burst"): "COGNITION_RATE_LIMIT_BURST",
             ("observability", "otel_endpoint"): "COGNITION_OTEL_ENDPOINT",
             ("observability", "metrics_port"): "COGNITION_METRICS_PORT",
+            ("openai_compatible", "base_url"): "COGNITION_OPENAI_COMPATIBLE_BASE_URL",
+            ("openai_compatible", "api_key"): "COGNITION_OPENAI_COMPATIBLE_API_KEY",
         }
 
         for keys, env_name in mapping.items():

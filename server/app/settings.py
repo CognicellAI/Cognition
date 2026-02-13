@@ -36,6 +36,9 @@ class Settings(BaseSettings):
         alias="COGNITION_LLM_PROVIDER",
     )
     llm_model: str = Field(default="gpt-4o", alias="COGNITION_LLM_MODEL")
+    llm_temperature: Optional[float] = Field(default=None, alias="COGNITION_LLM_TEMPERATURE")
+    llm_max_tokens: Optional[int] = Field(default=None, alias="COGNITION_LLM_MAX_TOKENS")
+    llm_system_prompt: Optional[str] = Field(default=None, alias="COGNITION_LLM_SYSTEM_PROMPT")
 
     # OpenAI settings - use SecretStr to prevent accidental logging
     openai_api_key: Optional[SecretStr] = Field(default=None, alias="OPENAI_API_KEY")
@@ -85,6 +88,17 @@ class Settings(BaseSettings):
         default="mock",
         alias="COGNITION_TEST_LLM_MODE",
     )
+
+    @property
+    def workspace_path(self) -> Path:
+        """Get the current workspace path.
+
+        Returns:
+            Absolute path to the current working directory (server's workspace).
+            This follows the git-style model where workspace is determined by
+            where the server was started.
+        """
+        return Path.cwd().resolve()
 
     @field_validator("workspace_root")
     @classmethod
@@ -171,8 +185,29 @@ _settings: Settings | None = None
 
 
 def get_settings() -> Settings:
-    """Get the global settings instance."""
+    """Get the global settings instance.
+
+    Loads configuration from YAML files first, then environment variables.
+    YAML config files (in order of precedence):
+    1. ~/.cognition/config.yaml (global)
+    2. .cognition/config.yaml (project-level)
+    Environment variables override YAML config.
+    """
     global _settings
     if _settings is None:
+        # Load config from YAML files
+        from server.app.config_loader import ConfigLoader
+        import os
+
+        loader = ConfigLoader()
+        config_env_vars = loader.to_env_vars()
+
+        # Set config file values as env vars (if not already set)
+        # Environment variables take precedence
+        for key, value in config_env_vars.items():
+            if key not in os.environ:
+                os.environ[key] = value
+
+        # Create settings (reads from env vars)
         _settings = Settings()
     return _settings
