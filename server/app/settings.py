@@ -26,7 +26,7 @@ class Settings(BaseSettings):
 
     # Workspace settings
     workspace_root: Path = Field(
-        default=Path("./workspaces"),
+        default=Path("."),
         alias="COGNITION_WORKSPACE_ROOT",
     )
 
@@ -96,9 +96,9 @@ class Settings(BaseSettings):
         Returns:
             Absolute path to the current working directory (server's workspace).
             This follows the git-style model where workspace is determined by
-            where the server was started.
+            where the server was started, or explicitly configured via environment.
         """
-        return Path.cwd().resolve()
+        return self.workspace_root.resolve()
 
     @field_validator("workspace_root")
     @classmethod

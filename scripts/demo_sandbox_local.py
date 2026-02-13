@@ -14,7 +14,7 @@ It shows:
 
 import tempfile
 from pathlib import Path
-from server.app.agent import CognitionSandboxBackend
+from server.app.agent import CognitionLocalSandboxBackend
 from server.app.agent import create_cognition_agent
 
 
@@ -29,7 +29,7 @@ def demo_basic_sandbox():
         print(f"\n📁 Created workspace: {workspace}")
 
         # Initialize the sandbox backend
-        backend = CognitionSandboxBackend(root_dir=workspace, sandbox_id="demo-sandbox")
+        backend = CognitionLocalSandboxBackend(root_dir=workspace, sandbox_id="demo-sandbox")
 
         print(f"🎛️  Sandbox ID: {backend.id}")
 
@@ -134,7 +134,7 @@ def demo_backend_protocol():
     print("=" * 70)
 
     with tempfile.TemporaryDirectory() as workspace:
-        backend = CognitionSandboxBackend(root_dir=workspace)
+        backend = CognitionLocalSandboxBackend(root_dir=workspace)
 
         print("\n🎯 Implements SandboxBackendProtocol:")
         print("  ✓ execute(command) -> ExecuteResponse")

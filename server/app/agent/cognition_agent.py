@@ -1,8 +1,8 @@
 """Agent factory for creating Deep Agents with SandboxBackend support.
 
-This module creates deep agents using the CognitionSandboxBackend, which provides:
+This module creates deep agents using the CognitionLocalSandboxBackend, which provides:
 - Isolated command execution via LocalSandbox
-- File operations (ls, read, write, edit)
+- File operations (ls, read, write, edit) via FilesystemBackend
 - Search operations (glob, grep)
 - Multi-step ReAct loop with automatic tool chaining
 """
@@ -14,7 +14,7 @@ from typing import Any
 
 from deepagents import create_deep_agent
 
-from server.app.agent.sandbox_backend import CognitionSandboxBackend
+from server.app.agent.sandbox_backend import CognitionLocalSandboxBackend
 
 
 SYSTEM_PROMPT = """You are Cognition, an expert AI coding assistant.
@@ -54,7 +54,7 @@ def create_cognition_agent(
     """Create a Deep Agent for the Cognition system.
 
     This factory creates an agent with:
-    - CognitionSandboxBackend for filesystem and command execution
+    - CognitionLocalSandboxBackend for filesystem and command execution
     - Multi-step ReAct loop with write_todos support
     - State checkpointing via thread_id
     - Automatic tool chaining
@@ -73,7 +73,7 @@ def create_cognition_agent(
     # Create the sandbox backend with command execution support
     # This backend provides the `execute` tool to the agent
     sandbox_id = f"cognition-{project_path.name}"
-    backend = CognitionSandboxBackend(
+    backend = CognitionLocalSandboxBackend(
         root_dir=project_path,
         sandbox_id=sandbox_id,
     )

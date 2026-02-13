@@ -1,15 +1,15 @@
-# Cognition Sandbox Backend
+# Cognition Local Sandbox Backend
 
 ## Overview
 
-The **Cognition Sandbox Backend** is a custom implementation of the `SandboxBackendProtocol` from the `deepagents` library. It provides isolated command execution and file operations for AI agents, enabling safe multi-step task completion in a local environment.
+The **Cognition Local Sandbox Backend** is a hybrid implementation of the `SandboxBackendProtocol` from the `deepagents` library. It provides isolated command execution and native file operations for AI agents, enabling safe multi-step task completion in a local environment.
 
 ## What It Does
 
 The sandbox backend enables AI agents to:
 
-1. **Execute Shell Commands** - Run commands in an isolated workspace (tests, git, etc.)
-2. **Manipulate Files** - Read, write, edit files within the workspace
+1. **Execute Shell Commands** - Run commands in an isolated workspace (tests, git, etc.) via `subprocess`
+2. **Manipulate Files** - Read, write, edit files using native OS calls (FilesystemBackend)
 3. **Search Files** - Use glob patterns and grep to find files and content
 4. **Work in Isolation** - All operations are contained within a specific root directory
 
@@ -20,29 +20,34 @@ The sandbox backend enables AI agents to:
 │                      Deep Agents Agent                       │
 │                                                              │
 │  ┌───────────────────────────────────────────────────────┐  │
-│  │              CognitionSandboxBackend                   │  │
-│  │  ┌─────────────────────────────────────────────┐      │  │
-│  │  │           LocalSandbox                       │      │  │
-│  │  │  - subprocess execution                      │      │  │
-│  │  │  - chroot-like containment                   │      │  │
-│  │  │  - timeout handling                          │      │  │
-│  │  └─────────────────────────────────────────────┘      │  │
+│  │            CognitionLocalSandboxBackend                │  │
+│  │                                                          │  │
+│  │  Inherits from FilesystemBackend:                        │  │
+│  │  • read(), write(), edit(), ls_info()                   │  │
+│  │  • Uses native Python I/O (fast, robust)                │  │
 │  │                                                          │  │
 │  │  Implements SandboxBackendProtocol:                     │  │
-│  │  • execute()   - Shell command execution                │  │
-│  │  • ls_info()   - List directory contents                │  │
-│  │  • read()      - Read file with line numbers            │  │
-│  │  • write()     - Create or overwrite files              │  │
-│  │  • edit()      - Find and replace in files              │  │
-│  │  • glob_info() - Find files by pattern                  │  │
-│  │  • grep_raw()  - Search file contents                   │  │
+│  │  • execute() -> Uses LocalSandbox                        │  │
+│  │     ┌─────────────────────────────────────────────┐      │  │
+│  │     │           LocalSandbox                       │      │  │
+│  │     │  - subprocess execution                      │      │  │
+│  │     │  - chroot-like containment (cwd)             │      │  │
+│  │     └─────────────────────────────────────────────┘      │  │
 │  └───────────────────────────────────────────────────────┘  │
 └─────────────────────────────────────────────────────────────┘
 ```
 
 ## Key Components
 
-### 1. LocalSandbox (Core Execution Engine)
+### 1. FilesystemBackend (Native File Operations)
+
+We inherit from `deepagents.backends.FilesystemBackend` to get robust, OS-compatible file operations:
+
+- **Cross-platform**: Works on Linux, macOS, and Windows
+- **Secure**: Prevents shell injection attacks in file paths
+- **Fast**: Direct system calls instead of shelling out
+
+### 2. LocalSandbox (Command Execution)
 
 The `LocalSandbox` class wraps Python's `subprocess` module to execute commands:
 
@@ -52,40 +57,23 @@ class LocalSandbox:
     def execute(command: str, timeout=300.0) -> ExecuteResult
 ```
 
-**Features:**
-- Commands execute with `cwd` set to the workspace root
-- Combines stdout/stderr for unified output
-- Handles timeouts (default: 5 minutes)
-- Returns structured results with exit code
+### 3. CognitionLocalSandboxBackend (The Hybrid)
 
-### 2. CognitionSandboxBackend (Protocol Implementation)
-
-Implements `SandboxBackendProtocol` from `deepagents`:
+Combines both to provide the full agent capability set:
 
 ```python
-class CognitionSandboxBackend(SandboxBackendProtocol):
-    def __init__(self, root_dir: str | Path, sandbox_id: Optional[str] = None)
+class CognitionLocalSandboxBackend(FilesystemBackend, SandboxBackendProtocol):
+    def execute(self, command: str) -> ExecuteResponse
 ```
 
-When used with `create_deep_agent()`, the agent automatically gains access to an `execute` tool.
-
 ## File Operations
+
+File operations are handled natively by `FilesystemBackend`.
 
 ### Listing Directory Contents
 
 ```python
 backend.ls_info(path="/") -> list[FileInfo]
-```
-
-Uses `ls -la` to list files and returns structured `FileInfo` objects.
-
-**Example:**
-```python
-files = backend.ls_info("/app")
-# Returns: [
-#   FileInfo(path='/app/server', is_dir=True, size=0),
-#   FileInfo(path='/app/hello.py', is_dir=False, size=1024)
-# ]
 ```
 
 ### Reading Files
@@ -94,25 +82,10 @@ files = backend.ls_info("/app")
 backend.read(file_path: str, offset=0, limit=2000) -> str
 ```
 
-Returns file content with line numbers using `cat -n`.
-
-**Features:**
-- Line numbers for precise referencing
-- Offset and limit for large files
-- Error handling for missing files
-
 ### Writing Files
 
 ```python
 backend.write(file_path: str, content: str) -> WriteResult
-```
-
-Creates or overwrites files using `printf` for safe content handling.
-
-**Example:**
-```python
-result = backend.write("/app/script.py", 'print("Hello")')
-# WriteResult(error=None, path='/app/script.py', files_update={'written': True})
 ```
 
 ### Editing Files
@@ -125,13 +98,6 @@ backend.edit(
     replace_all=False
 ) -> EditResult
 ```
-
-Performs find-and-replace operations on files.
-
-**Features:**
-- Replace first occurrence or all occurrences
-- Tracks how many replacements were made
-- Returns file update metadata
 
 ### Searching Files
 
@@ -153,9 +119,9 @@ When you create an agent with the sandbox backend, the agent automatically gets 
 
 ```python
 from deepagents import create_deep_agent
-from server.app.agent import CognitionSandboxBackend
+from server.app.agent import CognitionLocalSandboxBackend
 
-backend = CognitionSandboxBackend(root_dir="/workspace")
+backend = CognitionLocalSandboxBackend(root_dir="/workspace")
 agent = create_deep_agent(backend=backend)
 
 # The agent can now use:
@@ -219,8 +185,8 @@ agent = create_cognition_agent(
 )
 
 # The agent now has access to:
-# - File operations (read, write, edit, ls, glob, grep)
-# - Command execution (execute tool)
+# - File operations (read, write, edit, ls, glob, grep) -> Native
+# - Command execution (execute tool) -> Shell
 # - Automatic multi-step ReAct loop
 ```
 
@@ -231,8 +197,8 @@ agent = create_cognition_agent(
 1. **User Request**: "Create a Python script and run it"
 2. **Agent Planning**: Uses `write_todos` to create a plan
 3. **Tool Execution**:
-   - Calls `write_file` to create `script.py`
-   - Calls `execute("python script.py")` to run it
+   - Calls `write_file` to create `script.py` (Native I/O)
+   - Calls `execute("python script.py")` to run it (Subprocess)
 4. **Result Streaming**: Each step streams back via SSE
 5. **Completion**: Agent returns final response
 
@@ -254,9 +220,9 @@ Agent (Final Response): I've created and run the script. Output: Hello World
 
 ### Isolation
 
-- All commands execute within the specified `root_dir`
-- No chroot or container isolation (LocalSandbox uses subprocess)
-- For stronger isolation, use containerized sandboxes (Modal, Runloop, Daytona)
+- **Files**: Restricted to `root_dir` by `FilesystemBackend` logic
+- **Commands**: `LocalSandbox` sets `cwd` to `root_dir`
+- **Soft Isolation**: Relies on process permissions. A malicious agent could theoretically access absolute paths (e.g., `execute("cat /etc/shadow")`) if the underlying user has permissions. For hard isolation, use Docker.
 
 ### Permissions
 
@@ -303,12 +269,13 @@ docker-compose logs -f cognition
 
 ## Comparison with Other Backends
 
-| Feature | StateBackend | FilesystemBackend | CognitionSandboxBackend |
-|---------|-------------|------------------|------------------------|
-| Persistence | Ephemeral (session) | Disk | Disk + Command Execution |
-| execute() tool | ❌ | ❌ | ✅ |
-| Use case | Stateless agents | File manipulation | Full dev environment |
-| Container | N/A | N/A | Docker |
+| Feature | FilesystemBackend | CognitionLocalSandboxBackend |
+|---------|------------------|------------------------------|
+| Persistence | Disk | Disk |
+| File I/O | Native Python | Native Python |
+| execute() tool | ❌ | ✅ |
+| Isolation | Path constraints | Path constraints + CWD |
+| Use case | File manipulation | Full dev environment |
 
 ## Troubleshooting
 
@@ -335,10 +302,9 @@ backend.read("/app/large.log", offset=1000, limit=100)
 
 ## Future Enhancements
 
-1. **Container Sandboxes**: Integrate with Modal, Runloop, or Daytona for stronger isolation
+1. **CognitionDockerSandboxBackend**: Implementation that uses `docker exec` for hard isolation.
 2. **Resource Limits**: Add CPU/memory constraints per command
-3. **Network Isolation**: Toggle network access for commands
-4. **Audit Logging**: Log all commands for security review
+3. **Audit Logging**: Log all commands for security review
 
 ## Related Documentation
 
