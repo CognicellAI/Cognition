@@ -255,9 +255,9 @@ REST + SSE provides:
 ### Deliverables
 
 #### 5.1 REST API Design ✅
-- [ ] Define all REST endpoints with Pydantic request/response models
-- [ ] Document SSE event types and schemas
-- [ ] Design error response format
+- [x] Define all REST endpoints with Pydantic request/response models
+- [x] Document SSE event types and schemas
+- [x] Design error response format
 - [ ] Define authentication strategy (Phase 6)
 
 **Endpoints:**
@@ -278,11 +278,11 @@ REST + SSE provides:
 | `GET` | `/ready` | Readiness probe | `ReadyStatus` |
 
 #### 5.2 Server Implementation ✅
-- [ ] Implement all REST endpoints in FastAPI
-- [ ] Implement SSE streaming for message responses
-- [ ] Add request/response validation
-- [ ] Add comprehensive logging
-- [ ] Maintain backward compatibility during transition
+- [x] Implement all REST endpoints in FastAPI
+- [x] Implement SSE streaming for message responses
+- [x] Add request/response validation
+- [x] Add comprehensive logging
+- [x] Maintain backward compatibility during transition
 
 **Files:**
 - `server/app/api/routes/projects.py`
@@ -292,12 +292,12 @@ REST + SSE provides:
 - `server/app/api/models.py` (Pydantic schemas)
 
 #### 5.3 OpenAPI Documentation ✅
-- [ ] Auto-generated OpenAPI spec at `/docs`
-- [ ] Interactive Swagger UI
-- [ ] ReDoc alternative documentation
-- [ ] Tag and organize endpoints
-- [ ] Add request/response examples
-- [ ] Document SSE event stream format
+- [x] Auto-generated OpenAPI spec at `/docs`
+- [x] Interactive Swagger UI
+- [x] ReDoc alternative documentation
+- [x] Tag and organize endpoints
+- [x] Add request/response examples
+- [x] Document SSE event stream format
 
 **Files:**
 - `server/app/main.py` (FastAPI OpenAPI config)
@@ -311,11 +311,11 @@ REST + SSE provides:
 **Decision**: TUI client approach abandoned - too complex for MVP. Will use simpler CLI + web client approach in Phase 6.
 
 #### 5.5 Configuration Management ✅
-- [ ] YAML configuration support (`~/.cognition/config.yaml`)
-- [ ] Project-level configuration (`.cognition/config.yaml`)
-- [ ] Configuration hierarchy (defaults → global → project → env)
-- [ ] Configuration validation
-- [ ] Typer CLI for server startup
+- [x] YAML configuration support (`~/.cognition/config.yaml`)
+- [x] Project-level configuration (`.cognition/config.yaml`)
+- [x] Configuration hierarchy (defaults → global → project → env)
+- [x] Configuration validation
+- [x] Typer CLI for server startup
 
 **Configuration Schema:**
 ```yaml
@@ -344,10 +344,10 @@ rate_limit:
 ```
 
 #### 5.6 Documentation ✅
-- [ ] README with quick start
-- [ ] Configuration reference
-- [ ] Troubleshooting FAQ
-- [ ] One example project (Python)
+- [x] README with quick start
+- [x] Configuration reference
+- [x] Troubleshooting FAQ
+- [x] One example project (Python)
 
 **Deferred to Phase 6:**
 - Interactive tutorial
