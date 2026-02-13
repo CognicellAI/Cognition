@@ -1,4 +1,4 @@
-.PHONY: help install build-agent-image test lint format typecheck clean
+.PHONY: help install build-agent-image test lint format typecheck clean docker-up docker-down docker-logs
 
 help:
 	@echo "Available targets:"
@@ -12,6 +12,9 @@ help:
 	@echo "  clean           - Clean build artifacts"
 	@echo "  dev-server      - Run development server"
 	@echo "  dev-client      - Run development client"
+	@echo "  docker-up       - Start Docker Compose (Cognition + Observability)"
+	@echo "  docker-down     - Stop Docker Compose"
+	@echo "  docker-logs     - View Docker Compose logs"
 
 install:
 	uv pip install -e ".[all]"
@@ -52,3 +55,21 @@ dev-client:
 
 pre-commit:
 	uv run pre-commit run --all-files
+
+# Docker Compose targets for observability stack
+docker-up:
+	docker-compose up -d
+	@echo "Services starting up..."
+	@echo "Cognition API: http://localhost:8000"
+	@echo "Grafana: http://localhost:3000 (admin/admin)"
+	@echo "Jaeger UI: http://localhost:16686"
+	@echo "Prometheus: http://localhost:9091"
+
+docker-down:
+	docker-compose down
+
+docker-logs:
+	docker-compose logs -f
+
+docker-build:
+	docker-compose build --no-cache

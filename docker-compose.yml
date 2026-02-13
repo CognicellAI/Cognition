@@ -1,0 +1,151 @@
+# Docker Compose for Cognition with Full Observability Stack
+# 
+# Usage:
+#   docker-compose up -d          # Start all services
+#   docker-compose logs -f        # View logs
+#   docker-compose down           # Stop all services
+#   docker-compose down -v        # Stop and remove volumes
+#
+# Services:
+#   - cognition:    FastAPI server (port 8000)
+#   - prometheus:   Metrics collection (port 9091)
+#   - grafana:      Dashboards (port 3000)
+#   - jaeger:       Distributed tracing (port 16686)
+#   - loki:         Log aggregation
+#   - promtail:     Log shipping
+
+version: "3.8"
+
+services:
+  # Cognition Server
+  cognition:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: cognition-server
+    ports:
+      - "8000:8000"
+      - "9090:9090"
+    environment:
+      - COGNITION_HOST=0.0.0.0
+      - COGNITION_PORT=8000
+      - COGNITION_LOG_LEVEL=info
+      - COGNITION_LLM_PROVIDER=mock
+      - COGNITION_WORKSPACE_ROOT=/workspace
+      - COGNITION_OTEL_ENDPOINT=http://jaeger:4317
+      - COGNITION_METRICS_PORT=9090
+      # Add your API keys here or in .env file
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID:-}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY:-}
+    volumes:
+      - ./workspaces:/workspace
+      - ./.cognition:/app/.cognition
+    networks:
+      - cognition-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+
+  # Prometheus - Metrics Collection
+  prometheus:
+    image: prom/prometheus:v2.48.0
+    container_name: cognition-prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/usr/share/prometheus/console_libraries'
+      - '--web.console.templates=/usr/share/prometheus/consoles'
+      - '--web.enable-lifecycle'
+      - '--web.enable-admin-api'
+    ports:
+      - "9091:9090"
+    volumes:
+      - ./docker/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    networks:
+      - cognition-network
+    depends_on:
+      - cognition
+    restart: unless-stopped
+
+  # Grafana - Dashboards and Visualization
+  grafana:
+    image: grafana/grafana:10.2.3
+    container_name: cognition-grafana
+    environment:
+      - GF_SECURITY_ADMIN_USER=${GRAFANA_ADMIN_USER:-admin}
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:-admin}
+      - GF_USERS_ALLOW_SIGN_UP=false
+      - GF_SERVER_ROOT_URL=http://localhost:3000
+      - GF_INSTALL_PLUGINS=grafana-lokiexplore-app
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./docker/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./docker/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+    networks:
+      - cognition-network
+    depends_on:
+      - prometheus
+      - loki
+    restart: unless-stopped
+
+  # Jaeger - Distributed Tracing
+  jaeger:
+    image: jaegertracing/all-in-one:1.50
+    container_name: cognition-jaeger
+    environment:
+      - COLLECTOR_OTLP_ENABLED=true
+    ports:
+      - "16686:16686"   # Jaeger UI
+      - "4317:4317"     # OTLP gRPC
+      - "4318:4318"     # OTLP HTTP
+    networks:
+      - cognition-network
+    restart: unless-stopped
+
+  # Loki - Log Aggregation
+  loki:
+    image: grafana/loki:2.9.3
+    container_name: cognition-loki
+    command: -config.file=/etc/loki/local-config.yaml
+    ports:
+      - "3100:3100"
+    volumes:
+      - ./docker/loki-config.yml:/etc/loki/local-config.yaml:ro
+      - loki-data:/loki
+    networks:
+      - cognition-network
+    restart: unless-stopped
+
+  # Promtail - Log Shipping
+  promtail:
+    image: grafana/promtail:2.9.3
+    container_name: cognition-promtail
+    command: -config.file=/etc/promtail/config.yml
+    volumes:
+      - ./docker/promtail-config.yml:/etc/promtail/config.yml:ro
+      - /var/log:/var/log:ro
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks:
+      - cognition-network
+    depends_on:
+      - loki
+    restart: unless-stopped
+
+networks:
+  cognition-network:
+    driver: bridge
+
+volumes:
+  prometheus-data:
+  grafana-data:
+  loki-data:

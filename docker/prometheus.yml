@@ -1,0 +1,31 @@
+# Prometheus configuration for Cognition observability
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+# Alertmanager configuration (optional - can be added later)
+alerting:
+  alertmanagers: []
+
+# Rule files (optional - can be added later)
+rule_files: []
+
+# Scrape configurations
+scrape_configs:
+  # Prometheus self-monitoring
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+
+  # Cognition server metrics
+  - job_name: 'cognition'
+    static_configs:
+      - targets: ['cognition:9090']
+    metrics_path: '/metrics'
+    scrape_interval: 10s
+    scrape_timeout: 5s
+
+  # Docker daemon metrics (if enabled)
+  - job_name: 'docker'
+    static_configs:
+      - targets: []
