@@ -1664,5 +1664,22 @@
     "created_at": "2026-02-13T08:35:05.685245",
     "updated_at": "2026-02-13T08:37:38.457374",
     "message_count": 1
+  },
+  "91722ce3-55be-44b4-8cb2-d72cf68a13f0": {
+    "id": "91722ce3-55be-44b4-8cb2-d72cf68a13f0",
+    "workspace_path": "/app",
+    "title": null,
+    "thread_id": "4dc2664f-5858-4811-9c53-2c8e4cf1733a",
+    "status": "active",
+    "config": {
+      "provider": "openai_compatible",
+      "model": "google/gemini-3-flash-preview",
+      "temperature": null,
+      "max_tokens": null,
+      "system_prompt": null
+    },
+    "created_at": "2026-02-13T14:06:52.094582",
+    "updated_at": "2026-02-13T14:12:20.121520",
+    "message_count": 1
   }
 }
