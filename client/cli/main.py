@@ -1,6 +1,6 @@
 """Cognition CLI Client.
 
-A lightweight CLI for interacting with the Cognition Agent Substrate.
+A lightweight CLI for interacting with the Cognition Agent.
 """
 
 from __future__ import annotations
@@ -25,7 +25,7 @@ from rich.text import Text
 
 app = typer.Typer(
     name="cognition-cli",
-    help="CLI client for the Cognition Agent Substrate",
+    help="CLI client for Cognition",
     no_args_is_help=True,
 )
 session_app = typer.Typer(help="Manage agent sessions")
@@ -280,7 +280,7 @@ async def stream_chat(
                     return
 
                 # Print header for raw stream
-                console.print(f"\n[bold magenta]»»» AGENT_SUBSTRATE_INBOUND[/bold magenta]")
+                console.print(f"\n[bold magenta]»»» AGENT_COGNITION_INBOUND[/bold magenta]")
 
                 # Use Live to provide smooth updates and avoid double responses
                 with Live(Markdown(""), refresh_per_second=15, auto_refresh=False) as live:

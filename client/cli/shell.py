@@ -1,6 +1,6 @@
 """Cognition Interactive Shell (Cyberpunk Edition).
 
-Provides a rich REPL for interacting with the Cognition Agent Substrate
+Provides a rich REPL for interacting with the Cognition Agent
 with real-time telemetry and a high-tech dashboard layout.
 """
 
@@ -88,7 +88,7 @@ class CognitionShell:
 
         grid.add_row(
             Text.assemble(
-                ("SUBSTRATE_OS ", f"bold {NEON_PURPLE}"),
+                ("COGNITION_OS ", f"bold {NEON_PURPLE}"),
                 (f"v0.1.0", "dim"),
                 (" | ", "white"),
                 ("WORKSPACE: ", "bold white"),
@@ -204,7 +204,7 @@ class CognitionShell:
                 )
 
                 prompt_text = [
-                    ("class:prompt", "substrate"),
+                    ("class:prompt", "cognition"),
                     ("", "://"),
                     ("class:session", self.session_id[:8]),
                     ("", " > "),
@@ -269,7 +269,7 @@ class CognitionShell:
         return True
 
     def show_help(self):
-        table = Table(title="SUBSTRATE_COMMAND_INDEX", border_style=NEON_PURPLE)
+        table = Table(title="COGNITION_COMMAND_INDEX", border_style=NEON_PURPLE)
         table.add_column("COMMAND", style=NEON_CYAN)
         table.add_column("DESCRIPTION", style="white")
         table.add_row("/model <id>", "Switch the active LLM for this session")
