@@ -8,19 +8,19 @@ from __future__ import annotations
 
 import asyncio
 import os
+import sys
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Optional
 
 import httpx
 from prompt_toolkit import PromptSession
+from prompt_toolkit.patch_stdout import patch_stdout
 from prompt_toolkit.completion import WordCompleter
 from prompt_toolkit.history import FileHistory
 from prompt_toolkit.styles import Style
-from rich.console import Console, RenderableType
-from rich.layout import Layout
-from rich.live import Live
+from prompt_toolkit.input import DummyInput
+from rich.console import Console
 from rich.panel import Panel
-from rich.progress import BarColumn, Progress, TextColumn
 from rich.table import Table
 from rich.text import Text
 
@@ -34,13 +34,6 @@ NEON_PURPLE = "#BF00FF"
 NEON_CYAN = "#00FFFF"
 DARK_GREY = "#1A1A1A"
 WARNING_YELLOW = "#FFFF00"
-
-SHELL_STYLE = Style.from_dict(
-    {
-        "prompt": f"bold {NEON_CYAN}",
-        "session": "italic green",
-    }
-)
 
 HISTORY_FILE = Path.home() / ".cognition" / "history"
 
@@ -89,7 +82,7 @@ class CognitionShell:
         grid.add_row(
             Text.assemble(
                 ("COGNITION_OS ", f"bold {NEON_PURPLE}"),
-                (f"v0.1.0", "dim"),
+                ("v0.1.0", "dim"),
                 (" | ", "white"),
                 ("WORKSPACE: ", "bold white"),
                 (os.getcwd(), NEON_CYAN),
@@ -110,9 +103,6 @@ class CognitionShell:
         grid.add_column(justify="left")
         grid.add_column(justify="center")
         grid.add_column(justify="right")
-
-        # Token usage bar (simulated percentage of 128k context)
-        total_tokens = self.stats.input_tokens + self.stats.output_tokens
 
         grid.add_row(
             Text.assemble(
@@ -153,21 +143,10 @@ class CognitionShell:
         """Update the current session to use a different model."""
         url = f"{self.server_url}/sessions/{self.session_id}"
 
-        # Detect provider from cache
-        provider = "openai_compatible"  # default
-
         try:
             async with httpx.AsyncClient() as client:
                 # Update session config
-                resp = await client.patch(
-                    url,
-                    json={
-                        "config": {
-                            "model": model_id,
-                            # Server logic will handle provider mapping if it exists
-                        }
-                    },
-                )
+                resp = await client.patch(url, json={"config": {"model": model_id}})
                 resp.raise_for_status()
                 self.stats.model = model_id
                 console.print(f"[bold green]✓ BRAIN_LINK UPDATED: {model_id}[/bold green]")
@@ -194,6 +173,14 @@ class CognitionShell:
         )
         console.print(self.make_footer())
 
+        # Check if we are in a TTY
+        is_tty = sys.stdin.isatty() and sys.stdout.isatty()
+        if not is_tty:
+            console.print(
+                "[yellow]Warning: Non-TTY environment detected. Interactive features may be limited.[/yellow]"
+            )
+
+        consecutive_errors = 0
         while True:
             try:
                 # Completer for slash commands and models
@@ -203,16 +190,26 @@ class CognitionShell:
                     ignore_case=True,
                 )
 
-                prompt_text = [
-                    ("class:prompt", "cognition"),
-                    ("", "://"),
-                    ("class:session", self.session_id[:8]),
-                    ("", " > "),
-                ]
+                prompt_str = f"cognition:{self.session_id[:8]} > "
 
-                user_input = await self.session.prompt_async(
-                    prompt_text, style=SHELL_STYLE, completer=completer
-                )
+                if is_tty:
+                    # Use prompt_toolkit for full features in TTY
+                    with patch_stdout():
+                        try:
+                            user_input = await self.session.prompt_async(
+                                prompt_str, completer=completer
+                            )
+                        except OSError as e:
+                            if e.errno == 22:
+                                # Fallback to basic input if Errno 22 occurs
+                                is_tty = False
+                                raise e
+                            raise e
+                else:
+                    # Fallback to basic input for non-TTY
+                    user_input = await asyncio.get_event_loop().run_in_executor(
+                        None, lambda: input(prompt_str)
+                    )
 
                 user_input = user_input.strip()
                 if not user_input:
@@ -220,6 +217,7 @@ class CognitionShell:
 
                 if user_input.startswith("/"):
                     if await self.handle_command(user_input):
+                        consecutive_errors = 0
                         continue
                     else:
                         break
@@ -227,15 +225,29 @@ class CognitionShell:
                 # Execute chat and update HUD on completion
                 await self.stream_chat_fn(self.session_id, user_input, self.stats.update)
 
+                # Reset error counter on success
+                consecutive_errors = 0
+
                 # Show updated telemetry
                 console.print(self.make_footer())
 
-            except KeyboardInterrupt:
+            except (KeyboardInterrupt, asyncio.CancelledError):
+                console.print("\n[yellow]Operation cancelled.[/yellow]")
                 continue
             except EOFError:
                 break
             except Exception as e:
-                console.print(f"[bold red]UNHANDLED_EXCEPTION:[/bold red] {e}")
+                consecutive_errors += 1
+                if not isinstance(e, OSError) or e.errno != 22:
+                    console.print(f"[bold red]UNHANDLED_EXCEPTION:[/bold red] {e}")
+
+                if consecutive_errors > 5:
+                    console.print(
+                        "[bold red]Too many consecutive errors. Exiting shell.[/bold red]"
+                    )
+                    break
+
+                await asyncio.sleep(0.5)
 
     async def handle_command(self, cmd_str: str) -> bool:
         parts = cmd_str.split()

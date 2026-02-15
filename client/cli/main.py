@@ -282,54 +282,82 @@ async def stream_chat(
                 # Print header for raw stream
                 console.print(f"\n[bold magenta]»»» AGENT_COGNITION_INBOUND[/bold magenta]")
 
-                # Use Live to provide smooth updates and avoid double responses
-                with Live(Markdown(""), refresh_per_second=15, auto_refresh=False) as live:
+                # Check if we are in a TTY for Live display
+                is_tty = sys.stdout.isatty()
+
+                if is_tty:
+                    # Use Live for smooth updates in terminal
+                    with Live(Markdown(""), refresh_per_second=15, auto_refresh=False) as live:
+                        async for line in response.aiter_lines():
+                            event = parser.parse_line(line)
+                            if not event:
+                                continue
+
+                            event_type, data = event
+
+                            if event_type == "token":
+                                if not live.is_started:
+                                    live.start()
+                                content = data.get("content", "")
+                                accumulated_text += content
+                                live.update(Markdown(accumulated_text))
+                                live.refresh()
+
+                            elif event_type == "tool_call":
+                                if live.is_started:
+                                    live.stop()
+                                console.print(
+                                    f"[bold yellow]⚡ EXEC:[/bold yellow] [italic]{data['name']}({data['args']})[/italic]"
+                                )
+
+                            elif event_type == "tool_result":
+                                if live.is_started:
+                                    live.stop()
+                                output = data.get("output", "")
+                                if len(output) > 100:
+                                    output = output[:100] + "..."
+                                console.print(
+                                    f"   [dim cyan]└─ RETURN: {output.strip()}[/dim cyan]"
+                                )
+
+                            elif event_type == "usage" and stats_callback:
+                                stats_callback(data)
+
+                            elif event_type == "error":
+                                if live.is_started:
+                                    live.stop()
+                                console.print(
+                                    f"\n[bold red]TERMINAL_ERROR:[/bold red] {data['message']}"
+                                )
+                                live.start()
+
+                            elif event_type == "done":
+                                if not live.is_started:
+                                    live.start()
+                                live.update(Markdown(accumulated_text))
+                                live.refresh()
+                                break
+                else:
+                    # Fallback to simple printing for non-TTY
                     async for line in response.aiter_lines():
                         event = parser.parse_line(line)
                         if not event:
                             continue
 
                         event_type, data = event
-
                         if event_type == "token":
-                            if not live.is_started:
-                                live.start()
                             content = data.get("content", "")
                             accumulated_text += content
-                            live.update(Markdown(accumulated_text))
-                            live.refresh()
-
+                            sys.stdout.write(content)
+                            sys.stdout.flush()
                         elif event_type == "tool_call":
-                            if live.is_started:
-                                live.stop()
-                            console.print(
-                                f"[bold yellow]⚡ EXEC:[/bold yellow] [italic]{data['name']}({data['args']})[/italic]"
-                            )
-
+                            print(f"\nEXEC: {data['name']}")
                         elif event_type == "tool_result":
-                            if live.is_started:
-                                live.stop()
-                            output = data.get("output", "")
-                            if len(output) > 100:
-                                output = output[:100] + "..."
-                            console.print(f"   [dim cyan]└─ RETURN: {output.strip()}[/dim cyan]")
-
+                            print(f"RETURN: {str(data['output'])[:50]}...")
                         elif event_type == "usage" and stats_callback:
                             stats_callback(data)
-
-                        elif event_type == "error":
-                            if live.is_started:
-                                live.stop()
-                            console.print(
-                                f"\n[bold red]TERMINAL_ERROR:[/bold red] {data['message']}"
-                            )
-                            live.start()
-
                         elif event_type == "done":
-                            if not live.is_started:
-                                live.start()
-                            live.update(Markdown(accumulated_text))
-                            live.refresh()
+                            print("\n--- END ---")
                             break
 
                 print()  # Add spacing at the end
