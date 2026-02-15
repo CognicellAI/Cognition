@@ -86,6 +86,7 @@ all = [
 [project.scripts]
 cognition = "server.app.cli:main"
 cognition-server = "server.app.cli:main"
+cognition-cli = "client.cli.main:main"
 cognition-client = "client.tui.app:main"
 
 [build-system]
