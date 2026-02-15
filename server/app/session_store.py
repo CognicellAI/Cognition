@@ -200,18 +200,34 @@ class SqliteSessionStore:
             session.title = title
 
         if config is not None:
+            # Merge existing config with new values
+            existing_config = session.config
+            new_config = SessionConfig(
+                provider=config.provider or existing_config.provider,
+                model=config.model or existing_config.model,
+                temperature=config.temperature
+                if config.temperature is not None
+                else existing_config.temperature,
+                max_tokens=config.max_tokens
+                if config.max_tokens is not None
+                else existing_config.max_tokens,
+                system_prompt=config.system_prompt
+                if config.system_prompt is not None
+                else existing_config.system_prompt,
+            )
+
             config_json = json.dumps(
                 {
-                    "provider": config.provider,
-                    "model": config.model,
-                    "temperature": config.temperature,
-                    "max_tokens": config.max_tokens,
-                    "system_prompt": config.system_prompt,
+                    "provider": new_config.provider,
+                    "model": new_config.model,
+                    "temperature": new_config.temperature,
+                    "max_tokens": new_config.max_tokens,
+                    "system_prompt": new_config.system_prompt,
                 }
             )
             updates.append("config = ?")
             params.append(config_json)
-            session.config = config
+            session.config = new_config
 
         if not updates:
             return session

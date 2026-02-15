@@ -164,8 +164,7 @@ async def update_session(
 ) -> SessionResponse:
     """Update a session.
 
-    Updates session metadata (title only).
-    Server uses global settings exclusively - no per-session config changes.
+    Updates session metadata (title) or configuration (model, temperature, etc.).
     """
     workspace_path = str(settings.workspace_path)
     store = get_session_store(workspace_path)
@@ -173,7 +172,7 @@ async def update_session(
     session = await store.update_session(
         session_id=session_id,
         title=request.title,
-        config=None,  # Server doesn't accept config updates from client
+        config=request.config,
     )
 
     if session is None:

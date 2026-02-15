@@ -1,0 +1,113 @@
+# Technical Architecture
+
+> **Inside the Engine: Component Interaction, Data Flow, and State Management.**
+
+Cognition is built as a modular, asynchronous engine. It separates the concerns of API orchestration, agent reasoning, and isolated execution to ensure that the platform remains stable, auditable, and extensible.
+
+## System Overview
+
+The engine follows a layered architecture where each layer communicates through well-defined protocols.
+
+```mermaid
+graph TD
+    subgraph "External Layer"
+        CLI[CLI Client]
+        WEB[Third-Party Web UI]
+    end
+
+    subgraph "Interface Layer (FastAPI)"
+        REST[REST API]
+        SSE[SSE Stream Generator]
+    end
+
+    subgraph "Service Layer"
+        Manager[Session Agent Manager]
+        Streaming[DeepAgent Streaming Service]
+    end
+
+    subgraph "Core Engine (DeepAgents)"
+        Runtime[LangGraph Runtime]
+        Planner[Todo List Middleware]
+    end
+
+    subgraph "Execution Layer"
+        Backend[CognitionLocalSandboxBackend]
+        Sandbox[LocalSandbox - Subprocess]
+    end
+
+    subgraph "Persistence Layer"
+        Store[SqliteSessionStore - Metadata]
+        Saver[AsyncSqliteSaver - Checkpoints]
+    end
+
+    CLI --> REST
+    WEB --> REST
+    REST --> Manager
+    Manager --> Streaming
+    Streaming --> Runtime
+    Runtime --> Backend
+    Backend --> Sandbox
+    Runtime -.-> Saver
+    Manager -.-> Store
+```
+
+## 1. The Interface Layer (REST + SSE)
+
+Cognition exposes its functionality through a standard REST API. Unlike traditional WebSocket-based agents, Cognition uses **Server-Sent Events (SSE)** for response streaming.
+
+- **Request:** `POST /sessions/{id}/messages`
+- **Response:** `text/event-stream`
+- **Event Types:**
+    - `token`: Incremental LLM tokens for UI rendering.
+    - `tool_call`: Metadata about a tool the agent is about to execute.
+    - `tool_result`: The raw output from the sandbox.
+    - `usage`: Final token counts and cost estimation.
+    - `done`: Signal that the ReAct loop has finished.
+
+## 2. The Service Layer (DeepAgent Service)
+
+The `DeepAgentStreamingService` is the heartbeat of the engine. It transforms the linear request-response of HTTP into the iterative, multi-step lifecycle of an autonomous agent.
+
+### The ReAct Loop
+When a message is received, the service enters an automatic **ReAct (Reason + Act)** loop:
+1.  **Reason:** The LLM analyzes the conversation history and the new message.
+2.  **Act:** If a tool call is required, the loop pauses reasoning and dispatches to the **Execution Layer**.
+3.  **Observe:** The tool output is fed back into the LLM context.
+4.  **Repeat:** The loop continues until the LLM provides a final textual response or reaches the iteration limit.
+
+## 3. The Execution Layer (Hybrid Sandbox)
+
+Execution safety is provided by the `CognitionLocalSandboxBackend`. It implements a hybrid model designed for the local development environment:
+
+*   **Native File I/O:** Inherits from `FilesystemBackend`. It uses native Python `os` and `pathlib` calls for reading and writing files. This provides maximum OS compatibility and performance.
+*   **Isolated Shell:** Uses a `LocalSandbox` wrapper around `subprocess`. It executes shell commands (e.g., `pytest`, `git`) with the `cwd` (Current Working Directory) strictly locked to the workspace root.
+
+## 4. Dual-Layer Persistence
+
+Cognition uses a unified SQLite database (`.cognition/state.db`) to handle two distinct types of state:
+
+### A. Session Metadata (Registry)
+Managed by `SqliteSessionStore`. This table acts as the "Phonebook" of the engine, allowing fast listing and retrieval of sessions without loading the full agent history.
+*   **Fields:** `id`, `title`, `thread_id`, `status`, `message_count`.
+
+### B. Agent Checkpoints (The Brain)
+Managed by `AsyncSqliteSaver` (from LangGraph). This stores the "Full Stack Frame" of the agent.
+*   **Purpose:** If the server process is killed mid-turn, the agent loads the latest checkpoint from the DB and resumes its exact internal state (variables, planning steps, etc.) when the next message arrives.
+
+## 5. Trust & Observability
+
+Every internal component is instrumented with **OpenTelemetry**.
+
+1.  **Trace Context Propagation:** The Trace ID is passed from the FastAPI request down into the LangGraph execution.
+2.  **Granular Spans:** Every tool execution and LLM call is recorded as a nested span.
+3.  **Audit Trail:** The result is a complete, auditable waterfall in Jaeger or Grafana showing exactly how the engine arrived at a conclusion.
+
+---
+
+## Technical Specs
+
+- **Language:** Python 3.11+
+- **Framework:** FastAPI, LangGraph, DeepAgents
+- **Database:** SQLite (via aiosqlite)
+- **Observability:** OpenTelemetry (OTLP Protocol)
+- **Networking:** HTTP/1.1 (REST) + EventSource (SSE)

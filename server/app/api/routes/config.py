@@ -45,7 +45,27 @@ async def get_config(
             "model": yaml_config.get("llm", {}).get("model", settings.llm_model),
             "temperature": yaml_config.get("llm", {}).get("temperature"),
             "max_tokens": yaml_config.get("llm", {}).get("max_tokens"),
-            # Note: system_prompt not included to keep response concise
+            "available_providers": [
+                {
+                    "id": "openai",
+                    "name": "OpenAI",
+                    "models": ["gpt-4o", "gpt-4o-mini", "o1-preview"],
+                },
+                {
+                    "id": "bedrock",
+                    "name": "AWS Bedrock",
+                    "models": [
+                        "anthropic.claude-3-sonnet-20240229-v1:0",
+                        "anthropic.claude-3-opus-20240229-v1:0",
+                    ],
+                },
+                {
+                    "id": "openai_compatible",
+                    "name": "OpenRouter / Local",
+                    "models": ["google/gemini-3-flash-preview", "meta-llama/llama-3-70b"],
+                },
+                {"id": "mock", "name": "Mock Provider", "models": ["mock-model"]},
+            ],
         },
         rate_limit={
             "per_minute": yaml_config.get("rate_limit", {}).get(

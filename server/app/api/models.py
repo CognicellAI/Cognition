@@ -63,10 +63,11 @@ class SessionList(BaseModel):
 class SessionUpdate(BaseModel):
     """Request to update a session.
 
-    Server uses global settings exclusively - no per-session config.
+    Allows updating metadata and LLM configuration.
     """
 
     title: Optional[str] = Field(None, max_length=200)
+    config: Optional[SessionConfig] = Field(None, description="Update LLM configuration")
 
 
 # ============================================================================

@@ -257,7 +257,9 @@ def list_sessions():
         raise typer.Exit(1)
 
 
-async def stream_chat(session_id: str, message: str):
+async def stream_chat(
+    session_id: str, message: str, stats_callback: Optional[Callable[[dict], None]] = None
+):
     """Stream a chat message and display tokens with high-fidelity word-by-word printing."""
     url = f"{get_server_url()}/sessions/{session_id}/messages"
 
@@ -277,47 +279,66 @@ async def stream_chat(session_id: str, message: str):
                     console.print(f"[bold red]Error:[/bold red] {msg}")
                     return
 
-                console.print(f"\n[bold cyan]Agent Substrate:[/bold cyan]")
+                # Print header for raw stream
+                console.print(f"\n[bold magenta]»»» AGENT_SUBSTRATE_INBOUND[/bold magenta]")
 
-                async for line in response.aiter_lines():
-                    event = parser.parse_line(line)
-                    if not event:
-                        continue
+                # Use Live to provide smooth updates and avoid double responses
+                with Live(Markdown(""), refresh_per_second=15, auto_refresh=False) as live:
+                    async for line in response.aiter_lines():
+                        event = parser.parse_line(line)
+                        if not event:
+                            continue
 
-                    event_type, data = event
+                        event_type, data = event
 
-                    if event_type == "token":
-                        content = data.get("content", "")
-                        accumulated_text += content
-                        # Direct write to stdout for highest fidelity streaming
-                        sys.stdout.write(content)
-                        sys.stdout.flush()
+                        if event_type == "token":
+                            if not live.is_started:
+                                live.start()
+                            content = data.get("content", "")
+                            accumulated_text += content
+                            live.update(Markdown(accumulated_text))
+                            live.refresh()
 
-                    elif event_type == "tool_call":
-                        console.print(
-                            f"\n[italic yellow]🔧 Executing {data['name']}...[/italic yellow]"
-                        )
-                        # Show args if helpful
-                        # console.print(f"[dim]{data['args']}[/dim]")
+                        elif event_type == "tool_call":
+                            if live.is_started:
+                                live.stop()
+                            console.print(
+                                f"[bold yellow]⚡ EXEC:[/bold yellow] [italic]{data['name']}({data['args']})[/italic]"
+                            )
 
-                    elif event_type == "tool_result":
-                        output = data.get("output", "")
-                        if len(output) > 200:
-                            output = output[:200] + "..."
-                        console.print(f" [dim green]→ Result: {output.strip()}[/dim green]")
+                        elif event_type == "tool_result":
+                            if live.is_started:
+                                live.stop()
+                            output = data.get("output", "")
+                            if len(output) > 100:
+                                output = output[:100] + "..."
+                            console.print(f"   [dim cyan]└─ RETURN: {output.strip()}[/dim cyan]")
 
-                    elif event_type == "error":
-                        console.print(f"\n[bold red]Agent Error:[/bold red] {data['message']}")
+                        elif event_type == "usage" and stats_callback:
+                            stats_callback(data)
 
-                    elif event_type == "done":
-                        # Add a final newline
-                        print("\n")
-                        # Clear the raw stream and render final Markdown for reading
-                        # console.clear() # Maybe too disruptive? Let's just print Markdown Panel
-                        console.print(Panel(Markdown(accumulated_text), border_style="blue"))
+                        elif event_type == "error":
+                            if live.is_started:
+                                live.stop()
+                            console.print(
+                                f"\n[bold red]TERMINAL_ERROR:[/bold red] {data['message']}"
+                            )
+                            live.start()
+
+                        elif event_type == "done":
+                            if not live.is_started:
+                                live.start()
+                            live.update(Markdown(accumulated_text))
+                            live.refresh()
+                            break
+
+                print()  # Add spacing at the end
 
     except Exception as e:
-        console.print(f"\n[bold red]Connection Error:[/bold red] {e}")
+        console.print(f"\n[bold red]COMM_LINK_FAILURE:[/bold red] {e}")
+
+
+from typing import Callable
 
 
 @app.command("chat")

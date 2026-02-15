@@ -1,6 +1,7 @@
-"""Cognition Interactive Shell.
+"""Cognition Interactive Shell (Cyberpunk Edition).
 
-Provides a rich REPL for interacting with the Cognition Agent Substrate.
+Provides a rich REPL for interacting with the Cognition Agent Substrate
+with real-time telemetry and a high-tech dashboard layout.
 """
 
 from __future__ import annotations
@@ -10,11 +11,16 @@ import os
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Optional
 
+import httpx
 from prompt_toolkit import PromptSession
+from prompt_toolkit.completion import WordCompleter
 from prompt_toolkit.history import FileHistory
 from prompt_toolkit.styles import Style
-from rich.console import Console
+from rich.console import Console, RenderableType
+from rich.layout import Layout
+from rich.live import Live
 from rich.panel import Panel
+from rich.progress import BarColumn, Progress, TextColumn
 from rich.table import Table
 from rich.text import Text
 
@@ -23,85 +29,215 @@ if TYPE_CHECKING:
 
 console = Console()
 
+# Cyberpunk Color Palette
+NEON_PURPLE = "#BF00FF"
+NEON_CYAN = "#00FFFF"
+DARK_GREY = "#1A1A1A"
+WARNING_YELLOW = "#FFFF00"
+
+SHELL_STYLE = Style.from_dict(
+    {
+        "prompt": f"bold {NEON_CYAN}",
+        "session": "italic green",
+    }
+)
+
 HISTORY_FILE = Path.home() / ".cognition" / "history"
 
 
+class SessionStats:
+    """Tracks real-time session telemetry."""
+
+    def __init__(self):
+        self.input_tokens = 0
+        self.output_tokens = 0
+        self.cost = 0.0
+        self.model = "UNKNOWN"
+        self.provider = "UNKNOWN"
+
+    def update(self, data: dict):
+        self.input_tokens += data.get("input_tokens", 0)
+        self.output_tokens += data.get("output_tokens", 0)
+        self.cost += data.get("estimated_cost", 0.0)
+        self.model = data.get("model", self.model)
+        self.provider = data.get("provider", self.provider)
+
+
 class CognitionShell:
-    """Interactive REPL for Cognition."""
+    """Interactive REPL for Cognition with futuristic dashboard."""
 
     def __init__(self, session_id: str, server_url: str, stream_chat_fn: Any):
-        """Initialize the shell.
-
-        Args:
-            session_id: The active session ID.
-            server_url: The engine server URL.
-            stream_chat_fn: The async function to call for streaming chat.
-        """
         self.session_id = session_id
         self.server_url = server_url
         self.stream_chat_fn = stream_chat_fn
+        self.stats = SessionStats()
 
-        # Ensure history file exists
+        # Cache for model completions
+        self.available_models = []
+
         HISTORY_FILE.parent.mkdir(parents=True, exist_ok=True)
-
         self.session = PromptSession(
             history=FileHistory(str(HISTORY_FILE)),
         )
 
+    def make_header(self) -> Panel:
+        """Create the dashboard header."""
+        grid = Table.grid(expand=True)
+        grid.add_column(justify="left", ratio=1)
+        grid.add_column(justify="right", ratio=1)
+
+        grid.add_row(
+            Text.assemble(
+                ("SUBSTRATE_OS ", f"bold {NEON_PURPLE}"),
+                (f"v0.1.0", "dim"),
+                (" | ", "white"),
+                ("WORKSPACE: ", "bold white"),
+                (os.getcwd(), NEON_CYAN),
+            ),
+            Text.assemble(
+                ("SESSION_ID: ", "bold white"),
+                (self.session_id[:8], NEON_PURPLE),
+                (" [", "white"),
+                ("ONLINE", "bold green"),
+                ("]", "white"),
+            ),
+        )
+        return Panel(grid, style=f"bold {NEON_PURPLE}", border_style=NEON_PURPLE)
+
+    def make_footer(self) -> Panel:
+        """Create the dashboard footer with telemetry."""
+        grid = Table.grid(expand=True)
+        grid.add_column(justify="left")
+        grid.add_column(justify="center")
+        grid.add_column(justify="right")
+
+        # Token usage bar (simulated percentage of 128k context)
+        total_tokens = self.stats.input_tokens + self.stats.output_tokens
+
+        grid.add_row(
+            Text.assemble(
+                ("MODEL: ", "bold white"),
+                (self.stats.model.upper(), NEON_CYAN),
+                (f" ({self.stats.provider})", "dim"),
+            ),
+            Text.assemble(
+                ("TOKENS: ", "bold white"),
+                (f"In: {self.stats.input_tokens}", "green"),
+                (" | ", "white"),
+                (f"Out: {self.stats.output_tokens}", "yellow"),
+            ),
+            Text.assemble(
+                ("SESSION_COST: ", "bold white"), (f"${self.stats.cost:.4f}", "bold green")
+            ),
+        )
+        return Panel(grid, style="white", border_style="dim")
+
+    async def fetch_models(self):
+        """Fetch available models from the engine."""
+        try:
+            async with httpx.AsyncClient() as client:
+                resp = await client.get(f"{self.server_url}/config")
+                if resp.status_code == 200:
+                    data = resp.json()
+                    providers = data.get("llm", {}).get("available_providers", [])
+                    models = []
+                    for p in providers:
+                        models.extend(p.get("models", []))
+                    self.available_models = models
+                    self.stats.model = data.get("llm", {}).get("model", "UNKNOWN")
+                    self.stats.provider = data.get("llm", {}).get("provider", "UNKNOWN")
+        except:
+            pass
+
+    async def switch_model(self, model_id: str):
+        """Update the current session to use a different model."""
+        url = f"{self.server_url}/sessions/{self.session_id}"
+
+        # Detect provider from cache
+        provider = "openai_compatible"  # default
+
+        try:
+            async with httpx.AsyncClient() as client:
+                # Update session config
+                resp = await client.patch(
+                    url,
+                    json={
+                        "config": {
+                            "model": model_id,
+                            # Server logic will handle provider mapping if it exists
+                        }
+                    },
+                )
+                resp.raise_for_status()
+                self.stats.model = model_id
+                console.print(f"[bold green]✓ BRAIN_LINK UPDATED: {model_id}[/bold green]")
+        except Exception as e:
+            console.print(f"[bold red]✗ BRAIN_LINK FAILURE:[/bold red] {e}")
+
     async def run(self):
         """Run the interactive shell loop."""
+        await self.fetch_models()
+
+        # Initial display
+        console.clear()
+        console.print(self.make_header())
         console.print(
             Panel(
                 Text.assemble(
-                    ("Connected to Session: ", "white"),
-                    (self.session_id, "bold cyan"),
-                    ("\nType ", "white"),
-                    ("/help", "bold yellow"),
-                    (" for commands or ", "white"),
-                    ("exit", "bold red"),
-                    (" to quit.", "white"),
+                    ("SYSTEM READY. ", "bold green"),
+                    ("Enter query to begin investigation or ", "white"),
+                    ("/help", f"bold {WARNING_YELLOW}"),
+                    (" for command list.", "white"),
                 ),
-                title="[bold blue]Cognition Agent Substrate Shell[/bold blue]",
-                border_style="blue",
+                border_style=NEON_CYAN,
             )
         )
+        console.print(self.make_footer())
 
         while True:
             try:
-                # Use a simple formatted prompt string
-                prompt_text = f"cognition:{self.session_id[:8]} > "
-                user_input = await self.session.prompt_async(prompt_text)
+                # Completer for slash commands and models
+                completer = WordCompleter(
+                    ["/help", "/clear", "/session", "/status", "/exit", "/model"]
+                    + self.available_models,
+                    ignore_case=True,
+                )
+
+                prompt_text = [
+                    ("class:prompt", "substrate"),
+                    ("", "://"),
+                    ("class:session", self.session_id[:8]),
+                    ("", " > "),
+                ]
+
+                user_input = await self.session.prompt_async(
+                    prompt_text, style=SHELL_STYLE, completer=completer
+                )
 
                 user_input = user_input.strip()
                 if not user_input:
                     continue
 
-                # Handle Slash Commands
                 if user_input.startswith("/"):
                     if await self.handle_command(user_input):
                         continue
                     else:
-                        break  # Exit signaled
+                        break
 
-                # Normal Chat Message
-                await self.stream_chat_fn(self.session_id, user_input)
-                print()  # Add spacing
+                # Execute chat and update HUD on completion
+                await self.stream_chat_fn(self.session_id, user_input, self.stats.update)
+
+                # Show updated telemetry
+                console.print(self.make_footer())
 
             except KeyboardInterrupt:
-                # Ctrl+C clears the line but keeps the shell open
                 continue
             except EOFError:
-                # Ctrl+D exits
                 break
             except Exception as e:
-                console.print(f"[bold red]Shell Error:[/bold red] {e}")
+                console.print(f"[bold red]UNHANDLED_EXCEPTION:[/bold red] {e}")
 
     async def handle_command(self, cmd_str: str) -> bool:
-        """Handle slash commands.
-
-        Returns:
-            True to continue shell, False to exit.
-        """
         parts = cmd_str.split()
         cmd = parts[0].lower()
 
@@ -112,23 +248,34 @@ class CognitionShell:
             self.show_help()
         elif cmd == "/clear":
             console.clear()
+            console.print(self.make_header())
+        elif cmd == "/model":
+            if len(parts) > 1:
+                await self.switch_model(parts[1])
+            else:
+                console.print(f"[bold yellow]CURRENT_MODEL:[/bold yellow] {self.stats.model}")
+                console.print(
+                    f"[bold cyan]AVAILABLE_BRAINS:[/bold cyan] {', '.join(self.available_models)}"
+                )
         elif cmd == "/session":
-            console.print(f"Active Session: [bold cyan]{self.session_id}[/bold cyan]")
+            console.print(f"THREAD_ID: [bold cyan]{self.session_id}[/bold cyan]")
         elif cmd == "/status":
             from client.cli.main import engine_status
 
             engine_status()
         else:
-            console.print(f"[yellow]Unknown command: {cmd}. Type /help for list.[/yellow]")
+            console.print(f"[bold red]INVALID_COMMAND:[/bold red] {cmd}")
 
         return True
 
     def show_help(self):
-        """Display available slash commands."""
-        table = Table(title="Shell Commands", show_header=False, border_style="dim")
-        table.add_row("/help", "Show this help menu")
-        table.add_row("/clear", "Clear the terminal screen")
-        table.add_row("/session", "Show current session info")
-        table.add_row("/status", "Check engine health")
-        table.add_row("/exit", "Exit the shell")
+        table = Table(title="SUBSTRATE_COMMAND_INDEX", border_style=NEON_PURPLE)
+        table.add_column("COMMAND", style=NEON_CYAN)
+        table.add_column("DESCRIPTION", style="white")
+        table.add_row("/model <id>", "Switch the active LLM for this session")
+        table.add_row("/help", "Show this system index")
+        table.add_row("/clear", "Reset visual buffers")
+        table.add_row("/session", "Display thread telemetry")
+        table.add_row("/status", "Verify engine integrity")
+        table.add_row("/exit", "Terminate connection")
         console.print(table)
