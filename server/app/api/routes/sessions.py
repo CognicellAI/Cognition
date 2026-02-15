@@ -31,9 +31,9 @@ from server.app.api.models import (
 from server.app.models import SessionConfig
 from server.app.session_store import get_session_store, LocalSessionStore
 from server.app.settings import Settings, get_settings
-from server.app.llm.streaming_service import (
-    get_session_llm_manager,
-    SessionLLMManager,
+from server.app.llm.deep_agent_service import (
+    get_session_agent_manager,
+    SessionAgentManager,
 )
 
 router = APIRouter(prefix="/sessions", tags=["sessions"])
@@ -44,9 +44,9 @@ def get_settings_dependency() -> Settings:
     return get_settings()
 
 
-def get_llm_manager(settings: Settings = Depends(get_settings_dependency)) -> SessionLLMManager:
-    """Get the session LLM manager."""
-    return get_session_llm_manager(settings)
+def get_agent_manager(settings: Settings = Depends(get_settings_dependency)) -> SessionAgentManager:
+    """Get the session agent manager."""
+    return get_session_agent_manager(settings)
 
 
 @router.post(
@@ -60,7 +60,7 @@ def get_llm_manager(settings: Settings = Depends(get_settings_dependency)) -> Se
 async def create_session(
     request: SessionCreate,
     settings: Settings = Depends(get_settings_dependency),
-    llm_manager: SessionLLMManager = Depends(get_llm_manager),
+    agent_manager: SessionAgentManager = Depends(get_agent_manager),
 ) -> SessionResponse:
     """Create a new session.
 
@@ -94,8 +94,8 @@ async def create_session(
         title=request.title,
     )
 
-    # Register session with LLM manager
-    llm_manager.register_session(session_id, workspace_path)
+    # Register session with Agent manager
+    agent_manager.register_session(session_id, workspace_path)
 
     return SessionResponse.from_core(session)
 
@@ -195,7 +195,7 @@ async def update_session(
 async def delete_session(
     session_id: str,
     settings: Settings = Depends(get_settings_dependency),
-    llm_manager: SessionLLMManager = Depends(get_llm_manager),
+    agent_manager: SessionAgentManager = Depends(get_agent_manager),
 ) -> None:
     """Delete a session.
 
@@ -211,8 +211,8 @@ async def delete_session(
             detail=f"Session not found: {session_id}",
         )
 
-    # Unregister from LLM manager
-    llm_manager.unregister_session(session_id)
+    # Unregister from Agent manager
+    agent_manager.unregister_session(session_id)
 
     # Delete session
     await store.delete_session(session_id)

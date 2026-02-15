@@ -1,314 +1,103 @@
-# Cognition
+# Cognition: The Agent Substrate
 
-A local AI coding assistant built on **LangGraph Deep Agents** with a modern REST API and Server-Sent Events streaming.
+> **The foundational layer for trusted, executable AI platforms.**
 
-## Overview
+## The Platform Paradox
 
-Cognition provides an AI-powered coding assistant that runs locally on your machine. It features:
+We are in the midst of a platform shift. Every industry—from Cyber Security to FinTech to BioTech—is rushing to build "AI Agents" into their workflows.
 
-- **REST API** with OpenAPI 3.1 documentation
-- **Server-Sent Events (SSE)** for real-time streaming responses
-- **Multi-LLM support** (OpenAI, AWS Bedrock, OpenAI-compatible endpoints)
-- **In-process execution** via LocalSandbox (no Docker required)
-- **Session management** with automatic checkpointing
-- **YAML configuration** with hierarchical loading
+But building a production-grade Agent Platform requires solving three incredibly hard infrastructure problems that have nothing to do with the AI model itself:
 
-## Quick Start
+1.  **Isolation (Execution):** How do I let an AI run code or tools safely without destroying my infrastructure?
+2.  **State (Persistence):** How do I ensure an investigation or workflow survives server restarts and lasts for weeks?
+3.  **Trust (Auditability):** How do I prove to a regulator or legal team *exactly* what data the AI accessed and what logic it used?
 
-### Installation
+Most teams waste 12-18 months building this scaffolding before they write their first line of domain logic.
 
-```bash
-# Clone the repository
-git clone https://github.com/yourusername/cognition.git
-cd cognition
+**Cognition is that scaffolding.** It is the **Agent Substrate**: a hardened, pre-built runtime engine that handles Execution, State, and Trust so you can focus on building your platform.
 
-# Install dependencies (using uv)
-curl -LsSf https://astral.sh/uv/install.sh | sh
-uv sync
+## Core Primitives
 
-# Or using pip
-pip install -e ".[all]"
-```
+Cognition provides three fundamental primitives that you compose to build your platform:
 
-### Configuration
+### 1. The Cell (Execution Environment)
+The Cell is the secure boundary where "Thought" becomes "Action".
 
-Create a configuration file at `~/.cognition/config.yaml`:
+- **Concept:** Bring the Code to the Data.
+- **Capabilities:**
+    - **Local Cells:** Lightweight process isolation for rapid development loops.
+    - **Container Cells:** Hardened Docker/Kubernetes environments for analyzing untrusted data (malware, PII, financial records).
+- **Benefit:** Your platform logic remains clean. You simply request a tool execution, and the Substrate handles the containment, cleanup, and resource limits.
 
-```yaml
-llm:
-  provider: openai
-  model: gpt-4o
-  temperature: 0.7
+### 2. The Thread (State Management)
+The Thread is the continuous, resilient memory of a workflow.
 
-server:
-  host: 127.0.0.1
-  port: 8000
-```
+- **Concept:** Durable, resumable state.
+- **Capabilities:**
+    - **Pluggable Backends:** SQLite for local/edge deployments; PostgreSQL for cloud scale.
+    - **Checkpointing:** Every step the AI takes is saved. If your server crashes, the Agent picks up *exactly* where it left off.
+- **Benefit:** Enables long-running "Cases" or "Projects" that span days or weeks, rather than transient "Chats."
 
-Or use environment variables:
+### 3. The Trace (Forensic Audit)
+The Trace is the immutable proof of action.
 
-```bash
-export OPENAI_API_KEY="sk-..."
-export COGNITION_LLM_PROVIDER="openai"
-export COGNITION_LLM_MODEL="gpt-4o"
-```
-
-### Running the Server
-
-```bash
-# Start the API server
-cognition serve
-
-# Or with options
-cognition serve --host 0.0.0.0 --port 8080
-
-# View logs
-cognition serve --log-level debug
-```
-
-The server will be available at `http://127.0.0.1:8000` with:
-- REST API: `http://127.0.0.1:8000`
-- OpenAPI Docs: `http://127.0.0.1:8000/docs`
-- Health Check: `http://127.0.0.1:8000/health`
-
-### Using the TUI Client
-
-```bash
-# In a new terminal
-cognition-client
-
-# Or with custom server URL
-COGNITION_SERVER_URL=http://127.0.0.1:8000 cognition-client
-```
-
-### Using the API Directly
-
-```bash
-# Create a project
-curl -X POST http://127.0.0.1:8000/projects \
-  -H "Content-Type: application/json" \
-  -d '{"name": "my-project", "description": "Test project"}'
-
-# Create a session
-curl -X POST http://127.0.0.1:8000/sessions \
-  -H "Content-Type: application/json" \
-  -d '{"project_id": "<project-id>", "title": "My Session"}'
-
-# Send a message (streams SSE)
-curl -X POST http://127.0.0.1:8000/sessions/<session-id>/messages \
-  -H "Content-Type: application/json" \
-  -H "Accept: text/event-stream" \
-  -d '{"content": "Hello, what files are in this project?"}'
-```
+- **Concept:** Trust through verification.
+- **Capabilities:**
+    - **OTLP Integration:** Native OpenTelemetry support allows you to pipe traces to Jaeger, Splunk, or Datadog.
+    - **Chain of Custody:** See exactly what file was read, what API was called, and what reasoning the AI used to make a decision.
+- **Benefit:** Essential for platforms operating in regulated environments (Security, Legal, Healthcare).
 
 ## Architecture
 
-```
-┌──────────────┐     HTTP REST      ┌──────────────────┐
-│   TUI/CLI    │ ◄────────────────► │   FastAPI Server │
-│   Client     │    SSE Streaming   │                  │
-└──────────────┘                    │   ┌───────────┐  │
-                                    │   │  Projects │  │
-┌──────────────┐                    │   │  Sessions │  │
-│  Web Browser │ ────/docs────────► │   │  Messages │  │
-│  (OpenAPI)   │                    │   └───────────┘  │
-└──────────────┘                    │         │        │
-                                    │         ▼        │
-                                    │   ┌───────────┐  │
-                                    │   │   Agent   │  │
-                                    │   │  (LLM)    │  │
-                                    │   └───────────┘  │
-                                    │         │        │
-                                    │         ▼        │
-                                    │   ┌───────────┐  │
-                                    │   │ LocalSandbox│ │
-                                    │   │  (Execution)│ │
-                                    │   └───────────┘  │
-                                    └──────────────────┘
-```
+Cognition is designed to be the "Headless Backend" for your platform. You build the specialized UI/UX; we provide the engine.
 
-## Features
+```mermaid
+graph TD
+    subgraph "Your Platform (The Application)"
+        UI[Custom React/Vue Dashboard]
+        API_GW[Your API Gateway]
+    end
 
-### REST API
+    subgraph "The Substrate (Cognition Engine)"
+        API[REST API / SSE Stream]
+        
+        subgraph "Trust Layer"
+            Audit[OTLP Tracer]
+            State[Persistence - SQLite/Postgres]
+        end
+        
+        subgraph "Execution Layer"
+            Router[Agent Router]
+            
+            subgraph "The Cell (Sandbox)"
+                Tool_A[File System]
+                Tool_B[Shell / Python]
+                Tool_C[Custom Tools]
+            end
+        end
+    end
 
-Full REST API with automatic OpenAPI documentation:
-
-- **Projects**: Create, list, manage project workspaces
-- **Sessions**: Create, configure, and manage agent sessions
-- **Messages**: Send messages and receive streaming responses via SSE
-- **Configuration**: View and update server settings
-
-### Server-Sent Events (SSE)
-
-Messages return streaming events:
-
-```
-event: token
-data: {"content": "Hello"}
-
-event: tool_call
-data: {"name": "glob", "args": {"pattern": "*.py"}, "id": "123"}
-
-event: tool_result
-data: {"tool_call_id": "123", "output": "main.py app.py", "exit_code": 0}
-
-event: usage
-data: {"input_tokens": 10, "output_tokens": 50, "estimated_cost": 0.002}
-
-event: done
-data: {}
+    UI --> API_GW
+    API_GW --> API
+    API --> Router
+    Router --> State
+    Router --> Tool_A
+    Router --> Tool_B
+    Tool_B -.-> Audit
 ```
 
-### Configuration System
+## Use Cases
 
-Hierarchical configuration (lowest to highest precedence):
+Cognition is domain-agnostic. It powers platforms such as:
 
-1. Built-in defaults
-2. `~/.cognition/config.yaml` (global user settings)
-3. `.cognition/config.yaml` (project-specific)
-4. Environment variables / `.env` file
+*   **[GeneSmith (BioTech):](./blueprints/genesmith.md)** A biological foundry for designing and simulating proteins in a secure, audited environment.
+*   **[StarKeep (SpaceOps):](./blueprints/starkeep.md)** An orbital administrator for autonomous satellite repair and edge computing.
+*   **[ZeroOne (DeFi):](./blueprints/zeroone.md)** An algorithmic CEO for managing decentralized capital with transparent logic.
+*   **[BreachLens (Security):](./blueprints/cyber-investigation.md)** A forensic investigation platform for safely analyzing malware and breach logs.
+*   **[DataLens (Analytics):](./blueprints/data-analyst.md)** A headless data scientist for securely analyzing and visualizing business data.
 
-Example `~/.cognition/config.yaml`:
+## Getting Started
 
-```yaml
-server:
-  host: 127.0.0.1
-  port: 8000
-  log_level: info
-
-llm:
-  provider: openai
-  model: gpt-4o
-  temperature: 0.7
-  max_tokens: 4096
-
-agent:
-  system_prompt: "You are a helpful coding assistant."
-  max_iterations: 15
-
-workspace:
-  root: ./workspaces
-
-rate_limit:
-  per_minute: 60
-  burst: 10
-```
-
-### CLI Commands
-
-```bash
-# Server management
-cognition serve                    # Start server
-cognition serve --port 8080       # Custom port
-cognition serve --reload          # Development mode
-
-# Configuration
-cognition init                     # Create config files
-cognition config                   # Show current config
-
-# Health check
-cognition health                   # Check server status
-```
-
-## API Reference
-
-The complete API reference is available at `http://localhost:8000/docs` when the server is running.
-
-### Key Endpoints
-
-| Method | Path | Description |
-|--------|------|-------------|
-| `POST` | `/projects` | Create a new project |
-| `GET` | `/projects` | List all projects |
-| `POST` | `/sessions` | Create a new session |
-| `GET` | `/sessions` | List sessions |
-| `POST` | `/sessions/:id/messages` | Send message (SSE stream) |
-| `GET` | `/sessions/:id/messages` | List messages |
-| `GET` | `/health` | Health check |
-| `GET` | `/docs` | OpenAPI documentation |
-
-## Testing
-
-```bash
-# Run all tests
-pytest
-
-# Run only unit tests (fast)
-pytest tests/unit/ -v
-
-# Run E2E tests (requires server)
-pytest tests/e2e/ -v
-
-# Run with coverage
-pytest --cov=server --cov=client --cov-report=html
-```
-
-## Development
-
-```bash
-# Install in development mode
-pip install -e ".[dev]"
-
-# Run linting
-ruff check server/ client/
-
-# Run type checking
-mypy server/ client/
-
-# Format code
-ruff format server/ client/
-```
-
-## Configuration Reference
-
-See [docs/configuration.md](docs/configuration.md) for detailed configuration options.
-
-## Troubleshooting
-
-See [docs/troubleshooting.md](docs/troubleshooting.md) for common issues and solutions.
-
-## Project Structure
-
-```
-cognition/
-├── server/app/
-│   ├── main.py              # FastAPI application
-│   ├── api/                 # REST API routes
-│   │   ├── models.py        # Pydantic models
-│   │   ├── sse.py           # SSE utilities
-│   │   └── routes/          # API endpoints
-│   ├── agent/               # Agent tools and workflows
-│   ├── config_loader.py     # YAML configuration
-│   ├── cli.py               # Typer CLI
-│   └── settings.py          # Settings management
-├── client/tui/
-│   ├── app.py               # Textual TUI
-│   └── api.py               # REST client with SSE
-├── tests/
-│   ├── unit/                # Unit tests
-│   └── e2e/                 # End-to-end tests
-├── docs/                    # Documentation
-└── README.md
-```
-
-## Roadmap
-
-- **Phase 5** (Current): REST API, SSE streaming, YAML config, CLI ✅
-- **Phase 6**: Production hardening, authentication, Docker deployment
-- **Phase 7**: Multi-tenancy, Kubernetes operator, enterprise features
-
-See [ROADMAP.md](ROADMAP.md) for detailed planning.
-
-## License
-
-MIT License - see LICENSE file for details.
-
-## Contributing
-
-Contributions welcome! Please read our contributing guidelines and submit PRs.
-
-## Support
-
-- Documentation: `http://localhost:8000/docs` (when server is running)
-- Issues: [GitHub Issues](https://github.com/yourusername/cognition/issues)
-- Discussions: [GitHub Discussions](https://github.com/yourusername/cognition/discussions)
+1.  **[Concepts](./concepts/execution-environments.md):** Understand the primitives in detail.
+2.  **[Blueprints](./blueprints/cyber-investigation.md):** See a reference architecture for a Cyber Security Investigation Platform.
+3.  **[Build Guide](./guides/building-platforms.md):** Learn how to integrate the Cognition API into your application.
