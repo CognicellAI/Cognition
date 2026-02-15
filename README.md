@@ -101,3 +101,22 @@ Cognition is domain-agnostic. It powers platforms such as:
 1.  **[Concepts](./concepts/execution-environments.md):** Understand the primitives in detail.
 2.  **[Blueprints](./blueprints/cyber-investigation.md):** See a reference architecture for a Cyber Security Investigation Platform.
 3.  **[Build Guide](./guides/building-platforms.md):** Learn how to integrate the Cognition API into your application.
+
+## CLI Quick Start
+
+The easiest way to interact with the Substrate is via the `cognition-cli`.
+
+### Usage:
+```bash
+# 1. Start an interactive session
+# (The engine will automatically start in the background if not running)
+cognition-cli chat
+
+# 2. Or use it for automation (Piping)
+cat my_code.py | cognition-cli chat "Explain this code" --single
+
+# 3. Check status or stop the engine
+cognition-cli status
+cognition-cli stop
+```
+

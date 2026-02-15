@@ -8,7 +8,9 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import subprocess
 import sys
+import time
 from pathlib import Path
 from typing import Any, AsyncGenerator, Optional
 
@@ -34,11 +36,110 @@ console = Console()
 # Configuration
 DEFAULT_SERVER_URL = "http://localhost:8000"
 STATE_FILE = Path(".cognition-cli-state.json")
+LOG_DIR = Path.home() / ".cognition" / "logs"
 
 
 def get_server_url() -> str:
     """Get the server URL from environment or default."""
     return os.getenv("COGNITION_SERVER_URL", DEFAULT_SERVER_URL)
+
+
+def ensure_engine() -> None:
+    """Ensure the Cognition engine (server) is running."""
+    url = get_server_url()
+
+    # Try to connect to existing server
+    try:
+        with httpx.Client(timeout=1.0) as client:
+            response = client.get(f"{url}/ready")
+            if response.status_code == 200 and response.json().get("ready"):
+                return  # Engine is already running and ready
+    except (httpx.ConnectError, httpx.TimeoutException):
+        pass
+
+    # Engine not found or not ready, try to start it
+    console.print("[yellow]Cognition Engine not found. Starting in background...[/yellow]")
+
+    LOG_DIR.mkdir(parents=True, exist_ok=True)
+    log_file = LOG_DIR / "engine.log"
+
+    # Spawn the server process
+    # Use the 'cognition' command which points to server.app.cli:main
+    try:
+        with open(log_file, "a") as f:
+            # start_new_session=True makes it a daemon (detached from this terminal)
+            subprocess.Popen(
+                [sys.executable, "-m", "server.app.cli", "serve"],
+                stdout=f,
+                stderr=f,
+                start_new_session=True,
+                env=os.environ.copy(),
+            )
+    except Exception as e:
+        console.print(f"[bold red]✗ Failed to spawn engine:[/bold red] {e}")
+        raise typer.Exit(1)
+
+    # Wait for engine to become ready
+    with Live(Text("Waiting for engine to initialize..."), refresh_per_second=4) as live:
+        start_time = time.time()
+        timeout = 20
+        while time.time() - start_time < timeout:
+            try:
+                with httpx.Client(timeout=1.0) as client:
+                    response = client.get(f"{url}/ready")
+                    if response.status_code == 200 and response.json().get("ready"):
+                        live.update(Text("✓ Engine Ready!", style="bold green"))
+                        time.sleep(1)
+                        return
+            except Exception:
+                pass
+            time.sleep(1)
+            live.update(
+                Text(f"Waiting for engine... ({int(time.time() - start_time)}s)", style="yellow")
+            )
+
+        live.update(Text("✗ Engine startup timed out.", style="bold red"))
+        console.print(f"Check logs at: {log_file}")
+        raise typer.Exit(1)
+
+
+@app.command("stop")
+def stop_engine():
+    """Stop the background Cognition engine."""
+    # We'll look for processes matching 'server.app.cli serve'
+    try:
+        if sys.platform == "win32":
+            subprocess.run(["taskkill", "/F", "/IM", "uvicorn.exe"], capture_output=True)
+        else:
+            # Use pkill to find and kill the server
+            subprocess.run(["pkill", "-f", "server.app.cli serve"], capture_output=True)
+        console.print("[bold green]✓ Cognition engine stopped.[/bold green]")
+    except Exception as e:
+        console.print(f"[bold red]✗ Error stopping engine:[/bold red] {e}")
+
+
+@app.command("status")
+def engine_status():
+    """Check the status of the Cognition engine."""
+    url = get_server_url()
+    try:
+        with httpx.Client(timeout=2.0) as client:
+            resp = client.get(f"{url}/health")
+            if resp.status_code == 200:
+                data = resp.json()
+                console.print(
+                    Panel(
+                        f"Status: [bold green]Running[/bold green]\n"
+                        f"Version: {data.get('version')}\n"
+                        f"Active Sessions: {data.get('active_sessions')}",
+                        title="Cognition Engine Status",
+                        border_style="green",
+                    )
+                )
+            else:
+                console.print(f"[yellow]Engine responding with status {resp.status_code}[/yellow]")
+    except Exception:
+        console.print("[bold red]Engine Status: Not Running[/bold red]")
 
 
 def save_state(session_id: str) -> None:
@@ -62,6 +163,7 @@ def create_session(
     title: Optional[str] = typer.Option(None, "--title", "-t", help="Session title"),
 ):
     """Create a new agent session."""
+    ensure_engine()
     url = f"{get_server_url()}/sessions"
 
     try:
@@ -83,6 +185,7 @@ def create_session(
 @session_app.command("list")
 def list_sessions():
     """List all sessions in the current workspace."""
+    ensure_engine()
     url = f"{get_server_url()}/sessions"
 
     try:
@@ -208,6 +311,8 @@ def chat(
     interactive: bool = typer.Option(True, "--interactive/--single", help="Interactive mode"),
 ):
     """Enter interactive chat mode or send a single message."""
+    ensure_engine()
+
     # Check for stdin piping
     piped_data = ""
     if not sys.stdin.isatty():
