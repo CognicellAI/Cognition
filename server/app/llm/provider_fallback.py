@@ -155,58 +155,10 @@ class ProviderFallbackChain:
             ImportError: If provider SDK is not installed.
             Exception: If model creation fails.
         """
-        if config.provider == "openai":
-            from langchain_openai import ChatOpenAI
+        from server.app.llm.registry import get_provider_factory
 
-            api_key = config.api_key
-            if not api_key and settings.openai_api_key:
-                api_key = settings.openai_api_key.get_secret_value()
-
-            return ChatOpenAI(
-                model=config.model,
-                api_key=api_key,
-                base_url=config.base_url or settings.openai_api_base,
-            )
-
-        elif config.provider == "openai_compatible":
-            from langchain_openai import ChatOpenAI
-
-            api_key = config.api_key
-            if not api_key:
-                api_key = settings.openai_compatible_api_key.get_secret_value()
-
-            base_url = config.base_url or settings.openai_compatible_base_url
-
-            return ChatOpenAI(
-                model=config.model,
-                api_key=api_key,
-                base_url=base_url,
-            )
-
-        elif config.provider == "bedrock":
-            from langchain_aws import ChatBedrock
-
-            aws_access_key = None
-            aws_secret_key = None
-            if settings.aws_access_key_id:
-                aws_access_key = settings.aws_access_key_id.get_secret_value()
-            if settings.aws_secret_access_key:
-                aws_secret_key = settings.aws_secret_access_key.get_secret_value()
-
-            return ChatBedrock(
-                model_id=config.model,
-                region_name=config.region or settings.aws_region,
-                aws_access_key_id=aws_access_key,
-                aws_secret_access_key=aws_secret_key,
-            )
-
-        elif config.provider == "mock":
-            from server.app.llm.mock import MockLLM
-
-            return MockLLM()
-
-        else:
-            raise ValueError(f"Unknown provider: {config.provider}")
+        factory = get_provider_factory(config.provider)
+        return factory(config, settings)
 
     @classmethod
     def from_settings(cls, settings: Any) -> ProviderFallbackChain:

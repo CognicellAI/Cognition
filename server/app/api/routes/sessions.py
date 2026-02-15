@@ -35,6 +35,7 @@ from server.app.llm.deep_agent_service import (
     get_session_agent_manager,
     SessionAgentManager,
 )
+from server.app.llm.discovery import DiscoveryEngine
 
 router = APIRouter(prefix="/sessions", tags=["sessions"])
 
@@ -168,6 +169,13 @@ async def update_session(
     """
     workspace_path = str(settings.workspace_path)
     store = get_session_store(workspace_path)
+
+    # If model is updated but provider is missing, try to infer it
+    if request.config and request.config.model and not request.config.provider:
+        discovery = DiscoveryEngine(settings)
+        provider = await discovery.get_provider_for_model(request.config.model)
+        if provider:
+            request.config.provider = provider
 
     session = await store.update_session(
         session_id=session_id,

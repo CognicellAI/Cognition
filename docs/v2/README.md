@@ -47,6 +47,15 @@ The Trace is the immutable proof of action.
     - **Chain of Custody:** See exactly what file was read, what API was called, and what reasoning the AI used to make a decision.
 - **Benefit:** Essential for platforms operating in regulated environments (Security, Legal, Healthcare).
 
+### 4. The Plug (Extensibility)
+The Plug is the mechanism for domain-specific specialization.
+
+- **Concept:** Convention over Configuration.
+- **Capabilities:**
+    - **Skills & Memory:** Inject project-specific rules and reusable workflows via simple files.
+    - **Subagents:** Orchestrate specialized experts for complex tasks.
+- **Benefit:** Allows you to build deep domain expertise into your platform without modifying the substrate.
+
 ## Architecture
 
 Cognition is designed to be the "Headless Backend" for your platform. You build the specialized UI/UX; we provide the engine.
@@ -98,7 +107,8 @@ Cognition is domain-agnostic. It powers platforms such as:
 
 ## Getting Started
 
-1.  **[Core Concepts](./concepts/execution-environments.md):** Understand the primitives (Cell, Thread, Trace) in detail.
+1.  **[Core Concepts](./concepts/execution-environments.md):** Understand the primitives (Cell, Thread, Trace, Plug) in detail.
 2.  **[Technical Architecture](./concepts/architecture.md):** Deep dive into the engine's internal design and data flow.
-3.  **[Blueprints](./blueprints/cyber-investigation.md):** See a reference architecture for a Cyber Security Investigation Platform.
-4.  **[Build Guide](./guides/building-platforms.md):** Learn how to integrate the Cognition API into your application.
+3.  **[Extending Agents](./guides/extending-agents.md):** Learn how to customize agent behavior with Skills and Memory.
+4.  **[Blueprints](./blueprints/cyber-investigation.md):** See a reference architecture for a Cyber Security Investigation Platform.
+5.  **[Build Guide](./guides/building-platforms.md):** Learn how to integrate the Cognition API into your application.

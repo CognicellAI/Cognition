@@ -11,7 +11,7 @@ from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, Field
 
-from server.app.models import Session as CoreSession
+from server.app.models import Session as CoreSession, SessionConfig
 
 
 # ============================================================================

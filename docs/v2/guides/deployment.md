@@ -24,6 +24,14 @@ Cognition is configured via Environment Variables.
 | `COGNITION_LLM_MODEL` | Model ID | `gpt-4o` |
 | `OPENAI_API_KEY` | Key for OpenAI | `sk-...` |
 
+### Agent behavior
+
+| Variable | Description | Default |
+| :--- | :--- | :--- |
+| `COGNITION_AGENT_MEMORY` | JSON list of files to load as context | `["AGENTS.md"]` |
+| `COGNITION_AGENT_SKILLS` | JSON list of skill directory paths | `[".cognition/skills/"]` |
+| `COGNITION_AGENT_INTERRUPT_ON` | JSON dict of tools requiring approval | `{}` |
+
 ### Persistence (State)
 
 | Variable | Description | Default |

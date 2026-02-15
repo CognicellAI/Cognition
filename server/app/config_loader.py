@@ -9,6 +9,7 @@ Supports hierarchical configuration:
 
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 from typing import Any
@@ -266,6 +267,10 @@ class ConfigLoader:
             ("rate_limit", "burst"): "COGNITION_RATE_LIMIT_BURST",
             ("observability", "otel_endpoint"): "COGNITION_OTEL_ENDPOINT",
             ("observability", "metrics_port"): "COGNITION_METRICS_PORT",
+            ("agent", "memory"): "COGNITION_AGENT_MEMORY",
+            ("agent", "skills"): "COGNITION_AGENT_SKILLS",
+            ("agent", "subagents"): "COGNITION_AGENT_SUBAGENTS",
+            ("agent", "interrupt_on"): "COGNITION_AGENT_INTERRUPT_ON",
             ("openai_compatible", "base_url"): "COGNITION_OPENAI_COMPATIBLE_BASE_URL",
             ("openai_compatible", "api_key"): "COGNITION_OPENAI_COMPATIBLE_API_KEY",
         }
@@ -273,6 +278,9 @@ class ConfigLoader:
         for keys, env_name in mapping.items():
             value = self.get(".".join(keys))
             if value is not None:
-                env_vars[env_name] = str(value)
+                if isinstance(value, (list, dict)):
+                    env_vars[env_name] = json.dumps(value)
+                else:
+                    env_vars[env_name] = str(value)
 
         return env_vars

@@ -616,13 +616,19 @@ Phase 5 server-side REST API migration completed with:
 ### Phase 6 Plans
 Phase 6 focuses on Production Readiness, including containerization, advanced agent execution environments, and multi-user support.
 
-**Completed so far (6.1 - 6.2):**
+**Completed so far (6.1 - 6.4):**
 1. **Full Observability Stack**: Docker Compose with Jaeger, Prometheus, Grafana, Loki.
 2. **Auto-Instrumentation**: Full internal tracing of LangChain/DeepAgents components.
 3. **Local Sandbox Backend**: Robust hybrid backend combining native Python file I/O with isolated shell execution.
 4. **Autonomous Execution**: Automatic multi-step ReAct loop with error recovery and planning.
+5. **Persistence**: Pluggable backend (SQLite/Memory) with auto-save for sessions.
+6. **CLI Client**: Lightweight `cognition-cli` with interactive TUI and telemetry.
 
-**Next Steps (6.3+):**
+**Next Steps (6.5+):**
+- **Phase 6.5: Pluggability & Native deepagents Integration** (Current)
+  - ✅ Config-driven agent customization (`memory`, `skills`, `subagents`, `interrupt_on`)
+  - ✅ Native `AgentMiddleware` for streaming and observability
+  - ✅ Progressive skills system via `.cognition/skills/`
+  - ✅ Refactor to remove duplicate tool/workflow registries
 - Implement user authentication and isolation.
-- Develop the lightweight CLI client.
-- Add database persistence (SQLite/Postgres).
+- Production-grade deployment guides.

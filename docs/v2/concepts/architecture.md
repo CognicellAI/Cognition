@@ -28,6 +28,7 @@ graph TD
     subgraph "Core Engine (DeepAgents)"
         Runtime[LangGraph Runtime]
         Planner[Todo List Middleware]
+        Middleware[Agent Middleware Layer]
     end
 
     subgraph "Execution Layer"
@@ -45,7 +46,8 @@ graph TD
     REST --> Manager
     Manager --> Streaming
     Streaming --> Runtime
-    Runtime --> Backend
+    Runtime --> Middleware
+    Middleware --> Backend
     Backend --> Sandbox
     Runtime -.-> Saver
     Manager -.-> Store
@@ -94,7 +96,17 @@ Managed by `SqliteSessionStore`. This table acts as the "Phonebook" of the engin
 Managed by `AsyncSqliteSaver` (from LangGraph). This stores the "Full Stack Frame" of the agent.
 *   **Purpose:** If the server process is killed mid-turn, the agent loads the latest checkpoint from the DB and resumes its exact internal state (variables, planning steps, etc.) when the next message arrives.
 
-## 5. Trust & Observability
+## 5. Middleware Layer (The Hooks)
+
+Between the Agent Runtime and the Execution Backend lies the **Middleware Layer**. This is where Cognition-specific logic is injected without modifying the core ReAct loop.
+
+Cognition includes several built-in middlewares:
+- **`MemoryMiddleware`:** Loads `AGENTS.md` and injects it into the system prompt.
+- **`SkillsMiddleware`:** Discovers and manages on-demand agent skills.
+- **`CognitionObservabilityMiddleware`:** Records LLM and tool metrics.
+- **`CognitionStreamingMiddleware`:** Pushes "Thinking" status events to the client.
+
+## 6. Trust & Observability
 
 Every internal component is instrumented with **OpenTelemetry**.
 

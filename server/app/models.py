@@ -12,6 +12,9 @@ from typing import Literal, Optional
 from enum import Enum
 
 
+from pydantic import BaseModel
+
+
 class SessionStatus(str, Enum):
     """Session status enumeration."""
 
@@ -20,8 +23,7 @@ class SessionStatus(str, Enum):
     ERROR = "error"
 
 
-@dataclass
-class SessionConfig:
+class SessionConfig(BaseModel):
     """Session configuration options."""
 
     provider: Optional[Literal["openai", "bedrock", "mock", "openai_compatible"]] = None

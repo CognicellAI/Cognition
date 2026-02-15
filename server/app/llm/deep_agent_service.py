@@ -133,21 +133,30 @@ class DeepAgentStreamingService:
         content: str,
         system_prompt: Optional[str] = None,
     ) -> AsyncGenerator[StreamEvent, None]:
-        """Stream LLM response using DeepAgents with multi-step support.
-
-        Args:
-            session_id: Unique session identifier.
-            thread_id: LangGraph thread ID for checkpointing state.
-            project_path: Path to the project workspace.
-            content: User message content.
-            system_prompt: Optional custom system prompt.
-
-        Yields:
-            Stream events (tokens, tool calls, planning, completion, etc.)
-        """
+        """Stream LLM response using DeepAgents with multi-step support."""
         try:
-            # Get the model first
-            model = await self._get_model()
+            # Get session to get its specific LLM config
+            from server.app.session_store import get_session_store
+
+            store = get_session_store(project_path)
+            session = await store.get_session(session_id)
+
+            # Use session settings if available, else fallback to global
+            llm_settings = self.settings
+            if session and session.config:
+                # Merge session config into a temp settings object
+                from copy import copy
+
+                llm_settings = copy(self.settings)
+                if session.config.provider:
+                    llm_settings.llm_provider = session.config.provider
+                if session.config.model:
+                    llm_settings.llm_model = session.config.model
+                if session.config.temperature is not None:
+                    llm_settings.llm_temperature = session.config.temperature
+
+            # Get the model with specific settings
+            model = await self._get_model(llm_settings)
 
             # Get checkpointer from persistence backend
             checkpointer = await self.persistence_backend.get_checkpointer()
@@ -232,10 +241,10 @@ class DeepAgentStreamingService:
                 input_tokens=input_tokens,
                 output_tokens=output_tokens,
                 estimated_cost=self._estimate_cost(
-                    input_tokens, output_tokens, self.settings.llm_provider
+                    input_tokens, output_tokens, llm_settings.llm_provider
                 ),
-                provider=self.settings.llm_provider,
-                model=self.settings.llm_model,
+                provider=llm_settings.llm_provider,
+                model=llm_settings.llm_model,
             )
 
             # Signal completion
@@ -303,12 +312,12 @@ For complex tasks (refactoring, implementing features, debugging):
 
 For simple tasks (single file edits, quick checks), execute directly."""
 
-    async def _get_model(self) -> Any:
-        """Get LLM model from settings."""
+    async def _get_model(self, settings: Settings) -> Any:
+        """Get LLM model from specific settings."""
         from server.app.llm.provider_fallback import ProviderFallbackChain
 
-        fallback_chain = ProviderFallbackChain.from_settings(self.settings)
-        result = await fallback_chain.get_model(self.settings)
+        fallback_chain = ProviderFallbackChain.from_settings(settings)
+        result = await fallback_chain.get_model(settings)
         return result.model
 
     def _estimate_cost(

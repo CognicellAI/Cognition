@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Literal, Optional
+from typing import Any, Literal, Optional
 
 from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -31,7 +31,7 @@ class Settings(BaseSettings):
     )
 
     # LLM settings
-    llm_provider: Literal["openai", "bedrock", "mock", "openai_compatible"] = Field(
+    llm_provider: str = Field(
         default="mock",
         alias="COGNITION_LLM_PROVIDER",
     )
@@ -82,6 +82,12 @@ class Settings(BaseSettings):
     # Observability settings
     otel_endpoint: Optional[str] = Field(default=None, alias="COGNITION_OTEL_ENDPOINT")
     metrics_port: int = Field(default=9090, alias="COGNITION_METRICS_PORT")
+
+    # Agent behavior
+    agent_memory: list[str] = Field(default=["AGENTS.md"], alias="COGNITION_AGENT_MEMORY")
+    agent_skills: list[str] = Field(default=[".cognition/skills/"], alias="COGNITION_AGENT_SKILLS")
+    agent_subagents: list[dict[str, Any]] = Field(default=[], alias="COGNITION_AGENT_SUBAGENTS")
+    agent_interrupt_on: dict[str, bool] = Field(default={}, alias="COGNITION_AGENT_INTERRUPT_ON")
 
     # Persistence settings
     persistence_backend: Literal["sqlite", "memory", "postgres"] = Field(
@@ -142,52 +148,22 @@ class Settings(BaseSettings):
             raise ValueError(f"session_timeout_seconds must be positive, got {v}")
         return v
 
-    def get_llm_model(self):
+    def get_llm_model(self) -> Any:
         """Get the LLM model instance based on provider."""
-        if self.llm_provider == "openai":
-            from langchain_openai import ChatOpenAI
+        from dataclasses import dataclass
 
-            # Extract secret value if present
-            api_key = None
-            if self.openai_api_key:
-                api_key = self.openai_api_key.get_secret_value()
+        from server.app.llm.registry import get_provider_factory
 
-            return ChatOpenAI(
-                model=self.llm_model,
-                api_key=api_key,
-                base_url=self.openai_api_base,
-            )
-        elif self.llm_provider == "openai_compatible":
-            from langchain_openai import ChatOpenAI
+        @dataclass
+        class SimpleConfig:
+            model: str
+            api_key: Optional[str] = None
+            base_url: Optional[str] = None
+            region: Optional[str] = None
 
-            return ChatOpenAI(
-                model=self.llm_model,
-                api_key=self.openai_compatible_api_key.get_secret_value(),
-                base_url=self.openai_compatible_base_url,
-            )
-        elif self.llm_provider == "bedrock":
-            from langchain_aws import ChatBedrock
-
-            # Extract secret values if present
-            aws_access_key = None
-            aws_secret_key = None
-            if self.aws_access_key_id:
-                aws_access_key = self.aws_access_key_id.get_secret_value()
-            if self.aws_secret_access_key:
-                aws_secret_key = self.aws_secret_access_key.get_secret_value()
-
-            return ChatBedrock(
-                model_id=self.bedrock_model_id,
-                region_name=self.aws_region,
-                aws_access_key_id=aws_access_key,
-                aws_secret_access_key=aws_secret_key,
-            )
-        elif self.llm_provider == "mock":
-            from server.app.llm.mock import MockLLM
-
-            return MockLLM()
-        else:
-            raise ValueError(f"Unknown LLM provider: {self.llm_provider}")
+        factory = get_provider_factory(self.llm_provider)
+        config = SimpleConfig(model=self.llm_model)
+        return factory(config, self)
 
 
 # Global settings instance

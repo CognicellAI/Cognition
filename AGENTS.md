@@ -5,171 +5,120 @@ Guidelines for agentic coding assistants working on this codebase.
 ## Project Overview
 
 Cognition is an OpenCode-style coding agent with:
-- **Server**: FastAPI WebSocket API with Deep Agents runtime
-- **Client**: Textual TUI for interactive sessions
+- **Server**: FastAPI WebSocket API with Deep Agents runtime (`server/`)
+- **Client**: CLI/TUI for interactive sessions (`client/`)
 - **Execution**: Container-per-session with optional network isolation
 - **Scope**: Python repos only, pytest-based testing
 
 ## Build / Test / Lint Commands
 
+This project uses `uv` for dependency management and task execution.
+
 ```bash
-# Install uv (if not already installed)
-curl -LsSf https://astral.sh/uv/install.sh | sh
-
 # Install dependencies
-uv pip install -r server/requirements.txt
-uv pip install -r client/requirements.txt
-
-# Or use uv run (creates venv automatically)
-uv run --with-requirements server/requirements.txt python -m uvicorn app.main:app --reload --port 8000
+uv sync
 
 # Run server (development)
-cd server && uv run uvicorn app.main:app --reload --port 8000
+# Runs the FastAPI server with hot reload
+uv run uvicorn server.app.main:app --reload --port 8000
 
 # Run client (development)
-cd client && uv run python -m tui.app
+# Starts the CLI/TUI client
+uv run python -m client.cli.main
 
 # Run all tests
-uv run pytest -q
+uv run pytest
 
 # Run single test file
-uv run pytest tests/test_specific.py -v
+uv run pytest tests/unit/test_settings.py -v
 
-# Run single test
-uv run pytest tests/test_file.py::test_function_name -v
+# Run single test case
+uv run pytest tests/unit/test_settings.py::TestSettingsDefaults::test_default_server_settings -v
 
-# Type checking
-uv run mypy server/ client/ --strict
+# Type checking (Strict)
+uv run mypy .
 
-# Linting (use ruff)
-uv run ruff check server/ client/
-uv run ruff format server/ client/
-
-# Docker build
-make build-agent-image
+# Linting & Formatting (Ruff)
+uv run ruff check .
+uv run ruff format .
 ```
 
 ## Code Style Guidelines
 
 ### Python Standards
-- **Python 3.11+** required
-- Use **type hints everywhere** — strict mypy compliance
-- **Docstrings**: Google style for all public functions/classes
-- **Max line length**: 100 characters
-- **Import style**: isort-compatible, grouped as stdlib, third-party, local
+- **Python 3.11+** required.
+- **Type Hints**: strict `mypy` compliance. Use `from __future__ import annotations`.
+- **Docstrings**: Google style for all public functions/classes.
+- **Line Length**: Follow `ruff` config (default 88/100).
+- **Imports**: Grouped as stdlib, third-party, local. Use absolute imports.
 
 ### Naming Conventions
-- `snake_case` for functions, variables, modules
-- `PascalCase` for classes
-- `UPPER_CASE` for constants
-- Private methods prefix with `_`
-- Async functions prefix with verbs: `get_`, `fetch_`, `handle_`
+- `snake_case`: functions, variables, modules.
+- `PascalCase`: classes, types.
+- `UPPER_CASE`: constants.
+- `_prefix`: private methods/attributes.
+- `async` functions: often prefixed with verbs like `get_`, `fetch_`, `handle_`.
 
 ### Async Patterns
-- **Always use async/await** for I/O operations
-- WebSocket handlers must be async
-- Container execution uses asyncio subprocess
-- Use `asyncio.gather()` for parallel operations
+- **Async/Await**: Use for all I/O operations (DB, Network, File).
+- **Concurrency**: Use `asyncio.gather()` for parallel independent tasks.
+- **Subprocesses**: Use `asyncio.create_subprocess_exec`.
 
 ### Error Handling
-- Use **custom exception hierarchy** in `app/exceptions.py`
-- Wrap external calls with try/except → raise domain exceptions
-- Log all errors with structured logging (OpenTelemetry)
-- Never swallow exceptions silently
-- Use `raise from` when chaining exceptions
+- **Exceptions**: Use custom hierarchy in `server/app/exceptions.py`.
+- **Pattern**: Catch external errors -> Raise domain-specific `CognitionError`.
+- **Logging**: Log errors before raising if context is needed, otherwise let middleware handle it.
 
-### Type Safety
-- Use Pydantic v2 for all data models
-- Prefer `Optional[T]` over `T | None` for clarity
-- Use `Sequence[T]` over `list[T]` for parameters
-- Return concrete types, accept abstract types
+### Data Models
+- **Pydantic V2**: Use for all data structures and validation.
+- **Settings**: Use `pydantic-settings` (e.g., `server/app/settings.py`).
+- **Secrets**: Use `SecretStr` for sensitive data.
 
 ## Project Structure
 
 ```
 cognition/
-├── server/app/          # FastAPI + WebSocket + agents
-│   ├── sessions/        # Session lifecycle management
-│   ├── agent/           # Deep Agents runtime
-│   ├── tools/           # Tool interfaces (filesystem, search, etc.)
-│   ├── executor/        # Container execution layer
-│   ├── protocol/        # Message/event models
-│   └── streaming/       # Event streaming
-├── client/tui/          # Textual TUI
-│   └── widgets/         # Custom UI components
-└── shared/              # Shared protocol schemas
+├── server/
+│   └── app/
+│       ├── agent/       # Deep Agents runtime & tools
+│       ├── api/         # FastAPI routes
+│       ├── llm/         # LLM service integration
+│       └── persistence/ # Database/Storage
+├── client/
+│   └── cli/             # CLI/TUI entry points
+├── tests/
+│   ├── e2e/             # End-to-end full workflow tests
+│   └── unit/            # Isolated unit tests
+├── pyproject.toml       # Project dependencies & tool config
+└── uv.lock              # Dependency lock file
 ```
 
-## Key Patterns
+## Key Workflows
 
-### WebSocket Message Flow
-1. Client sends `user_msg` → Server validates
-2. Server routes to Session Manager → Deep Agent
-3. Agent requests tool → Tool Mediator validates
-4. Container Executor runs → streams output
-5. Events stream back to client
+### Extending Cognition
+Cognition is designed to be highly pluggable using native `deepagents` extension points.
 
-### Container Execution
-- **argv only** — no shell strings (`["pytest", "-q"]` not `"pytest -q"`)
-- **Network OFF by default** — explicit opt-in required
-- **Workspace mounted** at `/workspace/repo`
-- **Timeouts enforced** on all operations
+#### Custom Tools
+1. Define your tool as a plain Python callable or LangChain `BaseTool`.
+2. Register it in `.cognition/config.yaml` under `agent.tools` or pass it to `create_cognition_agent(tools=[...])`.
 
-### Tool Safety
-- Validate all paths stay within workspace
-- No arbitrary command execution
-- Diff-based editing only (unified diff format)
-- Read-only for inspection tools
+#### Agent Middleware
+1. Implement `deepagents.middleware.AgentMiddleware` for lifecycle hooks (observability, status streaming, etc.).
+2. Add to `create_cognition_agent(middleware=[...])`.
 
-## Testing Guidelines
+#### Skills & Memory
+1. Add `SKILL.md` files to `.cognition/skills/` for progressive disclosure capabilities.
+2. Update `AGENTS.md` in the workspace to provide the agent with project-specific conventions.
 
-- **Unit tests**: Fast, no containers, mocked dependencies
-- **Integration tests**: Use test containers, mark with `@pytest.mark.integration`
-- **E2E tests**: Full WebSocket round-trip tests
-- Mock external APIs (LLM calls) in unit tests
-- Use `tmp_path` fixture for filesystem operations
-- Test both network ON and OFF modes
+#### Subagents
+1. Define specialized subagents in `.cognition/config.yaml` to handle complex domain-specific tasks in isolated contexts.
 
-## Docker Guidelines
+### Testing
+- **Unit Tests**: Fast, mocked dependencies. No containers.
+- **E2E Tests**: Use `tests/e2e/`. May require running server.
+- **Mocking**: Use `unittest.mock` or `pytest-mock` for external services (LLMs).
 
-- Run as non-root user (UID 1000)
-- Read-only root filesystem where possible
-- No sensitive data in images
-- Use multi-stage builds for smaller images
-
-## Security Reminders
-
-- Never log secrets or API keys
-- Validate all user inputs at boundaries
-- Path traversal protection on all file operations
-- Container resource limits (CPU, memory, output size)
-- No network access unless explicitly enabled
-
-## Environment Setup
-
-```bash
-# Required env vars
-cp .env.example .env
-# Edit: OPENAI_API_KEY, ANTHROPIC_API_KEY, etc.
-
-# Pre-commit hooks
-pre-commit install
-```
-
-## Common Tasks
-
-```bash
-# Add new tool
-# 1. Define in app/tools/
-# 2. Add to Tool Mediator
-# 3. Register in agent policies
-# 4. Add tests
-
-# Update protocol schema
-# Edit shared/protocol/schema.json
-# Regenerate models: make generate-models
-
-# Debug session
-# Enable debug logging: LOG_LEVEL=debug uvicorn ...
-# View container logs: docker logs <container_id>
-```
+## Security & Safety
+- **Path Traversal**: Validate all file paths against workspace root.
+- **Command Execution**: No shell=True. Use argument lists.
+- **Secrets**: Never commit keys. Use `.env` and `Settings` class.
