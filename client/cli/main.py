@@ -39,6 +39,45 @@ STATE_FILE = Path(".cognition-cli-state.json")
 LOG_DIR = Path.home() / ".cognition" / "logs"
 
 
+class SSEParser:
+    """Parser for Server-Sent Events (SSE).
+
+    Correctly handles multi-line data and paired event/data lines.
+    """
+
+    def __init__(self):
+        self._current_event = None
+        self._current_data = []
+
+    def parse_line(self, line: str) -> Optional[tuple[str, dict]]:
+        """Parse a single line of SSE stream.
+
+        Returns:
+            Tuple of (event_type, data_dict) if an event is complete, else None.
+        """
+        line = line.strip()
+        if not line:
+            # Empty line signals end of event
+            if self._current_event and self._current_data:
+                try:
+                    data = json.loads("".join(self._current_data))
+                    event = (self._current_event, data)
+                    self._current_event = None
+                    self._current_data = []
+                    return event
+                except json.JSONDecodeError:
+                    self._current_event = None
+                    self._current_data = []
+            return None
+
+        if line.startswith("event: "):
+            self._current_event = line[7:].strip()
+        elif line.startswith("data: "):
+            self._current_data.append(line[6:].strip())
+
+        return None
+
+
 def get_server_url() -> str:
     """Get the server URL from environment or default."""
     return os.getenv("COGNITION_SERVER_URL", DEFAULT_SERVER_URL)
@@ -64,10 +103,8 @@ def ensure_engine() -> None:
     log_file = LOG_DIR / "engine.log"
 
     # Spawn the server process
-    # Use the 'cognition' command which points to server.app.cli:main
     try:
         with open(log_file, "a") as f:
-            # start_new_session=True makes it a daemon (detached from this terminal)
             subprocess.Popen(
                 [sys.executable, "-m", "server.app.cli", "serve"],
                 stdout=f,
@@ -106,12 +143,10 @@ def ensure_engine() -> None:
 @app.command("stop")
 def stop_engine():
     """Stop the background Cognition engine."""
-    # We'll look for processes matching 'server.app.cli serve'
     try:
         if sys.platform == "win32":
             subprocess.run(["taskkill", "/F", "/IM", "uvicorn.exe"], capture_output=True)
         else:
-            # Use pkill to find and kill the server
             subprocess.run(["pkill", "-f", "server.app.cli serve"], capture_output=True)
         console.print("[bold green]✓ Cognition engine stopped.[/bold green]")
     except Exception as e:
@@ -223,13 +258,11 @@ def list_sessions():
 
 
 async def stream_chat(session_id: str, message: str):
-    """Stream a chat message and display tokens."""
+    """Stream a chat message and display tokens with high-fidelity word-by-word printing."""
     url = f"{get_server_url()}/sessions/{session_id}/messages"
 
     accumulated_text = ""
-
-    # We'll use a Panel for the agent's response
-    # to separate it clearly from the user's input
+    parser = SSEParser()
 
     try:
         async with httpx.AsyncClient(timeout=None) as client:
@@ -246,60 +279,43 @@ async def stream_chat(session_id: str, message: str):
 
                 console.print(f"\n[bold cyan]Agent Substrate:[/bold cyan]")
 
-                with Live(Markdown(""), refresh_per_second=10, auto_refresh=False) as live:
-                    event_type = None
-                    async for line in response.aiter_lines():
-                        if not line.strip():
-                            continue
+                async for line in response.aiter_lines():
+                    event = parser.parse_line(line)
+                    if not event:
+                        continue
 
-                        if line.startswith("event: "):
-                            event_type = line[7:].strip()
-                        elif line.startswith("data: "):
-                            data_str = line[6:].strip()
-                            try:
-                                data = json.loads(data_str)
+                    event_type, data = event
 
-                                if event_type == "token":
-                                    accumulated_text += data.get("content", "")
-                                    live.update(Markdown(accumulated_text))
-                                    live.refresh()
-                                elif event_type == "tool_call":
-                                    # Temporarily pause live display to print tool info
-                                    live.stop()
-                                    args_str = json.dumps(data.get("args", {}), indent=2)
-                                    console.print(
-                                        Panel(
-                                            Text(
-                                                f"Executing {data['name']}...", style="bold yellow"
-                                            ),
-                                            subtitle=args_str,
-                                            border_style="yellow",
-                                            padding=(0, 1),
-                                        )
-                                    )
-                                    live.start()
-                                elif event_type == "tool_result":
-                                    live.stop()
-                                    output = data.get("output", "")
-                                    # Show a snippet of output if it's long
-                                    if len(output) > 200:
-                                        output = output[:200] + "..."
-                                    console.print(
-                                        f" [dim green]→ Result: {output.strip()}[/dim green]"
-                                    )
-                                    live.start()
-                                elif event_type == "error":
-                                    live.stop()
-                                    console.print(
-                                        f"\n[bold red]Agent Error:[/bold red] {data['message']}"
-                                    )
-                                    live.start()
-                                elif event_type == "done":
-                                    live.update(Markdown(accumulated_text))
-                                    live.refresh()
+                    if event_type == "token":
+                        content = data.get("content", "")
+                        accumulated_text += content
+                        # Direct write to stdout for highest fidelity streaming
+                        sys.stdout.write(content)
+                        sys.stdout.flush()
 
-                            except json.JSONDecodeError:
-                                pass
+                    elif event_type == "tool_call":
+                        console.print(
+                            f"\n[italic yellow]🔧 Executing {data['name']}...[/italic yellow]"
+                        )
+                        # Show args if helpful
+                        # console.print(f"[dim]{data['args']}[/dim]")
+
+                    elif event_type == "tool_result":
+                        output = data.get("output", "")
+                        if len(output) > 200:
+                            output = output[:200] + "..."
+                        console.print(f" [dim green]→ Result: {output.strip()}[/dim green]")
+
+                    elif event_type == "error":
+                        console.print(f"\n[bold red]Agent Error:[/bold red] {data['message']}")
+
+                    elif event_type == "done":
+                        # Add a final newline
+                        print("\n")
+                        # Clear the raw stream and render final Markdown for reading
+                        # console.clear() # Maybe too disruptive? Let's just print Markdown Panel
+                        console.print(Panel(Markdown(accumulated_text), border_style="blue"))
+
     except Exception as e:
         console.print(f"\n[bold red]Connection Error:[/bold red] {e}")
 
@@ -344,25 +360,13 @@ def chat(
         return
 
     if interactive:
-        console.print(
-            Panel(
-                f"Interactive Session: [bold cyan]{active_session_id}[/bold cyan]\n"
-                "Type 'exit' or 'quit' to end.",
-                title="Cognition Agent Substrate",
-                border_style="blue",
-            )
+        from client.cli.shell import CognitionShell
+
+        shell = CognitionShell(
+            session_id=active_session_id, server_url=get_server_url(), stream_chat_fn=stream_chat
         )
 
-        while True:
-            try:
-                user_input = typer.prompt("You")
-                if user_input.lower() in ["exit", "quit"]:
-                    break
-
-                asyncio.run(stream_chat(active_session_id, user_input))
-                print()
-            except typer.Abort:
-                break
+        asyncio.run(shell.run())
 
 
 def main():
