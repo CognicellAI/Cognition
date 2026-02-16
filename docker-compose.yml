@@ -46,7 +46,7 @@ services:
       - COGNITION_LLM_MODEL=google/gemini-3-flash-preview
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
       - COGNITION_OPENAI_COMPATIBLE_BASE_URL=https://openrouter.ai/api/v1
-      - COGNITION_OPENAI_COMPATIBLE_API_KEY=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
+      - COGNITION_OPENAI_COMPATIBLE_API_KEY=${COGNITION_OPENAI_COMPATIBLE_API_KEY:-}
     volumes:
       - ./workspaces:/workspace
       - ./.cognition:/app/.cognition

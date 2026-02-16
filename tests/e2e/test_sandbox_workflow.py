@@ -52,8 +52,8 @@ class TestSandboxWorkflow:
             env["COGNITION_LLM_PROVIDER"] = "openai_compatible"
             env["COGNITION_WORKSPACE_ROOT"] = workspace
             env["COGNITION_OPENAI_COMPATIBLE_BASE_URL"] = "https://openrouter.ai/api/v1"
-            env["COGNITION_OPENAI_COMPATIBLE_API_KEY"] = (
-                "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"
+            env["COGNITION_OPENAI_COMPATIBLE_API_KEY"] = os.environ.get(
+                "COGNITION_OPENAI_COMPATIBLE_API_KEY", ""
             )
             env["COGNITION_LLM_MODEL"] = "google/gemini-3-flash-preview"
 
