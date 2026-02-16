@@ -26,7 +26,9 @@ The Cell is the secure boundary where "Thought" becomes "Action".
 - **Concept:** Bring the Code to the Data.
 - **Capabilities:**
     - **Local Cells:** Lightweight process isolation for rapid development loops.
-    - **Container Cells:** Hardened Docker/Kubernetes environments for analyzing untrusted data (malware, PII, financial records).
+    - **Docker Cells:** Hardened container environments for semi-trusted code.
+    - **Cloud-Native Cells:** AWS Lambda and Kubernetes for infinite scale.
+- **Powered By:** Built on the industry-leading **LangGraph Deep Agents** sandboxing protocol.
 - **Benefit:** Your platform logic remains clean. You simply request a tool execution, and the Substrate handles the containment, cleanup, and resource limits.
 
 ### 2. The Thread (State Management)

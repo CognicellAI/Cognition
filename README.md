@@ -1,78 +1,96 @@
-# Cognition: The Agent Substrate
+# Cognition
 
-> **The foundational layer for trusted, executable AI platforms.**
+> Secure execution, durable state, and forensic audit for AI agents.
+
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/release/python-3110/)
+[![Status: Alpha](https://img.shields.io/badge/Status-Alpha-orange.svg)](#)
+
+Cognition is the open-source **Agent Substrate** — a hardened runtime engine that handles the critical infrastructure AI platforms need, but shouldn't have to build. Execution safety, durable persistence, and compliance-ready auditability come out of the box so you can focus on building your domain logic.
 
 ## The Platform Paradox
 
-We are in the midst of a platform shift. Every industry—from Cyber Security to FinTech to BioTech—is rushing to build "AI Agents" into their workflows.
+We are in the midst of a platform shift. Every industry—from Cybersecurity to BioTech—is rushing to build "AI Agents" into their core workflows. 
 
 But building a production-grade Agent Platform requires solving three incredibly hard infrastructure problems that have nothing to do with the AI model itself:
 
-1.  **Isolation (Execution):** How do I let an AI run code or tools safely without destroying my infrastructure?
-2.  **State (Persistence):** How do I ensure an investigation or workflow survives server restarts and lasts for weeks?
-3.  **Trust (Auditability):** How do I prove to a regulator or legal team *exactly* what data the AI accessed and what logic it used?
+1.  **Isolation (Execution):** How do you let an AI run code or tools safely without endangering your production infrastructure?
+2.  **State (Persistence):** How do you ensure an investigation or workflow survives server restarts and remains resumable for weeks?
+3.  **Trust (Auditability):** How do you prove to a regulator or legal team *exactly* what data the AI accessed and why it made a decision?
 
-Most teams waste 12-18 months building this scaffolding before they write their first line of domain logic.
-
-**Cognition is that scaffolding.** It is the **Agent Substrate**: a hardened, pre-built runtime engine that handles Execution, State, and Trust so you can focus on building your platform.
+Most teams waste months building this scaffolding. **Cognition is that scaffolding.**
 
 ## Core Primitives
 
-Cognition provides three fundamental primitives that you compose to build your platform:
+Cognition provides four fundamental primitives that you compose to build your platform:
 
-### 1. The Cell (Execution Environment)
-The Cell is the secure boundary where "Thought" becomes "Action".
+*   🏗️ **The Cell (Execution)**: A secure, sandboxed environment (local process or hardened container) where "Thought" becomes "Action". Bring the code to the data safely.
+*   🧬 **The Thread (State)**: Durable, checkpoint-based memory. Every step is saved; if the server crashes, the agent picks up *exactly* where it left off.
+*   🔍 **The Trace (Audit)**: Native OpenTelemetry integration. Immutable forensic proof of every file read, API call, and reasoning step.
+*   🔌 **The Plug (Extensibility)**: A five-tier extensibility model from simple no-code instructions to deep Python middleware.
 
-- **Concept:** Bring the Code to the Data.
-- **Capabilities:**
-    - **Local Cells:** Lightweight process isolation for rapid development loops.
-    - **Container Cells:** Hardened Docker/Kubernetes environments for analyzing untrusted data (malware, PII, financial records).
-- **Benefit:** Your platform logic remains clean. You simply request a tool execution, and the Substrate handles the containment, cleanup, and resource limits.
+## Quick Start
 
-### 2. The Thread (State Management)
-The Thread is the continuous, resilient memory of a workflow.
+### 1. Install Cognition
+```bash
+pip install cognition
+```
 
-- **Concept:** Durable, resumable state.
-- **Capabilities:**
-    - **Pluggable Backends:** SQLite for local/edge deployments; PostgreSQL for cloud scale.
-    - **Checkpointing:** Every step the AI takes is saved. If your server crashes, the Agent picks up *exactly* where it left off.
-- **Benefit:** Enables long-running "Cases" or "Projects" that span days or weeks, rather than transient "Chats."
+### 2. Try the Reference CLI
+Start the engine and chat with a local agent in your terminal. The server will automatically start in the background.
+```bash
+cognition-cli chat
+> Analyze this project for security vulnerabilities.
+```
 
-### 3. The Trace (Forensic Audit)
-The Trace is the immutable proof of action.
+### 3. Integrate the API
+Cognition is a "headless" engine. You build the UI; we provide the REST/SSE backbone.
 
-- **Concept:** Trust through verification.
-- **Capabilities:**
-    - **OTLP Integration:** Native OpenTelemetry support allows you to pipe traces to Jaeger, Splunk, or Datadog.
-    - **Chain of Custody:** See exactly what file was read, what API was called, and what reasoning the AI used to make a decision.
-- **Benefit:** Essential for platforms operating in regulated environments (Security, Legal, Healthcare).
+**Start the Server:**
+```bash
+cognition-server
+```
+
+**Create a Session:**
+```bash
+curl -X POST http://localhost:8000/sessions \
+  -H "Content-Type: application/json" \
+  -d '{"title": "Security Investigation"}'
+```
+
+**Stream a Response (SSE):**
+```bash
+curl -N -X POST http://localhost:8000/sessions/{id}/messages \
+  -H "Content-Type: application/json" \
+  -d '{"content": "Scan the breach logs in /data/incident-404"}'
+```
 
 ## Architecture
 
-Cognition is designed to be the "Headless Backend" for your platform. You build the specialized UI/UX; we provide the engine.
+Cognition acts as the unified backend for your AI application. You build the specialized UX; Cognition handles the containment, persistence, and audit.
 
 ```mermaid
 graph TD
-    subgraph "Your Platform (The Application)"
-        UI[Custom React/Vue Dashboard]
+    subgraph "Your Application (The UX)"
+        UI[Custom Dashboard / IDE / CLI]
         API_GW[Your API Gateway]
     end
 
     subgraph "The Substrate (Cognition Engine)"
         API[REST API / SSE Stream]
         
-        subgraph "Trust Layer"
-            Audit[OTLP Tracer]
-            State[Persistence - SQLite/Postgres]
+        subgraph "Trust & State"
+            Audit[OTLP Trace Propagation]
+            State[SQLite/Postgres Checkpoints]
         end
         
         subgraph "Execution Layer"
             Router[Agent Router]
             
             subgraph "The Cell (Sandbox)"
-                Tool_A[File System]
-                Tool_B[Shell / Python]
-                Tool_C[Custom Tools]
+                Tool_A[Secure File System]
+                Tool_B[Isolated Shell]
+                Tool_C[Custom Domain Tools]
             end
         end
     end
@@ -86,37 +104,35 @@ graph TD
     Tool_B -.-> Audit
 ```
 
-## Use Cases
+## Extend Your Agent
 
-Cognition is domain-agnostic. It powers platforms such as:
+Cognition uses a "Convention over Configuration" model. Most customizations require zero code.
 
-*   **[GeneSmith (BioTech):](./blueprints/genesmith.md)** A biological foundry for designing and simulating proteins in a secure, audited environment.
-*   **[StarKeep (SpaceOps):](./blueprints/starkeep.md)** An orbital administrator for autonomous satellite repair and edge computing.
-*   **[ZeroOne (DeFi):](./blueprints/zeroone.md)** An algorithmic CEO for managing decentralized capital with transparent logic.
-*   **[BreachLens (Security):](./blueprints/cyber-investigation.md)** A forensic investigation platform for safely analyzing malware and breach logs.
-*   **[DataLens (Analytics):](./blueprints/data-analyst.md)** A headless data scientist for securely analyzing and visualizing business data.
+| Level | Mechanism | Effort | Example |
+|---|---|---|---|
+| **Memory** | `AGENTS.md` | No Code | Project-specific rules & style |
+| **Skills** | `SKILL.md` files | No Code | Reusable runbooks (e.g., "how to deploy") |
+| **Subagents** | YAML Config | Config | Delegated specialists (e.g., "security-expert") |
+| **Tools** | Python Functions | Code | Proprietary API integrations |
+| **Middleware** | Python Classes | Code | Approval gates, custom telemetry |
 
-## Getting Started
+## Blueprints
 
-1.  **[Concepts](./concepts/execution-environments.md):** Understand the primitives in detail.
-2.  **[Blueprints](./blueprints/cyber-investigation.md):** See a reference architecture for a Cyber Security Investigation Platform.
-3.  **[Build Guide](./guides/building-platforms.md):** Learn how to integrate the Cognition API into your application.
+The CLI is just one example of what you can build on Cognition. See our [Blueprints](./docs/v2/README.md#blueprints) for reference architectures:
 
-## CLI Quick Start
+*   **[Cognition CLI](./docs/v2/blueprints/cognition-cli.md)**: A high-fidelity terminal assistant.
+*   **[BreachLens](./docs/v2/blueprints/cyber-investigation.md)**: Forensic analysis for cybersecurity investigations.
+*   **[GeneSmith](./docs/v2/blueprints/genesmith.md)**: Secure biological foundry for protein design.
+*   **[DataLens](./docs/v2/blueprints/data-analyst.md)**: Headless data science for sensitive datasets.
+*   **[StarKeep](./docs/v2/blueprints/starkeep.md)**: SpaceOps administrator for satellite repair.
 
-The easiest way to interact with the Substrate is via the `cognition-cli`.
+## Documentation
 
-### Usage:
-```bash
-# 1. Start an interactive session
-# (The engine will automatically start in the background if not running)
-cognition-cli chat
+*   📖 **[Core Concepts](./docs/v2/README.md)**: Cells, Threads, Traces, and Plugs.
+*   🛠️ **[Extending Agents](./docs/v2/guides/extending-agents.md)**: How to add memory, skills, and tools.
+*   ⚙️ **[Configuration Reference](./docs/v2/guides/configuration.md)**: YAML and Environment variable details.
+*   🚀 **[Deployment Guide](./docs/v2/guides/deployment.md)**: Running in Docker and Kubernetes.
 
-# 2. Or use it for automation (Piping)
-cat my_code.py | cognition-cli chat "Explain this code" --single
+## License
 
-# 3. Check status or stop the engine
-cognition-cli status
-cognition-cli stop
-```
-
+MIT © [CognicellAI](LICENSE)
