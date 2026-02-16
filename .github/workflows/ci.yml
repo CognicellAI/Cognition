@@ -1,0 +1,85 @@
+name: CI/CD
+
+on:
+  push:
+    branches: [ main, pivot ]
+  pull_request:
+    branches: [ main, pivot ]
+  release:
+    types: [ created ]
+  workflow_dispatch:
+    inputs:
+      run_e2e:
+        description: 'Run E2E tests with real keys'
+        required: false
+        default: 'false'
+        type: boolean
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.11", "3.12"]
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Python ${{ matrix.python-version }}
+      uses: actions/setup-python@v5
+      with:
+        python-version: ${{ matrix.python-version }}
+
+    - name: Install uv
+      uses: astral-sh/setup-uv@v5
+      with:
+        enable-cache: true
+
+    - name: Install dependencies
+      run: uv sync --all-extras --dev
+
+    - name: Run unit tests
+      run: uv run pytest tests/unit -v
+
+    - name: Run E2E tests (Mock LLM)
+      run: uv run pytest tests/e2e -v -m "not slow"
+      env:
+        COGNITION_LLM_PROVIDER: mock
+        COGNITION_TEST_LLM_MODE: mock
+
+    - name: Run E2E tests (Real keys)
+      if: github.event.inputs.run_e2e == 'true'
+      run: uv run pytest tests/e2e -v
+      env:
+        OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        COGNITION_OPENAI_COMPATIBLE_API_KEY: ${{ secrets.OPENAI_COMPATIBLE_API_KEY }}
+        AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        AWS_REGION: us-east-1
+
+  publish:
+    needs: test
+    if: github.event_name == 'release'
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write  # Mandatory for trusted publishing
+      contents: read
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: "3.12"
+
+    - name: Install uv
+      uses: astral-sh/setup-uv@v5
+
+    - name: Build package
+      run: uv build
+
+    - name: Publish to PyPI
+      uses: pypa/gh-action-pypi-publish@release/v1
+      with:
+        skip-existing: true
