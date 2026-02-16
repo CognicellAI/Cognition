@@ -136,7 +136,7 @@ class CognitionShell:
                     self.available_models = models
                     self.stats.model = data.get("llm", {}).get("model", "UNKNOWN")
                     self.stats.provider = data.get("llm", {}).get("provider", "UNKNOWN")
-        except:
+        except Exception:
             pass
 
     async def switch_model(self, model_id: str):

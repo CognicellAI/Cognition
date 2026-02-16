@@ -90,6 +90,13 @@ class StepCompleteEvent:
     description: str
 
 
+@dataclass
+class StatusEvent:
+    """Agent status update event."""
+
+    status: str
+
+
 # Union type for all events
 StreamEvent = (
     TokenEvent
@@ -100,6 +107,7 @@ StreamEvent = (
     | ErrorEvent
     | PlanningEvent
     | StepCompleteEvent
+    | StatusEvent
 )
 
 
@@ -167,6 +175,7 @@ class DeepAgentStreamingService:
                 model=model,
                 store=None,
                 checkpointer=checkpointer,
+                settings=llm_settings,
             )
 
             # Build the input with enhanced system prompt
@@ -199,6 +208,27 @@ class DeepAgentStreamingService:
                         output_tokens += len(chunk.content.split())
                         yield TokenEvent(content=chunk.content)
 
+                elif event_type == "on_chain_stream" and name == "model":
+                    # Fallback: model streaming via chain events
+                    chunk = data.get("chunk", {})
+                    # Chunk might be a list, Command object, or message
+                    chunks = chunk if isinstance(chunk, list) else [chunk]
+                    for c in chunks:
+                        content = None
+                        # Handle Command objects from LangGraph
+                        if hasattr(c, "update") and isinstance(c.update, dict):
+                            messages = c.update.get("messages", [])
+                            if messages and hasattr(messages[-1], "content"):
+                                content = messages[-1].content
+                        # Handle regular message objects
+                        elif hasattr(c, "content") and c.content:
+                            content = c.content
+
+                        if content:
+                            accumulated_content += content
+                            output_tokens += len(content.split())
+                            yield TokenEvent(content=content)
+
                 elif event_type == "on_tool_start":
                     # Tool execution starting
                     tool_name = name
@@ -230,6 +260,14 @@ class DeepAgentStreamingService:
                     )
 
                     current_tool_call = None
+
+                elif event_type == "on_custom_event":
+                    # Custom events from middleware (e.g. status updates)
+                    # The event name is in the 'name' field, data contains the payload
+                    event_name = event.get("name", "")
+                    if event_name == "status":
+                        if isinstance(data, dict) and "status" in data:
+                            yield StatusEvent(status=data["status"])
 
                 elif event_type == "on_chain_end":
                     # The agent's turn is complete

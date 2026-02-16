@@ -1,0 +1,95 @@
+# Cognition Configuration File
+#
+# This file defines all available configuration options.
+# Copy this file to .cognition/config.yaml and customize as needed.
+#
+# Configuration hierarchy (lowest to highest precedence):
+#   1. Built-in defaults
+#   2. ~/.cognition/config.yaml (global user preferences)
+#   3. .cognition/config.yaml (project-level)
+#   4. Environment variables / .env (highest precedence)
+#
+# Security note: Never commit API keys or secrets to this file.
+# Use environment variables for secrets.
+
+# Server settings
+# Configure the HTTP server that serves the Cognition API.
+server:
+  host: 127.0.0.1
+  port: 8000
+  log_level: info
+  max_sessions: 100
+  session_timeout_seconds: 3600.0
+
+# Workspace settings
+# Configure where projects/workspaces are stored.
+workspace:
+  root: .
+
+# LLM (Language Model) settings
+# Configure which AI model provider to use and model-specific options.
+#
+# Supported providers: mock, openai, bedrock, openai_compatible, ollama
+#
+# Note: API keys should be set via environment variables:
+#   OPENAI_API_KEY, AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, etc.
+llm:
+  provider: mock
+  model: "gpt-4o"
+  temperature: null
+  max_tokens: null
+  system_prompt: null
+
+# OpenAI-specific settings
+openai:
+  api_base: null
+
+# OpenAI-compatible API settings (for self-hosted models)
+openai_compatible:
+  base_url: null
+
+# AWS/Bedrock-specific settings
+aws:
+  region: "us-east-1"
+
+# Bedrock model settings
+bedrock:
+  model_id: "anthropic.claude-3-sonnet-20240229-v1:0"
+
+# Ollama (local LLM) settings
+ollama:
+  model: llama3.2
+  base_url: "http://localhost:11434"
+
+# Rate limiting settings
+# Control API request throttling.
+rate_limit:
+  per_minute: 60
+  burst: 10
+
+# Observability settings
+# Configure metrics, tracing, and monitoring.
+observability:
+  otel_endpoint: null
+  metrics_port: 9090
+
+# Agent behavior settings
+# Configure how the AI agent behaves and what capabilities it has.
+agent:
+  memory:
+    - "AGENTS.md"
+  skills:
+    - ".cognition/skills/"
+  subagents: []
+  interrupt_on: {}
+
+# Persistence settings
+# Configure how session state is stored.
+persistence:
+  backend: sqlite
+  uri: .cognition/state.db
+
+# Test settings
+# Configure testing behavior.
+test:
+  llm_mode: mock

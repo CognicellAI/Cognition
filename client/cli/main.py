@@ -274,7 +274,7 @@ async def stream_chat(
                     try:
                         error_json = json.loads(error_data)
                         msg = error_json.get("detail", error_data.decode())
-                    except:
+                    except Exception:
                         msg = error_data.decode()
                     console.print(f"[bold red]Error:[/bold red] {msg}")
                     return

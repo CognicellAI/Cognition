@@ -63,3 +63,9 @@ workspaces/*
 # OS
 .DS_Store
 Thumbs.db
+
+# Cognition state and sessions
+.cognition/
+.cognition-cli-state.json
+state.db*
+sessions.json

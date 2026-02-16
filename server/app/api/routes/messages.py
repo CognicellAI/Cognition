@@ -37,6 +37,7 @@ from server.app.llm.deep_agent_service import (
     ErrorEvent,
     PlanningEvent,
     StepCompleteEvent,
+    StatusEvent,
 )
 
 router = APIRouter(prefix="/sessions/{session_id}/messages", tags=["messages"])
@@ -128,6 +129,9 @@ async def agent_event_stream(
                     total_steps=event.total_steps,
                     description=event.description,
                 )
+
+            elif isinstance(event, StatusEvent):
+                yield EventBuilder.status(event.status)
 
             elif isinstance(event, UsageEvent):
                 yield EventBuilder.usage(

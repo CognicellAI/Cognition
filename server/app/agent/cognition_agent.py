@@ -19,7 +19,7 @@ from server.app.agent.middleware import (
     CognitionStreamingMiddleware,
 )
 from server.app.agent.sandbox_backend import CognitionLocalSandboxBackend
-from server.app.settings import get_settings
+from server.app.settings import Settings, get_settings
 
 
 SYSTEM_PROMPT = """You are Cognition, an expert AI coding assistant.
@@ -61,6 +61,8 @@ def create_cognition_agent(
     subagents: Sequence[Any] | None = None,
     interrupt_on: Mapping[str, Any] | None = None,
     middleware: Sequence[Any] | None = None,
+    tools: Sequence[Any] | None = None,
+    settings: Settings | None = None,
 ) -> Any:
     """Create a Deep Agent for the Cognition system.
 
@@ -71,6 +73,7 @@ def create_cognition_agent(
     - Automatic tool chaining
     - Configurable memory, skills, and subagents
     - Observability and streaming middleware
+    - Optional custom tools
 
     Args:
         project_path: Path to the project workspace directory.
@@ -83,11 +86,13 @@ def create_cognition_agent(
         subagents: Optional list of subagent definitions.
         interrupt_on: Optional dict mapping tool names to human-approval requirement.
         middleware: Optional additional middleware to apply.
+        tools: Optional additional tools to register.
+        settings: Optional settings override.
 
     Returns:
         Configured Deep Agent ready to handle coding tasks with multi-step support.
     """
-    settings = get_settings()
+    settings = settings or get_settings()
     project_path = Path(project_path).resolve()
 
     # Create the sandbox backend
@@ -118,6 +123,7 @@ def create_cognition_agent(
     # Create the agent with multi-step support
     agent = create_deep_agent(
         model=model,
+        tools=tools,
         system_prompt=prompt,
         backend=backend,
         checkpointer=checkpointer,

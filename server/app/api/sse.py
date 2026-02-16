@@ -158,3 +158,8 @@ class EventBuilder:
                 "description": description,
             },
         }
+
+    @staticmethod
+    def status(status: str) -> dict:
+        """Create a status update event."""
+        return {"event": "status", "data": {"status": status}}
