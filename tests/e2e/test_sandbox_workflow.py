@@ -56,6 +56,7 @@ class TestSandboxWorkflow:
                 "COGNITION_OPENAI_COMPATIBLE_API_KEY", ""
             )
             env["COGNITION_LLM_MODEL"] = "google/gemini-3-flash-preview"
+            env["COGNITION_METRICS_PORT"] = str(unused_tcp_port + 1000)  # Unique metrics port
 
             # Start server
             process = subprocess.Popen(
@@ -140,13 +141,15 @@ class TestSandboxWorkflow:
             # Parse SSE events
             events = []
             content = response.text
+            event_type = None
 
             for line in content.split("\n"):
                 if line.startswith("event:"):
                     event_type = line.replace("event:", "").strip()
                 elif line.startswith("data:"):
                     data = json.loads(line.replace("data:", "").strip())
-                    events.append({"type": event_type, "data": data})
+                    if event_type:
+                        events.append({"type": event_type, "data": data})
 
             # Check for tool calls
             tool_calls = [e for e in events if e["type"] == "tool_call"]
@@ -208,13 +211,15 @@ class TestSandboxWorkflow:
 
             # Parse events
             events = []
+            event_type = None
             for line in response.text.split("\n"):
                 if line.startswith("event:"):
                     event_type = line.replace("event:", "").strip()
                 elif line.startswith("data:"):
                     try:
                         data = json.loads(line.replace("data:", "").strip())
-                        events.append({"type": event_type, "data": data})
+                        if event_type:
+                            events.append({"type": event_type, "data": data})
                     except json.JSONDecodeError:
                         pass
 
@@ -253,13 +258,15 @@ class TestSandboxWorkflow:
 
             # Parse events
             events = []
+            event_type = None
             for line in response.text.split("\n"):
                 if line.startswith("event:"):
                     event_type = line.replace("event:", "").strip()
                 elif line.startswith("data:"):
                     try:
                         data = json.loads(line.replace("data:", "").strip())
-                        events.append({"type": event_type, "data": data})
+                        if event_type:
+                            events.append({"type": event_type, "data": data})
                     except json.JSONDecodeError:
                         pass
 
