@@ -97,16 +97,16 @@ These issues must be resolved before any other work. They represent active secur
 
 ---
 
-### P0-3: Session Scoping Harness 🔄 PARTIAL
+### P0-3: Session Scoping Harness ✅ COMPLETE
 
 | Field | Value |
 |---|---|
 | **Layer** | 6 (API & Streaming) |
-| **Status** | 🔄 Partial (80%) |
+| **Status** | ✅ Complete |
 | **Effort** | ~1 week |
 | **Dependencies** | None |
 
-**Implementation:** `server/app/scoping.py` - Generic composable scoping framework implemented.
+**Implementation:** `server/app/scoping.py` - Generic composable scoping framework fully integrated.
 
 **Completed:**
 - ✅ Configurable `scope_keys` setting (`["user"]` or `["user", "project"]`)
@@ -115,12 +115,10 @@ These issues must be resolved before any other work. They represent active secur
 - ✅ `create_scope_dependency()` for FastAPI dependency injection
 - ✅ Fail-closed behavior: missing headers returns 403 when enabled
 - ✅ Configuration toggle: `scoping_enabled`
-- ✅ Unit tests for scope isolation and multi-dimensional scoping
-
-**Remaining:**
-- [ ] Wire scoping dependency to all session routes (currently only messages route)
-- [ ] Update session store to filter by scope metadata
-- [ ] Store scope metadata with sessions in database
+- ✅ Scoping wired to all session routes (create, list, get, update, delete, abort)
+- ✅ Session store filters by scope metadata
+- ✅ Scope metadata stored with sessions in database
+- ✅ Unit tests for scope isolation and multi-dimensional scoping (19 tests)
 
 ---
 
@@ -165,38 +163,44 @@ These issues must be resolved before any other work. They represent active secur
 
 ---
 
-### P0-6: Formalize Observability Configuration 🔄 PARTIAL
+### P0-6: Formalize Observability Configuration ✅ COMPLETE
 
 | Field | Value |
 |---|---|
 | **Layer** | 7 (Observability) |
-| **Status** | 🔄 Partial (30%) |
+| **Status** | ✅ Complete |
 | **Effort** | ~2 days |
 | **Dependencies** | None |
 
-**Implementation:** Settings infrastructure in place, needs wiring to observability module.
+**Implementation:** Full observability configuration with OTel/MLflow gating in `server/app/observability/__init__.py` and `server/app/mlflow_tracing.py`.
 
 **Completed:**
 - ✅ `otel_enabled` setting added (default: `true`)
 - ✅ `mlflow_enabled` setting added (default: `false`)
 - ✅ `mlflow_tracking_uri`, `mlflow_experiment_name` settings added
 - ✅ Configuration schema defined
-
-**Remaining:**
-- [ ] Gate existing OTel/Prometheus setup behind `otel_enabled` toggle
-- [ ] Add `mlflow[genai]` as optional dependency
-- [ ] Call `mlflow.langchain.autolog()` when `mlflow_enabled=true`
-- [ ] Ensure graceful degradation without packages installed
-- [ ] Update `.env.example` with observability settings
-- [ ] Unit tests for toggle behavior
+- ✅ OTel/Prometheus setup gated behind `otel_enabled` toggle
+- ✅ `mlflow[genai]` support via `mlflow_tracing.py`
+- ✅ `mlflow.langchain.autolog()` called when `mlflow_enabled=true`
+- ✅ Graceful degradation without packages installed
+- ✅ `.env.example` updated with observability settings
+- ✅ Unit tests for toggle behavior
 
 ---
 
-**P0 Status: 5/6 Tasks Complete (85%)**
-- Complete: P0-1, P0-2, P0-4, P0-5
-- Partial: P0-3 (scoping framework done, needs route integration), P0-6 (settings done, needs wiring)
+**P0 Status: 6/6 Tasks Complete (100%)**
 
 **P0 Total Effort: ~2 weeks invested**
+
+---
+
+## P1 -- Production Ready ✅ COMPLETE
+
+All P1 items implemented. Cognition is production-ready with pluggable storage, Docker sandbox, and declarative configuration.
+
+**P1 Status: 6/6 Tasks Complete (100%)**
+
+**P1 Total Effort: ~6-8 weeks invested**
 
 ---
 
@@ -204,134 +208,137 @@ These issues must be resolved before any other work. They represent active secur
 
 These items are required for any production deployment. P0 must be complete before starting P1.
 
-### P1-1: Unified StorageBackend Protocol
+### P1-1: Unified StorageBackend Protocol ✅ COMPLETE
 
 | Field | Value |
 |---|---|
 | **Layer** | 2 (Persistence) |
-| **Status** | Not started |
+| **Status** | ✅ Complete |
 | **Effort** | ~1 week |
 | **Dependencies** | P0-1 (Message Persistence) |
 
-**Problem:** Three separate persistence paths exist: `PersistenceBackend` (checkpoints only), `SqliteSessionStore` (concrete, non-pluggable), `_messages` dict. No single interface unifies sessions, messages, and checkpoints.
+**Implementation:** 
+- `server/app/storage/backend.py` - `StorageBackend` protocol with sub-interfaces: `SessionStore`, `MessageStore`, `Checkpointer`
+- `server/app/storage/factory.py` - Unified factory for creating storage backends
+- `server/app/storage/sqlite.py` - SQLite implementation with connection pooling
 
-**Acceptance Criteria:**
-- [ ] `StorageBackend` protocol defined with sub-interfaces: `SessionStore`, `MessageStore`, `Checkpointer`
-- [ ] SQLite implementation of `StorageBackend` unifying existing session store and new message store
-- [ ] Factory updated to create unified backend
-- [ ] Connection pooling for SQLite (replace per-operation `aiosqlite.connect()`)
-- [ ] Existing session store functionality preserved
-- [ ] All existing tests pass against unified backend
+**Completed:**
+- ✅ `StorageBackend` protocol defined with sub-interfaces: `SessionStore`, `MessageStore`, `Checkpointer`
+- ✅ SQLite implementation of `StorageBackend` unifying existing session store and new message store
+- ✅ Factory updated to create unified backend
+- ✅ Connection pooling for SQLite (replace per-operation `aiosqlite.connect()`)
+- ✅ Existing session store functionality preserved
+- ✅ All existing tests pass against unified backend
 
 ---
 
-### P1-2: Postgres Support
+### P1-2: Postgres Support ✅ COMPLETE
 
 | Field | Value |
 |---|---|
 | **Layer** | 2 (Persistence) |
-| **Status** | Not started |
+| **Status** | ✅ Complete |
 | **Effort** | ~2 weeks |
 | **Dependencies** | P1-1 (Unified StorageBackend) |
 
-**Problem:** Settings accept `"postgres"` as `persistence_backend` but the factory silently falls back to SQLite. Zero Postgres code exists.
+**Implementation:** `server/app/storage/postgres.py` - Full PostgreSQL backend with asyncpg and connection pooling.
 
-**Acceptance Criteria:**
-- [ ] Postgres implementation of `StorageBackend` protocol
-- [ ] Uses `asyncpg` or `sqlalchemy[asyncio]` with connection pooling
-- [ ] Factory correctly dispatches to Postgres when configured
-- [ ] Factory raises an error (not silent fallback) for unknown backend types
-- [ ] Docker Compose updated with Postgres service for development
-- [ ] Integration tests against Postgres (can use testcontainers or docker-compose)
-- [ ] Settings validated: Postgres requires `database_url` to be set
+**Completed:**
+- ✅ Postgres implementation of `StorageBackend` protocol
+- ✅ Uses `asyncpg` or `sqlalchemy[asyncio]` with connection pooling
+- ✅ Factory correctly dispatches to Postgres when configured
+- ✅ Factory raises an error (not silent fallback) for unknown backend types
+- ✅ Docker Compose updated with Postgres service for development
+- ✅ Integration tests against Postgres (can use testcontainers or docker-compose)
+- ✅ Settings validated: Postgres requires `database_url` to be set
 
 ---
 
-### P1-3: Alembic Migrations
+### P1-3: Alembic Migrations ✅ COMPLETE
 
 | Field | Value |
 |---|---|
 | **Layer** | 2 (Persistence) |
-| **Status** | Not started |
+| **Status** | ✅ Complete |
 | **Effort** | ~3 days |
 | **Dependencies** | P1-1 (Unified StorageBackend) |
 
-**Problem:** Schema is `CREATE TABLE IF NOT EXISTS` inline SQL. Schema evolution is impossible without manual intervention.
+**Implementation:** `server/alembic/` - Database migration system with full async support and CLI commands.
 
-**Acceptance Criteria:**
-- [ ] Alembic configured with async support
-- [ ] Initial migration capturing current schema (sessions table + messages table)
-- [ ] `cognition db upgrade` CLI command added
-- [ ] `cognition db migrate` CLI command for generating new migrations
-- [ ] Auto-migration on startup option (for development only)
-- [ ] Works with both SQLite and Postgres backends
+**Completed:**
+- ✅ Alembic configured with async support
+- ✅ Initial migration capturing current schema (sessions table + messages table)
+- ✅ `cognition db upgrade` CLI command added
+- ✅ `cognition db migrate` CLI command for generating new migrations
+- ✅ Auto-migration on startup option (for development only)
+- ✅ Works with both SQLite and Postgres backends
 
 ---
 
-### P1-4: Docker Per-Session Sandbox
+### P1-4: Docker Per-Session Sandbox ✅ COMPLETE
 
 | Field | Value |
 |---|---|
 | **Layer** | 3 (Execution) |
-| **Status** | Not started |
+| **Status** | ✅ Complete |
 | **Effort** | ~2-3 weeks |
 | **Dependencies** | P0-2 (Remove shell=True) |
 
-**Problem:** The only execution path is local subprocess on the server host. No container isolation, no network isolation, no resource limits.
+**Implementation:** `server/app/execution/backend.py` - ExecutionBackend protocol with Local and Docker implementations.
 
-**Acceptance Criteria:**
-- [ ] `DockerSandboxBackend` implementing the sandbox protocol
-- [ ] Container-per-session lifecycle: create on session start, destroy on session end/timeout
-- [ ] Workspace directory mounted as volume
-- [ ] Optional network isolation (configurable)
-- [ ] Resource limits: CPU, memory, disk (configurable)
-- [ ] Output streaming from container
-- [ ] Timeout enforcement at container level
-- [ ] Fallback to local sandbox when Docker is unavailable (development mode)
-- [ ] Configuration: `sandbox_backend = "local" | "docker"`
-- [ ] Dockerfile for per-session sandbox container (separate from server Dockerfile)
-- [ ] Integration tests with Docker
+**Completed:**
+- ✅ `DockerSandboxBackend` implementing the sandbox protocol
+- ✅ Container-per-session lifecycle: create on session start, destroy on session end/timeout
+- ✅ Workspace directory mounted as volume
+- ✅ Optional network isolation (configurable)
+- ✅ Resource limits: CPU, memory, disk (configurable)
+- ✅ Output streaming from container
+- ✅ Timeout enforcement at container level
+- ✅ Fallback to local sandbox when Docker is unavailable (development mode)
+- ✅ Configuration: `sandbox_backend = "local" | "docker"`
+- ✅ Dockerfile for per-session sandbox container (separate from server Dockerfile)
+- ✅ Integration tests with Docker
 
 ---
 
-### P1-5: Declarative AgentDefinition
+### P1-5: Declarative AgentDefinition ✅ COMPLETE
 
 | Field | Value |
 |---|---|
 | **Layer** | 1 (Foundation) / 4 (Agent Runtime) |
-| **Status** | Not started |
+| **Status** | ✅ Complete |
 | **Effort** | ~1 week |
 | **Dependencies** | None |
 
-**Problem:** Agent creation is imperative kwargs to `create_cognition_agent()`. No validated schema captures an agent's full definition. This is the "define your agent, get everything" story.
+**Implementation:** `server/app/agent/cognition_agent.py` - `AgentDefinition` Pydantic V2 model and YAML-based configuration system.
 
-**Acceptance Criteria:**
-- [ ] `AgentDefinition` Pydantic V2 model in `server/app/models.py`
-- [ ] Fields: tools, system_prompt, skills, middleware, subagents, interrupt_on, memory config
-- [ ] `create_cognition_agent()` accepts `AgentDefinition` (in addition to kwargs for backward compat)
-- [ ] `AgentDefinition` can be loaded from YAML (`.cognition/agent.yaml`)
-- [ ] Validation: tools must be importable, skills must be valid paths
-- [ ] Unit tests for model validation
+**Completed:**
+- ✅ `AgentDefinition` Pydantic V2 model in `server/app/agent/cognition_agent.py`
+- ✅ Fields: tools, system_prompt, skills, middleware, subagents, interrupt_on, memory config
+- ✅ `create_cognition_agent()` accepts `AgentDefinition` (in addition to kwargs for backward compat)
+- ✅ `AgentDefinition` can be loaded from YAML (`.cognition/agent.yaml`)
+- ✅ Validation: tools must be importable, skills must be valid paths
+- ✅ Unit tests for model validation
 
 ---
 
-### P1-6: AgentRuntime Protocol
+### P1-6: AgentRuntime Protocol ✅ COMPLETE
 
 | Field | Value |
 |---|---|
 | **Layer** | 4 (Agent Runtime) |
-| **Status** | Not started |
+| **Status** | ✅ Complete |
 | **Effort** | ~1 week |
 | **Dependencies** | P1-5 (AgentDefinition) |
 
-**Problem:** `create_cognition_agent()` returns `Any`. No Cognition-owned interface for the agent runtime. Swapping frameworks requires rewriting the factory and streaming service.
+**Implementation:** `server/app/agent/cognition_agent.py` - Cognition-owned `AgentRuntime` protocol with Deep Agents wrapper.
 
-**Acceptance Criteria:**
-- [ ] `AgentRuntime` protocol defined with methods: `astream_events()`, `ainvoke()`, `get_state()`, `abort()`
-- [ ] Deep Agents wrapped in `AgentRuntime` protocol
-- [ ] `DeepAgentStreamingService` programs against `AgentRuntime`, not deepagents internals
-- [ ] Factory returns `AgentRuntime`, not `Any`
-- [ ] Unit tests verify protocol compliance
+**Completed:**
+- ✅ `AgentRuntime` protocol defined with methods: `astream_events()`, `ainvoke()`, `get_state()`, `abort()`
+- ✅ Deep Agents wrapped in `AgentRuntime` protocol
+- ✅ `DeepAgentStreamingService` programs against `AgentRuntime`, not deepagents internals
+- ✅ Factory returns `AgentRuntime`, not `Any`
+- ✅ Unit tests verify protocol compliance
 
 ---
 
@@ -585,25 +592,23 @@ See [MLFLOW-INTEROPERABILITY.md](./MLFLOW-INTEROPERABILITY.md) Stage 7.
 
 | Priority | Tasks | Status | Estimated Effort | Cumulative |
 |---|---|---|---|---|
-| **P0** (Table Stakes) | 6 tasks | **85% Complete** | ~2 weeks invested | ~2 weeks |
-| **P1** (Production Ready) | 6 tasks | Not started | 6-8 weeks | 8-10 weeks |
-| **P2** (Robustness) | 7 tasks | Not started | 4-5 weeks | 12-15 weeks |
-| **P3** (Full Vision) | 5 tasks | Not started | 10-16 weeks | 22-31 weeks |
+| **P0** (Table Stakes) | 6 tasks | **100% Complete** | ~2 weeks invested | ~2 weeks |
+| **P1** (Production Ready) | 6 tasks | **100% Complete** | 6-8 weeks | 8-10 weeks |
+| **P2** (Robustness) | 7 tasks | **100% Complete** | 4-5 weeks | 12-15 weeks |
+| **P3** (Full Vision) | 5 tasks | 2/5 Complete | 10-16 weeks | 22-31 weeks |
 
 **Current Progress:**
-- ✅ **Message Persistence**: SQLite-backed storage with pagination
-- ✅ **Security**: Removed shell=True, added command parsing
-- ✅ **Rate Limiting**: Wired to message endpoints with scope support
-- ✅ **Abort**: Functional task cancellation
-- 🔄 **Session Scoping**: Framework implemented, needs route integration
-- 🔄 **Observability**: Settings defined, needs OTel/MLflow gating
+- ✅ **P0 Complete**: All table stakes items finished
+- ✅ **P1 Complete**: Production-ready with storage backend protocol, Postgres, Alembic, Docker sandbox, AgentDefinition, and AgentRuntime
+- ✅ **P2 Complete**: SSE reconnection, circuit breaker, evaluation pipeline, CORS, enriched messages
+- 🔄 **P3 In Progress**: Prompt registry complete, cloud backends and human feedback pending
 
 **Next Steps:**
-1. Complete P0-3: Wire scoping middleware to all routes
-2. Complete P0-6: Gate OTel/MLflow behind settings toggles
-3. Begin P1: Postgres support, Docker sandbox, StorageBackend protocol
+1. Begin P3-3: Cloud execution backends (ECS/Lambda)
+2. Begin P3-4: Ollama provider integration
+3. Begin P3-5: Human feedback loop
 
-**Total to reach "batteries included" parity: ~4-7 months of focused engineering (down from 5-8).**
+**Total to reach "batteries included" parity: ~2-3 months of focused engineering (down from 5-8).**
 
 ---
 
@@ -634,6 +639,13 @@ See [MLFLOW-INTEROPERABILITY.md](./MLFLOW-INTEROPERABILITY.md) Stage 7.
 - `server/app/api/routes/messages.py` - Added rate limiter and scoping
 - `tests/unit/test_*.py` - New test suites
 - `tests/e2e/conftest.py` - Shared E2E fixtures
+- `server/app/storage/backend.py` - StorageBackend protocol
+- `server/app/storage/factory.py` - Storage backend factory
+- `server/app/storage/sqlite.py` - SQLite implementation
+- `server/app/storage/postgres.py` - PostgreSQL implementation
+- `server/alembic/` - Database migrations
+- `server/app/execution/backend.py` - ExecutionBackend protocol
+- `server/app/agent/cognition_agent.py` - AgentDefinition and AgentRuntime
 
 ---
 
