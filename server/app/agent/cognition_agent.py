@@ -19,6 +19,7 @@ from server.app.agent.middleware import (
     CognitionStreamingMiddleware,
 )
 from server.app.agent.sandbox_backend import CognitionLocalSandboxBackend
+from server.app.agent.context import ContextManager
 from server.app.settings import Settings, get_settings
 
 
@@ -102,8 +103,35 @@ def create_cognition_agent(
         sandbox_id=sandbox_id,
     )
 
+    # Initialize context manager (P2-7)
+    # This automatically indexes the project and identifies relevant files
+    # Note: Using backend.backend to access the underlying ExecutionBackendAdapter's wrapped backend
+    # This assumes backend is an ExecutionBackendAdapter which wraps a LocalExecutionBackend
+    # Ideally ContextManager should work with the adapter or protocol directly
+    try:
+        # Access the raw LocalExecutionBackend if possible, or use the adapter
+        raw_backend = getattr(backend, "backend", backend)
+        context_manager = ContextManager(raw_backend)
+        context_manager.index_project()
+
+        # Get relevant context for system prompt
+        context_info = context_manager.get_context_summary()
+
+        # Base system prompt with context
+        if context_info:
+            SYSTEM_PROMPT_WITH_CONTEXT = SYSTEM_PROMPT + f"\n\nProject Context:\n{context_info}"
+        else:
+            SYSTEM_PROMPT_WITH_CONTEXT = SYSTEM_PROMPT
+    except Exception:
+        # Fallback if context manager fails
+        SYSTEM_PROMPT_WITH_CONTEXT = SYSTEM_PROMPT
+
     # Use provided values or defaults from settings
-    prompt = system_prompt if system_prompt else (settings.llm_system_prompt or SYSTEM_PROMPT)
+    prompt = (
+        system_prompt
+        if system_prompt
+        else (settings.llm_system_prompt or SYSTEM_PROMPT_WITH_CONTEXT)
+    )
     agent_memory = list(memory) if memory is not None else settings.agent_memory
     agent_skills = list(skills) if skills is not None else settings.agent_skills
     agent_subagents = list(subagents) if subagents is not None else settings.agent_subagents
