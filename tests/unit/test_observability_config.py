@@ -59,41 +59,51 @@ class TestMLflowConfiguration:
     def test_setup_mlflow_called_when_mlflow_enabled(self):
         """Test that MLflow setup is called when mlflow_enabled=True.
 
-        This test verifies the function attempts MLflow setup when enabled.
-        Since MLflow is imported inside the function, we test that the
-        graceful degradation path is taken when MLflow is not installed.
+        Mocks the MLflow imports so setup completes without network calls.
         """
         from server.app.observability.mlflow_tracing import setup_mlflow_tracing
 
-        # Create mock settings with mlflow_enabled=True
         mock_settings = MagicMock()
         mock_settings.mlflow_enabled = True
         mock_settings.mlflow_tracking_uri = "http://localhost:5000"
         mock_settings.mlflow_experiment_name = "cognition-test"
 
-        # Call setup - should gracefully handle missing MLflow
-        result = setup_mlflow_tracing(mock_settings)
+        with patch("server.app.observability.mlflow_tracing.mlflow", create=True) as mock_mlflow:
+            mock_autolog = MagicMock()
+            with patch.dict(
+                "sys.modules",
+                {"mlflow": mock_mlflow, "mlflow.langchain": MagicMock(autolog=mock_autolog)},
+            ):
+                # Re-import to pick up mocked modules
+                import importlib
+                import server.app.observability.mlflow_tracing as mod
 
-        # If we get here without exception, the test passes
-        # The function should either succeed (if MLflow installed)
-        # or gracefully degrade (if MLflow not installed)
-        assert result is None
+                importlib.reload(mod)
+                result = mod.setup_mlflow_tracing(mock_settings)
+
+                assert result is None
+                mock_mlflow.set_tracking_uri.assert_called_once_with("http://localhost:5000")
+                mock_mlflow.set_experiment.assert_called_once_with("cognition-test")
+                mock_autolog.assert_called_once_with(log_traces=True, run_tracer_inline=True)
 
     def test_setup_mlflow_graceful_degradation_when_package_missing(self):
         """Test graceful degradation when MLflow package is not installed."""
         from server.app.observability.mlflow_tracing import setup_mlflow_tracing
 
-        # Create mock settings with mlflow_enabled=True
         mock_settings = MagicMock()
         mock_settings.mlflow_enabled = True
         mock_settings.mlflow_tracking_uri = None
         mock_settings.mlflow_experiment_name = "test"
 
-        # Call setup - should not raise exception even if MLflow not installed
-        result = setup_mlflow_tracing(mock_settings)
+        # Force ImportError by removing mlflow from sys.modules
+        with patch.dict("sys.modules", {"mlflow": None, "mlflow.langchain": None}):
+            import importlib
+            import server.app.observability.mlflow_tracing as mod
 
-        # If we get here without exception, the test passes
-        assert result is None
+            importlib.reload(mod)
+            result = mod.setup_mlflow_tracing(mock_settings)
+
+            assert result is None
 
 
 class TestSettingsValidation:
