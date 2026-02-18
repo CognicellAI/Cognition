@@ -99,6 +99,16 @@ class Settings(BaseSettings):
         alias="COGNITION_PERSISTENCE_URI",
     )
 
+    # Session scoping settings
+    scoping_enabled: bool = Field(
+        default=False,
+        alias="COGNITION_SCOPING_ENABLED",
+    )
+    scope_keys: list[str] = Field(
+        default=["user"],
+        alias="COGNITION_SCOPE_KEYS",
+    )
+
     # Test settings
     test_llm_mode: Literal["mock", "openai", "ollama"] = Field(
         default="mock",

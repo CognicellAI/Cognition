@@ -24,6 +24,7 @@ from server.app.api.models import (
 )
 from server.app.api.sse import SSEStream, EventBuilder
 from server.app.session_store import get_session_store
+from server.app.message_store import get_message_store
 from server.app.settings import Settings, get_settings
 from server.app.llm.deep_agent_service import (
     get_session_agent_manager,
@@ -41,10 +42,6 @@ from server.app.llm.deep_agent_service import (
 )
 
 router = APIRouter(prefix="/sessions/{session_id}/messages", tags=["messages"])
-
-
-# In-memory message store (replace with database in production)
-_messages: dict[str, list[MessageResponse]] = {}
 
 
 def get_settings_dependency() -> Settings:
@@ -204,28 +201,28 @@ async def send_message(
         session.thread_id = thread_id
 
     # Create user message
-    message_id = str(uuid.uuid4())
-    user_message = MessageResponse(
-        id=message_id,
+    message_store = get_message_store(workspace_path)
+    user_message = await message_store.create_message(
+        message_id=str(uuid.uuid4()),
         session_id=session_id,
         role="user",
         content=request.content,
         parent_id=request.parent_id,
-        created_at=datetime.utcnow(),
     )
 
-    # Store message
-    if session_id not in _messages:
-        _messages[session_id] = []
-    _messages[session_id].append(user_message)
-
     # Update session message count in store
-    await store.update_message_count(session_id, len(_messages[session_id]))
+    messages_for_session, _ = await message_store.get_messages_by_session(
+        session_id, limit=-1, offset=0
+    )
+    await store.update_message_count(session_id, len(messages_for_session))
 
     # Create SSE stream with DeepAgents (multi-step support)
     event_stream = agent_event_stream(
         session_id, thread_id, request.content, workspace_path, settings, agent_manager
     )
+
+    # TODO: P2-5 will add assistant message persistence here
+    # For now, only user messages are persisted
 
     return SSEStream.create_response(event_stream, http_request)
 
@@ -254,12 +251,23 @@ async def list_messages(
             detail=f"Session not found: {session_id}",
         )
 
-    # Get messages for this session
-    messages = _messages.get(session_id, [])
+    # Get messages for this session from database
+    message_store = get_message_store(workspace_path)
+    messages, total = await message_store.get_messages_by_session(session_id, limit, offset)
 
-    # Apply pagination
-    total = len(messages)
-    paginated = messages[offset : offset + limit]
+    # Convert domain models to API models
+    paginated = [
+        MessageResponse(
+            id=m.id,
+            session_id=m.session_id,
+            role=m.role,
+            content=m.content,
+            parent_id=m.parent_id,
+            created_at=m.created_at,
+        )
+        for m in messages
+    ]
+
     has_more = offset + limit < total
 
     return MessageList(
@@ -296,10 +304,18 @@ async def get_message(
         )
 
     # Find message
-    messages = _messages.get(session_id, [])
-    for message in messages:
-        if message.id == message_id:
-            return message
+    message_store = get_message_store(workspace_path)
+    message = await message_store.get_message(message_id)
+
+    if message and message.session_id == session_id:
+        return MessageResponse(
+            id=message.id,
+            session_id=message.session_id,
+            role=message.role,
+            content=message.content,
+            parent_id=message.parent_id,
+            created_at=message.created_at,
+        )
 
     raise HTTPException(
         status_code=status.HTTP_404_NOT_FOUND,

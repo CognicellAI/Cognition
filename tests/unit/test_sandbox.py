@@ -40,9 +40,9 @@ class TestLocalSandbox:
 
     def test_create_and_list_file(self, sandbox):
         """Test creating and listing files."""
-        # Create a file
-        result = sandbox.execute("echo 'test content' > test.txt")
-        assert result.exit_code == 0
+        # Create a file using Python (shell redirects don't work without shell=True)
+        test_file = Path(sandbox.root_dir) / "test.txt"
+        test_file.write_text("test content")
 
         # List files
         result = sandbox.execute("ls -la")
@@ -59,3 +59,20 @@ class TestLocalSandbox:
         result = sandbox.execute("cat test.txt")
         assert result.exit_code == 0
         assert "Hello from sandbox" in result.output
+
+    def test_shell_injection_prevented(self, sandbox):
+        """Test that shell metacharacters are not interpreted (security)."""
+        # Create a file with a name that looks like a command injection attempt
+        # With shell=True, this would execute 'id' command
+        # With shell=False, this creates a file literally named ";id"
+        result = sandbox.execute(["echo", ";id"])
+        assert result.exit_code == 0
+        # Output should be the literal string ";id", not the result of id command
+        assert ";id" in result.output
+        assert "uid=" not in result.output  # Would appear if 'id' command ran
+
+    def test_command_as_list(self, sandbox):
+        """Test passing command as argument list (recommended for security)."""
+        result = sandbox.execute(["echo", "hello world"])
+        assert result.exit_code == 0
+        assert "hello world" in result.output

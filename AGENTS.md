@@ -122,3 +122,216 @@ Cognition is designed to be highly pluggable using native `deepagents` extension
 - **Path Traversal**: Validate all file paths against workspace root.
 - **Command Execution**: No shell=True. Use argument lists.
 - **Secrets**: Never commit keys. Use `.env` and `Settings` class.
+
+
+# Hard Requirements
+
+
+## Mission
+
+Cognition is a **batteries-included AI backend**.
+
+An agent definition (tools, prompt, skills, middleware) must be sufficient to generate:
+
+* API
+* Streaming
+* Persistence
+* Sandboxing
+* Observability
+* Multi-user scoping
+* Evaluation
+
+The FIRST-PRINCIPLE-EVALUTION.md document  is the architectural source of truth.
+
+All development must move the system toward that architecture.
+
+---
+
+# 0. Mandatory Roadmap Governance
+
+## ROADMAP.md Is Required
+
+A `ROADMAP.md` file must exist at the repository root.
+
+It must:
+
+1. Reflect the priority structure defined in the First Principles Evaluation:
+
+   * P0 (Table Stakes)
+   * P1 (Production-Ready)
+   * P2 (Robustness)
+   * P3 (Full Vision)
+
+2. Break each priority into:
+
+   * Concrete tasks
+   * Layer assignment (1–7)
+   * Acceptance criteria
+   * Estimated effort
+   * Dependencies
+
+3. Be updated before:
+
+   * Starting major work
+   * Merging architectural changes
+   * Changing priority direction
+
+---
+
+## Agents Must Adhere to ROADMAP.md
+
+Agents are not permitted to:
+
+* Implement large features not listed in ROADMAP.md
+* Skip P0 work to build P2/P3 features
+* Add architectural scope creep without roadmap update
+* Introduce new subsystems without a roadmap entry
+
+If a change is not in ROADMAP.md:
+
+* The agent must first update ROADMAP.md
+* Justify priority placement
+* Then proceed
+
+Roadmap discipline is mandatory.
+
+---
+
+## Roadmap Precedence Rules
+
+1. P0 blocks P1
+2. P1 blocks P2
+3. P2 blocks P3
+4. Security fixes override all priorities
+5. Architecture corrections override feature work
+
+No “cool feature” work is allowed while:
+
+* Messages are in-memory
+* `shell=True` exists
+* Multi-user isolation is missing
+* Abort is a stub
+* Postgres silently falls back to SQLite
+
+These are roadmap violations.
+
+---
+
+# 1. Architectural Alignment Rules
+
+All work MUST respect the 7-layer architecture:
+
+```
+Layer 7: Observability
+Layer 6: API & Streaming
+Layer 5: LLM Provider
+Layer 4: Agent Runtime
+Layer 3: Execution
+Layer 2: Persistence
+Layer 1: Foundation
+```
+
+Dependency direction is strictly top-down.
+
+No lateral or upward imports.
+
+---
+
+# 2. Definition of Done (DoD)
+
+A feature is not complete unless:
+
+* It is listed in ROADMAP.md
+* It has a clear layer assignment
+* It has observability
+* It respects persistence boundaries
+* It respects multi-user isolation
+* It has tests
+* It does not introduce architectural drift
+
+---
+
+# 3. Roadmap Priority Enforcement
+
+## P0 – Table Stakes (Must Complete First)
+
+* Message persistence
+* Remove `shell=True`
+* Multi-user harness
+* Wire rate limiter
+* Functional abort
+* Enable MLflow autolog
+
+No new features beyond bug fixes are allowed until P0 is complete.
+
+---
+
+## P1 – Production Ready
+
+* Unified StorageBackend
+* Postgres support
+* Docker sandbox backend
+* Declarative AgentDefinition
+* AgentRuntime protocol
+* Alembic migrations
+
+---
+
+## P2 – Robustness
+
+* SSE reconnection
+* Circuit breaker + retries
+* Evaluation pipeline foundation
+* Proper token accounting
+
+---
+
+## P3 – Full Vision
+
+* MLflow evaluation workflows - see MLFLOW-INTEROPERABILITY.md
+* Prompt registry
+* Cloud execution backends
+* Human feedback loop
+
+---
+
+# 4. Enforcement Protocol
+
+Before merging any PR, agents must verify:
+
+* Is this task in ROADMAP.md?
+* Is it the correct priority tier?
+* Does it respect layer boundaries?
+* Does it move us toward the architecture in ?
+
+If any answer is “no,” the PR must be revised.
+
+---
+
+# 5. Architectural North Star
+
+Cognition must eventually allow:
+
+```python
+agent = AgentDefinition(
+    tools=[...],
+    skills=[...],
+    system_prompt="...",
+)
+
+app = Cognition(agent)
+app.run()
+```
+
+And automatically provide:
+
+* REST API
+* SSE streaming
+* Persistence
+* Sandbox isolation
+* Observability
+* Multi-user scoping
+* Evaluation pipeline
+
+The roadmap exists to force convergence toward that state.
+

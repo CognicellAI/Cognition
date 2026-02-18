@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+import shlex
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Union
 
 
 @dataclass
@@ -40,16 +41,31 @@ class LocalSandbox:
         if not self.root_dir.exists():
             self.root_dir.mkdir(parents=True, exist_ok=True)
 
+    def _parse_command(self, command: Union[str, list[str]]) -> list[str]:
+        """Parse command into argument list.
+
+        Args:
+            command: Either a string (will be parsed with shlex) or a list of arguments.
+
+        Returns:
+            List of command arguments.
+        """
+        if isinstance(command, str):
+            return shlex.split(command)
+        return command
+
     def execute(
         self,
-        command: str,
+        command: Union[str, list[str]],
         timeout: Optional[float] = 300.0,
         env: Optional[dict[str, str]] = None,
     ) -> ExecuteResult:
         """Execute a command in the sandbox.
 
         Args:
-            command: The shell command to execute.
+            command: The command to execute. Can be:
+                    - A string (parsed with shlex.split)
+                    - A list of arguments (recommended for security)
             timeout: Maximum time to wait for command completion (seconds).
                     Default is 300 seconds (5 minutes).
             env: Optional environment variables to set for the command.
@@ -61,9 +77,12 @@ class LocalSandbox:
             subprocess.TimeoutExpired: If the command times out.
         """
         try:
+            # Parse command into argument list (no shell=True for security)
+            cmd_args = self._parse_command(command)
+
             result = subprocess.run(
-                command,
-                shell=True,
+                cmd_args,
+                shell=False,  # Security: no shell execution, prevents injection
                 capture_output=True,
                 text=True,
                 cwd=self.root_dir,

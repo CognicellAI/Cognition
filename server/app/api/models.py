@@ -94,7 +94,7 @@ class MessageResponse(BaseModel):
     role: Literal["user", "assistant", "system"] = Field(..., description="Message role")
     content: Optional[str] = Field(None, description="Message content (if complete)")
     parent_id: Optional[str] = Field(None, description="Parent message ID")
-    model: Optional[str] = Field(None, description="Model used for this message")
+    model: Optional[str] = Field(default=None, description="Model used for this message")
     created_at: datetime = Field(..., description="Message creation timestamp")
 
 
