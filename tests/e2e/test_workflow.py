@@ -178,8 +178,8 @@ class TestMessageWorkflow:
 
     async def test_list_messages_after_send(self, server, session):
         """Test listing messages after sending."""
-        async with httpx.AsyncClient() as client:
-            # Send a message
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            # Send a message via SSE stream
             async with client.stream(
                 "POST",
                 f"{server}/sessions/{session}/messages",

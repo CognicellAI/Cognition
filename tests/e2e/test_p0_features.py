@@ -243,7 +243,7 @@ class TestP0EndToEnd:
 
             # Delete
             del_resp = await client.delete(f"{server}/sessions/{session_id}")
-            assert del_resp.status_code == 200
+            assert del_resp.status_code == 204
 
             # Verify deleted
             get_resp2 = await client.get(f"{server}/sessions/{session_id}")
