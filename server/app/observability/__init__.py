@@ -110,6 +110,7 @@ def setup_tracing(
     service_name: str = "cognition",
     endpoint: str | None = None,
     app: Any | None = None,
+    enabled: bool = True,
 ) -> None:
     """Initialize OpenTelemetry tracing.
 
@@ -117,9 +118,15 @@ def setup_tracing(
         service_name: Name of the service for trace identification
         endpoint: OTLP endpoint URL (e.g., "http://localhost:4317")
         app: FastAPI application instance to instrument
+        enabled: Whether to enable tracing (defaults to True)
     """
+    logger = structlog.get_logger()
+
+    if not enabled:
+        logger.debug("OpenTelemetry tracing disabled by settings")
+        return
+
     if not OPENTELEMETRY_AVAILABLE or Resource is None or TracerProvider is None:
-        logger = structlog.get_logger()
         logger.debug("OpenTelemetry not available, skipping tracing setup")
         return
 
@@ -175,16 +182,23 @@ def setup_logging(log_level: str = "info", json_format: bool = False) -> None:
     )
 
 
-def setup_metrics(port: int = 9090) -> None:
+def setup_metrics(port: int = 9090, enabled: bool = True) -> None:
     """Start Prometheus metrics server.
 
     Args:
         port: Port to expose metrics on
+        enabled: Whether to enable metrics server (defaults to True)
     """
+    logger = structlog.get_logger()
+
+    if not enabled:
+        logger.debug("Prometheus metrics disabled by settings")
+        return
+
     if not PROMETHEUS_AVAILABLE or start_http_server is None:
-        logger = structlog.get_logger()
         logger.debug("Prometheus not available, skipping metrics server")
         return
+
     start_http_server(port)
 
 

@@ -168,7 +168,7 @@ async def send_message(
     settings: Settings = Depends(get_settings_dependency),
     agent_manager: SessionAgentManager = Depends(get_agent_manager),
     rate_limiter: RateLimiter = Depends(lambda: get_rate_limiter()),
-    scope: SessionScope = Depends(lambda: create_scope_dependency(get_settings())),
+    scope: SessionScope = Depends(create_scope_dependency(get_settings())),
 ):
     """Send a message to the agent.
 
@@ -201,6 +201,13 @@ async def send_message(
     session = await store.get_session(session_id)
 
     if session is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Session not found: {session_id}",
+        )
+
+    # Enforce scoping - check if session scope matches current scope
+    if not scope.is_empty() and not scope.matches(session.scopes):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Session not found: {session_id}",
@@ -248,6 +255,7 @@ async def send_message(
 async def list_messages(
     session_id: str,
     settings: Settings = Depends(get_settings_dependency),
+    scope: SessionScope = Depends(create_scope_dependency(get_settings())),
     limit: int = 50,
     offset: int = 0,
 ) -> MessageList:
@@ -257,9 +265,17 @@ async def list_messages(
     """
     workspace_path = str(settings.workspace_path)
 
-    # Check if session exists
+    # Check if session exists and scope matches
     store = get_session_store(workspace_path)
-    if await store.get_session(session_id) is None:
+    session = await store.get_session(session_id)
+    if session is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Session not found: {session_id}",
+        )
+
+    # Enforce scoping - check if session scope matches current scope
+    if not scope.is_empty() and not scope.matches(session.scopes):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Session not found: {session_id}",
@@ -302,6 +318,7 @@ async def get_message(
     session_id: str,
     message_id: str,
     settings: Settings = Depends(get_settings_dependency),
+    scope: SessionScope = Depends(create_scope_dependency(get_settings())),
 ) -> MessageResponse:
     """Get a specific message.
 
@@ -309,9 +326,17 @@ async def get_message(
     """
     workspace_path = str(settings.workspace_path)
 
-    # Check if session exists
+    # Check if session exists and scope matches
     store = get_session_store(workspace_path)
-    if await store.get_session(session_id) is None:
+    session = await store.get_session(session_id)
+    if session is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Session not found: {session_id}",
+        )
+
+    # Enforce scoping - check if session scope matches current scope
+    if not scope.is_empty() and not scope.matches(session.scopes):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Session not found: {session_id}",

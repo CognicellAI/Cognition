@@ -46,6 +46,7 @@ class Session:
     created_at: str
     updated_at: str
     message_count: int = 0
+    scopes: dict[str, str] = field(default_factory=dict)
 
     def to_dict(self) -> dict:
         """Convert to dictionary for storage."""
@@ -65,6 +66,7 @@ class Session:
             "created_at": self.created_at,
             "updated_at": self.updated_at,
             "message_count": self.message_count,
+            "scopes": self.scopes,
         }
 
     @classmethod
@@ -87,6 +89,7 @@ class Session:
             created_at=data["created_at"],
             updated_at=data["updated_at"],
             message_count=data.get("message_count", 0),
+            scopes=data.get("scopes", {}),
         )
 
 

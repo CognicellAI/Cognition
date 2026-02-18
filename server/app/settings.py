@@ -80,8 +80,23 @@ class Settings(BaseSettings):
     rate_limit_burst: int = Field(default=10, alias="COGNITION_RATE_LIMIT_BURST")
 
     # Observability settings
+    otel_enabled: bool = Field(default=True, alias="COGNITION_OTEL_ENABLED")
     otel_endpoint: Optional[str] = Field(default=None, alias="COGNITION_OTEL_ENDPOINT")
     metrics_port: int = Field(default=9090, alias="COGNITION_METRICS_PORT")
+
+    # MLflow settings
+    mlflow_enabled: bool = Field(default=False, alias="COGNITION_MLFLOW_ENABLED")
+    mlflow_tracking_uri: Optional[str] = Field(default=None, alias="COGNITION_MLFLOW_TRACKING_URI")
+    mlflow_experiment_name: Optional[str] = Field(
+        default="cognition", alias="COGNITION_MLFLOW_EXPERIMENT_NAME"
+    )
+
+    # Prompt Registry settings
+    prompt_source: Literal["local", "mlflow"] = Field(
+        default="local", alias="COGNITION_PROMPT_SOURCE"
+    )
+    prompt_fallback_to_local: bool = Field(default=True, alias="COGNITION_PROMPT_FALLBACK_TO_LOCAL")
+    prompts_dir: Optional[str] = Field(default=".cognition/prompts", alias="COGNITION_PROMPTS_DIR")
 
     # Agent behavior
     agent_memory: list[str] = Field(default=["AGENTS.md"], alias="COGNITION_AGENT_MEMORY")

@@ -176,6 +176,51 @@ class ReadyStatus(BaseModel):
 
 
 # ============================================================================
+# Feedback Models
+# ============================================================================
+
+
+class FeedbackCreate(BaseModel):
+    """Request to submit feedback for a session."""
+
+    feedback_type: str = Field(
+        ..., description="Type of feedback: thumbs_up, thumbs_down, rating, correction, custom"
+    )
+    value: float = Field(
+        ...,
+        ge=0.0,
+        le=1.0,
+        description="Numeric value (e.g., 1.0 for thumbs up, 0.0 for thumbs down)",
+    )
+    trace_id: Optional[str] = Field(
+        None, description="Optional MLflow trace ID to attach feedback to"
+    )
+    rationale: Optional[str] = Field(
+        None, max_length=1000, description="Explanation for the feedback"
+    )
+    metadata: Optional[dict[str, Any]] = Field(default=None, description="Additional metadata")
+
+
+class FeedbackResponse(BaseModel):
+    """Feedback submission response."""
+
+    id: str = Field(..., description="Unique feedback ID")
+    session_id: str = Field(..., description="Associated session ID")
+    feedback_type: str = Field(..., description="Type of feedback")
+    value: float = Field(..., description="Feedback value")
+    created_at: str = Field(..., description="Timestamp when feedback was created")
+
+
+class EvaluationResponse(BaseModel):
+    """Session evaluation response."""
+
+    session_id: str = Field(..., description="Session ID")
+    average_score: float = Field(..., description="Average score across all categories")
+    scores: list[dict[str, Any]] = Field(default_factory=list, description="Individual scores")
+    feedback_count: int = Field(0, description="Number of feedback entries")
+
+
+# ============================================================================
 # Error Models
 # ============================================================================
 

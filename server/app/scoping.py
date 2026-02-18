@@ -38,7 +38,9 @@ class SessionScope:
     def matches(self, other_scopes: dict[str, str]) -> bool:
         """Check if this scope matches another scope dictionary.
 
-        Returns True if all keys in this scope match the other scope.
+        Returns True if all keys in this scope are present in other_scopes
+        with matching values. This is used to check if a filter scope
+        matches a session's scopes (filter is a subset of session scopes).
         """
         for key, value in self._scopes.items():
             if other_scopes.get(key) != value:

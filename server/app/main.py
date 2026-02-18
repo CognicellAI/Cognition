@@ -12,6 +12,7 @@ from fastapi.responses import JSONResponse
 from server.app.api.models import ErrorResponse, HealthStatus, ReadyStatus
 from server.app.api.routes import config, messages, sessions
 from server.app.middleware import ObservabilityMiddleware, SecurityHeadersMiddleware
+from server.app.mlflow_tracing import setup_mlflow_tracing
 from server.app.observability import setup_metrics, setup_tracing
 from server.app.rate_limiter import get_rate_limiter
 from server.app.session_store import get_session_store
@@ -25,8 +26,16 @@ async def lifespan(app: FastAPI):
     """Application lifespan context manager."""
     logger.info("Starting Cognition server")
     settings = get_settings()
-    setup_tracing(endpoint=settings.otel_endpoint, app=app)
-    setup_metrics(port=settings.metrics_port)
+    setup_tracing(
+        endpoint=settings.otel_endpoint,
+        app=app,
+        enabled=settings.otel_enabled,
+    )
+    setup_metrics(
+        port=settings.metrics_port,
+        enabled=settings.otel_enabled,
+    )
+    setup_mlflow_tracing(settings)
     rate_limiter = get_rate_limiter()
     await rate_limiter.start()
     logger.info(
