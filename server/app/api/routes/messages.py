@@ -26,6 +26,8 @@ from server.app.api.sse import SSEStream, EventBuilder
 from server.app.session_store import get_session_store
 from server.app.message_store import get_message_store
 from server.app.settings import Settings, get_settings
+from server.app.rate_limiter import get_rate_limiter, RateLimiter
+from server.app.scoping import SessionScope, create_scope_dependency
 from server.app.llm.deep_agent_service import (
     get_session_agent_manager,
     DeepAgentStreamingService,
@@ -165,6 +167,8 @@ async def send_message(
     http_request: Request,
     settings: Settings = Depends(get_settings_dependency),
     agent_manager: SessionAgentManager = Depends(get_agent_manager),
+    rate_limiter: RateLimiter = Depends(lambda: get_rate_limiter()),
+    scope: SessionScope = Depends(lambda: create_scope_dependency(get_settings())),
 ):
     """Send a message to the agent.
 
@@ -181,6 +185,16 @@ async def send_message(
     - `done`: Stream complete
     """
     workspace_path = str(settings.workspace_path)
+
+    # Check rate limit
+    # Use scope-based key if scoping is enabled, otherwise use IP
+    if settings.scoping_enabled and not scope.is_empty():
+        rate_limit_key = f"session:{session_id}:scope:{scope.get_all()}"
+    else:
+        client_ip = http_request.client.host if http_request.client else "unknown"
+        rate_limit_key = f"session:{session_id}:ip:{client_ip}"
+
+    await rate_limiter.check_rate_limit(rate_limit_key)
 
     # Check if session exists using the store
     store = get_session_store(workspace_path)
