@@ -1,634 +1,407 @@
-# Cognition Production MVP Roadmap
+# Cognition Roadmap
 
-This roadmap outlines the phases required to bring Cognition from its current prototype state to a production-ready Minimum Viable Product (MVP). Each phase builds upon the previous, with clear deliverables and success criteria.
+This roadmap is derived from [FIRST-PRINCIPLE-EVALUTION.md](./FIRST-PRINCIPLE-EVALUTION.md), the architectural source of truth for Cognition. All development must move the system toward the 7-layer architecture defined in that document.
 
----
+**Governance:** This file must be updated before starting major work, merging architectural changes, or changing priority direction. See [AGENTS.md](./AGENTS.md) for enforcement rules.
 
-## Phase 1: Core Foundation ✅
-
-**Status**: Complete
-
-### Deliverables
-- ✅ Client-server architecture with WebSocket streaming
-- ✅ In-process agent execution via LocalSandbox
-- ✅ Basic message protocol (JSON over WebSocket)
-- ✅ Simple Textual TUI for interaction
-- ✅ Session management with automatic cleanup
-- ✅ Support for multiple LLM providers (OpenAI, Bedrock, OpenAI-compatible)
-- ✅ Project/workspace isolation
-
-### Success Criteria
-- Server starts and accepts WebSocket connections
-- TUI client can connect, create projects, and chat with agent
-- Agent can execute bash commands and file operations
-- Messages stream in real-time from agent to client
-- Sessions persist across disconnections (via checkpointing)
+**Priority rules:**
+- P0 blocks P1. P1 blocks P2. P2 blocks P3.
+- Security fixes override all priorities.
+- Architecture corrections override feature work.
 
 ---
 
-## Phase 2: Production Hardening ✅
+## Current State
 
-**Status**: Complete
+| Priority | Tasks | Complete | Status |
+|----------|-------|----------|--------|
+| **P0** (Table Stakes) | 6 | 6/6 | **100%** |
+| **P1** (Production Ready) | 6 | 6/6 | **100%** |
+| **P2** (Robustness) | 7 | 5/7 | **~85%** |
+| **P3** (Full Vision) | 5 | 0/5 | **~30% partial** |
 
-**Focus**: Reliability, observability, and robustness
-
-### Deliverables
-
-#### 2.1 Error Handling & Resilience ✅
-- ✅ Comprehensive error handling in all async paths
-- ✅ Custom exception hierarchy (`CognitionError`, `SessionError`, `LLMError`, etc.)
-- ✅ Graceful degradation when LLM API fails
-- ✅ Automatic retry logic with exponential backoff (3 attempts)
-- ✅ Circuit breaker pattern for external API calls
-- ✅ Structured error responses with error codes
-
-#### 2.2 Observability ✅
-- ✅ Structured logging (structlog) throughout codebase
-- ✅ OpenTelemetry tracing for all major operations (with graceful fallback)
-- ✅ Metrics collection (Prometheus-style)
-  - LLM API latency (`llm_call_duration_seconds`)
-  - Session count (`sessions_total`)
-  - Tool call count (`tool_calls_total`)
-  - Token usage per session
-- ✅ Request/response logging with PII redaction
-
-#### 2.3 Security ✅
-- ✅ Input validation and sanitization
-- ✅ Path traversal protection
-- ✅ API key management with `SecretStr`
-- ✅ Rate limiting per client (token bucket)
-- ✅ Security headers middleware
-
-#### 2.4 Testing Infrastructure ✅
-- ✅ Unit tests for all major components
-- ✅ Integration tests for agent execution
-- ✅ E2E tests for full user flows
-- ✅ Test fixtures and mocks
-
-### Success Criteria
-- 95%+ test coverage
-- Zero unhandled exceptions in normal operation
-- All operations are observable and debuggable
-- Security audit passes
-- Circuit breaker opens within 3 failures, recovers after 60s
+**Unit tests:** 223 passed, 2 skipped, 0 warnings (except 1 collection warning)
+**Live tests:** 40/41 pass across 9 phases (sole failure: MLflow async tracing — upstream bug)
 
 ---
 
-## Phase 3: Dynamic Model Management ✅
+## P0 — Table Stakes ✅ 100% Complete
 
-**Status**: Complete
+All table stakes resolved. No blockers.
 
-**Focus**: Multi-LLM support with model registry, usage tracking, and configuration
+### P0-1: Message Persistence ✅
 
-### Deliverables
+| Field | Value |
+|-------|-------|
+| **Layer** | 2 (Persistence) |
+| **File** | `server/app/message_store.py` |
 
-#### 3.1 Model Registry (models.dev) ✅
-- ✅ Integration with models.dev API
-- ✅ Local caching of model metadata (1-hour TTL)
-- ✅ Search and filter by provider, capability, cost
-- ✅ Real-time pricing data
-- ✅ 88+ providers supported
+SQLite-backed message storage with full CRUD, pagination, and session scoping. 8 unit tests.
 
-#### 3.2 Provider Fallback Chain ✅
-- ✅ Ordered provider fallback (OpenAI → Bedrock → mock)
-- ✅ Per-provider configuration (timeout, retry, etc.)
-- ✅ Seamless switching on provider failure
-- ✅ Health checks per provider
+### P0-2: Remove `shell=True` ✅
 
-#### 3.3 Token Usage Tracking ✅
-- ✅ Per-session token counting
-- ✅ Cost estimation with real models.dev pricing
-- ✅ Usage analytics
-- ✅ Cost tracking per project
+| Field | Value |
+|-------|-------|
+| **Layer** | 3 (Execution) |
+| **File** | `server/app/execution/sandbox.py` |
 
-#### 3.4 Per-Session Model Configuration ✅
-- ✅ Dynamic model switching mid-session
-- ✅ Temperature, max_tokens customization
-- ✅ System prompt per-session
-- ✅ Configuration merging semantics
+Commands parsed with `shlex.split()`. Shell metacharacters are not interpreted.
 
-#### 3.5 Context Window Management ✅
-- ✅ Token estimation (char-based)
-- ✅ Context budget computation
-- ✅ Smart message truncation
-- ✅ Overflow protection
+### P0-3: Session Scoping Harness ✅
 
-### Protocol Extensions ✅
+| Field | Value |
+|-------|-------|
+| **Layer** | 6 (API & Streaming) |
+| **File** | `server/app/api/scoping.py` |
 
-| Direction | Type | Purpose |
-|---|---|---|
-| Client → Server | `configure_session` | Switch provider/model/temperature for a session |
-| Client → Server | `init_agents_md` | Create AGENTS.md in project workspace |
-| Server → Client | `session_configured` | Confirms session config update |
-| Server → Client | `agents_md_created` | Confirms AGENTS.md creation |
-| Server → Client | `usage_update` | Token usage + cost after each turn |
+Generic composable scoping via `X-Cognition-Scope-{Key}` headers. Multi-dimensional support. Fail-closed when enabled. 19 unit tests.
 
-### New Modules
+### P0-4: Wire Rate Limiter ✅
 
-| Module | Lines | Purpose |
-|---|---|---|
-| `server/app/llm/model_registry.py` | ~330 | models.dev API client + cache |
-| `server/app/llm/usage_tracker.py` | ~260 | Token/cost tracking per session |
-| `server/app/llm/provider_fallback.py` | ~230 | Ordered provider fallback chain |
-| `server/app/llm/model_config.py` | ~180 | Per-session model configuration |
-| `server/app/llm/context_window.py` | ~280 | Token counting + message truncation |
+| Field | Value |
+|-------|-------|
+| **Layer** | 6 (API & Streaming) |
+| **File** | `server/app/rate_limiter.py` |
 
-### Tests (66 new tests)
+Token bucket rate limiter applied to message routes. Scope-aware keys. 429 responses.
 
-| Test File | Tests | Coverage |
-|---|---|---|
-| `test_model_registry.py` | 27 | Registry, providers, search, filters, cache |
-| `test_llm_phase3.py` | 39 | Context window, model config, usage tracker |
+### P0-5: Functional Abort ✅
 
-### Success Criteria ✅
-- ✅ Seamless switching between providers via protocol message
-- ✅ Token usage tracking with per-event cost estimation
-- ✅ Context window management prevents overflow
-- ✅ Cost estimates use real models.dev pricing data
+| Field | Value |
+|-------|-------|
+| **Layer** | 4 (Agent Runtime) / 6 (API) |
+| **File** | `server/app/api/routes/sessions.py` |
+
+Abort endpoint cancels active streaming task. Session remains usable. 5 unit tests.
+
+### P0-6: Observability Configuration ✅
+
+| Field | Value |
+|-------|-------|
+| **Layer** | 7 (Observability) |
+| **Files** | `server/app/observability/__init__.py`, `server/app/observability/mlflow_tracing.py` |
+
+OTel/MLflow gating via settings toggles. `mlflow.langchain.autolog(run_tracer_inline=True)` for async-compatible tracing. Graceful degradation without packages. 12 unit tests.
+
+**Known issue:** MLflow `autolog()` ContextVar propagation fails in async uvicorn contexts (upstream MLflow bug). OpenTelemetry tracing to Jaeger works correctly as alternative.
 
 ---
 
-## Phase 4: Advanced Agent Capabilities ✅ COMPLETE
+## P1 — Production Ready ✅ 100% Complete
 
-**Status**: Complete (40/40 tests passing)
+### P1-1: Unified StorageBackend Protocol ✅
 
-**Focus**: Making the agent more capable and context-aware
+| Field | Value |
+|-------|-------|
+| **Layer** | 2 (Persistence) |
+| **Files** | `server/app/storage/backend.py`, `server/app/storage/factory.py`, `server/app/storage/sqlite.py` |
 
-### Deliverables
+`StorageBackend` protocol with sub-interfaces: `SessionStore`, `MessageStore`, `Checkpointer`. SQLite implementation with connection pooling.
 
-#### 4.1 Enhanced Tool System ✅
-- [x] Git integration (status, diff, log, branch)
-- [x] Code search (grep, find)
-- [x] Test runner integration (pytest, jest)
-- [x] Linter integration (ruff, eslint, mypy)
-- [ ] Web search capability (optional/opt-in)
-- [ ] LSP integration for code intelligence
+### P1-2: Postgres Support ✅
 
-**Files**: `server/app/agent/tools.py` (~220 lines)
+| Field | Value |
+|-------|-------|
+| **Layer** | 2 (Persistence) |
+| **File** | `server/app/storage/postgres.py` |
 
-#### 4.2 Context Management ✅
-- [x] Automatic project indexing
-- [x] File relevance scoring
-- [x] Smart file inclusion in context
-- [x] Language detection from file extensions
-- [ ] Long-term memory via StoreBackend
-- [ ] Cross-session learning (preferences, patterns)
+Full PostgreSQL backend with asyncpg. Factory dispatches correctly. Docker Compose includes Postgres service.
 
-**Files**: `server/app/agent/context.py` (~280 lines)
+### P1-3: Alembic Migrations ✅
 
-#### 4.3 Agent Workflows ✅
-- [x] Multi-step planning and execution
-- [x] Task orchestration with dependencies
-- [x] Change tracking (undo/redo)
-- [x] Human-in-the-loop approvals
-- [x] Progress reporting
+| Field | Value |
+|-------|-------|
+| **Layer** | 2 (Persistence) |
+| **File** | `server/alembic/` |
 
-**Files**: `server/app/agent/workflows.py` (~380 lines)
+Async Alembic with CLI commands (`cognition db upgrade`, `cognition db migrate`). Works with SQLite and Postgres.
 
-#### 4.4 Output Formatting ✅
-- [x] Diff visualization (unified and compact)
-- [x] Syntax highlighting for code
-- [x] Tool call formatting
-- [x] Collapsible sections
-- [x] Output truncation for long content
-- [ ] Rich markdown rendering
+### P1-4: Docker Per-Session Sandbox ✅
 
-**Files**: `server/app/agent/output.py` (~300 lines)
+| Field | Value |
+|-------|-------|
+| **Layer** | 3 (Execution) |
+| **Files** | `server/app/execution/backend.py`, `server/app/agent/sandbox_backend.py`, `Dockerfile.sandbox` |
 
-### Implementation Notes
-- Built on LangGraph Deep Agents foundation
-- All features integrated into existing agent architecture
-- 40 comprehensive unit tests covering all components
+**Implementation:**
+- `DockerExecutionBackend` with full container lifecycle (create/exec/stop/remove)
+- `CognitionDockerSandboxBackend` combining `FilesystemBackend` (file ops) + `DockerExecutionBackend` (command execution)
+- Settings-driven dispatch: `create_sandbox_backend()` factory reads `settings.sandbox_backend`
+- `create_cognition_agent()` uses the factory — no hardcoded backend
 
-### Success Criteria ✅
-- Agent can complete multi-step tasks autonomously
-- Context includes only relevant files
-- File changes are previewed before application
-- 90%+ accuracy on file search queries
-- All tests passing (211/213)
+**Security hardening:**
+- `cap_drop=["ALL"]` — all Linux capabilities dropped
+- `security_opt=["no-new-privileges"]` — prevents privilege escalation
+- `read_only=True` — read-only root filesystem
+- `tmpfs` for `/tmp` (64MB) and `/home` (16MB)
+- Configurable resource limits: memory, CPU quota
+- Configurable network isolation
 
----
+**Deployment model:**
+- **Local development (recommended):** Cognition runs on host, Docker sandbox provides real isolation. No socket hacks needed.
+- **Docker Compose (testing/CI):** Uses `COGNITION_SANDBOX_BACKEND=local` — commands execute inside the Cognition container without isolation. Suitable for rapid testing only.
 
-## Phase 5: REST API Migration & OpenAPI Documentation
+**Verified via live testing:** Container spawns in ~800ms cold / ~130ms warm. `whoami` returns `sandbox` user, `pwd` returns `/workspace`.
 
-**Status**: Complete (Server-side only, client deferred)
+### P1-5: Declarative AgentDefinition ✅
 
-**Focus**: Replace WebSocket protocol with REST + Server-Sent Events (SSE) for improved observability, tooling, and documentation
+| Field | Value |
+|-------|-------|
+| **Layer** | 1 (Foundation) / 4 (Agent Runtime) |
+| **File** | `server/app/agent/definition.py` |
 
-### Rationale
+Pydantic V2 `AgentDefinition` model. YAML loading from `.cognition/agent.yaml`. Validation for tools and skills.
 
-The current WebSocket protocol has limitations:
-- ❌ No OpenAPI support (custom binary protocol)
-- ❌ Harder to debug without specialized tools
-- ❌ No auto-generated SDKs
-- ❌ No browser/proxy-friendly observability
+### P1-6: AgentRuntime Protocol ✅
 
-REST + SSE provides:
-- ✅ Full OpenAPI 3.1 documentation
-- ✅ Auto-generated SDKs (TypeScript, Python, etc.)
-- ✅ Standard HTTP debugging tools (curl, Postman, browser devtools)
-- ✅ Native FastAPI support
-- ✅ Load balancer and CDN compatibility
-- ✅ Clear request/response semantics
+| Field | Value |
+|-------|-------|
+| **Layer** | 4 (Agent Runtime) |
+| **File** | `server/app/agent/runtime.py` |
 
-### Architecture
-
-```
-┌─────────────────────────────────────────────────────┐
-│                    Client                           │
-│                                                     │
-│  POST /projects              ────────►              │
-│  POST /sessions              ────────►              │
-│  POST /sessions/:id/messages ────────► SSE stream   │
-│                                 │    (streaming)    │
-│                                 │                   │
-│                                 ▼                   │
-│                        ┌──────────────────────┐     │
-│                        │   Token events       │     │
-│                        │   Tool call events   │     │
-│                        │   Tool result events │     │
-│                        │   Done event         │     │
-│                        └──────────────────────┘     │
-└─────────────────────────────────────────────────────┘
-```
-
-### Deliverables
-
-#### 5.1 REST API Design ✅
-- [x] Define all REST endpoints with Pydantic request/response models
-- [x] Document SSE event types and schemas
-- [x] Design error response format
-- [ ] Define authentication strategy (Phase 6)
-
-**Endpoints:**
-
-| Method | Path | Purpose | Response |
-|--------|------|---------|----------|
-| `POST` | `/projects` | Create new project | `Project` |
-| `GET` | `/projects` | List all projects | `Project[]` |
-| `GET` | `/projects/:id` | Get project details | `Project` |
-| `POST` | `/sessions` | Create session | `Session` |
-| `GET` | `/sessions` | List sessions | `Session[]` |
-| `GET` | `/sessions/:id` | Get session details | `Session` |
-| `DELETE` | `/sessions/:id` | Delete session | `boolean` |
-| `POST` | `/sessions/:id/messages` | Send message | SSE stream |
-| `POST` | `/sessions/:id/abort` | Abort current operation | `boolean` |
-| `PATCH` | `/sessions/:id/config` | Update session config | `Session` |
-| `GET` | `/health` | Health check | `HealthStatus` |
-| `GET` | `/ready` | Readiness probe | `ReadyStatus` |
-
-#### 5.2 Server Implementation ✅
-- [x] Implement all REST endpoints in FastAPI
-- [x] Implement SSE streaming for message responses
-- [x] Add request/response validation
-- [x] Add comprehensive logging
-- [x] Maintain backward compatibility during transition
-
-**Files:**
-- `server/app/api/routes/projects.py`
-- `server/app/api/routes/sessions.py`
-- `server/app/api/routes/messages.py`
-- `server/app/api/sse.py` (SSE utilities)
-- `server/app/api/models.py` (Pydantic schemas)
-
-#### 5.3 OpenAPI Documentation ✅
-- [x] Auto-generated OpenAPI spec at `/docs`
-- [x] Interactive Swagger UI
-- [x] ReDoc alternative documentation
-- [x] Tag and organize endpoints
-- [x] Add request/response examples
-- [x] Document SSE event stream format
-
-**Files:**
-- `server/app/main.py` (FastAPI OpenAPI config)
-- `docs/openapi.yaml` (static export)
-
-#### 5.4 Client Architecture (Deferred) ❌
-- ❌ ~~Update TUI client to use REST + SSE~~
-- ❌ ~~Implement SSE event parsing~~
-- ❌ ~~Handle connection errors and reconnection~~
-
-**Decision**: TUI client approach abandoned - too complex for MVP. Will use simpler CLI + web client approach in Phase 6.
-
-#### 5.5 Configuration Management ✅
-- [x] YAML configuration support (`~/.cognition/config.yaml`)
-- [x] Project-level configuration (`.cognition/config.yaml`)
-- [x] Configuration hierarchy (defaults → global → project → env)
-- [x] Configuration validation
-- [x] Typer CLI for server startup
-
-**Configuration Schema:**
-```yaml
-# ~/.cognition/config.yaml (global)
-server:
-  host: 127.0.0.1
-  port: 8000
-  log_level: info
-
-llm:
-  provider: openai
-  model: gpt-4o
-  temperature: 0.7
-  max_tokens: 4096
-
-agent:
-  system_prompt: "..."
-  max_iterations: 15
-
-workspace:
-  root: ./workspaces
-
-rate_limit:
-  per_minute: 60
-  burst: 10
-```
-
-#### 5.6 Documentation ✅
-- [x] README with quick start
-- [x] Configuration reference
-- [x] Troubleshooting FAQ
-- [x] One example project (Python)
-
-**Deferred to Phase 6:**
-- Interactive tutorial
-- Video walkthroughs
-- Multi-language examples
-- Full API reference (OpenAPI covers this)
-
-### Success Criteria ✅
-- ✅ All endpoints documented in OpenAPI spec
-- ✅ Message streaming works with SSE
-- ✅ SDK can be auto-generated from OpenAPI spec
-- ✅ Configuration loaded from YAML files
-- ✅ Tests updated for new API
-- ❌ ~~TUI client connects via REST + SSE~~ (deferred - will use simpler CLI)
+Cognition-owned `AgentRuntime` protocol wrapping Deep Agents. Methods: `astream_events()`, `ainvoke()`, `get_state()`, `abort()`.
 
 ---
 
-## Phase 6: Production Readiness
+## P2 — Robustness (~85% Complete)
 
-**Status**: Not Started
+### P2-1: SSE Reconnection ✅
 
-**Focus**: Multi-user deployment, authentication, data persistence
+| Field | Value |
+|-------|-------|
+| **Layer** | 6 (API & Streaming) |
+| **File** | `server/app/api/sse.py` |
 
-### Deliverables
+Event IDs (`{counter}-{uuid}`), `retry:` directive (3000ms), keepalive heartbeat (15s), Last-Event-ID resume, circular event buffer. 38 unit tests.
 
-#### 6.1 Containerization ✅
-- [x] Dockerfile for server (multi-stage, security-hardened)
-- [x] Docker Compose setup (Cognition + full observability stack)
-- [x] Volume management for workspaces
-- [x] Environment-specific configurations (.env.example)
-- [x] Health checks in containers
+### P2-2: Circuit Breaker 🔄 PARTIAL (Implemented, Not Wired)
 
-**Observability Stack:**
-- **Grafana** (port 3000) - Pre-built Cognition dashboard
-- **Prometheus** (port 9091) - Metrics collection
-- **Jaeger** (port 16686) - Distributed tracing via OTLP (full agent internals)
-- **Loki + Promtail** - Log aggregation from containers
+| Field | Value |
+|-------|-------|
+| **Layer** | 5 (LLM Provider) |
+| **File** | `server/app/execution/circuit_breaker.py` |
+| **Effort remaining** | ~2 days |
 
-**Quick Start:**
-```bash
-# Start everything
-docker-compose up -d
+**What exists:** Full implementation (447 lines) — `CircuitBreaker` with CLOSED/OPEN/HALF_OPEN state machine, `RetryWithBackoff` with exponential backoff and jitter, `ResilientProviderClient` combining both, global registry with metrics.
 
-# Or use Make
-make docker-up
+**What's missing:** Not wired into `server/app/llm/provider_fallback.py`. The `ProviderFallbackChain` does not import or use `CircuitBreaker`. The `max_retries` field on `ProviderConfig` is still ignored.
 
-# Access:
-# - Cognition API: http://localhost:8000
-# - Grafana: http://localhost:3000 (admin/admin)
-# - Jaeger: http://localhost:16686
-# - Prometheus: http://localhost:9091
-```
+**Remaining work:**
+- [ ] Wire `CircuitBreaker` into `ProviderFallbackChain.get_model()`
+- [ ] Use `max_retries` from `ProviderConfig`
+- [ ] Expose circuit state via `/health` endpoint and Prometheus metrics
 
-#### 6.2 Agent Execution Environment (Sandbox) ✅
-- [x] **Local Sandbox Backend**: Hybrid native/shell isolation
-  - Inherits from `FilesystemBackend` for robust, native file operations
-  - Uses `LocalSandbox` for safe shell command execution via `subprocess`
-  - Safe path resolution (prevents escaping workspace)
-- [x] **Multi-step Task Completion**: Automatic ReAct loop via `deepagents`
-  - Planning with `write_todos`
-  - Tool chaining and error recovery
-  - Automatic state persistence via `thread_id`
-- [x] **Observability Integration**: Full tracing of agent internals via OpenTelemetry auto-instrumentation
+### P2-3: Evaluation Pipeline ✅
 
-**Files:**
-- `server/app/agent/sandbox_backend.py`
-- `server/app/agent/cognition_agent.py`
-- `server/app/llm/deep_agent_service.py`
-- `docs/sandbox/`
+| Field | Value |
+|-------|-------|
+| **Layer** | 7 (Observability) |
+| **File** | `server/app/evaluation/workflows.py` |
 
-#### 6.3 Persistence & Data Management ✅
-- [x] **Pluggable Persistence Layer**: Abstract `PersistenceBackend` interface
-- [x] **SQLite Backend**: `SqliteBackend` using `AsyncSqliteSaver` for agent state
-- [x] **Session Storage Migration**: Consolidated `LocalSessionStore` to SQLite (`.cognition/state.db`)
-- [x] **Resilience**: Chat history and sessions survive server restarts
-- [ ] **Database Migration Tool**: (Deferred until schema stabilizes)
+`EvaluationService` with 3 built-in scorers (ToolEfficiency, SafetyCompliance, ResponseQuality), feedback collection, MLflow metric logging (when enabled), dataset creation from feedback. In-memory feedback storage.
 
-**Files:**
-- `server/app/persistence/`
-- `server/app/session_store.py` (SQLite implementation)
+### P2-4: CORS Middleware ✅
 
-#### 6.4 Client Architecture (CLI)
-- [ ] Lightweight CLI client using `httpx` and `typer`
-- [ ] Interactive chat mode
-- [ ] Session management commands
-- [ ] Output formatting (markdown, syntax highlighting)
+| Field | Value |
+|-------|-------|
+| **Layer** | 6 (API & Streaming) |
+| **File** | `server/app/main.py` (lines 62-70) |
 
-#### 6.5 Multi-User Support (Deferred)
-Moved to future Enterprise/Cloud phase.
-- [ ] User authentication (API keys, JWT)
-- [ ] Workspace isolation between users
-- [ ] Resource quotas per user
-- [ ] Server-initiated events via SSE (`GET /events`)
-- [ ] Background task support
-- [ ] Session sharing and collaboration
-- [ ] Advanced TUI features (themes, keybinds, etc.)
+Settings-driven CORS: `cors_origins`, `cors_methods`, `cors_headers`, `cors_credentials`.
 
-### Success Criteria
-- One-command deployment: `docker-compose up`
-- Supports 10+ users on single instance
-- Automatic SSL certificate management
-- Zero-downtime updates
-- Complete audit trail
+### P2-5: Enrich Message Model ✅
+
+| Field | Value |
+|-------|-------|
+| **Layer** | 1 (Foundation) |
+| **File** | `server/app/models.py` |
+
+`Message` model includes: `tool_calls` (list of `ToolCall`), `tool_call_id`, `token_count`, `model_used`, `metadata`.
+
+### P2-6: ExecutionBackend Protocol ✅
+
+| Field | Value |
+|-------|-------|
+| **Layer** | 3 (Execution) |
+| **File** | `server/app/execution/backend.py` |
+
+`ExecutionBackend` runtime-checkable Protocol with `execute()`, `read_file()`, `write_file()`, `list_files()`. Local and Docker implementations. `ExecutionBackendAdapter` bridges to `deepagents.SandboxBackendProtocol`. Factory dispatches on config.
+
+### P2-7: Integrate ContextManager ✅
+
+| Field | Value |
+|-------|-------|
+| **Layer** | 4 (Agent Runtime) |
+| **File** | `server/app/agent/context.py` |
+
+`ContextManager` wired into `cognition_agent.py`. Project indexing, file relevance scoring, context pruning.
 
 ---
 
-## Phase 7: Enterprise & Scale (Post-MVP)
+## P3 — Full Vision (~30% Partial)
 
-**Status**: Not Started
+### P3-1: MLflow Evaluation Workflows 🔄 PARTIAL (40%)
 
-**Focus**: Advanced features for larger teams and distributed systems
+| Field | Value |
+|-------|-------|
+| **Layer** | 7 (Observability) |
+| **File** | `server/app/evaluation/workflows.py` |
+| **Effort remaining** | ~2 weeks |
 
-### Deliverables
+**What exists:**
+- ✅ `SessionEvaluation` model with feedback, scores, and metrics
+- ✅ `EvaluationService` with session run management and multi-scorer evaluation
+- ✅ MLflow integration (experiment tracking, metric logging, trace search)
+- ✅ Built-in scorers: ToolEfficiency, SafetyCompliance, ResponseQuality
 
-#### 7.1 Kubernetes Operator
-- [ ] CognitionTenant CRD
-- [ ] Operator controller
-- [ ] Namespace isolation
-- [ ] RBAC integration
-- [ ] Network policies
+**What's missing:**
+- [ ] API routes to expose evaluation service (`POST /sessions/{id}/evaluate`, `GET /sessions/{id}/evaluation`)
+- [ ] Persist feedback to database (currently in-memory dict)
+- [ ] Human feedback loop endpoint (`POST /sessions/{id}/feedback`)
+- [ ] Feedback-annotated traces → evaluation datasets
+- [ ] Quality trend dashboards in Grafana
+- [ ] CLI command: `cognition eval`
 
-#### 7.2 Multi-Tenancy
-- [ ] Tenant onboarding/offboarding
-- [ ] Resource quotas and limits
-- [ ] Billing integration hooks
-- [ ] SSO integration (SAML, OIDC)
-- [ ] Admin dashboard
+### P3-2: Prompt Registry 🔄 PARTIAL (60%)
 
-#### 7.3 Advanced Communication
-- [ ] **Hybrid Architecture**: REST + SSE externally, gRPC internally
-- [ ] Agent-to-agent gRPC communication
-- [ ] Containerized agent execution
-- [ ] Multi-region support
+| Field | Value |
+|-------|-------|
+| **Layer** | 7 (Observability) / 4 (Agent Runtime) |
+| **File** | `server/app/agent/prompt_registry.py` |
+| **Effort remaining** | ~3 days |
 
-**Future Hybrid Architecture:**
-```
-┌──────────────┐     REST + SSE      ┌──────────────┐
-│   Clients    │ ◄──────────────────► │   API Layer  │
-│ (TUI/Web/IDE)│                      │   (FastAPI)  │
-└──────────────┘                      └──────┬───────┘
-                                             │
-                                        gRPC │ (internal)
-                                             │
-                           ┌─────────────────┼─────────────────┐
-                           │                 │                 │
-                     ┌─────▼─────┐    ┌──────▼────┐    ┌──────▼────┐
-                     │  Agent A  │    │  Agent B  │    │  Agent C  │
-                     │ (planning)│    │ (coding)  │    │ (testing) │
-                     └───────────┘    └───────────┘    └───────────┘
-```
+**What exists:**
+- ✅ `PromptRegistryBackend` protocol
+- ✅ `LocalPromptRegistry` — file-based, loads from `.cognition/prompts/`
+- ✅ `MLflowPromptRegistry` — uses `mlflow.genai.load_prompt()` API
+- ✅ `PromptRegistry` — unified with MLflow-first + local fallback, template formatting, lineage tracking
 
-**When gRPC makes sense:**
-- Agent-to-agent communication (Phase 7+)
-- Containerized execution layer
-- Multi-region deployment
-- High-throughput tool execution
+**What's missing:**
+- [ ] Wire into `create_cognition_agent()` — currently the agent factory uses its own hardcoded `SYSTEM_PROMPT` and `settings.llm_system_prompt`, ignoring the registry
+- [ ] Support registry references in `AgentDefinition` (e.g., `prompt: "mlflow:security-expert:v1"`)
+- [ ] Integration tests with live MLflow server
 
-#### 7.4 Enterprise Security
-- [ ] SOC 2 compliance features
-- [ ] Data residency controls
-- [ ] Audit logging to SIEM
-- [ ] Secret rotation
-- [ ] Penetration testing
+### P3-3: Cloud Execution Backends
 
-#### 7.5 Scalability
-- [ ] Horizontal pod autoscaling
-- [ ] Database sharding
-- [ ] Caching layer (Redis)
-- [ ] CDN for static assets
+| Field | Value |
+|-------|-------|
+| **Layer** | 3 (Execution) |
+| **Status** | Not started |
+| **Effort** | ~2-4 weeks per backend |
+| **Dependencies** | P2-6 (ExecutionBackend Protocol) ✅ |
 
-### Success Criteria
-- SOC 2 Type II compliant
-- 1000+ concurrent users
-- 99.9% uptime
-- <100ms latency for token streaming
-- Complete audit trail retention (1 year)
+**Acceptance Criteria:**
+- [ ] At least one cloud backend (ECS or Lambda) implementing `ExecutionBackend`
+- [ ] Container image registry integration
+- [ ] Auto-scaling based on session demand
+- [ ] Cost-aware scheduling
+- [ ] Configuration-driven backend selection
+
+### P3-4: Ollama Provider + LLM Resilience
+
+| Field | Value |
+|-------|-------|
+| **Layer** | 5 (LLM Provider) |
+| **Status** | Not started |
+| **Effort** | ~1-2 weeks |
+| **Dependencies** | P2-2 (Circuit Breaker) — partially done |
+
+**Acceptance Criteria:**
+- [ ] Ollama provider factory registered
+- [ ] Streaming-level fallback: mid-stream provider failure triggers fallback
+- [ ] Provider factories return typed protocol, not `Any`
+- [ ] Gateway integration option (MLflow AI Gateway or LiteLLM)
+
+### P3-5: Human Feedback Loop
+
+| Field | Value |
+|-------|-------|
+| **Layer** | 7 (Observability) / 6 (API & Streaming) |
+| **Status** | Not started |
+| **Effort** | ~1-2 weeks |
+| **Dependencies** | P3-1 (MLflow Evaluation Workflows) |
+
+**Acceptance Criteria:**
+- [ ] `POST /sessions/{id}/feedback` endpoint
+- [ ] Feedback attached to MLflow traces
+- [ ] Feedback-annotated traces become evaluation datasets
+- [ ] Feedback-based filtering in MLflow UI
 
 ---
 
-## Phase Dependencies
+## Codebase Health
 
+### File Organization
+
+All modules are in their correct architectural layer:
+
+| Layer | Directory | Contents |
+|-------|-----------|----------|
+| L1 Foundation | `server/app/models.py`, `server/app/exceptions.py`, `server/app/settings.py` | Domain models, exceptions, config |
+| L2 Persistence | `server/app/storage/`, `server/app/session_store.py`, `server/app/message_store.py` | Storage backends, SQLite/Postgres |
+| L3 Execution | `server/app/execution/` | `sandbox.py`, `backend.py`, `circuit_breaker.py` |
+| L4 Agent Runtime | `server/app/agent/` | `cognition_agent.py`, `sandbox_backend.py`, `definition.py`, `runtime.py`, `context.py`, `prompt_registry.py` |
+| L5 LLM Provider | `server/app/llm/` | Provider registry, fallback chain, discovery, mock |
+| L6 API & Streaming | `server/app/api/` | Routes, SSE, models, `scoping.py`, `middleware.py` |
+| L7 Observability | `server/app/observability/` | OTel setup, `mlflow_tracing.py` |
+
+### Testing Status
+
+- **Unit tests:** 223 passed, 2 skipped, 1 warning
+- **Live tests:** 40/41 across 9 phases
+  - Phase 1 (Service Health): 9/9
+  - Phase 2 (Core API CRUD): 6/6
+  - Phase 3 (Agent Streaming): 6/6
+  - Phase 4 (MLflow Observability): 2/3 (upstream ContextVar bug)
+  - Phase 5 (Docker Sandbox): 5/5
+  - Phase 6 (Persistence Across Restart): 4/4
+  - Phase 7 (Prometheus Metrics): 3/3
+  - Phase 8 (Distributed Tracing): 2/2
+  - Phase 9 (Security & Resilience): 3/3
+
+### Known Issues
+
+| Issue | Severity | Status |
+|-------|----------|--------|
+| MLflow `autolog()` ContextVar error in async contexts | Medium | Upstream MLflow bug. `run_tracer_inline=True` applied but insufficient. OTel tracing works as alternative. |
+| Circuit breaker not wired into LLM fallback chain | Medium | Implementation exists, integration pending (P2-2) |
+| Prompt registry not wired into agent factory | Low | Implementation exists, integration pending (P3-2) |
+| Evaluation feedback stored in-memory only | Low | Needs persistence backend (P3-1) |
+
+---
+
+## Next Steps
+
+**Immediate (highest impact, lowest effort):**
+1. Wire circuit breaker into `ProviderFallbackChain` (P2-2 completion — ~2 days)
+2. Wire prompt registry into `create_cognition_agent()` (P3-2 completion — ~3 days)
+
+**Short-term:**
+3. Add API routes for evaluation service (P3-1 — ~1 week)
+4. Persist evaluation feedback to database (P3-1 — ~3 days)
+
+**Medium-term:**
+5. Human feedback loop endpoint (P3-5 — ~1-2 weeks)
+6. Ollama provider + LLM resilience (P3-4 — ~1-2 weeks)
+
+**Long-term:**
+7. Cloud execution backends (P3-3 — ~2-4 weeks per backend)
+
+---
+
+## Architectural North Star
+
+All work converges toward:
+
+```python
+agent = AgentDefinition(
+    tools=[...],
+    skills=[...],
+    system_prompt="...",
+)
+
+app = Cognition(agent)
+app.run()
 ```
-Phase 1 (Foundation)
-    ↓
-Phase 2 (Hardening) → Phase 3 (Multi-LLM)
-    ↓                       ↓
-    ↓                       ↓
-Phase 4 (Capabilities) ←──┘
-    ↓
-Phase 5 (REST API)
-    ↓
-Phase 6 (Production)
-    ↓
-Phase 7 (Enterprise)
-```
 
-## Definition of MVP
-
-**Production MVP** is achieved at the completion of Phase 6 with:
-
-1. **Stability**: 7-day uptime, graceful error handling
-2. **Security**: No secrets in logs, input validation, audit trails
-3. **Observability**: Structured logging, metrics, tracing
-4. **Multi-user**: 10+ users, isolation, quotas
-5. **Multi-LLM**: OpenAI, Bedrock, local models
-6. **Usability**: TUI + docs, <10 min onboarding
-7. **Deployability**: Docker Compose, single command
-8. **Testing**: >80% coverage, E2E tests pass
-
-## Exit Criteria for Each Phase
-
-Before moving to the next phase:
-
-1. **All deliverables complete** (or consciously deferred)
-2. **Tests pass** (unit, integration, E2E)
-3. **Documentation updated**
-4. **No critical bugs**
-5. **Performance benchmarks met**
-6. **Security review** (for phases 2+)
-
-## Notes
-
-- Phases can overlap where dependencies allow
-- Some features may be cut to reach MVP faster
-- Phase 7 is explicitly post-MVP (requires significant investment)
-- Each phase includes "polish" items that improve UX
-- REST + SSE chosen for Phase 5 for OpenAPI compatibility and tooling
-- gRPC reserved for Phase 7 internal communication only
-
-## Current Status
-
-**Completed**: Phase 1 (Core Foundation) ✅, Phase 2 (Production Hardening) ✅, Phase 3 (Multi-LLM & Model Management) ✅, Phase 4 (Advanced Agent Capabilities) ✅, Phase 5 (REST API Server) ✅, Phase 6.1 (Containerization & Observability) ✅, Phase 6.2 (Sandbox Execution) ✅, Phase 6.3 (Persistence) ✅
-**In Progress**: Phase 6.4 (CLI Client)
-**Deferred**: Multi-User Support, TUI client
-
-See GitHub issues for detailed task breakdown per phase.
-
-### Phase 3 Summary
-Phase 3 has been completed with the following achievements:
-1. **Model Registry** - Full models.dev API integration with local caching (88+ providers)
-2. **Provider Fallback** - Ordered fallback chain with per-provider configuration
-3. **Token Usage Tracking** - Per-session and per-project tracking with cost estimation
-4. **Per-Session Config** - Temperature, max_tokens, system prompt overrides via protocol
-5. **Context Window Management** - Token estimation, budget computation, smart truncation
-6. **Protocol Extensions** - 5 new message types for model switching, config, and usage
-7. **Comprehensive Tests** - 66 new unit tests (total: 155+ passing)
-
-### Phase 4 Summary
-Phase 4 has been completed with the following achievements:
-1. **Enhanced Tool System** - Git tools, search, test runners, linters
-2. **Context Management** - Project indexing, file relevance scoring, smart inclusion
-3. **Agent Workflows** - Multi-step planning, orchestration, approvals, undo/redo
-4. **Output Formatting** - Diff visualization, syntax highlighting, tool call formatting
-5. **Comprehensive Tests** - 40 new unit tests (total: 211 passing)
-
-### Phase 5 Summary
-Phase 5 server-side REST API migration completed with:
-1. **REST API Design** - 11 endpoints with Pydantic models
-2. **SSE Streaming** - Real-time message streaming via Server-Sent Events
-3. **OpenAPI Documentation** - Auto-generated spec at `/docs`, Swagger UI
-4. **Configuration System** - YAML config with hierarchical loading
-5. **Comprehensive Tests** - E2E and unit tests for REST API
-
-**Note**: TUI client was abandoned - too complex. Will use simpler CLI approach in Phase 6.
-
-### Phase 6 Plans
-Phase 6 focuses on Production Readiness, including containerization, advanced agent execution environments, and multi-user support.
-
-**Completed so far (6.1 - 6.4):**
-1. **Full Observability Stack**: Docker Compose with Jaeger, Prometheus, Grafana, Loki.
-2. **Auto-Instrumentation**: Full internal tracing of LangChain/DeepAgents components.
-3. **Local Sandbox Backend**: Robust hybrid backend combining native Python file I/O with isolated shell execution.
-4. **Autonomous Execution**: Automatic multi-step ReAct loop with error recovery and planning.
-5. **Persistence**: Pluggable backend (SQLite/Memory) with auto-save for sessions.
-6. **CLI Client**: Lightweight `cognition-cli` with interactive TUI and telemetry.
-
-**Next Steps (6.5+):**
-- **Phase 6.5: Pluggability & Native deepagents Integration** (Current)
-  - ✅ Config-driven agent customization (`memory`, `skills`, `subagents`, `interrupt_on`)
-  - ✅ Native `AgentMiddleware` for streaming and observability
-  - ✅ Progressive skills system via `.cognition/skills/`
-  - ✅ Refactor to remove duplicate tool/workflow registries
-- Implement user authentication and isolation.
-- Production-grade deployment guides.
+Automatically providing: REST API, SSE streaming, persistence, sandbox isolation, observability, multi-user scoping, and evaluation pipeline.

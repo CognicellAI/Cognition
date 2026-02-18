@@ -40,13 +40,13 @@ The Thread is the continuous, resilient memory of a workflow.
     - **Checkpointing:** Every step the AI takes is saved. If your server crashes, the Agent picks up *exactly* where it left off.
 - **Benefit:** Enables long-running "Cases" or "Projects" that span days or weeks, rather than transient "Chats."
 
-### 3. The Trace (Forensic Audit)
+### 3. The Trace (Audit Trail)
 The Trace is the immutable proof of action.
 
 - **Concept:** Trust through verification.
 - **Capabilities:**
     - **OTLP Integration:** Native OpenTelemetry support allows you to pipe traces to Jaeger, Splunk, or Datadog.
-    - **Chain of Custody:** See exactly what file was read, what API was called, and what reasoning the AI used to make a decision.
+    - **Chain of Events:** See exactly what file was read, what API was called, and what reasoning the AI used to make a decision.
 - **Benefit:** Essential for platforms operating in regulated environments (Security, Legal, Healthcare).
 
 ### 4. The Plug (Extensibility)
@@ -104,7 +104,7 @@ Cognition is domain-agnostic. It powers platforms such as:
 *   **[GeneSmith (BioTech):](./blueprints/genesmith.md)** A biological foundry for designing and simulating proteins in a secure, audited environment.
 *   **[StarKeep (SpaceOps):](./blueprints/starkeep.md)** An orbital administrator for autonomous satellite repair and edge computing.
 *   **[ZeroOne (DeFi):](./blueprints/zeroone.md)** An algorithmic CEO for managing decentralized capital with transparent logic.
-*   **[BreachLens (Security):](./blueprints/cyber-investigation.md)** A forensic investigation platform for safely analyzing malware and breach logs.
+*   **[BreachLens (Security):](./blueprints/cyber-investigation.md)** A security investigation platform for safely analyzing malware and breach logs.
 *   **[DataLens (Analytics):](./blueprints/data-analyst.md)** A headless data scientist for securely analyzing and visualizing business data.
 
 ## Getting Started

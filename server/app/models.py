@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Literal, Optional
+from typing import Any, Literal, Optional
 from enum import Enum
 
 
@@ -46,6 +46,7 @@ class Session:
     created_at: str
     updated_at: str
     message_count: int = 0
+    scopes: dict[str, str] = field(default_factory=dict)
 
     def to_dict(self) -> dict:
         """Convert to dictionary for storage."""
@@ -65,6 +66,7 @@ class Session:
             "created_at": self.created_at,
             "updated_at": self.updated_at,
             "message_count": self.message_count,
+            "scopes": self.scopes,
         }
 
     @classmethod
@@ -87,7 +89,17 @@ class Session:
             created_at=data["created_at"],
             updated_at=data["updated_at"],
             message_count=data.get("message_count", 0),
+            scopes=data.get("scopes", {}),
         )
+
+
+@dataclass
+class ToolCall:
+    """Tool call invocation details."""
+
+    name: str
+    args: dict[str, Any]
+    id: str
 
 
 @dataclass
@@ -96,10 +108,15 @@ class Message:
 
     id: str
     session_id: str
-    role: Literal["user", "assistant", "system"]
+    role: Literal["user", "assistant", "system", "tool"]
     content: Optional[str]
     parent_id: Optional[str]
     created_at: datetime
+    tool_calls: Optional[list[ToolCall]] = None
+    tool_call_id: Optional[str] = None
+    token_count: Optional[int] = None
+    model_used: Optional[str] = None
+    metadata: Optional[dict[str, Any]] = None
 
 
 @dataclass

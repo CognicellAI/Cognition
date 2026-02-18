@@ -36,8 +36,7 @@ A **Session** (or "Thread") is the container for your interaction. It persists s
 curl -X POST http://localhost:8000/sessions \
   -H "Content-Type: application/json" \
   -d '{
-    "title": "My First Investigation",
-    "project_id": "demo-project"
+    "title": "My First Investigation"
   }'
 ```
 
@@ -52,6 +51,28 @@ curl -X POST http://localhost:8000/sessions \
 ```
 
 Save the `id` from the response. We'll use it as `SESSION_ID`.
+
+### Multi-Tenant Scoping (Optional)
+
+For multi-user platforms, enable session scoping:
+
+```bash
+# Enable scoping in config
+cat > .cognition/config.yaml << EOF
+scoping:
+  enabled: true
+  keys: ["user", "project"]
+EOF
+
+# Create scoped session
+curl -X POST http://localhost:8000/sessions \
+  -H "Content-Type: application/json" \
+  -H "X-Cognition-Scope-User: alice" \
+  -H "X-Cognition-Scope-Project: demo" \
+  -d '{"title": "Scoped Session"}'
+```
+
+Sessions are now isolated by user and project.
 
 ## 3. Send a Message
 

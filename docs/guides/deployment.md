@@ -36,8 +36,25 @@ Cognition is configured via Environment Variables.
 
 | Variable | Description | Default |
 | :--- | :--- | :--- |
-| `COGNITION_PERSISTENCE_BACKEND` | `sqlite` or `postgres` (future) | `sqlite` |
+| `COGNITION_PERSISTENCE_BACKEND` | `sqlite` or `postgres` | `sqlite` |
 | `COGNITION_PERSISTENCE_URI` | Path/URL to DB | `.cognition/state.db` |
+
+> **Postgres is fully implemented** via `server/app/storage/postgres.py` using `asyncpg`.
+> Set `COGNITION_PERSISTENCE_BACKEND=postgres` and provide a connection URI
+> (e.g., `postgresql://user:pass@localhost:5432/cognition`).
+
+### Sandbox Backend
+
+| Variable | Description | Default |
+| :--- | :--- | :--- |
+| `COGNITION_SANDBOX_BACKEND` | `local` or `docker` | `local` |
+
+The sandbox backend controls how agent commands are executed. The agent factory
+calls `create_sandbox_backend()` which dispatches based on this setting:
+
+- **`local`** — Runs commands directly on the host via `LocalExecutionBackend`.
+- **`docker`** — Runs commands in isolated containers via `DockerExecutionBackend`
+  (which wraps `CognitionDockerSandboxBackend`). Both classes are fully implemented.
 
 ### Observability (Audit)
 
@@ -46,6 +63,20 @@ Cognition is configured via Environment Variables.
 | `COGNITION_OTEL_ENDPOINT` | OTLP Collector URL | `http://jaeger:4318` |
 
 ## Security Hardening
+
+### 0. Docker Sandbox Container Hardening
+
+When `COGNITION_SANDBOX_BACKEND=docker`, every agent command runs inside a
+hardened container with the following defaults:
+
+- **`cap_drop=ALL`** — All Linux capabilities are dropped.
+- **`security_opt=no-new-privileges`** — Prevents privilege escalation.
+- **`read_only=True`** — Root filesystem is read-only.
+- **tmpfs mounts** for `/tmp` and `/home` — Writable scratch space that never
+  persists to disk.
+
+These settings are applied automatically by `DockerExecutionBackend` and require
+no additional configuration.
 
 ### 1. File System Isolation (Volumes)
 In Docker, always mount the workspace volume with the least privilege required.
@@ -76,6 +107,38 @@ services:
       - internal_only
 ```
 
+## Deployment Modes
+
+### Local Development (Recommended for Security)
+
+Cognition runs directly on the host while supporting services run in Docker Compose:
+
+```bash
+# Start supporting services
+docker compose up -d postgres mlflow jaeger
+
+# Run Cognition on the host
+COGNITION_SANDBOX_BACKEND=docker uv run uvicorn server.app.main:app --reload --port 8000
+```
+
+With `COGNITION_SANDBOX_BACKEND=docker`, every agent command executes inside an
+isolated, hardened container (cap_drop=ALL, no-new-privileges, read-only root
+filesystem). This is the recommended mode for any environment where the agent
+processes untrusted input.
+
+### Docker Compose (Testing / CI)
+
+All services — including Cognition itself — run inside Docker Compose:
+
+```bash
+docker compose --profile full up -d
+```
+
+In this mode Cognition typically uses `COGNITION_SANDBOX_BACKEND=local`, meaning
+agent commands run directly inside the Cognition container with **no additional
+isolation**. This is suitable for rapid testing and CI pipelines only; do not use
+it for untrusted workloads.
+
 ## Scaling
 
 ### Stateless Architecture
@@ -84,7 +147,7 @@ The Cognition API container is **stateless**. State lives in the Persistence Bac
 To scale horizontally:
 1.  Switch `COGNITION_PERSISTENCE_BACKEND` to `postgres`.
 2.  Deploy multiple replicas of the `cognition` container behind a Load Balancer (Nginx/ALB).
-3.  Ensure all replicas mount the same Workspace Volume (via NFS/EFS) OR use `CognitionDockerSandboxBackend` (future) which manages its own volumes.
+3.  Ensure all replicas mount the same Workspace Volume (via NFS/EFS) OR use `DockerExecutionBackend` (`COGNITION_SANDBOX_BACKEND=docker`) which manages its own per-session volumes.
 
 ## Health Checks
 

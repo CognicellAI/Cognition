@@ -29,20 +29,35 @@ import pytest
 import pytest_asyncio
 
 # Mark all tests in this file as e2e
+# These tests require a real LLM (not mock) and are skipped in CI
 pytestmark = [
     pytest.mark.e2e,
     pytest.mark.asyncio,
     pytest.mark.timeout(120),
+    pytest.mark.skipif(
+        not os.environ.get("COGNITION_OPENAI_COMPATIBLE_API_KEY"),
+        reason="Requires COGNITION_OPENAI_COMPATIBLE_API_KEY (real LLM needed for sandbox tool use)",
+    ),
 ]
+
+
+def _find_free_port() -> int:
+    """Find a free TCP port on localhost."""
+    import socket
+
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1]
 
 
 class TestSandboxWorkflow:
     """Test sandbox functionality with local server."""
 
     @pytest_asyncio.fixture
-    async def server(self, unused_tcp_port):
-        """Start the server on an unused port with temp workspace."""
-        port = unused_tcp_port
+    async def server(self):
+        """Start the server on a free port with temp workspace."""
+        port = _find_free_port()
+        metrics_port = _find_free_port()
 
         # Create temp workspace for this test
         with tempfile.TemporaryDirectory() as workspace:
@@ -56,6 +71,7 @@ class TestSandboxWorkflow:
                 "COGNITION_OPENAI_COMPATIBLE_API_KEY", ""
             )
             env["COGNITION_LLM_MODEL"] = "google/gemini-3-flash-preview"
+            env["COGNITION_METRICS_PORT"] = str(metrics_port)
 
             # Start server
             process = subprocess.Popen(
@@ -140,13 +156,15 @@ class TestSandboxWorkflow:
             # Parse SSE events
             events = []
             content = response.text
+            event_type = None
 
             for line in content.split("\n"):
                 if line.startswith("event:"):
                     event_type = line.replace("event:", "").strip()
                 elif line.startswith("data:"):
                     data = json.loads(line.replace("data:", "").strip())
-                    events.append({"type": event_type, "data": data})
+                    if event_type:
+                        events.append({"type": event_type, "data": data})
 
             # Check for tool calls
             tool_calls = [e for e in events if e["type"] == "tool_call"]
@@ -208,13 +226,15 @@ class TestSandboxWorkflow:
 
             # Parse events
             events = []
+            event_type = None
             for line in response.text.split("\n"):
                 if line.startswith("event:"):
                     event_type = line.replace("event:", "").strip()
                 elif line.startswith("data:"):
                     try:
                         data = json.loads(line.replace("data:", "").strip())
-                        events.append({"type": event_type, "data": data})
+                        if event_type:
+                            events.append({"type": event_type, "data": data})
                     except json.JSONDecodeError:
                         pass
 
@@ -253,13 +273,15 @@ class TestSandboxWorkflow:
 
             # Parse events
             events = []
+            event_type = None
             for line in response.text.split("\n"):
                 if line.startswith("event:"):
                     event_type = line.replace("event:", "").strip()
                 elif line.startswith("data:"):
                     try:
                         data = json.loads(line.replace("data:", "").strip())
-                        events.append({"type": event_type, "data": data})
+                        if event_type:
+                            events.append({"type": event_type, "data": data})
                     except json.JSONDecodeError:
                         pass
 

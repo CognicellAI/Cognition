@@ -31,52 +31,6 @@ pytestmark = [
 class TestServerLifecycle:
     """Test server startup and shutdown."""
 
-    @pytest_asyncio.fixture
-    async def server(self, unused_tcp_port):
-        """Start the server on an unused port."""
-        port = unused_tcp_port
-        env = os.environ.copy()
-        env["COGNITION_PORT"] = str(port)
-        env["COGNITION_HOST"] = "127.0.0.1"
-        env["COGNITION_LLM_PROVIDER"] = "mock"  # Use mock LLM for tests
-
-        # Start server
-        process = subprocess.Popen(
-            [sys.executable, "-m", "uvicorn", "server.app.main:app", "--port", str(port)],
-            env=env,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            cwd=str(Path(__file__).parent.parent.parent),
-        )
-
-        # Wait for server to be ready
-        base_url = f"http://127.0.0.1:{port}"
-        start_time = time.time()
-        timeout = 10  # 10 seconds to start
-
-        while time.time() - start_time < timeout:
-            try:
-                async with httpx.AsyncClient() as client:
-                    response = await client.get(f"{base_url}/ready")
-                    if response.status_code == 200 and response.json().get("ready"):
-                        break
-            except Exception:
-                await asyncio.sleep(0.1)
-        else:
-            process.terminate()
-            process.wait(timeout=5)
-            raise RuntimeError("Server failed to start")
-
-        yield base_url
-
-        # Cleanup: terminate server
-        process.terminate()
-        try:
-            process.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            process.kill()
-            process.wait()
-
     async def test_server_starts_and_responds(self, server):
         """Test server starts and responds to health check."""
         async with httpx.AsyncClient() as client:
@@ -106,47 +60,6 @@ class TestServerLifecycle:
 
 class TestSessionWorkflow:
     """Test complete session workflow."""
-
-    @pytest_asyncio.fixture
-    async def server(self, unused_tcp_port):
-        """Start server and return base URL."""
-        port = unused_tcp_port
-        env = os.environ.copy()
-        env["COGNITION_PORT"] = str(port)
-        env["COGNITION_HOST"] = "127.0.0.1"
-        env["COGNITION_LLM_PROVIDER"] = "mock"
-
-        process = subprocess.Popen(
-            [sys.executable, "-m", "uvicorn", "server.app.main:app", "--port", str(port)],
-            env=env,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            cwd=str(Path(__file__).parent.parent.parent),
-        )
-
-        base_url = f"http://127.0.0.1:{port}"
-        start_time = time.time()
-        while time.time() - start_time < 10:
-            try:
-                async with httpx.AsyncClient() as client:
-                    response = await client.get(f"{base_url}/ready")
-                    if response.status_code == 200:
-                        break
-            except Exception:
-                await asyncio.sleep(0.1)
-        else:
-            process.terminate()
-            process.wait(timeout=5)
-            raise RuntimeError("Server failed to start")
-
-        yield base_url
-
-        process.terminate()
-        try:
-            process.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            process.kill()
-            process.wait()
 
     async def test_create_session(self, server):
         """Test creating a session."""
@@ -223,47 +136,6 @@ class TestMessageWorkflow:
     """Test message sending with SSE streaming."""
 
     @pytest_asyncio.fixture
-    async def server(self, unused_tcp_port):
-        """Start server and return base URL."""
-        port = unused_tcp_port
-        env = os.environ.copy()
-        env["COGNITION_PORT"] = str(port)
-        env["COGNITION_HOST"] = "127.0.0.1"
-        env["COGNITION_LLM_PROVIDER"] = "mock"
-
-        process = subprocess.Popen(
-            [sys.executable, "-m", "uvicorn", "server.app.main:app", "--port", str(port)],
-            env=env,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            cwd=str(Path(__file__).parent.parent.parent),
-        )
-
-        base_url = f"http://127.0.0.1:{port}"
-        start_time = time.time()
-        while time.time() - start_time < 10:
-            try:
-                async with httpx.AsyncClient() as client:
-                    response = await client.get(f"{base_url}/ready")
-                    if response.status_code == 200:
-                        break
-            except Exception:
-                await asyncio.sleep(0.1)
-        else:
-            process.terminate()
-            process.wait(timeout=5)
-            raise RuntimeError("Server failed to start")
-
-        yield base_url
-
-        process.terminate()
-        try:
-            process.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            process.kill()
-            process.wait()
-
-    @pytest_asyncio.fixture
     async def session(self, server):
         """Create a session, return session ID."""
         async with httpx.AsyncClient() as client:
@@ -288,12 +160,14 @@ class TestMessageWorkflow:
 
                 # Collect events
                 events = []
+                event_type = None
                 async for line in response.aiter_lines():
                     if line.startswith("event: "):
                         event_type = line[7:]
                     elif line.startswith("data: "):
                         data = json.loads(line[6:])
-                        events.append({"event": event_type, "data": data})
+                        if event_type:
+                            events.append({"event": event_type, "data": data})
 
                 # Verify we got events
                 assert len(events) > 0
@@ -304,8 +178,8 @@ class TestMessageWorkflow:
 
     async def test_list_messages_after_send(self, server, session):
         """Test listing messages after sending."""
-        async with httpx.AsyncClient() as client:
-            # Send a message
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            # Send a message via SSE stream
             async with client.stream(
                 "POST",
                 f"{server}/sessions/{session}/messages",
@@ -326,47 +200,6 @@ class TestMessageWorkflow:
 
 class TestErrorHandling:
     """Test error handling scenarios."""
-
-    @pytest_asyncio.fixture
-    async def server(self, unused_tcp_port):
-        """Start server and return base URL."""
-        port = unused_tcp_port
-        env = os.environ.copy()
-        env["COGNITION_PORT"] = str(port)
-        env["COGNITION_HOST"] = "127.0.0.1"
-        env["COGNITION_LLM_PROVIDER"] = "mock"
-
-        process = subprocess.Popen(
-            [sys.executable, "-m", "uvicorn", "server.app.main:app", "--port", str(port)],
-            env=env,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            cwd=str(Path(__file__).parent.parent.parent),
-        )
-
-        base_url = f"http://127.0.0.1:{port}"
-        start_time = time.time()
-        while time.time() - start_time < 10:
-            try:
-                async with httpx.AsyncClient() as client:
-                    response = await client.get(f"{base_url}/ready")
-                    if response.status_code == 200:
-                        break
-            except Exception:
-                await asyncio.sleep(0.1)
-        else:
-            process.terminate()
-            process.wait(timeout=5)
-            raise RuntimeError("Server failed to start")
-
-        yield base_url
-
-        process.terminate()
-        try:
-            process.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            process.kill()
-            process.wait()
 
     async def test_404_errors(self, server):
         """Test 404 error handling."""
@@ -398,47 +231,6 @@ class TestErrorHandling:
 class TestFullWorkflow:
     """Test complete end-to-end workflow."""
 
-    @pytest_asyncio.fixture
-    async def server(self, unused_tcp_port):
-        """Start server and return base URL."""
-        port = unused_tcp_port
-        env = os.environ.copy()
-        env["COGNITION_PORT"] = str(port)
-        env["COGNITION_HOST"] = "127.0.0.1"
-        env["COGNITION_LLM_PROVIDER"] = "mock"
-
-        process = subprocess.Popen(
-            [sys.executable, "-m", "uvicorn", "server.app.main:app", "--port", str(port)],
-            env=env,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            cwd=str(Path(__file__).parent.parent.parent),
-        )
-
-        base_url = f"http://127.0.0.1:{port}"
-        start_time = time.time()
-        while time.time() - start_time < 10:
-            try:
-                async with httpx.AsyncClient() as client:
-                    response = await client.get(f"{base_url}/ready")
-                    if response.status_code == 200:
-                        break
-            except Exception:
-                await asyncio.sleep(0.1)
-        else:
-            process.terminate()
-            process.wait(timeout=5)
-            raise RuntimeError("Server failed to start")
-
-        yield base_url
-
-        process.terminate()
-        try:
-            process.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            process.kill()
-            process.wait()
-
     async def test_complete_conversation(self, server):
         """Test a complete conversation workflow."""
         async with httpx.AsyncClient() as client:
@@ -468,12 +260,14 @@ class TestFullWorkflow:
 
                 # Collect events
                 events = []
+                event_type = None
                 async for line in response.aiter_lines():
                     if line.startswith("event: "):
                         event_type = line[7:]
                     elif line.startswith("data: "):
                         data = json.loads(line[6:])
-                        events.append({"event": event_type, "data": data})
+                        if event_type:
+                            events.append({"event": event_type, "data": data})
 
                 # Verify stream completed
                 done_events = [e for e in events if e["event"] == "done"]

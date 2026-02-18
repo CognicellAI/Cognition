@@ -75,6 +75,14 @@ class SessionUpdate(BaseModel):
 # ============================================================================
 
 
+class ToolCallResponse(BaseModel):
+    """Tool call response model."""
+
+    name: str = Field(..., description="Tool name")
+    args: dict[str, Any] = Field(..., description="Tool arguments")
+    id: str = Field(..., description="Tool call ID")
+
+
 class MessageCreate(BaseModel):
     """Request to send a message."""
 
@@ -91,11 +99,16 @@ class MessageResponse(BaseModel):
 
     id: str = Field(..., description="Unique message identifier")
     session_id: str = Field(..., description="Associated session ID")
-    role: Literal["user", "assistant", "system"] = Field(..., description="Message role")
+    role: Literal["user", "assistant", "system", "tool"] = Field(..., description="Message role")
     content: Optional[str] = Field(None, description="Message content (if complete)")
     parent_id: Optional[str] = Field(None, description="Parent message ID")
-    model: Optional[str] = Field(None, description="Model used for this message")
+    model: Optional[str] = Field(default=None, description="Model used for this message")
     created_at: datetime = Field(..., description="Message creation timestamp")
+    tool_calls: Optional[list[ToolCallResponse]] = Field(None, description="Tool invocations")
+    tool_call_id: Optional[str] = Field(None, description="ID of tool being responded to")
+    token_count: Optional[int] = Field(None, description="Token usage for this message")
+    model_used: Optional[str] = Field(None, description="Model that generated response")
+    metadata: Optional[dict[str, Any]] = Field(None, description="Additional metadata")
 
 
 class MessageList(BaseModel):
@@ -173,6 +186,51 @@ class ReadyStatus(BaseModel):
     """Readiness probe response."""
 
     ready: bool = Field(..., description="Whether server is ready to accept requests")
+
+
+# ============================================================================
+# Feedback Models
+# ============================================================================
+
+
+class FeedbackCreate(BaseModel):
+    """Request to submit feedback for a session."""
+
+    feedback_type: str = Field(
+        ..., description="Type of feedback: thumbs_up, thumbs_down, rating, correction, custom"
+    )
+    value: float = Field(
+        ...,
+        ge=0.0,
+        le=1.0,
+        description="Numeric value (e.g., 1.0 for thumbs up, 0.0 for thumbs down)",
+    )
+    trace_id: Optional[str] = Field(
+        None, description="Optional MLflow trace ID to attach feedback to"
+    )
+    rationale: Optional[str] = Field(
+        None, max_length=1000, description="Explanation for the feedback"
+    )
+    metadata: Optional[dict[str, Any]] = Field(default=None, description="Additional metadata")
+
+
+class FeedbackResponse(BaseModel):
+    """Feedback submission response."""
+
+    id: str = Field(..., description="Unique feedback ID")
+    session_id: str = Field(..., description="Associated session ID")
+    feedback_type: str = Field(..., description="Type of feedback")
+    value: float = Field(..., description="Feedback value")
+    created_at: str = Field(..., description="Timestamp when feedback was created")
+
+
+class EvaluationResponse(BaseModel):
+    """Session evaluation response."""
+
+    session_id: str = Field(..., description="Session ID")
+    average_score: float = Field(..., description="Average score across all categories")
+    scores: list[dict[str, Any]] = Field(default_factory=list, description="Individual scores")
+    feedback_count: int = Field(0, description="Number of feedback entries")
 
 
 # ============================================================================

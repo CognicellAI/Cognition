@@ -4,10 +4,13 @@ Commands:
 - serve: Start the API server
 - init: Initialize configuration
 - config: Show configuration
+- db: Database migration commands
 """
 
 from __future__ import annotations
 
+import asyncio
+import subprocess
 import sys
 from pathlib import Path
 from typing import Optional
@@ -31,7 +34,18 @@ app = typer.Typer(
     help="Cognition AI coding assistant",
     no_args_is_help=True,
 )
+
+# Create db subcommand group
+db_app = typer.Typer(
+    name="db",
+    help="Database migration commands",
+)
+app.add_typer(db_app)
+
 console = Console()
+
+# Project root directory for alembic commands
+project_root = Path(__file__).parent.parent.parent
 
 
 @app.command()
@@ -189,6 +203,264 @@ def health(
     except Exception as e:
         console.print(f"[bold red]✗ Cannot connect to server[/bold red]")
         console.print(f"Error: {e}")
+
+
+@db_app.command("upgrade")
+def db_upgrade(
+    revision: str = typer.Option(
+        "head", "--revision", "-r", help="Target revision (default: head)"
+    ),
+    sql: bool = typer.Option(False, "--sql", help="Print SQL instead of executing"),
+):
+    """Upgrade database to the specified revision.
+
+    Applies all pending migrations to bring the database schema
+    up to the specified revision (default: latest).
+
+    Examples:
+        cognition db upgrade              # Upgrade to latest
+        cognition db upgrade --revision 001  # Upgrade to specific revision
+    """
+    import os
+
+    # Ensure we're using the correct working directory
+    alembic_ini = Path(__file__).parent.parent / "alembic.ini"
+
+    if not alembic_ini.exists():
+        console.print(f"[bold red]Error:[/bold red] alembic.ini not found at {alembic_ini}")
+        raise typer.Exit(1)
+
+    cmd = ["alembic", "-c", str(alembic_ini), "upgrade", revision]
+
+    if sql:
+        cmd.append("--sql")
+
+    console.print(f"[bold blue]Upgrading database to {revision}...[/bold blue]")
+
+    try:
+        result = subprocess.run(
+            cmd,
+            cwd=project_root,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+
+        if sql:
+            console.print(result.stdout)
+        else:
+            console.print(f"[bold green]✓ Database upgraded successfully[/bold green]")
+            if result.stdout:
+                console.print(result.stdout)
+    except subprocess.CalledProcessError as e:
+        console.print(f"[bold red]✗ Database upgrade failed[/bold red]")
+        console.print(f"Error: {e.stderr}")
+        raise typer.Exit(1)
+
+
+@db_app.command("downgrade")
+def db_downgrade(
+    revision: str = typer.Argument(..., help="Target revision (e.g., -1, base, or revision ID)"),
+    sql: bool = typer.Option(False, "--sql", help="Print SQL instead of executing"),
+):
+    """Downgrade database to the specified revision.
+
+    Reverts migrations to bring the database schema back
+    to the specified revision.
+
+    Examples:
+        cognition db downgrade -1         # Downgrade one revision
+        cognition db downgrade base       # Downgrade to base (empty)
+        cognition db downgrade 001        # Downgrade to specific revision
+    """
+    alembic_ini = Path(__file__).parent.parent / "alembic.ini"
+
+    if not alembic_ini.exists():
+        console.print(f"[bold red]Error:[/bold red] alembic.ini not found at {alembic_ini}")
+        raise typer.Exit(1)
+
+    cmd = ["alembic", "-c", str(alembic_ini), "downgrade", revision]
+
+    if sql:
+        cmd.append("--sql")
+
+    console.print(f"[bold yellow]Downgrading database to {revision}...[/bold yellow]")
+
+    try:
+        result = subprocess.run(
+            cmd,
+            cwd=project_root,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+
+        if sql:
+            console.print(result.stdout)
+        else:
+            console.print(f"[bold green]✓ Database downgraded successfully[/bold green]")
+            if result.stdout:
+                console.print(result.stdout)
+    except subprocess.CalledProcessError as e:
+        console.print(f"[bold red]✗ Database downgrade failed[/bold red]")
+        console.print(f"Error: {e.stderr}")
+        raise typer.Exit(1)
+
+
+@db_app.command("migrate")
+def db_migrate(
+    message: str = typer.Argument(..., help="Migration message/description"),
+    autogenerate: bool = typer.Option(
+        False, "--autogenerate", "-a", help="Auto-generate migration from models"
+    ),
+):
+    """Create a new database migration.
+
+    Creates a new migration script with the given message.
+    Use --autogenerate to automatically detect schema changes.
+
+    Examples:
+        cognition db migrate "add user table"
+        cognition db migrate --autogenerate "auto migration"
+    """
+    alembic_ini = Path(__file__).parent.parent / "alembic.ini"
+
+    if not alembic_ini.exists():
+        console.print(f"[bold red]Error:[/bold red] alembic.ini not found at {alembic_ini}")
+        raise typer.Exit(1)
+
+    cmd = ["alembic", "-c", str(alembic_ini), "revision", "-m", message]
+
+    if autogenerate:
+        cmd.append("--autogenerate")
+
+    console.print(f"[bold blue]Creating migration: {message}...[/bold blue]")
+
+    try:
+        result = subprocess.run(
+            cmd,
+            cwd=project_root,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+
+        console.print(f"[bold green]✓ Migration created successfully[/bold green]")
+        console.print(result.stdout)
+    except subprocess.CalledProcessError as e:
+        console.print(f"[bold red]✗ Migration creation failed[/bold red]")
+        console.print(f"Error: {e.stderr}")
+        raise typer.Exit(1)
+
+
+@db_app.command("current")
+def db_current(
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="Show verbose output"),
+):
+    """Show current database revision."""
+    alembic_ini = Path(__file__).parent.parent / "alembic.ini"
+
+    if not alembic_ini.exists():
+        console.print(f"[bold red]Error:[/bold red] alembic.ini not found at {alembic_ini}")
+        raise typer.Exit(1)
+
+    cmd = ["alembic", "-c", str(alembic_ini), "current"]
+
+    if verbose:
+        cmd.append("-v")
+
+    try:
+        result = subprocess.run(
+            cmd,
+            cwd=project_root,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+
+        console.print(f"[bold blue]Current database revision:[/bold blue]")
+        console.print(result.stdout)
+    except subprocess.CalledProcessError as e:
+        console.print(f"[bold red]✗ Failed to get current revision[/bold red]")
+        console.print(f"Error: {e.stderr}")
+        raise typer.Exit(1)
+
+
+@db_app.command("history")
+def db_history(
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="Show verbose output"),
+    indicate_current: bool = typer.Option(
+        False, "--current", "-c", help="Indicate current revision"
+    ),
+):
+    """Show migration history."""
+    alembic_ini = Path(__file__).parent.parent / "alembic.ini"
+
+    if not alembic_ini.exists():
+        console.print(f"[bold red]Error:[/bold red] alembic.ini not found at {alembic_ini}")
+        raise typer.Exit(1)
+
+    cmd = ["alembic", "-c", str(alembic_ini), "history"]
+
+    if verbose:
+        cmd.append("-v")
+
+    if indicate_current:
+        cmd.append("--indicate-current")
+
+    try:
+        result = subprocess.run(
+            cmd,
+            cwd=project_root,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+
+        console.print(f"[bold blue]Migration history:[/bold blue]")
+        console.print(result.stdout)
+    except subprocess.CalledProcessError as e:
+        console.print(f"[bold red]✗ Failed to get migration history[/bold red]")
+        console.print(f"Error: {e.stderr}")
+        raise typer.Exit(1)
+
+
+@db_app.command("init")
+def db_init():
+    """Initialize database (run all migrations).
+
+    This is an alias for 'db upgrade head' that creates
+    all necessary tables for a fresh installation.
+    """
+    alembic_ini = Path(__file__).parent.parent / "alembic.ini"
+
+    if not alembic_ini.exists():
+        console.print(f"[bold red]Error:[/bold red] alembic.ini not found at {alembic_ini}")
+        raise typer.Exit(1)
+
+    settings = get_settings()
+    console.print(f"[bold blue]Initializing database...[/bold blue]")
+    console.print(f"Backend: {settings.persistence_backend}")
+    console.print(f"URI: {settings.persistence_uri}")
+
+    cmd = ["alembic", "-c", str(alembic_ini), "upgrade", "head"]
+
+    try:
+        result = subprocess.run(
+            cmd,
+            cwd=project_root,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+
+        console.print(f"[bold green]✓ Database initialized successfully[/bold green]")
+        if result.stdout:
+            console.print(result.stdout)
+    except subprocess.CalledProcessError as e:
+        console.print(f"[bold red]✗ Database initialization failed[/bold red]")
+        console.print(f"Error: {e.stderr}")
+        raise typer.Exit(1)
 
 
 def main():

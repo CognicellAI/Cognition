@@ -1,4 +1,4 @@
-# Forensic Audit Trails ("The Trace")
+# Audit Trails ("The Trace")
 
 > **Trust is good. Proof is better.**
 
@@ -6,7 +6,7 @@ In regulated industries (Security, Healthcare, Finance), it is not enough for an
 
 Cognition treats Observability not just as a debugging tool, but as a **Compliance Primitive**.
 
-## The Chain of Custody
+## The Chain of Events
 
 Cognition generates a continuous, immutable stream of events called the **Trace**. This Trace captures the full cognitive lifecycle of an action.
 
@@ -18,7 +18,7 @@ A single "Action" by an Agent results in a structured OTLP Trace containing:
 2.  **The Reasoning:** (The LLM's internal monologue/Chain of Thought)
     *   *"I see a large log file. I should not read it all at once. I will sample the first 100 lines."*
 3.  **The Tool Call:** (The exact command executed)
-    *   `head -n 100 /mnt/evidence/access.log`
+    *   `head -n 100 /mnt/data/access.log`
 4.  **The Output:** (The raw result returned by the Kernel)
 5.  **The Conclusion:** (The final summary presented to the user)
 
@@ -54,9 +54,8 @@ Integrating the Audit Trail into your platform is simple configuration.
 ```yaml
 # .cognition/config.yaml
 observability:
-  provider: otlp
-  endpoint: "https://audit-vault.internal:4317"
-  sampling: 1.0  # Keep 100% of traces for compliance
+  otel_enabled: true
+  otel_endpoint: "https://audit-vault.internal:4317"
 ```
 
 ## Dashboarding

@@ -17,6 +17,8 @@ ENV PATH="/opt/venv/bin:$PATH"
 COPY pyproject.toml README.md .
 RUN pip install --no-cache-dir -e ".[all]"
 
+# Note: [all] now includes [deploy] which brings mlflow, docker SDK, asyncpg
+
 # Production stage
 FROM python:3.11-slim AS production
 

@@ -77,9 +77,17 @@ dev = [
     "pre-commit>=4.0.0",
 ]
 
+# Deployment (MLflow tracing + Docker sandbox)
+deploy = [
+    "mlflow[genai]>=2.19.0",
+    "docker>=7.0.0",
+    "psycopg2-binary>=2.9.0",
+    "asyncpg>=0.30.0",
+]
+
 # All extras
 all = [
-    "cognition[openai,bedrock,test]",
+    "cognition[openai,bedrock,test,deploy]",
 ]
 
 [project.scripts]

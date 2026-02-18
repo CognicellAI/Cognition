@@ -1,4 +1,4 @@
-# Blueprint: Secure Forensic Investigation Platform
+# Blueprint: Secure Security Investigation Platform
 
 > **Codename: "BreachLens"**
 
@@ -11,7 +11,7 @@ A Security Operations Center (SOC) team needs to investigate potential breaches.
 **The Hard Requirements:**
 1.  **Safety:** Malware analysis must happen in a completely isolated environment (Sandbox).
 2.  **Privacy:** Sensitive logs cannot leave the premise or be sent to public LLM APIs.
-3.  **Audit:** Every action taken by the AI must be logged for legal chain-of-custody.
+3.  **Audit:** Every action taken by the AI must be logged for compliance and review.
 
 ## The Solution: BreachLens
 
@@ -58,7 +58,7 @@ graph TB
 #### 1. The Hazard Zone (Docker Sandbox)
 BreachLens uses Cognition's **Docker Sandbox Backend**.
 *   **Isolation:** Each investigation runs in a fresh, ephemeral Docker container.
-*   **Tooling:** The container image (`breachlens-agent:latest`) is pre-loaded with forensic tools: `yara`, `grep`, `jq`, `python`, `wireshark-cli`.
+*   **Tooling:** The container image (`breachlens-agent:latest`) is pre-loaded with security analysis tools: `yara`, `grep`, `jq`, `python`, `wireshark-cli`.
 *   **Data Access:** The "Evidence" (logs, binaries) is mounted as a read-only volume at `/mnt/evidence`. The agent can read, but cannot alter the original evidence (preserving integrity).
 
 #### 2. The Private Intelligence (Local LLM)
@@ -66,7 +66,7 @@ To satisfy privacy requirements, Cognition is configured to use a local inferenc
 *   **Config:** `COGNITION_LLM_PROVIDER=openai_compatible`
 *   **Result:** No data ever leaves the VPC.
 
-#### 3. The Chain of Custody (Forensic Audit)
+#### 3. The Audit Trail
 Every step of the investigation is recorded via OpenTelemetry (OTLP).
 *   **Analyst:** "Scan the evidence volume for IOCs related to Log4Shell."
 *   **Agent Trace:**
@@ -74,7 +74,7 @@ Every step of the investigation is recorded via OpenTelemetry (OTLP).
     2.  *Tool Call:* `execute("grep -r 'jndi:ldap' /mnt/evidence")`
     3.  *Tool Result:* `Found matches in access.log:204`
     4.  *Action:* Flagged as critical.
-*   **Benefit:** If this case goes to court, the trace serves as an automated, immutable log of exactly how the conclusion was reached.
+*   **Benefit:** The trace serves as an automated, immutable log of exactly how the conclusion was reached, supporting compliance and review processes.
 
 ## User Workflow
 
@@ -128,7 +128,7 @@ The BreachLens frontend drives the investigation via simple REST calls.
 // Start Investigation
 const session = await api.post('/sessions', {
   title: 'Case #402',
-  system_prompt: 'You are a Senior Forensic Analyst. You verify facts before reporting.'
+  system_prompt: 'You are a Senior Security Analyst. You verify facts before reporting.'
 });
 
 // Send Instruction
@@ -151,4 +151,4 @@ Building this platform from scratch would require:
 3.  Building a persistent memory system.
 4.  integrating observability.
 
-With **Cognition**, you get all of this as a deployable infrastructure. You focus on the **Forensic Logic** and **User Experience**; Cognition handles the **Runtime**.
+With **Cognition**, you get all of this as a deployable infrastructure. You focus on the **Investigation Logic** and **User Experience**; Cognition handles the **Runtime**.

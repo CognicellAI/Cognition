@@ -32,13 +32,15 @@ graph TD
     end
 
     subgraph "Execution Layer"
-        Backend[CognitionLocalSandboxBackend]
-        Sandbox[LocalSandbox - Subprocess]
+        Factory[create_sandbox_backend Factory]
+        Backend[CognitionLocalSandboxBackend / CognitionDockerSandboxBackend]
+        Sandbox[LocalSandbox or DockerSandbox]
     end
 
     subgraph "Persistence Layer"
-        Store[SqliteSessionStore - Metadata]
-        Saver[AsyncSqliteSaver - Checkpoints]
+        StoreFactory[StorageBackend Factory]
+        Store[SQLite / PostgreSQL / Memory]
+        Saver[Checkpointer - LangGraph State]
     end
 
     CLI --> REST
@@ -51,6 +53,7 @@ graph TD
     Backend --> Sandbox
     Runtime -.-> Saver
     Manager -.-> Store
+    Factory --> Backend
 ```
 
 ## 1. The Interface Layer (REST + SSE)
@@ -79,22 +82,45 @@ When a message is received, the service enters an automatic **ReAct (Reason + Ac
 
 ## 3. The Execution Layer (Hybrid Sandbox)
 
-Execution safety is provided by the `CognitionLocalSandboxBackend`. It implements a hybrid model designed for the local development environment:
+Execution safety is provided by a settings-driven sandbox factory (`create_sandbox_backend` in `server/app/sandbox/factory.py`). Based on the `settings.sandbox_backend` value, the factory dispatches to one of two backends:
 
-*   **Native File I/O:** Inherits from `FilesystemBackend`. It uses native Python `os` and `pathlib` calls for reading and writing files. This provides maximum OS compatibility and performance.
-*   **Isolated Shell:** Uses a `LocalSandbox` wrapper around `subprocess`. It executes shell commands (e.g., `pytest`, `git`) with the `cwd` (Current Working Directory) strictly locked to the workspace root.
+*   **`CognitionLocalSandboxBackend`** (default, `sandbox_backend="local"`): A hybrid model designed for local development.
+    *   **Native File I/O:** Inherits from `FilesystemBackend`. Uses native Python `os` and `pathlib` calls for reading and writing files, providing maximum OS compatibility and performance.
+    *   **Isolated Shell:** Uses a `LocalSandbox` wrapper around `subprocess`. Executes shell commands (e.g., `pytest`, `git`) with the `cwd` strictly locked to the workspace root.
+*   **`CognitionDockerSandboxBackend`** (`sandbox_backend="docker"`): Runs tool execution inside Docker containers for full process and filesystem isolation, suitable for production and multi-user deployments.
 
-## 4. Dual-Layer Persistence
+## 4. Unified StorageBackend Protocol
 
-Cognition uses a unified SQLite database (`.cognition/state.db`) to handle two distinct types of state:
+Cognition implements a unified storage protocol (`StorageBackend`) that abstracts sessions, messages, and checkpoints behind a single interface. This enables pluggable persistence with multiple backend implementations:
 
-### A. Session Metadata (Registry)
-Managed by `SqliteSessionStore`. This table acts as the "Phonebook" of the engine, allowing fast listing and retrieval of sessions without loading the full agent history.
-*   **Fields:** `id`, `title`, `thread_id`, `status`, `message_count`.
+*   **SQLite** (default) — lightweight, zero-config via `aiosqlite`.
+*   **PostgreSQL** — production-grade via `asyncpg`.
+*   **Memory** — ephemeral, useful for testing.
 
-### B. Agent Checkpoints (The Brain)
-Managed by `AsyncSqliteSaver` (from LangGraph). This stores the "Full Stack Frame" of the agent.
-*   **Purpose:** If the server process is killed mid-turn, the agent loads the latest checkpoint from the DB and resumes its exact internal state (variables, planning steps, etc.) when the next message arrives.
+The factory in `server/app/storage/factory.py` dispatches based on the `COGNITION_PERSISTENCE_BACKEND` setting.
+
+### Storage Architecture
+```
+StorageBackend (Protocol)
+├── SessionStore - Session metadata and scoping
+├── MessageStore - Message history with pagination
+└── Checkpointer - LangGraph checkpoint persistence
+```
+
+### A. Session Metadata with Scoping
+Managed by `SessionStore` implementations (SQLite or Postgres). Sessions now support multi-dimensional scoping via `X-Cognition-Scope-*` headers.
+*   **Fields:** `id`, `title`, `thread_id`, `status`, `message_count`, `scopes`.
+*   **Scoping:** Filter sessions by user, project, team, or custom dimensions.
+
+### B. Message Persistence
+Managed by `MessageStore`. All messages are persisted with pagination support.
+*   **Features:** CRUD operations, pagination, session-scoped queries.
+*   **Schema:** `id`, `session_id`, `role`, `content`, `parent_id`, `created_at`.
+
+### C. Agent Checkpoints (The Brain)
+Managed by `AsyncSqliteSaver` (from LangGraph) or database-specific checkpointer.
+*   **Purpose:** If the server process is killed mid-turn, the agent loads the latest checkpoint and resumes its exact internal state.
+*   **Durability:** PostgreSQL backend for production deployments.
 
 ## 5. Middleware Layer (The Hooks)
 
@@ -120,6 +146,6 @@ Every internal component is instrumented with **OpenTelemetry**.
 
 - **Language:** Python 3.11+
 - **Framework:** FastAPI, LangGraph, DeepAgents
-- **Database:** SQLite (via aiosqlite)
+- **Database:** SQLite (via aiosqlite) for development; PostgreSQL (via asyncpg) for production
 - **Observability:** OpenTelemetry (OTLP Protocol)
 - **Networking:** HTTP/1.1 (REST) + EventSource (SSE)

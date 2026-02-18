@@ -1,7 +1,10 @@
 """Agent factory for creating Deep Agents with SandboxBackend support.
 
-This module creates deep agents using the CognitionLocalSandboxBackend, which provides:
-- Isolated command execution via LocalSandbox
+This module creates deep agents using settings-driven sandbox backends:
+- Local: CognitionLocalSandboxBackend (development) — shell execution via LocalSandbox
+- Docker: CognitionDockerSandboxBackend (production) — isolated container execution
+
+Both backends provide:
 - File operations (ls, read, write, edit) via FilesystemBackend
 - Search operations (glob, grep)
 - Multi-step ReAct loop with automatic tool chaining
@@ -18,7 +21,8 @@ from server.app.agent.middleware import (
     CognitionObservabilityMiddleware,
     CognitionStreamingMiddleware,
 )
-from server.app.agent.sandbox_backend import CognitionLocalSandboxBackend
+from server.app.agent.sandbox_backend import create_sandbox_backend
+from server.app.agent.context import ContextManager
 from server.app.settings import Settings, get_settings
 
 
@@ -67,7 +71,8 @@ def create_cognition_agent(
     """Create a Deep Agent for the Cognition system.
 
     This factory creates an agent with:
-    - CognitionLocalSandboxBackend for filesystem and command execution
+    - Settings-driven sandbox backend (local or Docker) for execution
+    - FilesystemBackend for file operations (shared across both backends)
     - Multi-step ReAct loop with write_todos support
     - State checkpointing via thread_id
     - Automatic tool chaining
@@ -95,15 +100,48 @@ def create_cognition_agent(
     settings = settings or get_settings()
     project_path = Path(project_path).resolve()
 
-    # Create the sandbox backend
+    # Create the sandbox backend using settings-driven factory
     sandbox_id = f"cognition-{project_path.name}"
-    backend = CognitionLocalSandboxBackend(
+    backend = create_sandbox_backend(
         root_dir=project_path,
         sandbox_id=sandbox_id,
+        sandbox_backend=settings.sandbox_backend,
+        docker_image=settings.docker_image,
+        docker_network=settings.docker_network,
+        docker_memory_limit=settings.docker_memory_limit,
+        docker_cpu_limit=settings.docker_cpu_limit,
+        docker_host_workspace=settings.docker_host_workspace,
     )
 
+    # Initialize context manager (P2-7)
+    # This automatically indexes the project and identifies relevant files
+    # Note: Using backend.backend to access the underlying ExecutionBackendAdapter's wrapped backend
+    # This assumes backend is an ExecutionBackendAdapter which wraps a LocalExecutionBackend
+    # Ideally ContextManager should work with the adapter or protocol directly
+    try:
+        # Access the raw LocalExecutionBackend if possible, or use the adapter
+        raw_backend = getattr(backend, "backend", backend)
+        context_manager = ContextManager(raw_backend)
+        context_manager.index_project()
+
+        # Get relevant context for system prompt
+        context_info = context_manager.get_context_summary()
+
+        # Base system prompt with context
+        if context_info:
+            SYSTEM_PROMPT_WITH_CONTEXT = SYSTEM_PROMPT + f"\n\nProject Context:\n{context_info}"
+        else:
+            SYSTEM_PROMPT_WITH_CONTEXT = SYSTEM_PROMPT
+    except Exception:
+        # Fallback if context manager fails
+        SYSTEM_PROMPT_WITH_CONTEXT = SYSTEM_PROMPT
+
     # Use provided values or defaults from settings
-    prompt = system_prompt if system_prompt else (settings.llm_system_prompt or SYSTEM_PROMPT)
+    prompt = (
+        system_prompt
+        if system_prompt
+        else (settings.llm_system_prompt or SYSTEM_PROMPT_WITH_CONTEXT)
+    )
     agent_memory = list(memory) if memory is not None else settings.agent_memory
     agent_skills = list(skills) if skills is not None else settings.agent_skills
     agent_subagents = list(subagents) if subagents is not None else settings.agent_subagents

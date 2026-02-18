@@ -7,7 +7,7 @@ Replaces the old JSON-based LocalSessionStore.
 from __future__ import annotations
 
 import json
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Optional
 
@@ -38,7 +38,11 @@ class SqliteSessionStore:
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
 
     async def _init_db(self) -> None:
-        """Initialize the database schema."""
+        """Initialize the database schema.
+
+        Creates the sessions table if it does not exist, and migrates
+        older schemas that are missing the ``scopes`` column.
+        """
         async with aiosqlite.connect(self.db_path) as db:
             await db.execute(
                 """
@@ -49,12 +53,22 @@ class SqliteSessionStore:
                     thread_id TEXT NOT NULL,
                     status TEXT NOT NULL,
                     config TEXT NOT NULL,
+                    scopes TEXT NOT NULL DEFAULT '{}',
                     message_count INTEGER DEFAULT 0,
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL
                 )
                 """
             )
+
+            # Migrate older schemas missing the scopes column
+            cursor = await db.execute("PRAGMA table_info(sessions)")
+            columns = {row[1] for row in await cursor.fetchall()}
+            if "scopes" not in columns:
+                await db.execute(
+                    "ALTER TABLE sessions ADD COLUMN scopes TEXT NOT NULL DEFAULT '{}'"
+                )
+
             await db.commit()
 
     async def create_session(
@@ -63,10 +77,11 @@ class SqliteSessionStore:
         thread_id: str,
         config: SessionConfig,
         title: Optional[str] = None,
+        scopes: Optional[dict[str, str]] = None,
     ) -> Session:
         """Create a new session."""
         await self._init_db()
-        now = datetime.utcnow().isoformat()
+        now = datetime.now(UTC).isoformat()
 
         session = Session(
             id=session_id,
@@ -78,6 +93,7 @@ class SqliteSessionStore:
             created_at=now,
             updated_at=now,
             message_count=0,
+            scopes=scopes or {},
         )
 
         config_json = json.dumps(
@@ -90,13 +106,15 @@ class SqliteSessionStore:
             }
         )
 
+        scopes_json = json.dumps(session.scopes)
+
         async with aiosqlite.connect(self.db_path) as db:
             await db.execute(
                 """
                 INSERT INTO sessions (
                     id, workspace_path, title, thread_id, status, 
-                    config, message_count, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    config, scopes, message_count, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     session.id,
@@ -105,6 +123,7 @@ class SqliteSessionStore:
                     session.thread_id,
                     session.status.value,
                     config_json,
+                    scopes_json,
                     session.message_count,
                     session.created_at,
                     session.updated_at,
@@ -129,6 +148,7 @@ class SqliteSessionStore:
                 row = await cursor.fetchone()
                 if row:
                     config_data = json.loads(row["config"])
+                    scopes_data = json.loads(row["scopes"]) if row["scopes"] else {}
                     config = SessionConfig(
                         provider=config_data.get("provider"),
                         model=config_data.get("model"),
@@ -146,11 +166,17 @@ class SqliteSessionStore:
                         created_at=row["created_at"],
                         updated_at=row["updated_at"],
                         message_count=row["message_count"],
+                        scopes=scopes_data,
                     )
         return None
 
-    async def list_sessions(self) -> list[Session]:
-        """List all sessions for this workspace."""
+    async def list_sessions(self, filter_scopes: Optional[dict[str, str]] = None) -> list[Session]:
+        """List all sessions for this workspace.
+
+        Args:
+            filter_scopes: If provided, only return sessions that match all
+                scope key-value pairs in this dictionary.
+        """
         await self._init_db()
         sessions = []
         async with aiosqlite.connect(self.db_path) as db:
@@ -158,6 +184,16 @@ class SqliteSessionStore:
             async with db.execute("SELECT * FROM sessions ORDER BY updated_at DESC") as cursor:
                 async for row in cursor:
                     config_data = json.loads(row["config"])
+                    scopes_data = json.loads(row["scopes"]) if row["scopes"] else {}
+
+                    # If filter_scopes is provided, only include sessions that match
+                    if filter_scopes:
+                        matches = all(
+                            scopes_data.get(key) == value for key, value in filter_scopes.items()
+                        )
+                        if not matches:
+                            continue
+
                     config = SessionConfig(
                         provider=config_data.get("provider"),
                         model=config_data.get("model"),
@@ -176,6 +212,7 @@ class SqliteSessionStore:
                             created_at=row["created_at"],
                             updated_at=row["updated_at"],
                             message_count=row["message_count"],
+                            scopes=scopes_data,
                         )
                     )
         return sessions
@@ -233,7 +270,7 @@ class SqliteSessionStore:
             return session
 
         updates.append("updated_at = ?")
-        now = datetime.utcnow().isoformat()
+        now = datetime.now(UTC).isoformat()
         params.append(now)
         session.updated_at = now
 
@@ -247,7 +284,7 @@ class SqliteSessionStore:
 
     async def update_message_count(self, session_id: str, count: int) -> None:
         """Update the message count for a session."""
-        now = datetime.utcnow().isoformat()
+        now = datetime.now(UTC).isoformat()
         async with aiosqlite.connect(self.db_path) as db:
             await db.execute(
                 "UPDATE sessions SET message_count = ?, updated_at = ? WHERE id = ?",
