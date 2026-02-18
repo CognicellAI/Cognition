@@ -17,7 +17,7 @@ import structlog
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 
-from server.app.models import Message, Session, SessionConfig, SessionStatus
+from server.app.models import Message, Session, SessionConfig, SessionStatus, ToolCall
 from server.app.storage.backend import StorageBackend
 
 logger = structlog.get_logger(__name__)
@@ -322,9 +322,14 @@ class PostgresStorageBackend:
         self,
         message_id: str,
         session_id: str,
-        role: Literal["user", "assistant", "system"],
+        role: Literal["user", "assistant", "system", "tool"],
         content: Optional[str],
         parent_id: Optional[str] = None,
+        tool_calls: Optional[list[ToolCall]] = None,
+        tool_call_id: Optional[str] = None,
+        token_count: Optional[int] = None,
+        model_used: Optional[str] = None,
+        metadata: Optional[dict[str, Any]] = None,
     ) -> Message:
         """Create a new message."""
         now = datetime.utcnow()
@@ -336,13 +341,18 @@ class PostgresStorageBackend:
             content=content,
             parent_id=parent_id,
             created_at=now,
+            tool_calls=tool_calls,
+            tool_call_id=tool_call_id,
+            token_count=token_count,
+            model_used=model_used,
+            metadata=metadata,
         )
 
         async with self._pool.acquire() as conn:
             await conn.execute(
                 """
-                INSERT INTO messages (id, session_id, role, content, parent_id, created_at)
-                VALUES ($1, $2, $3, $4, $5, $6)
+                INSERT INTO messages (id, session_id, role, content, parent_id, created_at, tool_calls, tool_call_id, token_count, model_used, metadata)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
                 """,
                 message.id,
                 message.session_id,
@@ -350,6 +360,13 @@ class PostgresStorageBackend:
                 message.content,
                 message.parent_id,
                 now,
+                json.dumps([{"name": tc.name, "args": tc.args, "id": tc.id} for tc in tool_calls])
+                if tool_calls
+                else None,
+                message.tool_call_id,
+                message.token_count,
+                message.model_used,
+                json.dumps(metadata) if metadata else None,
             )
 
         logger.debug(
@@ -506,13 +523,38 @@ class PostgresStorageBackend:
         else:
             created_at = datetime.fromisoformat(created_at)
 
+        tool_calls_data = row.get("tool_calls")
+        tool_calls = None
+        if tool_calls_data:
+            try:
+                tc_list = json.loads(tool_calls_data)
+                tool_calls = [
+                    ToolCall(name=tc["name"], args=tc.get("args", {}), id=tc["id"])
+                    for tc in tc_list
+                ]
+            except (json.JSONDecodeError, KeyError, TypeError):
+                tool_calls = None
+
+        metadata_data = row.get("metadata")
+        metadata = None
+        if metadata_data:
+            try:
+                metadata = json.loads(metadata_data)
+            except json.JSONDecodeError:
+                metadata = None
+
         return Message(
             id=row["id"],
             session_id=row["session_id"],
-            role=row["role"],
+            role=row["role"],  # type: ignore
             content=row["content"],
             parent_id=row["parent_id"],
             created_at=created_at,
+            tool_calls=tool_calls,
+            tool_call_id=row.get("tool_call_id"),
+            token_count=row.get("token_count"),
+            model_used=row.get("model_used"),
+            metadata=metadata,
         )
 
 

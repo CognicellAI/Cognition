@@ -32,7 +32,7 @@ This roadmap is derived from [FIRST-PRINCIPLE-EVALUTION.md](./FIRST-PRINCIPLE-EV
 - ✅ **P1-6 AgentRuntime Protocol**: Cognition-owned runtime abstraction
 
 ### P2 (Robustness) - ✅ 100% Complete
-- ✅ **P2-1 SSE Reconnection**: Last-Event-ID support with keepalive
+- ✅ **P2-1 SSE Reconnection**: Last-Event-ID support with configurable retry intervals and keepalive heartbeats
 - ✅ **P2-2 Circuit Breaker**: Provider resilience with exponential backoff
 - ✅ **P2-3 Evaluation Pipeline**: MLflow-based evaluation with custom scorers
 - ✅ **P2-4 CORS Middleware**: Configurable cross-origin support
@@ -350,21 +350,39 @@ These items are required for any production deployment. P0 must be complete befo
 
 Production hardening, resilience, and developer experience. P1 must be complete before starting P2.
 
-### P2-1: SSE Reconnection
+### P2-1: SSE Reconnection ✅ COMPLETE
 
 | Field | Value |
 |---|---|
 | **Layer** | 6 (API & Streaming) |
-| **Status** | Not started |
+| **Status** | ✅ Complete |
 | **Effort** | ~1 week |
 | **Dependencies** | P0-1 (Message Persistence) |
 
-**Acceptance Criteria:**
-- [ ] SSE events include `id:` field for `Last-Event-ID` resumption
-- [ ] `retry:` directive sent to clients
-- [ ] Keepalive heartbeat events (`:` comment lines) at configurable interval
-- [ ] `Last-Event-ID` header support: resume stream from where client disconnected
-- [ ] Unit tests for event ID generation and resumption logic
+**Implementation:** `server/app/api/sse.py` - Full SSE reconnection support with Last-Event-ID, configurable retry intervals, and keepalive heartbeats.
+
+**Completed:**
+- ✅ Event ID generation: Sequential counter + UUID prefix format (e.g., `123-abc12345`)
+- ✅ Retry directive: Configurable `retry:` directive sent to clients (default 3000ms)
+- ✅ Keepalive heartbeat: Periodic `:` comment lines at configurable interval (default 15s)
+- ✅ Last-Event-ID support: Resume stream from buffered events using client header
+- ✅ Event buffering: Circular buffer stores recent events for replay on reconnection
+- ✅ Settings integration: `SSE_RETRY_INTERVAL_MS`, `SSE_HEARTBEAT_INTERVAL_SECONDS`, `SSE_BUFFER_SIZE`
+- ✅ Reconnection event: Sends `reconnected` event with `last_event_id` confirmation
+- ✅ Unit tests: 38 tests covering all SSE functionality
+
+**Files Modified:**
+- `server/app/api/sse.py` - Enhanced SSE implementation
+- `server/app/api/routes/messages.py` - Uses enhanced SSE with Last-Event-ID header
+- `server/app/settings.py` - Added SSE configuration settings
+- `tests/unit/test_sse.py` - Comprehensive unit tests (38 tests)
+
+**Example Usage:**
+```python
+# Client disconnects and reconnects with Last-Event-ID header
+sse_stream = SSEStream.from_settings(settings)
+return sse_stream.create_response(event_stream, request, last_event_id="123-abc12345")
+```
 
 ---
 

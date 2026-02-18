@@ -21,8 +21,9 @@ from server.app.api.models import (
     MessageResponse,
     MessageList,
     ErrorResponse,
+    ToolCallResponse,
 )
-from server.app.api.sse import SSEStream, EventBuilder
+from server.app.api.sse import SSEStream, EventBuilder, get_last_event_id
 from server.app.session_store import get_session_store
 from server.app.message_store import get_message_store
 from server.app.settings import Settings, get_settings
@@ -71,6 +72,10 @@ async def agent_event_stream(
     2. State persistence via thread_id checkpointing
     3. Built-in planning with write_todos
     4. Context management and streaming
+
+    Yields:
+        SSE events as dictionaries. The final 'done' event contains
+        the assistant message data for persistence.
     """
     try:
         # Get or create agent service for this session
@@ -94,6 +99,14 @@ async def agent_event_stream(
         if session and session.config.system_prompt:
             system_prompt = session.config.system_prompt
 
+        # Accumulate assistant message data for persistence
+        accumulated_content = []
+        tool_calls = []
+        current_tool_call = None
+        token_count = 0
+        model_used = None
+        metadata = {}
+
         # Stream response using DeepAgents with multi-step support
         async for event in service.stream_response(
             session_id=session_id,
@@ -103,9 +116,18 @@ async def agent_event_stream(
             system_prompt=system_prompt,
         ):
             if isinstance(event, TokenEvent):
+                accumulated_content.append(event.content)
+                token_count += len(event.content.split())
                 yield EventBuilder.token(event.content)
 
             elif isinstance(event, ToolCallEvent):
+                tool_call = {
+                    "name": event.name,
+                    "args": event.args,
+                    "id": event.tool_call_id,
+                }
+                tool_calls.append(tool_call)
+                current_tool_call = event.tool_call_id
                 yield EventBuilder.tool_call(
                     name=event.name,
                     args=event.args,
@@ -133,6 +155,12 @@ async def agent_event_stream(
                 yield EventBuilder.status(event.status)
 
             elif isinstance(event, UsageEvent):
+                token_count = event.output_tokens
+                model_used = event.model
+                metadata["input_tokens"] = event.input_tokens
+                metadata["output_tokens"] = event.output_tokens
+                metadata["estimated_cost"] = event.estimated_cost
+                metadata["provider"] = event.provider
                 yield EventBuilder.usage(
                     input_tokens=event.input_tokens,
                     output_tokens=event.output_tokens,
@@ -142,7 +170,15 @@ async def agent_event_stream(
                 )
 
             elif isinstance(event, DoneEvent):
-                yield EventBuilder.done()
+                # Include assistant message data in the done event for persistence
+                assistant_data = {
+                    "content": "".join(accumulated_content),
+                    "tool_calls": tool_calls if tool_calls else None,
+                    "token_count": token_count,
+                    "model_used": model_used,
+                    "metadata": metadata if metadata else None,
+                }
+                yield EventBuilder.done(assistant_data=assistant_data)
 
             elif isinstance(event, ErrorEvent):
                 yield EventBuilder.error(event.message, code=event.code)
@@ -242,10 +278,57 @@ async def send_message(
         session_id, thread_id, request.content, workspace_path, settings, agent_manager
     )
 
-    # TODO: P2-5 will add assistant message persistence here
-    # For now, only user messages are persisted
+    # Wrap the event stream to persist assistant message on completion
+    async def wrapped_event_stream():
+        assistant_data = None
+        async for event in event_stream:
+            # Capture assistant data from done event
+            if event.get("event") == "done" and event.get("data", {}).get("assistant_data"):
+                assistant_data = event["data"]["assistant_data"]
+            yield event
 
-    return SSEStream.create_response(event_stream, http_request)
+        # Persist assistant message after stream completes
+        if assistant_data:
+            try:
+                from server.app.models import ToolCall
+
+                # Convert tool_calls dicts to ToolCall objects
+                tc_objects = None
+                if assistant_data.get("tool_calls"):
+                    tc_objects = [
+                        ToolCall(name=tc["name"], args=tc.get("args", {}), id=tc["id"])
+                        for tc in assistant_data["tool_calls"]
+                    ]
+
+                await message_store.create_message(
+                    message_id=str(uuid.uuid4()),
+                    session_id=session_id,
+                    role="assistant",
+                    content=assistant_data.get("content"),
+                    parent_id=user_message.id,
+                    tool_calls=tc_objects,
+                    token_count=assistant_data.get("token_count"),
+                    model_used=assistant_data.get("model_used"),
+                    metadata=assistant_data.get("metadata"),
+                )
+
+                # Update session message count
+                messages_for_session, _ = await message_store.get_messages_by_session(
+                    session_id, limit=-1, offset=0
+                )
+                await store.update_message_count(session_id, len(messages_for_session))
+            except Exception as e:
+                logger = __import__("structlog").get_logger(__name__)
+                logger.error(
+                    "Failed to persist assistant message", error=str(e), session_id=session_id
+                )
+
+    # Check for Last-Event-ID header for stream resumption
+    last_event_id = get_last_event_id(http_request)
+
+    # Create SSE stream with settings-based configuration
+    sse_stream = SSEStream.from_settings(settings)
+    return sse_stream.create_response(wrapped_event_stream(), http_request, last_event_id)
 
 
 @router.get(
@@ -294,6 +377,15 @@ async def list_messages(
             content=m.content,
             parent_id=m.parent_id,
             created_at=m.created_at,
+            tool_calls=[
+                ToolCallResponse(name=tc.name, args=tc.args, id=tc.id) for tc in m.tool_calls
+            ]
+            if m.tool_calls
+            else None,
+            tool_call_id=m.tool_call_id,
+            token_count=m.token_count,
+            model_used=m.model_used,
+            metadata=m.metadata,
         )
         for m in messages
     ]
@@ -354,6 +446,15 @@ async def get_message(
             content=message.content,
             parent_id=message.parent_id,
             created_at=message.created_at,
+            tool_calls=[
+                ToolCallResponse(name=tc.name, args=tc.args, id=tc.id) for tc in message.tool_calls
+            ]
+            if message.tool_calls
+            else None,
+            tool_call_id=message.tool_call_id,
+            token_count=message.token_count,
+            model_used=message.model_used,
+            metadata=message.metadata,
         )
 
     raise HTTPException(

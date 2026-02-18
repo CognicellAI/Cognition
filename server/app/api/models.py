@@ -75,6 +75,14 @@ class SessionUpdate(BaseModel):
 # ============================================================================
 
 
+class ToolCallResponse(BaseModel):
+    """Tool call response model."""
+
+    name: str = Field(..., description="Tool name")
+    args: dict[str, Any] = Field(..., description="Tool arguments")
+    id: str = Field(..., description="Tool call ID")
+
+
 class MessageCreate(BaseModel):
     """Request to send a message."""
 
@@ -91,11 +99,16 @@ class MessageResponse(BaseModel):
 
     id: str = Field(..., description="Unique message identifier")
     session_id: str = Field(..., description="Associated session ID")
-    role: Literal["user", "assistant", "system"] = Field(..., description="Message role")
+    role: Literal["user", "assistant", "system", "tool"] = Field(..., description="Message role")
     content: Optional[str] = Field(None, description="Message content (if complete)")
     parent_id: Optional[str] = Field(None, description="Parent message ID")
     model: Optional[str] = Field(default=None, description="Model used for this message")
     created_at: datetime = Field(..., description="Message creation timestamp")
+    tool_calls: Optional[list[ToolCallResponse]] = Field(None, description="Tool invocations")
+    tool_call_id: Optional[str] = Field(None, description="ID of tool being responded to")
+    token_count: Optional[int] = Field(None, description="Token usage for this message")
+    model_used: Optional[str] = Field(None, description="Model that generated response")
+    metadata: Optional[dict[str, Any]] = Field(None, description="Additional metadata")
 
 
 class MessageList(BaseModel):

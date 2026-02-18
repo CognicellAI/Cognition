@@ -206,7 +206,6 @@ Cognition is built for production deployments with comprehensive table-stakes, r
 | Feature | Status | Description |
 |---------|--------|-------------|
 | **Message Persistence** | ✅ | SQLite/PostgreSQL message storage with pagination |
-| **Security** | ✅ | No `shell=True`—commands parsed with `shlex` |
 | **Session Scoping** | ✅ | Multi-tenant isolation via HTTP headers |
 | **Rate Limiting** | ✅ | Token bucket with scope-aware keys |
 | **Abort** | ✅ | Cancel streaming tasks gracefully |
@@ -244,8 +243,6 @@ uv run pytest tests/unit/test_message_store.py -v
 *   🛠️ **[Extending Agents](./docs/v2/guides/extending-agents.md)**: How to add memory, skills, and tools.
 *   ⚙️ **[Configuration Reference](./docs/v2/guides/configuration.md)**: YAML and Environment variable details.
 *   🚀 **[Deployment Guide](./docs/v2/guides/deployment.md)**: Running in Docker and Kubernetes.
-*   🗺️ **[Roadmap](./ROADMAP.md)**: Current implementation status and future plans.
-*   🏗️ **[Architecture](./FIRST-PRINCIPLE-EVALUATION.md)**: 7-layer architectural principles.
 
 ## License
 

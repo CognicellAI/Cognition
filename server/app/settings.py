@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Literal, Optional
+from typing import Any, List, Literal, Optional
 
 from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -98,6 +98,32 @@ class Settings(BaseSettings):
     prompt_fallback_to_local: bool = Field(default=True, alias="COGNITION_PROMPT_FALLBACK_TO_LOCAL")
     prompts_dir: Optional[str] = Field(default=".cognition/prompts", alias="COGNITION_PROMPTS_DIR")
 
+    # CORS settings
+    cors_origins: List[str] = Field(
+        default=["*"],
+        alias="COGNITION_CORS_ORIGINS",
+    )
+    cors_methods: List[str] = Field(
+        default=["*"],
+        alias="COGNITION_CORS_METHODS",
+    )
+    cors_headers: List[str] = Field(
+        default=["*"],
+        alias="COGNITION_CORS_HEADERS",
+    )
+    cors_credentials: bool = Field(
+        default=False,
+        alias="COGNITION_CORS_CREDENTIALS",
+    )
+
+    @field_validator("cors_origins", "cors_methods", "cors_headers", mode="before")
+    @classmethod
+    def parse_cors_list(cls, v: Any) -> list[str] | Any:
+        """Parse comma-separated string into list."""
+        if isinstance(v, str):
+            return [item.strip() for item in v.split(",")]
+        return v
+
     # Agent behavior
     agent_memory: list[str] = Field(default=["AGENTS.md"], alias="COGNITION_AGENT_MEMORY")
     agent_skills: list[str] = Field(default=[".cognition/skills/"], alias="COGNITION_AGENT_SKILLS")
@@ -122,6 +148,20 @@ class Settings(BaseSettings):
     scope_keys: list[str] = Field(
         default=["user"],
         alias="COGNITION_SCOPE_KEYS",
+    )
+
+    # SSE (Server-Sent Events) settings
+    sse_retry_interval_ms: int = Field(
+        default=3000,
+        alias="COGNITION_SSE_RETRY_INTERVAL_MS",
+    )
+    sse_heartbeat_interval_seconds: float = Field(
+        default=15.0,
+        alias="COGNITION_SSE_HEARTBEAT_INTERVAL_SECONDS",
+    )
+    sse_buffer_size: int = Field(
+        default=100,
+        alias="COGNITION_SSE_BUFFER_SIZE",
     )
 
     # Test settings

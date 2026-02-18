@@ -1,0 +1,456 @@
+"""AgentRuntime Protocol for Cognition.
+
+This module defines the AgentRuntime protocol and provides a Deep Agents wrapper
+implementation. The protocol abstracts the underlying agent framework, allowing
+Cognition to remain framework-agnostic.
+
+Architecture:
+- AgentRuntime (protocol): Clean interface for agent operations
+- DeepAgentRuntime (implementation): Wraps Deep Agents with AgentRuntime interface
+- create_agent_runtime() (factory): Creates configured AgentRuntime instances
+
+Layer: 4 (Agent Runtime)
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import (
+    Any,
+    AsyncIterator,
+    Literal,
+    Mapping,
+    Optional,
+    Protocol,
+    Sequence,
+    runtime_checkable,
+)
+
+from pydantic import BaseModel, Field
+
+from server.app.agent.cognition_agent import create_cognition_agent
+from server.app.settings import Settings, get_settings
+
+
+class AgentEvent(BaseModel):
+    """Event emitted by the agent during execution.
+    
+    Events flow from the agent to the client via SSE streaming.
+    """
+    event_type: Literal["message", "tool_call", "tool_result", "status", "error", "complete"]
+    content: Optional[str] = None
+    tool_name: Optional[str] = None
+    tool_input: Optional[dict[str, Any]] = None
+    tool_output: Optional[str] = None
+    status: Optional[Literal["thinking", "idle", "error"]] = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class AgentState(BaseModel):
+    """Current state of the agent execution.
+    
+    Captures the agent's internal state including conversation history,
+    tool usage, and checkpoint information.
+    """
+    thread_id: str
+    message_count: int = 0
+    last_tool_used: Optional[str] = None
+    is_active: bool = False
+    checkpoint_id: Optional[str] = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+@dataclass
+class AgentDefinition:
+    """Declarative definition of an agent's behavior and capabilities.
+    
+    This dataclass defines what an agent can do, not how it does it.
+    The runtime implementation handles the execution details.
+    
+    Attributes:
+        tools: List of tool callables or tool specifications
+        system_prompt: System prompt for the agent
+        skills: List of skill directory paths for progressive disclosure
+        memory: List of memory files (e.g., AGENTS.md)
+        subagents: List of subagent definitions for delegation
+        interrupt_on: Dict mapping tool names to approval requirements
+        middleware: List of middleware instances to apply
+        model: Optional model override
+    """
+    tools: Sequence[Any] = field(default_factory=list)
+    system_prompt: Optional[str] = None
+    skills: Sequence[str] = field(default_factory=list)
+    memory: Sequence[str] = field(default_factory=list)
+    subagents: Sequence[Any] = field(default_factory=list)
+    interrupt_on: Mapping[str, Any] = field(default_factory=dict)
+    middleware: Sequence[Any] = field(default_factory=list)
+    model: Any = None
+
+
+@runtime_checkable
+class AgentRuntime(Protocol):
+    """Protocol defining the interface between Cognition and agent frameworks.
+    
+    This protocol abstracts the underlying agent implementation, allowing
+    Cognition to work with different agent frameworks (Deep Agents, LangChain,
+    etc.) without changing business logic.
+    
+    Layer: 4 (Agent Runtime)
+    
+    Example:
+        ```python
+        runtime = create_agent_runtime(definition, workspace_path="/path")
+        
+        # Stream events
+        async for event in runtime.astream_events("Analyze this code"):
+            print(event)
+        
+        # Or invoke directly
+        result = await runtime.ainvoke("Hello")
+        ```
+    """
+
+    async def astream_events(self, input_text: str, **kwargs: Any) -> AsyncIterator[AgentEvent]:
+        """Stream agent events asynchronously.
+        
+        Yields AgentEvent objects as the agent processes the input.
+        Events include messages, tool calls, status updates, and errors.
+        
+        Args:
+            input_text: The user input to process
+            **kwargs: Additional runtime parameters (e.g., thread_id)
+            
+        Yields:
+            AgentEvent: Events from the agent execution
+        """
+        ...
+
+    async def ainvoke(self, input_text: str, **kwargs: Any) -> dict[str, Any]:
+        """Invoke the agent synchronously and return the result.
+        
+        Unlike astream_events(), this method waits for the complete
+        agent execution and returns the final result.
+        
+        Args:
+            input_text: The user input to process
+            **kwargs: Additional runtime parameters (e.g., thread_id)
+            
+        Returns:
+            Dict containing the agent's response and metadata
+        """
+        ...
+
+    def get_state(self) -> AgentState:
+        """Get the current agent execution state.
+        
+        Returns:
+            AgentState representing the current state
+        """
+        ...
+
+    async def abort(self) -> None:
+        """Cancel the current agent execution.
+        
+        This method signals the runtime to stop the current execution
+        as soon as possible. The session remains usable after abort.
+        """
+        ...
+
+    def get_checkpointer(self) -> Any:
+        """Get the checkpoint saver for state persistence.
+        
+        Returns:
+            The checkpointer instance used by this runtime
+        """
+        ...
+
+
+class DeepAgentRuntime:
+    """AgentRuntime implementation wrapping Deep Agents.
+    
+    This class wraps the Deep Agents framework implementation and exposes
+    it through the AgentRuntime protocol interface.
+    
+    Attributes:
+        _agent: The underlying Deep Agent instance
+        _thread_id: Current conversation thread ID
+        _checkpointer: Checkpoint saver for state persistence
+        _is_active: Whether the agent is currently executing
+    """
+
+    def __init__(
+        self,
+        agent: Any,
+        thread_id: str,
+        checkpointer: Any = None,
+    ):
+        """Initialize the DeepAgentRuntime.
+        
+        Args:
+            agent: The Deep Agent instance to wrap
+            thread_id: Thread ID for conversation state
+            checkpointer: Optional checkpoint saver
+        """
+        self._agent = agent
+        self._thread_id = thread_id
+        self._checkpointer = checkpointer
+        self._is_active = False
+        self._current_task: Any = None
+
+    async def astream_events(self, input_text: str, **kwargs: Any) -> AsyncIterator[AgentEvent]:
+        """Stream agent events from Deep Agents.
+        
+        Converts Deep Agent events to AgentEvent objects and yields them.
+        
+        Args:
+            input_text: User input to process
+            **kwargs: Additional parameters (thread_id, etc.)
+            
+        Yields:
+            AgentEvent: Normalized events from Deep Agents
+        """
+        self._is_active = True
+        thread_id = kwargs.get("thread_id", self._thread_id)
+        
+        try:
+            # Yield initial status
+            yield AgentEvent(
+                event_type="status",
+                status="thinking",
+            )
+            
+            # Stream from Deep Agent
+            # Deep Agents uses astream_events for streaming
+            async for event in self._agent.astream_events(
+                {"messages": [{"role": "user", "content": input_text}]},
+                config={"configurable": {"thread_id": thread_id}},
+                version="v2",
+            ):
+                event_type = event.get("event", "")
+                
+                # Map Deep Agent events to AgentEvent
+                if event_type == "on_chat_model_stream":
+                    content = event.get("data", {}).get("chunk", {}).get("content", "")
+                    if content:
+                        yield AgentEvent(
+                            event_type="message",
+                            content=content,
+                        )
+                
+                elif event_type == "on_tool_start":
+                    tool_name = event.get("name", "unknown")
+                    tool_input = event.get("data", {}).get("input", {})
+                    yield AgentEvent(
+                        event_type="tool_call",
+                        tool_name=tool_name,
+                        tool_input=tool_input,
+                    )
+                
+                elif event_type == "on_tool_end":
+                    tool_name = event.get("name", "unknown")
+                    tool_output = str(event.get("data", {}).get("output", ""))
+                    yield AgentEvent(
+                        event_type="tool_result",
+                        tool_name=tool_name,
+                        tool_output=tool_output,
+                    )
+                
+                elif event_type == "on_error":
+                    error_msg = str(event.get("data", {}).get("error", "Unknown error"))
+                    yield AgentEvent(
+                        event_type="error",
+                        content=error_msg,
+                    )
+            
+            # Yield completion
+            yield AgentEvent(
+                event_type="complete",
+            )
+            
+        except Exception as e:
+            yield AgentEvent(
+                event_type="error",
+                content=str(e),
+            )
+        finally:
+            self._is_active = False
+            yield AgentEvent(
+                event_type="status",
+                status="idle",
+            )
+
+    async def ainvoke(self, input_text: str, **kwargs: Any) -> dict[str, Any]:
+        """Invoke the Deep Agent and return the result.
+        
+        Args:
+            input_text: User input to process
+            **kwargs: Additional parameters
+            
+        Returns:
+            Dict with response content and metadata
+        """
+        self._is_active = True
+        thread_id = kwargs.get("thread_id", self._thread_id)
+        
+        try:
+            result = await self._agent.ainvoke(
+                {"messages": [{"role": "user", "content": input_text}]},
+                config={"configurable": {"thread_id": thread_id}},
+            )
+            
+            # Extract the last message content
+            messages = result.get("messages", [])
+            last_message = messages[-1] if messages else None
+            content = ""
+            
+            if last_message:
+                if hasattr(last_message, "content"):
+                    content = last_message.content
+                elif isinstance(last_message, dict):
+                    content = last_message.get("content", "")
+            
+            return {
+                "content": content,
+                "messages": messages,
+                "thread_id": thread_id,
+            }
+        finally:
+            self._is_active = False
+
+    def get_state(self) -> AgentState:
+        """Get current agent state.
+        
+        Returns:
+            AgentState with current execution info
+        """
+        return AgentState(
+            thread_id=self._thread_id,
+            is_active=self._is_active,
+            checkpoint_id=None,  # Would extract from checkpointer if available
+        )
+
+    async def abort(self) -> None:
+        """Cancel current execution.
+        
+        Note: Deep Agents doesn't have explicit abort support in all versions.
+        This sets the active flag to false and cancels any tracked task.
+        """
+        self._is_active = False
+        if self._current_task and not self._current_task.done():
+            self._current_task.cancel()
+
+    def get_checkpointer(self) -> Any:
+        """Get the checkpoint saver.
+        
+        Returns:
+            The checkpointer instance or None
+        """
+        return self._checkpointer
+
+
+def create_agent_runtime(
+    definition: AgentDefinition,
+    workspace_path: str | Path,
+    thread_id: str,
+    checkpointer: Any = None,
+    settings: Settings | None = None,
+) -> AgentRuntime:
+    """Factory function for creating AgentRuntime instances.
+    
+    Creates a configured AgentRuntime from an AgentDefinition. This is the
+    primary entry point for agent creation in Cognition.
+    
+    Args:
+        definition: AgentDefinition with tools, prompts, and configuration
+        workspace_path: Path to the project workspace
+        thread_id: Thread ID for conversation state
+        checkpointer: Optional checkpoint saver for persistence
+        settings: Optional settings override
+        
+    Returns:
+        AgentRuntime instance ready for use
+        
+    Example:
+        ```python
+        definition = AgentDefinition(
+            system_prompt="You are a helpful assistant",
+            tools=[my_tool],
+        )
+        runtime = create_agent_runtime(
+            definition,
+            workspace_path="/path/to/project",
+            thread_id="session-123",
+        )
+        ```
+    """
+    settings = settings or get_settings()
+    workspace_path = Path(workspace_path).resolve()
+    
+    # Create the Deep Agent using existing factory
+    agent = create_cognition_agent(
+        project_path=workspace_path,
+        model=definition.model or settings.llm_model,
+        system_prompt=definition.system_prompt,
+        memory=definition.memory,
+        skills=definition.skills,
+        subagents=definition.subagents,
+        interrupt_on=definition.interrupt_on,
+        middleware=definition.middleware,
+        tools=definition.tools if definition.tools else None,
+        checkpointer=checkpointer,
+        settings=settings,
+    )
+    
+    # Wrap in DeepAgentRuntime
+    return DeepAgentRuntime(
+        agent=agent,
+        thread_id=thread_id,
+        checkpointer=checkpointer,
+    )
+
+
+def load_agent_definition(path: str | Path) -> AgentDefinition:
+    """Load an AgentDefinition from a YAML file.
+    
+    Supports .cognition/agent.yaml files with declarative agent configuration.
+    
+    Args:
+        path: Path to the YAML file
+        
+    Returns:
+        AgentDefinition loaded from file
+        
+    Raises:
+        FileNotFoundError: If the file doesn't exist
+        ValueError: If the YAML is invalid
+    """
+    path = Path(path)
+    
+    if not path.exists():
+        raise FileNotFoundError(f"Agent definition not found: {path}")
+    
+    try:
+        import yaml
+        with open(path, "r") as f:
+            data = yaml.safe_load(f)
+    except ImportError:
+        raise ImportError(
+            "PyYAML is required for YAML config support. "
+            "Install with: uv pip install pyyaml"
+        )
+    except Exception as e:
+        raise ValueError(f"Failed to parse agent definition: {e}")
+    
+    if not isinstance(data, dict):
+        raise ValueError("Agent definition must be a YAML mapping")
+    
+    return AgentDefinition(
+        tools=data.get("tools", []),
+        system_prompt=data.get("system_prompt"),
+        skills=data.get("skills", []),
+        memory=data.get("memory", []),
+        subagents=data.get("subagents", []),
+        interrupt_on=data.get("interrupt_on", {}),
+        middleware=data.get("middleware", []),
+    )

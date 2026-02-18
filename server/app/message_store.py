@@ -6,16 +6,39 @@ Replaces the old in-memory dict-based storage.
 
 from __future__ import annotations
 
+import json
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 import aiosqlite
 import structlog
 
-from server.app.models import Message
+from server.app.models import Message, ToolCall
 
 logger = structlog.get_logger(__name__)
+
+
+def _parse_tool_calls(tool_calls_json: Optional[str]) -> Optional[list[ToolCall]]:
+    """Parse tool_calls JSON string into list of ToolCall objects."""
+    if not tool_calls_json:
+        return None
+    try:
+        data = json.loads(tool_calls_json)
+        return [ToolCall(name=tc["name"], args=tc.get("args", {}), id=tc["id"]) for tc in data]
+    except (json.JSONDecodeError, KeyError, TypeError):
+        return None
+
+
+def _parse_metadata(metadata_json: Optional[str]) -> Optional[dict[str, Any]]:
+    """Parse metadata JSON string into dict."""
+    if not metadata_json:
+        return None
+    try:
+        result: dict[str, Any] = json.loads(metadata_json)
+        return result
+    except json.JSONDecodeError:
+        return None
 
 
 class SqliteMessageStore:
@@ -48,13 +71,18 @@ class SqliteMessageStore:
                     content TEXT,
                     parent_id TEXT,
                     created_at TEXT NOT NULL,
+                    tool_calls TEXT,
+                    tool_call_id TEXT,
+                    token_count INTEGER,
+                    model_used TEXT,
+                    metadata TEXT,
                     FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
                 )
                 """
             )
             await db.execute(
                 """
-                CREATE INDEX IF NOT EXISTS idx_messages_session 
+                CREATE INDEX IF NOT EXISTS idx_messages_session
                 ON messages(session_id, created_at)
                 """
             )
@@ -67,6 +95,11 @@ class SqliteMessageStore:
         role: str,
         content: Optional[str],
         parent_id: Optional[str] = None,
+        tool_calls: Optional[list[ToolCall]] = None,
+        tool_call_id: Optional[str] = None,
+        token_count: Optional[int] = None,
+        model_used: Optional[str] = None,
+        metadata: Optional[dict[str, Any]] = None,
     ) -> Message:
         """Create a new message."""
         await self._init_db()
@@ -75,17 +108,23 @@ class SqliteMessageStore:
         message = Message(
             id=message_id,
             session_id=session_id,
-            role=role,  # type: ignore
+            role=role,  # type: ignore[arg-type]
             content=content,
             parent_id=parent_id,
             created_at=datetime.fromisoformat(now),
+            tool_calls=tool_calls,
+            tool_call_id=tool_call_id,
+            token_count=token_count,
+            model_used=model_used,
+            metadata=metadata,
         )
 
         async with aiosqlite.connect(self.db_path) as db:
             await db.execute(
                 """
-                INSERT INTO messages (id, session_id, role, content, parent_id, created_at)
-                VALUES (?, ?, ?, ?, ?, ?)
+                INSERT INTO messages
+                (id, session_id, role, content, parent_id, created_at, tool_calls, tool_call_id, token_count, model_used, metadata)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     message.id,
@@ -94,6 +133,15 @@ class SqliteMessageStore:
                     message.content,
                     message.parent_id,
                     now,
+                    json.dumps(
+                        [{"name": tc.name, "args": tc.args, "id": tc.id} for tc in tool_calls]
+                    )
+                    if tool_calls
+                    else None,
+                    message.tool_call_id,
+                    message.token_count,
+                    message.model_used,
+                    json.dumps(metadata) if metadata else None,
                 ),
             )
             await db.commit()
@@ -118,10 +166,15 @@ class SqliteMessageStore:
                     return Message(
                         id=row["id"],
                         session_id=row["session_id"],
-                        role=row["role"],  # type: ignore
+                        role=row["role"],
                         content=row["content"],
                         parent_id=row["parent_id"],
                         created_at=datetime.fromisoformat(row["created_at"]),
+                        tool_calls=_parse_tool_calls(row["tool_calls"]),
+                        tool_call_id=row["tool_call_id"],
+                        token_count=row["token_count"],
+                        model_used=row["model_used"],
+                        metadata=_parse_metadata(row["metadata"]),
                     )
         return None
 
@@ -150,7 +203,7 @@ class SqliteMessageStore:
             # Get paginated messages
             async with db.execute(
                 """
-                SELECT * FROM messages 
+                SELECT * FROM messages
                 WHERE session_id = ?
                 ORDER BY created_at ASC
                 LIMIT ? OFFSET ?
@@ -162,10 +215,15 @@ class SqliteMessageStore:
                         Message(
                             id=row["id"],
                             session_id=row["session_id"],
-                            role=row["role"],  # type: ignore
+                            role=row["role"],
                             content=row["content"],
                             parent_id=row["parent_id"],
                             created_at=datetime.fromisoformat(row["created_at"]),
+                            tool_calls=_parse_tool_calls(row["tool_calls"]),
+                            tool_call_id=row["tool_call_id"],
+                            token_count=row["token_count"],
+                            model_used=row["model_used"],
+                            metadata=_parse_metadata(row["metadata"]),
                         )
                     )
 

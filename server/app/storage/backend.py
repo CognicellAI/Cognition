@@ -104,18 +104,28 @@ class MessageStore(Protocol):
         self,
         message_id: str,
         session_id: str,
-        role: Literal["user", "assistant", "system"],
+        role: Literal["user", "assistant", "system", "tool"],
         content: Optional[str],
         parent_id: Optional[str] = None,
+        tool_calls: Optional[list] = None,
+        tool_call_id: Optional[str] = None,
+        token_count: Optional[int] = None,
+        model_used: Optional[str] = None,
+        metadata: Optional[dict[str, Any]] = None,
     ) -> Message:
         """Create a new message.
 
         Args:
             message_id: Unique identifier for the message.
             session_id: The parent session identifier.
-            role: Message role (user/assistant/system).
+            role: Message role (user/assistant/system/tool).
             content: Message content.
             parent_id: Optional parent message ID for threading.
+            tool_calls: Optional list of tool call invocations.
+            tool_call_id: Optional ID of tool being responded to.
+            token_count: Optional token usage for this message.
+            model_used: Optional model that generated response.
+            metadata: Optional additional metadata.
 
         Returns:
             The created Message object.

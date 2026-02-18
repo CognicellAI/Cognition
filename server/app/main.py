@@ -7,6 +7,7 @@ from datetime import datetime
 
 import structlog
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from server.app.api.models import ErrorResponse, HealthStatus, ReadyStatus
@@ -55,6 +56,16 @@ app = FastAPI(
     description="AI-powered coding assistant",
     version="0.1.0",
     lifespan=lifespan,
+)
+
+# Add CORS middleware first (must be before other middlewares)
+settings = get_settings()
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=settings.cors_origins,
+    allow_methods=settings.cors_methods,
+    allow_headers=settings.cors_headers,
+    allow_credentials=settings.cors_credentials,
 )
 
 app.add_middleware(SecurityHeadersMiddleware)

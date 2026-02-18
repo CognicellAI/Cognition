@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Literal, Optional
+from typing import Any, Literal, Optional
 from enum import Enum
 
 
@@ -94,15 +94,29 @@ class Session:
 
 
 @dataclass
+class ToolCall:
+    """Tool call invocation details."""
+
+    name: str
+    args: dict[str, Any]
+    id: str
+
+
+@dataclass
 class Message:
     """Core message domain model."""
 
     id: str
     session_id: str
-    role: Literal["user", "assistant", "system"]
+    role: Literal["user", "assistant", "system", "tool"]
     content: Optional[str]
     parent_id: Optional[str]
     created_at: datetime
+    tool_calls: Optional[list[ToolCall]] = None
+    tool_call_id: Optional[str] = None
+    token_count: Optional[int] = None
+    model_used: Optional[str] = None
+    metadata: Optional[dict[str, Any]] = None
 
 
 @dataclass

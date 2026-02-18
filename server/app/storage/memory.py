@@ -161,9 +161,14 @@ class MemoryStorageBackend:
         self,
         message_id: str,
         session_id: str,
-        role: Literal["user", "assistant", "system"],
+        role: Literal["user", "assistant", "system", "tool"],
         content: Optional[str],
         parent_id: Optional[str] = None,
+        tool_calls: Optional[list] = None,
+        tool_call_id: Optional[str] = None,
+        token_count: Optional[int] = None,
+        model_used: Optional[str] = None,
+        metadata: Optional[dict[str, Any]] = None,
     ) -> Message:
         """Create a new message."""
         now = datetime.utcnow()
@@ -175,6 +180,11 @@ class MemoryStorageBackend:
             content=content,
             parent_id=parent_id,
             created_at=now,
+            tool_calls=tool_calls,
+            tool_call_id=tool_call_id,
+            token_count=token_count,
+            model_used=model_used,
+            metadata=metadata,
         )
 
         self._messages[message_id] = message
