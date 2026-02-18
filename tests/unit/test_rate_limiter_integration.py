@@ -78,7 +78,7 @@ class TestRateLimiterIntegration:
     def test_rate_limiter_uses_scope_key(self):
         """Test that rate limiter uses scope key when scoping is enabled."""
         with (
-            patch("server.app.settings.get_settings") as mock_settings,
+            patch("server.app.api.routes.messages.get_settings") as mock_settings,
             patch("server.app.api.routes.messages.get_rate_limiter") as mock_get_limiter,
         ):
             from server.app.settings import Settings

@@ -44,6 +44,9 @@ app.add_typer(db_app)
 
 console = Console()
 
+# Project root directory for alembic commands
+project_root = Path(__file__).parent.parent.parent
+
 
 @app.command()
 def serve(

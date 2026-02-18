@@ -8,7 +8,7 @@ pooling for high-performance concurrent access.
 from __future__ import annotations
 
 import json
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal, Optional
 
@@ -147,7 +147,7 @@ class PostgresStorageBackend:
         title: Optional[str] = None,
     ) -> Session:
         """Create a new session."""
-        now = datetime.utcnow()
+        now = datetime.now(UTC)
 
         session = Session(
             id=session_id,
@@ -269,7 +269,7 @@ class PostgresStorageBackend:
             return session
 
         updates.append(f"updated_at = ${param_idx}")
-        now = datetime.utcnow()
+        now = datetime.now(UTC)
         params.append(now)
         param_idx += 1
 
@@ -286,7 +286,7 @@ class PostgresStorageBackend:
 
     async def update_message_count(self, session_id: str, count: int) -> None:
         """Update the message count for a session."""
-        now = datetime.utcnow()
+        now = datetime.now(UTC)
         async with self._pool.acquire() as conn:
             await conn.execute(
                 """
@@ -332,7 +332,7 @@ class PostgresStorageBackend:
         metadata: Optional[dict[str, Any]] = None,
     ) -> Message:
         """Create a new message."""
-        now = datetime.utcnow()
+        now = datetime.now(UTC)
 
         message = Message(
             id=message_id,

@@ -6,10 +6,10 @@ Tests that sessions are properly scoped and isolated based on scope metadata.
 from __future__ import annotations
 
 import pytest
-from datetime import datetime
+from datetime import UTC, datetime
 
 from server.app.models import Session, SessionConfig, SessionStatus
-from server.app.scoping import SessionScope
+from server.app.api.scoping import SessionScope
 from server.app.session_store import SqliteSessionStore
 
 
@@ -87,7 +87,7 @@ class TestSessionModel:
 
     def test_session_with_scopes(self):
         """Test creating session with scopes."""
-        now = datetime.utcnow().isoformat()
+        now = datetime.now(UTC).isoformat()
         config = SessionConfig(provider="openai", model="gpt-4")
         scopes = {"user_id": "user123", "project": "proj456"}
 
@@ -108,7 +108,7 @@ class TestSessionModel:
 
     def test_session_to_dict_includes_scopes(self):
         """Test that to_dict includes scopes."""
-        now = datetime.utcnow().isoformat()
+        now = datetime.now(UTC).isoformat()
         config = SessionConfig(provider="openai", model="gpt-4")
         scopes = {"user_id": "user123"}
 
@@ -137,8 +137,8 @@ class TestSessionModel:
             "thread_id": "thread-123",
             "status": "active",
             "config": {},
-            "created_at": datetime.utcnow().isoformat(),
-            "updated_at": datetime.utcnow().isoformat(),
+            "created_at": datetime.now(UTC).isoformat(),
+            "updated_at": datetime.now(UTC).isoformat(),
             "message_count": 0,
             "scopes": {"user_id": "user123"},
         }
@@ -148,7 +148,7 @@ class TestSessionModel:
 
     def test_session_default_scopes(self):
         """Test that scopes defaults to empty dict."""
-        now = datetime.utcnow().isoformat()
+        now = datetime.now(UTC).isoformat()
         config = SessionConfig()
 
         session = Session(
@@ -386,7 +386,7 @@ class TestScopeDependency:
 
     def test_extract_scope_from_headers(self):
         """Test extracting scope from request headers."""
-        from server.app.scoping import extract_scope_from_headers
+        from server.app.api.scoping import extract_scope_from_headers
         from server.app.settings import Settings
 
         # Create settings with custom scope keys
@@ -408,7 +408,7 @@ class TestScopeDependency:
 
     def test_extract_scope_with_missing_headers(self):
         """Test extracting scope when some headers are missing."""
-        from server.app.scoping import extract_scope_from_headers
+        from server.app.api.scoping import extract_scope_from_headers
         from server.app.settings import Settings
 
         settings = Settings(
@@ -430,7 +430,7 @@ class TestScopeDependency:
 
     def test_extract_scope_with_defaults(self):
         """Test extracting scope with default settings (user key)."""
-        from server.app.scoping import extract_scope_from_headers
+        from server.app.api.scoping import extract_scope_from_headers
         from server.app.settings import Settings
 
         settings = Settings(llm_provider="mock")

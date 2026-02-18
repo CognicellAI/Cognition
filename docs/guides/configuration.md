@@ -462,6 +462,8 @@ observability:
 | false | true | MLflow traces only |
 | true | true | Full stack (all backends) |
 
+> **Note:** MLflow LangChain autologging uses `run_tracer_inline=True` for async compatibility. However, an upstream MLflow bug causes ContextVar propagation errors in async uvicorn contexts. OpenTelemetry tracing to Jaeger works correctly as an alternative for trace visibility.
+
 ### Execution Backend (`execution`)
 
 Choose the sandbox environment for code execution.
@@ -482,6 +484,7 @@ execution:
 - `COGNITION_DOCKER_NETWORK_MODE` - Network isolation mode
 - `COGNITION_DOCKER_MEMORY_LIMIT` - Memory limit
 - `COGNITION_DOCKER_CPU_LIMIT` - CPU limit
+- `COGNITION_DOCKER_HOST_WORKSPACE` - Host filesystem path for Docker volume mounts (required when Cognition runs inside Docker and spawns sibling sandbox containers; leave empty for host-native execution)
 
 **Backends:**
 
@@ -493,6 +496,13 @@ execution:
 - Mounts workspace as read-write volume
 - Enforces resource limits and network policies
 - Destroys container on session end
+
+**Docker Security Hardening:**
+
+Docker sandbox containers are hardened with the following security measures:
+- `cap_drop=ALL` — all Linux capabilities are dropped from the container
+- `no-new-privileges` — prevents privilege escalation via setuid/setgid binaries
+- Read-only root filesystem with tmpfs mounts for `/tmp` and `/home` to allow necessary writes while preventing persistent filesystem modifications
 
 ### Evaluation (`evaluation`)
 
@@ -519,6 +529,8 @@ evaluation:
 - `helpfulness` - Actionability and relevance
 - `safety` - Policy compliance and toxicity
 - `tool_efficiency` - Appropriate tool usage
+
+> **Note:** The evaluation pipeline is partially implemented (P3-1). The `EvaluationService` with built-in scorers exists, but API routes for triggering evaluations and persistent feedback storage are not yet available.
 
 ## Security Best Practices
 

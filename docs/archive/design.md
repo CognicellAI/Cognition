@@ -306,7 +306,7 @@ import pytest
 import tempfile
 import os
 from pathlib import Path
-from server.app.sandbox import LocalSandbox
+from server.app.execution.sandbox import LocalSandbox
 
 class TestLocalSandbox:
     @pytest.fixture
@@ -485,7 +485,7 @@ Test agent actually using sandbox (mocked LLM):
 import pytest
 from unittest.mock import Mock, AsyncMock, patch
 from server.app.agent import create_cognition_agent
-from server.app.sandbox import LocalSandbox
+from server.app.execution.sandbox import LocalSandbox
 import tempfile
 
 class TestAgentSandboxIntegration:

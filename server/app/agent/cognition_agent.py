@@ -1,7 +1,10 @@
 """Agent factory for creating Deep Agents with SandboxBackend support.
 
-This module creates deep agents using the CognitionLocalSandboxBackend, which provides:
-- Isolated command execution via LocalSandbox
+This module creates deep agents using settings-driven sandbox backends:
+- Local: CognitionLocalSandboxBackend (development) — shell execution via LocalSandbox
+- Docker: CognitionDockerSandboxBackend (production) — isolated container execution
+
+Both backends provide:
 - File operations (ls, read, write, edit) via FilesystemBackend
 - Search operations (glob, grep)
 - Multi-step ReAct loop with automatic tool chaining
@@ -18,7 +21,7 @@ from server.app.agent.middleware import (
     CognitionObservabilityMiddleware,
     CognitionStreamingMiddleware,
 )
-from server.app.agent.sandbox_backend import CognitionLocalSandboxBackend
+from server.app.agent.sandbox_backend import create_sandbox_backend
 from server.app.agent.context import ContextManager
 from server.app.settings import Settings, get_settings
 
@@ -68,7 +71,8 @@ def create_cognition_agent(
     """Create a Deep Agent for the Cognition system.
 
     This factory creates an agent with:
-    - CognitionLocalSandboxBackend for filesystem and command execution
+    - Settings-driven sandbox backend (local or Docker) for execution
+    - FilesystemBackend for file operations (shared across both backends)
     - Multi-step ReAct loop with write_todos support
     - State checkpointing via thread_id
     - Automatic tool chaining
@@ -96,11 +100,17 @@ def create_cognition_agent(
     settings = settings or get_settings()
     project_path = Path(project_path).resolve()
 
-    # Create the sandbox backend
+    # Create the sandbox backend using settings-driven factory
     sandbox_id = f"cognition-{project_path.name}"
-    backend = CognitionLocalSandboxBackend(
+    backend = create_sandbox_backend(
         root_dir=project_path,
         sandbox_id=sandbox_id,
+        sandbox_backend=settings.sandbox_backend,
+        docker_image=settings.docker_image,
+        docker_network=settings.docker_network,
+        docker_memory_limit=settings.docker_memory_limit,
+        docker_cpu_limit=settings.docker_cpu_limit,
+        docker_host_workspace=settings.docker_host_workspace,
     )
 
     # Initialize context manager (P2-7)

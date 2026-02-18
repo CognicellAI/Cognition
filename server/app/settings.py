@@ -17,6 +17,7 @@ class Settings(BaseSettings):
         env_file_encoding="utf-8",
         case_sensitive=False,
         extra="ignore",  # Allow extra fields from old .env files
+        populate_by_name=True,  # Allow setting fields by Python name or alias
     )
 
     # Server settings
@@ -138,6 +139,42 @@ class Settings(BaseSettings):
     persistence_uri: str = Field(
         default=".cognition/state.db",
         alias="COGNITION_PERSISTENCE_URI",
+    )
+
+    # Sandbox / Execution backend settings
+    sandbox_backend: Literal["local", "docker"] = Field(
+        default="local",
+        alias="COGNITION_SANDBOX_BACKEND",
+    )
+    docker_image: str = Field(
+        default="cognition-sandbox:latest",
+        alias="COGNITION_DOCKER_IMAGE",
+    )
+    docker_network: str = Field(
+        default="none",
+        alias="COGNITION_DOCKER_NETWORK",
+    )
+    docker_host_workspace: str = Field(
+        default="",
+        alias="COGNITION_DOCKER_HOST_WORKSPACE",
+        description=(
+            "Host filesystem path that maps to the container workspace. "
+            "Required when Cognition runs inside Docker and spawns sibling "
+            "sandbox containers — the sandbox mount must use the host path, "
+            "not the container-internal path. Leave empty for local execution."
+        ),
+    )
+    docker_timeout: float = Field(
+        default=300.0,
+        alias="COGNITION_DOCKER_TIMEOUT",
+    )
+    docker_memory_limit: str = Field(
+        default="512m",
+        alias="COGNITION_DOCKER_MEMORY_LIMIT",
+    )
+    docker_cpu_limit: float = Field(
+        default=1.0,
+        alias="COGNITION_DOCKER_CPU_LIMIT",
     )
 
     # Session scoping settings

@@ -39,7 +39,7 @@ from server.app.llm.deep_agent_service import (
     SessionAgentManager,
 )
 from server.app.llm.discovery import DiscoveryEngine
-from server.app.scoping import SessionScope, create_scope_dependency
+from server.app.api.scoping import SessionScope, create_scope_dependency
 
 router = APIRouter(prefix="/sessions", tags=["sessions"])
 
@@ -68,12 +68,17 @@ async def get_scope_dependency(
 
     scope = SessionScope(scopes)
 
-    # Fail-closed: if scoping is enabled, require at least one scope
-    if settings.scoping_enabled and scope.is_empty():
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Missing required scope headers. Expected: X-Cognition-Scope-User or X-Cognition-Scope-Project",
-        )
+    # Fail-closed: if scoping is enabled, require all configured scope keys
+    if settings.scoping_enabled:
+        missing_keys = [key for key in settings.scope_keys if not scope.get(key)]
+        if missing_keys:
+            header_names = [
+                f"X-Cognition-Scope-{k.replace('_', '-').title()}" for k in missing_keys
+            ]
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"Missing required scope headers: {missing_keys}. Expected headers: {header_names}",
+            )
 
     return scope
 

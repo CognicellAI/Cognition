@@ -7,7 +7,7 @@ Replaces the old in-memory dict-based storage.
 from __future__ import annotations
 
 import json
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Optional
 
@@ -103,7 +103,7 @@ class SqliteMessageStore:
     ) -> Message:
         """Create a new message."""
         await self._init_db()
-        now = datetime.utcnow().isoformat()
+        now = datetime.now(UTC).isoformat()
 
         message = Message(
             id=message_id,

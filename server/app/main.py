@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
-from datetime import datetime
+from datetime import UTC, datetime
 
 import structlog
 from fastapi import FastAPI
@@ -12,8 +12,9 @@ from fastapi.responses import JSONResponse
 
 from server.app.api.models import ErrorResponse, HealthStatus, ReadyStatus
 from server.app.api.routes import config, messages, sessions
-from server.app.middleware import ObservabilityMiddleware, SecurityHeadersMiddleware
-from server.app.mlflow_tracing import setup_mlflow_tracing
+from server.app.exceptions import RateLimitError
+from server.app.api.middleware import ObservabilityMiddleware, SecurityHeadersMiddleware
+from server.app.observability.mlflow_tracing import setup_mlflow_tracing
 from server.app.observability import setup_metrics, setup_tracing
 from server.app.rate_limiter import get_rate_limiter
 from server.app.session_store import get_session_store
@@ -87,7 +88,7 @@ async def health_check() -> HealthStatus:
         status="healthy",
         version="0.1.0",
         active_sessions=len(sessions_list),
-        timestamp=datetime.utcnow(),
+        timestamp=datetime.now(UTC),
     )
 
 
@@ -95,6 +96,20 @@ async def health_check() -> HealthStatus:
 async def ready_check() -> ReadyStatus:
     """Readiness probe endpoint."""
     return ReadyStatus(ready=True)
+
+
+@app.exception_handler(RateLimitError)
+async def rate_limit_exception_handler(request, exc):
+    """Handle rate limit exceeded errors."""
+    logger.warning(
+        "Rate limit exceeded",
+        error=str(exc),
+        path=request.url.path,
+    )
+    return JSONResponse(
+        status_code=429,
+        content={"detail": f"Rate limit exceeded: {exc.message}"},
+    )
 
 
 @app.exception_handler(Exception)

@@ -8,7 +8,7 @@ from fastapi.testclient import TestClient
 from unittest.mock import patch
 
 from server.app.main import app
-from server.app.scoping import SessionScope, extract_scope_from_headers, create_scope_dependency
+from server.app.api.scoping import SessionScope, extract_scope_from_headers, create_scope_dependency
 from server.app.settings import Settings
 
 
@@ -88,7 +88,7 @@ class TestScopingIntegration:
 
     def test_session_creation_with_scope(self):
         """Test creating a session with scope headers."""
-        with patch("server.app.settings.get_settings") as mock_get_settings:
+        with patch("server.app.api.routes.sessions.get_settings") as mock_get_settings:
             mock_get_settings.return_value = Settings(
                 scoping_enabled=True,
                 scope_keys=["user"],
@@ -105,7 +105,7 @@ class TestScopingIntegration:
 
     def test_session_creation_without_scope_fail_closed(self):
         """Test that missing scope headers fail when scoping is enabled."""
-        with patch("server.app.settings.get_settings") as mock_get_settings:
+        with patch("server.app.api.routes.sessions.get_settings") as mock_get_settings:
             mock_get_settings.return_value = Settings(
                 scoping_enabled=True,
                 scope_keys=["user"],
@@ -123,7 +123,7 @@ class TestScopingIntegration:
 
     def test_session_creation_disabled_scoping(self):
         """Test that sessions work without scope when scoping is disabled."""
-        with patch("server.app.settings.get_settings") as mock_get_settings:
+        with patch("server.app.api.routes.sessions.get_settings") as mock_get_settings:
             mock_get_settings.return_value = Settings(
                 scoping_enabled=False,
                 scope_keys=["user"],
@@ -140,7 +140,7 @@ class TestScopingIntegration:
 
     def test_multi_dimensional_scoping(self):
         """Test scoping with multiple dimensions."""
-        with patch("server.app.settings.get_settings") as mock_get_settings:
+        with patch("server.app.api.routes.sessions.get_settings") as mock_get_settings:
             mock_get_settings.return_value = Settings(
                 scoping_enabled=True,
                 scope_keys=["user", "project"],
@@ -160,7 +160,7 @@ class TestScopingIntegration:
 
     def test_multi_dimensional_scoping_partial(self):
         """Test that partial scope fails when all keys are required."""
-        with patch("server.app.settings.get_settings") as mock_get_settings:
+        with patch("server.app.api.routes.sessions.get_settings") as mock_get_settings:
             mock_get_settings.return_value = Settings(
                 scoping_enabled=True,
                 scope_keys=["user", "project"],

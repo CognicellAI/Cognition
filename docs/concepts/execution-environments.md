@@ -23,7 +23,7 @@ Cognition defines its own `ExecutionBackend` protocol, decoupled from Deep Agent
 
 ```python
 class ExecutionBackend(Protocol):
-    async def execute(self, command: list[str], timeout: float) -> ExecuteResult: ...
+    async def execute(self, command: str, timeout: float | None = None) -> ExecutionResult: ...
     async def read_file(self, path: str) -> str: ...
     async def write_file(self, path: str, content: str) -> None: ...
     async def list_files(self, path: str) -> list[FileInfo]: ...
@@ -57,16 +57,20 @@ The "Hard" Sandbox. Ideal for production deployments on a single server or VM.
     - Resource limits (CPU, memory, disk)
     - Volume mounting for workspace persistence
     - Container lifecycle management (create/destroy per session)
+*   **Security Hardening:**
+    - `cap_drop=["ALL"]` — all Linux capabilities dropped
+    - `security_opt=["no-new-privileges"]` — prevents privilege escalation via setuid/setgid
+    - `read_only=True` — read-only root filesystem
+    - `tmpfs` mounts for `/tmp` (64MB) and `/home` (16MB) — writable scratch space
 *   **Best For:** Internal tools, CI/CD integrations, and semi-trusted code.
 
-### Tier 3: Cloud-Native Cells (Scale)
-**Backends:** `LambdaExecutionBackend`, `K8sExecutionBackend`
+### Tier 3: Cloud-Native Cells (Planned)
 
-For platforms managing thousands of concurrent agents or requiring specialized hardware (like GPUs).
+> **Note:** Cloud-native backends are **P3 roadmap items** and are not yet implemented. The backends described below represent the intended direction for Cognition's execution layer at scale.
 
-*   **AWS Lambda**: Executes stateless tasks in a fresh, short-lived micro-VM. Perfect for cost-optimized, high-burst workloads.
-*   **Kubernetes (K8s)**: Schedules a dedicated Pod per session. Provides full cluster-level isolation and infinite horizontal scaling.
-*   **Configuration:** `sandbox_backend = "local" | "docker" | "lambda" | "k8s"`
+*   **AWS Lambda** (planned): Execute stateless tasks in a fresh, short-lived micro-VM. Perfect for cost-optimized, high-burst workloads.
+*   **Kubernetes (K8s)** (planned): Schedule a dedicated Pod per session. Provides full cluster-level isolation and infinite horizontal scaling.
+*   **Configuration:** `sandbox_backend = "local" | "docker"` (cloud backends will be added when implemented)
 
 ### Custom Integration
 Cognition's execution layer is fully extensible. Implement the `ExecutionBackend` protocol to integrate with any execution provider (Firecracker MicroVMs, WASM runtimes, or proprietary internal clouds). The adapter layer handles Deep Agents compatibility automatically.
@@ -92,6 +96,16 @@ To prevent Denial of Service (DoS) or resource exhaustion:
 | :--- | :--- | :--- |
 | **Building the Platform** | Local | Debugging is easy; file access is instant. |
 | **Internal Ops Tools** | Docker | Good balance of security and simplicity. |
-| **Customer-Facing SaaS** | Kubernetes | Strict tenant isolation and auto-scaling. |
-| **High-Volume Stateless Tasks** | Lambda | Pay-per-use and zero infrastructure management. |
+| **Customer-Facing SaaS** | Kubernetes (planned) | Strict tenant isolation and auto-scaling. |
+| **High-Volume Stateless Tasks** | Lambda (planned) | Pay-per-use and zero infrastructure management. |
 | **Malware/Untrusted Analysis** | Docker (No Net) | Absolute network containment required. |
+
+## Deployment Models
+
+### Local Development (Recommended)
+
+Run Cognition directly on the host with `sandbox_backend=docker`. Agent commands execute inside ephemeral Docker containers with real kernel-level isolation (namespaces, cgroups, capability dropping, read-only filesystem). No Docker socket hacking needed — Cognition talks to the Docker daemon via the standard SDK.
+
+### Docker Compose (Testing / CI)
+
+Run Cognition itself inside a Docker container with `sandbox_backend=local`. Commands execute as subprocesses inside the Cognition container. This provides **no additional isolation** beyond what the outer container already gives. Suitable for rapid testing and CI pipelines where simplicity matters more than defense-in-depth.

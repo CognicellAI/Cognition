@@ -1,0 +1,44 @@
+# Lightweight sandbox container for per-session code execution
+#
+# This image is used by DockerExecutionBackend to provide isolated
+# execution environments for each agent session.
+#
+# Build:
+#   docker build -f Dockerfile.sandbox -t cognition-sandbox:latest .
+#
+# Features:
+#   - Python 3.11 with common dev tools
+#   - Non-root user for security
+#   - /workspace mount point for project files
+#   - Minimal footprint (~150MB)
+
+FROM python:3.11-slim
+
+# Install common development tools agents may need
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    git \
+    curl \
+    jq \
+    tree \
+    ripgrep \
+    && rm -rf /var/lib/apt/lists/* \
+    && apt-get clean
+
+# Install common Python tools
+RUN pip install --no-cache-dir \
+    ruff \
+    mypy \
+    pytest \
+    black
+
+# Security: run as non-root
+RUN groupadd -r sandbox && useradd -r -g sandbox -u 1000 -m sandbox
+
+# Create workspace directory
+RUN mkdir -p /workspace && chown sandbox:sandbox /workspace
+
+WORKDIR /workspace
+USER sandbox
+
+# Keep container running so exec_run works
+CMD ["sleep", "infinity"]

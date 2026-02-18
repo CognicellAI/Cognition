@@ -32,13 +32,15 @@ graph TD
     end
 
     subgraph "Execution Layer"
-        Backend[CognitionLocalSandboxBackend]
-        Sandbox[LocalSandbox - Subprocess]
+        Factory[create_sandbox_backend Factory]
+        Backend[CognitionLocalSandboxBackend / CognitionDockerSandboxBackend]
+        Sandbox[LocalSandbox or DockerSandbox]
     end
 
     subgraph "Persistence Layer"
-        Store[SqliteSessionStore - Metadata]
-        Saver[AsyncSqliteSaver - Checkpoints]
+        StoreFactory[StorageBackend Factory]
+        Store[SQLite / PostgreSQL / Memory]
+        Saver[Checkpointer - LangGraph State]
     end
 
     CLI --> REST
@@ -51,6 +53,7 @@ graph TD
     Backend --> Sandbox
     Runtime -.-> Saver
     Manager -.-> Store
+    Factory --> Backend
 ```
 
 ## 1. The Interface Layer (REST + SSE)
@@ -79,14 +82,22 @@ When a message is received, the service enters an automatic **ReAct (Reason + Ac
 
 ## 3. The Execution Layer (Hybrid Sandbox)
 
-Execution safety is provided by the `CognitionLocalSandboxBackend`. It implements a hybrid model designed for the local development environment:
+Execution safety is provided by a settings-driven sandbox factory (`create_sandbox_backend` in `server/app/sandbox/factory.py`). Based on the `settings.sandbox_backend` value, the factory dispatches to one of two backends:
 
-*   **Native File I/O:** Inherits from `FilesystemBackend`. It uses native Python `os` and `pathlib` calls for reading and writing files. This provides maximum OS compatibility and performance.
-*   **Isolated Shell:** Uses a `LocalSandbox` wrapper around `subprocess`. It executes shell commands (e.g., `pytest`, `git`) with the `cwd` (Current Working Directory) strictly locked to the workspace root.
+*   **`CognitionLocalSandboxBackend`** (default, `sandbox_backend="local"`): A hybrid model designed for local development.
+    *   **Native File I/O:** Inherits from `FilesystemBackend`. Uses native Python `os` and `pathlib` calls for reading and writing files, providing maximum OS compatibility and performance.
+    *   **Isolated Shell:** Uses a `LocalSandbox` wrapper around `subprocess`. Executes shell commands (e.g., `pytest`, `git`) with the `cwd` strictly locked to the workspace root.
+*   **`CognitionDockerSandboxBackend`** (`sandbox_backend="docker"`): Runs tool execution inside Docker containers for full process and filesystem isolation, suitable for production and multi-user deployments.
 
 ## 4. Unified StorageBackend Protocol
 
-Cognition implements a unified storage protocol (`StorageBackend`) that abstracts sessions, messages, and checkpoints behind a single interface. This enables pluggable persistence with support for SQLite (default) and PostgreSQL.
+Cognition implements a unified storage protocol (`StorageBackend`) that abstracts sessions, messages, and checkpoints behind a single interface. This enables pluggable persistence with multiple backend implementations:
+
+*   **SQLite** (default) — lightweight, zero-config via `aiosqlite`.
+*   **PostgreSQL** — production-grade via `asyncpg`.
+*   **Memory** — ephemeral, useful for testing.
+
+The factory in `server/app/storage/factory.py` dispatches based on the `COGNITION_PERSISTENCE_BACKEND` setting.
 
 ### Storage Architecture
 ```
@@ -135,6 +146,6 @@ Every internal component is instrumented with **OpenTelemetry**.
 
 - **Language:** Python 3.11+
 - **Framework:** FastAPI, LangGraph, DeepAgents
-- **Database:** SQLite (via aiosqlite)
+- **Database:** SQLite (via aiosqlite) for development; PostgreSQL (via asyncpg) for production
 - **Observability:** OpenTelemetry (OTLP Protocol)
 - **Networking:** HTTP/1.1 (REST) + EventSource (SSE)

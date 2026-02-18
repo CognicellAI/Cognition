@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import UTC, datetime
 from enum import Enum
 from typing import Any, Optional, Protocol
 from uuid import uuid4
@@ -61,7 +61,7 @@ class FeedbackEntry:
     value: float
     rationale: Optional[str] = None
     source: str = "human"  # "human" or "system"
-    created_at: datetime = field(default_factory=datetime.utcnow)
+    created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
     metadata: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
@@ -123,7 +123,7 @@ class SessionEvaluation:
     run_id: Optional[str]  # MLflow run ID
     scores: list[EvaluationScore] = field(default_factory=list)
     feedback_entries: list[FeedbackEntry] = field(default_factory=list)
-    evaluated_at: datetime = field(default_factory=datetime.utcnow)
+    evaluated_at: datetime = field(default_factory=lambda: datetime.now(UTC))
     metadata: dict[str, Any] = field(default_factory=dict)
 
     @property
@@ -770,7 +770,7 @@ class EvaluationService:
         """
         from datetime import timedelta
 
-        cutoff = datetime.utcnow() - timedelta(days=window_days)
+        cutoff = datetime.now(UTC) - timedelta(days=window_days)
 
         # Collect feedback in window
         recent_feedback = []

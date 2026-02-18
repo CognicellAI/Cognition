@@ -62,9 +62,12 @@ def setup_mlflow_tracing(settings: Settings) -> None:
             experiment=experiment_name,
         )
 
-        # Enable LangChain autologging
-        autolog()
-        logger.info("MLflow LangChain autologging enabled")
+        # Enable LangChain autologging with inline tracing.
+        # run_tracer_inline=True runs the tracer callback in the main async
+        # task instead of a background thread, which avoids ContextVar
+        # propagation failures under uvicorn / asyncio.
+        autolog(log_traces=True, run_tracer_inline=True)
+        logger.info("MLflow LangChain autologging enabled (inline tracing)")
 
         _mlflow_available = True
 

@@ -13,7 +13,7 @@ This module provides:
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import UTC, datetime
 from enum import Enum
 from pathlib import Path
 from typing import Any, Optional, Protocol
@@ -43,7 +43,7 @@ class PromptVersion:
     version: str
     content: str
     source: PromptSource
-    created_at: datetime = field(default_factory=datetime.utcnow)
+    created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
     tags: dict[str, str] = field(default_factory=dict)
     metadata: dict[str, Any] = field(default_factory=dict)
 
@@ -540,7 +540,7 @@ class PromptRegistry:
                 "version": prompt.version,
                 "source": prompt.source.value,
                 "used_fallback": used_fallback,
-                "timestamp": datetime.utcnow().isoformat(),
+                "timestamp": datetime.now(UTC).isoformat(),
             }
         )
 

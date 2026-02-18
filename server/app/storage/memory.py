@@ -6,7 +6,7 @@ and development purposes. Data is not persisted across restarts.
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal, Optional
 
@@ -66,7 +66,7 @@ class MemoryStorageBackend:
         title: Optional[str] = None,
     ) -> Session:
         """Create a new session."""
-        now = datetime.utcnow().isoformat()
+        now = datetime.now(UTC).isoformat()
 
         session = Session(
             id=session_id,
@@ -132,7 +132,7 @@ class MemoryStorageBackend:
                 else existing_config.system_prompt,
             )
 
-        session.updated_at = datetime.utcnow().isoformat()
+        session.updated_at = datetime.now(UTC).isoformat()
         return session
 
     async def update_message_count(self, session_id: str, count: int) -> None:
@@ -140,7 +140,7 @@ class MemoryStorageBackend:
         session = self._sessions.get(session_id)
         if session:
             session.message_count = count
-            session.updated_at = datetime.utcnow().isoformat()
+            session.updated_at = datetime.now(UTC).isoformat()
 
     async def delete_session(self, session_id: str) -> bool:
         """Delete a session."""
@@ -171,7 +171,7 @@ class MemoryStorageBackend:
         metadata: Optional[dict[str, Any]] = None,
     ) -> Message:
         """Create a new message."""
-        now = datetime.utcnow()
+        now = datetime.now(UTC)
 
         message = Message(
             id=message_id,

@@ -28,7 +28,7 @@ from server.app.session_store import get_session_store
 from server.app.message_store import get_message_store
 from server.app.settings import Settings, get_settings
 from server.app.rate_limiter import get_rate_limiter, RateLimiter
-from server.app.scoping import SessionScope, create_scope_dependency
+from server.app.api.scoping import SessionScope, create_scope_dependency
 from server.app.llm.deep_agent_service import (
     get_session_agent_manager,
     DeepAgentStreamingService,

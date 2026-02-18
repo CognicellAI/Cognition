@@ -1,5 +1,5 @@
 # Docker Compose for Cognition with Full Observability Stack
-# 
+#
 # Usage:
 #   docker-compose up -d          # Start all services
 #   docker-compose logs -f        # View logs
@@ -8,6 +8,8 @@
 #
 # Services:
 #   - cognition:    FastAPI server (port 8000)
+#   - postgres:     PostgreSQL database (port 5432)
+#   - mlflow:       MLflow tracking server (port 5000)
 #   - prometheus:   Metrics collection (port 9091)
 #   - grafana:      Dashboards (port 3000)
 #   - jaeger:       Distributed tracing (port 16686)
@@ -15,6 +17,36 @@
 #   - promtail:     Log shipping
 
 services:
+  # ──────────────────────────────────────────────────────
+  # Layer 2: Persistence
+  # ──────────────────────────────────────────────────────
+
+  # PostgreSQL - Primary persistence backend
+  postgres:
+    image: postgres:16-alpine
+    container_name: cognition-postgres
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-cognition}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-cognition}
+      POSTGRES_DB: ${POSTGRES_DB:-cognition}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    networks:
+      - cognition-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-cognition}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+
+  # ──────────────────────────────────────────────────────
+  # Layer 4: Agent Runtime (Cognition Server)
+  # ──────────────────────────────────────────────────────
+
   # Cognition Server
   cognition:
     build:
@@ -25,39 +57,95 @@ services:
       - "8000:8000"
       - "9090:9090"
     environment:
+      # Server
       - COGNITION_HOST=0.0.0.0
       - COGNITION_PORT=8000
       - COGNITION_LOG_LEVEL=info
       - COGNITION_LOG_FORMAT=json
-      - COGNITION_LLM_PROVIDER=openai_compatible
       - COGNITION_WORKSPACE_ROOT=/workspace
-      - COGNITION_OTEL_ENDPOINT=http://jaeger:4317
       - COGNITION_METRICS_PORT=9090
-      # OpenTelemetry Configuration for Jaeger
-      # Disable LangSmith proprietary API, use OTLP only
+
+      # LLM Provider
+      - COGNITION_LLM_PROVIDER=openai_compatible
+      - COGNITION_LLM_MODEL=google/gemini-3-flash-preview
+      - COGNITION_OPENAI_COMPATIBLE_BASE_URL=https://openrouter.ai/api/v1
+      - COGNITION_OPENAI_COMPATIBLE_API_KEY=${COGNITION_OPENAI_COMPATIBLE_API_KEY:-}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+
+      # Persistence — PostgreSQL
+      - COGNITION_PERSISTENCE_BACKEND=postgres
+      - COGNITION_PERSISTENCE_URI=postgresql+asyncpg://${POSTGRES_USER:-cognition}:${POSTGRES_PASSWORD:-cognition}@postgres:5432/${POSTGRES_DB:-cognition}
+
+      # MLflow — Tracing & Evaluation
+      - COGNITION_MLFLOW_ENABLED=true
+      - COGNITION_MLFLOW_TRACKING_URI=http://mlflow:5000
+      - COGNITION_MLFLOW_EXPERIMENT_NAME=cognition
+
+      # Sandbox — Local backend (commands execute inside this container)
+      # For isolated Docker sandbox execution, run Cognition on the host
+      # with COGNITION_SANDBOX_BACKEND=docker instead.
+      - COGNITION_SANDBOX_BACKEND=local
+
+      # OpenTelemetry — Jaeger
+      - COGNITION_OTEL_ENABLED=true
+      - COGNITION_OTEL_ENDPOINT=http://jaeger:4317
       - LANGSMITH_TRACING=false
-      - OTEL_ENABLED=true
       - OTEL_EXPORTER_OTLP_ENDPOINT=http://jaeger:4318
       - OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf
       - OTEL_SERVICE_NAME=cognition
       - OTEL_TRACES_EXPORTER=otlp
       - OTEL_LOG_LEVEL=debug
-      # Add your API keys here or in .env file
-      - COGNITION_LLM_MODEL=google/gemini-3-flash-preview
-      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
-      - COGNITION_OPENAI_COMPATIBLE_BASE_URL=https://openrouter.ai/api/v1
-      - COGNITION_OPENAI_COMPATIBLE_API_KEY=${COGNITION_OPENAI_COMPATIBLE_API_KEY:-}
     volumes:
       - ./workspaces:/workspace
       - ./.cognition:/app/.cognition
     networks:
       - cognition-network
+    depends_on:
+      postgres:
+        condition: service_healthy
+      mlflow:
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 30s
       timeout: 10s
       retries: 3
       start_period: 10s
+    restart: unless-stopped
+
+  # ──────────────────────────────────────────────────────
+  # Layer 7: Observability
+  # ──────────────────────────────────────────────────────
+
+  # MLflow - Experiment Tracking & Evaluation
+  mlflow:
+    build:
+      context: .
+      dockerfile_inline: |
+        FROM ghcr.io/mlflow/mlflow:v2.19.0
+        RUN pip install --no-cache-dir psycopg2-binary
+    container_name: cognition-mlflow
+    command: >
+      mlflow server
+      --host 0.0.0.0
+      --port 5000
+      --backend-store-uri postgresql://${POSTGRES_USER:-cognition}:${POSTGRES_PASSWORD:-cognition}@postgres:5432/${POSTGRES_DB:-cognition}
+      --default-artifact-root /mlflow/artifacts
+    ports:
+      - "5050:5000"
+    volumes:
+      - mlflow-artifacts:/mlflow/artifacts
+    networks:
+      - cognition-network
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:5000/health')"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
     restart: unless-stopped
 
   # Prometheus - Metrics Collection
@@ -153,6 +241,8 @@ networks:
     driver: bridge
 
 volumes:
+  postgres-data:
+  mlflow-artifacts:
   prometheus-data:
   grafana-data:
   loki-data:

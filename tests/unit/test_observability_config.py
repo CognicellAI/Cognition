@@ -42,7 +42,7 @@ class TestMLflowConfiguration:
 
     def test_setup_mlflow_skipped_when_mlflow_disabled(self):
         """Test that MLflow setup is skipped when mlflow_enabled=False."""
-        from server.app.mlflow_tracing import setup_mlflow_tracing
+        from server.app.observability.mlflow_tracing import setup_mlflow_tracing
 
         # Create mock settings with mlflow_enabled=False
         mock_settings = MagicMock()
@@ -63,7 +63,7 @@ class TestMLflowConfiguration:
         Since MLflow is imported inside the function, we test that the
         graceful degradation path is taken when MLflow is not installed.
         """
-        from server.app.mlflow_tracing import setup_mlflow_tracing
+        from server.app.observability.mlflow_tracing import setup_mlflow_tracing
 
         # Create mock settings with mlflow_enabled=True
         mock_settings = MagicMock()
@@ -81,7 +81,7 @@ class TestMLflowConfiguration:
 
     def test_setup_mlflow_graceful_degradation_when_package_missing(self):
         """Test graceful degradation when MLflow package is not installed."""
-        from server.app.mlflow_tracing import setup_mlflow_tracing
+        from server.app.observability.mlflow_tracing import setup_mlflow_tracing
 
         # Create mock settings with mlflow_enabled=True
         mock_settings = MagicMock()

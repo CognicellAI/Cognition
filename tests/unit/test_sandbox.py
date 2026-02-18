@@ -4,7 +4,7 @@ import pytest
 import tempfile
 from pathlib import Path
 
-from server.app.sandbox import LocalSandbox
+from server.app.execution.sandbox import LocalSandbox
 
 
 class TestLocalSandbox:
@@ -35,7 +35,7 @@ class TestLocalSandbox:
 
     def test_execute_failure(self, sandbox):
         """Test non-zero exit codes."""
-        result = sandbox.execute("exit 42")
+        result = sandbox.execute("bash -c 'exit 42'")
         assert result.exit_code == 42
 
     def test_create_and_list_file(self, sandbox):

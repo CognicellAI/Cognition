@@ -191,13 +191,13 @@ Cognition uses a "Convention over Configuration" model. Most customizations requ
 
 ## Blueprints
 
-The CLI is just one example of what you can build on Cognition. See our [Blueprints](./docs/v2/README.md#blueprints) for reference architectures:
+The CLI is just one example of what you can build on Cognition. See our [Blueprints](./docs/README.md#blueprints) for reference architectures:
 
-*   **[Cognition CLI](./docs/v2/blueprints/cognition-cli.md)**: A high-fidelity terminal assistant.
-*   **[BreachLens](./docs/v2/blueprints/cyber-investigation.md)**: Security analysis for cybersecurity investigations.
-*   **[GeneSmith](./docs/v2/blueprints/genesmith.md)**: Secure biological foundry for protein design.
-*   **[DataLens](./docs/v2/blueprints/data-analyst.md)**: Headless data science for sensitive datasets.
-*   **[StarKeep](./docs/v2/blueprints/starkeep.md)**: SpaceOps administrator for satellite repair.
+*   **[Cognition CLI](./docs/blueprints/cognition-cli.md)**: A high-fidelity terminal assistant.
+*   **[BreachLens](./docs/blueprints/cyber-investigation.md)**: Security analysis for cybersecurity investigations.
+*   **[GeneSmith](./docs/blueprints/genesmith.md)**: Secure biological foundry for protein design.
+*   **[DataLens](./docs/blueprints/data-analyst.md)**: Headless data science for sensitive datasets.
+*   **[StarKeep](./docs/blueprints/starkeep.md)**: SpaceOps administrator for satellite repair.
 
 ## Production Features
 
@@ -239,10 +239,10 @@ uv run pytest tests/unit/test_message_store.py -v
 
 ## Documentation
 
-*   📖 **[Core Concepts](./docs/v2/README.md)**: Cells, Threads, Traces, and Plugs.
-*   🛠️ **[Extending Agents](./docs/v2/guides/extending-agents.md)**: How to add memory, skills, and tools.
-*   ⚙️ **[Configuration Reference](./docs/v2/guides/configuration.md)**: YAML and Environment variable details.
-*   🚀 **[Deployment Guide](./docs/v2/guides/deployment.md)**: Running in Docker and Kubernetes.
+*   📖 **[Core Concepts](./docs/README.md)**: Cells, Threads, Traces, and Plugs.
+*   🛠️ **[Extending Agents](./docs/guides/extending-agents.md)**: How to add memory, skills, and tools.
+*   ⚙️ **[Configuration Reference](./docs/guides/configuration.md)**: YAML and Environment variable details.
+*   🚀 **[Deployment Guide](./docs/guides/deployment.md)**: Running in Docker and Kubernetes.
 
 ## License
 

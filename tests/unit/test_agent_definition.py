@@ -16,7 +16,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-from server.app.agent_definition import (
+from server.app.agent.definition import (
     AgentConfig,
     AgentDefinition,
     SubagentDefinition,
@@ -161,7 +161,7 @@ class TestAgentDefinition:
                 )
             ],
             interrupt_on={"execute": True, "write_file": False},
-            middleware=["server.app.middleware.LoggingMiddleware"],
+            middleware=["server.app.api.middleware.LoggingMiddleware"],
             config=AgentConfig(temperature=0.3, max_tokens=2000),
         )
         assert agent.name == "security-analyzer"
@@ -434,13 +434,13 @@ class TestAgentDefinitionPathValidation:
             name="test-agent",
             system_prompt="You are a test agent.",
             tools=[
-                "server.app.agent_definition",  # exists
+                "server.app.agent.definition",  # exists
                 "fake.module.that.does.not.exist",  # doesn't exist
             ],
         )
         failed = agent.validate_tool_paths()
         assert "fake.module.that.does.not.exist" in failed
-        assert "server.app.agent_definition" not in failed
+        assert "server.app.agent.definition" not in failed
 
     def test_validate_skill_paths(self):
         """Test validating skill paths."""

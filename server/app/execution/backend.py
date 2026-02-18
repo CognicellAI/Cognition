@@ -140,7 +140,7 @@ class LocalExecutionBackend:
             root_dir: Root directory for execution
             sandbox_id: Optional unique identifier
         """
-        from server.app.sandbox import LocalSandbox
+        from server.app.execution.sandbox import LocalSandbox
 
         self.root_dir = Path(root_dir).resolve()
         self.sandbox_id = sandbox_id or f"local-{id(self)}"
@@ -379,6 +379,7 @@ def create_execution_backend(
             network_mode=kwargs.get("docker_network_mode", "none"),
             memory_limit=kwargs.get("docker_memory_limit", "512m"),
             cpu_limit=kwargs.get("docker_cpu_limit", 1.0),
+            host_workspace=kwargs.get("docker_host_workspace", ""),
         )
     else:
         raise ValueError(f"Unknown backend type: {backend_type}")
@@ -405,16 +406,21 @@ class DockerExecutionBackend:
         network_mode: str = "none",
         memory_limit: str = "512m",
         cpu_limit: float = 1.0,
+        host_workspace: str = "",
     ):
         """Initialize Docker execution backend.
 
         Args:
-            root_dir: Host directory to mount into container
+            root_dir: Workspace directory (container-internal path for file ops)
             sandbox_id: Unique identifier for this container
             image: Docker image name
             network_mode: Docker network mode ("none", "bridge", etc.)
             memory_limit: Memory limit (e.g., "512m", "1g")
             cpu_limit: CPU core limit
+            host_workspace: Host filesystem path for Docker volume mount.
+                If empty, root_dir is used (assumes local execution).
+                Required when Cognition itself runs in a container
+                and spawns sibling sandbox containers.
         """
         self.root_dir = Path(root_dir).resolve()
         self.sandbox_id = sandbox_id or f"docker-{id(self)}"
@@ -422,6 +428,7 @@ class DockerExecutionBackend:
         self.network_mode = network_mode
         self.memory_limit = memory_limit
         self.cpu_limit = cpu_limit
+        self.host_workspace = host_workspace or str(self.root_dir)
         self._container = None
 
     def _ensure_container(self):
@@ -444,7 +451,11 @@ class DockerExecutionBackend:
             except Exception:
                 pass
 
-            # Create and start new container
+            # Create and start new container with security hardening:
+            # - cap_drop=ALL: Remove all Linux capabilities
+            # - security_opt=no-new-privileges: Prevent privilege escalation
+            # - read_only=True: Read-only root filesystem
+            # - tmpfs /tmp: Writable temp directory on tmpfs
             self._container = client.containers.run(
                 self.image,
                 name=container_name,
@@ -452,10 +463,14 @@ class DockerExecutionBackend:
                 network_mode=self.network_mode,
                 mem_limit=self.memory_limit,
                 cpu_quota=int(self.cpu_limit * 100000),
-                volumes={str(self.root_dir): {"bind": "/workspace", "mode": "rw"}},
+                volumes={self.host_workspace: {"bind": "/workspace", "mode": "rw"}},
                 working_dir="/workspace",
                 stdin_open=True,
                 tty=True,
+                cap_drop=["ALL"],
+                security_opt=["no-new-privileges"],
+                read_only=True,
+                tmpfs={"/tmp": "size=64m", "/home": "size=16m"},
                 labels={"cognition.sandbox.id": self.sandbox_id, "cognition.managed": "true"},
             )
 
