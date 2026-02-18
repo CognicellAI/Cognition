@@ -380,6 +380,146 @@ test:
 
 Used by the test suite to control which LLM provider tests use.
 
+### Session Scoping (`scoping`)
+
+Configure multi-dimensional session isolation for multi-tenant deployments.
+
+```yaml
+scoping:
+  enabled: false           # Enable session scoping
+  keys: ["user", "project"]  # Scope dimensions (headers: X-Cognition-Scope-User, X-Cognition-Scope-Project)
+```
+
+**Environment Variables:**
+- `COGNITION_SCOPING_ENABLED` - Enable scoping (default: false)
+- `COGNITION_SCOPE_KEYS` - Comma-separated list of scope keys (default: user)
+
+**How it works:**
+- Sessions are tagged with scope values extracted from request headers
+- `X-Cognition-Scope-{Key}` headers provide scope values
+- Session list operations filter by the caller's scope
+- Fail-closed: missing required scope headers return 403 when enabled
+
+**Examples:**
+
+**Single-tenant (default):**
+```yaml
+scoping:
+  enabled: false
+```
+All sessions visible to all callers.
+
+**Multi-user isolation:**
+```yaml
+scoping:
+  enabled: true
+  keys: ["user"]
+```
+Sessions scoped per user via `X-Cognition-Scope-User` header.
+
+**Multi-dimensional (user + project):**
+```yaml
+scoping:
+  enabled: true
+  keys: ["user", "project"]
+```
+Sessions scoped by both user and project. Caller must provide both headers.
+
+**With custom dimensions:**
+```yaml
+scoping:
+  enabled: true
+  keys: ["team", "environment"]
+```
+Uses `X-Cognition-Scope-Team` and `X-Cognition-Scope-Environment` headers.
+
+### Observability Toggles (`observability`)
+
+Control which observability backends are active.
+
+```yaml
+observability:
+  enabled: true            # Master switch for observability
+  otel_enabled: true       # Enable OpenTelemetry tracing
+  mlflow_enabled: false    # Enable MLflow tracing
+  mlflow_tracking_uri: null  # MLflow tracking server URI
+  mlflow_experiment_name: "cognition"  # Default experiment name
+```
+
+**Environment Variables:**
+- `COGNITION_OBSERVABILITY_ENABLED` - Master observability switch
+- `COGNITION_OTEL_ENABLED` - Enable OpenTelemetry (default: true)
+- `COGNITION_MLFLOW_ENABLED` - Enable MLflow (default: false)
+- `COGNITION_MLFLOW_TRACKING_URI` - MLflow tracking URI
+- `COGNITION_MLFLOW_EXPERIMENT_NAME` - MLflow experiment name
+
+**Configuration Matrix:**
+
+| otel_enabled | mlflow_enabled | Result |
+|-------------|----------------|---------|
+| false | false | Structured logging only |
+| true | false | Prometheus + OTel traces |
+| false | true | MLflow traces only |
+| true | true | Full stack (all backends) |
+
+### Execution Backend (`execution`)
+
+Choose the sandbox environment for code execution.
+
+```yaml
+execution:
+  backend: "local"         # Backend: local, docker
+  docker:
+    image: "cognition-sandbox:latest"  # Sandbox image
+    network_mode: "none"   # Network isolation: none, bridge
+    memory_limit: "512m"   # Memory limit per container
+    cpu_limit: 1.0         # CPU cores per container
+```
+
+**Environment Variables:**
+- `COGNITION_SANDBOX_BACKEND` - Execution backend (default: local)
+- `COGNITION_DOCKER_IMAGE` - Docker image for sandbox
+- `COGNITION_DOCKER_NETWORK_MODE` - Network isolation mode
+- `COGNITION_DOCKER_MEMORY_LIMIT` - Memory limit
+- `COGNITION_DOCKER_CPU_LIMIT` - CPU limit
+
+**Backends:**
+
+- **local** (default): Subprocess execution with path containment
+- **docker**: Container-per-session with kernel-level isolation
+
+**Docker Mode:**
+- Creates a fresh container for each session
+- Mounts workspace as read-write volume
+- Enforces resource limits and network policies
+- Destroys container on session end
+
+### Evaluation (`evaluation`)
+
+Configure MLflow-based evaluation pipeline.
+
+```yaml
+evaluation:
+  enabled: true            # Enable evaluation tracking
+  default_scorers:         # Built-in scorers to run
+    - "correctness"
+    - "helpfulness"
+    - "tool_efficiency"
+  custom_scorers:          # Paths to custom scorer modules
+    - "./my_scorers/"
+```
+
+**Environment Variables:**
+- `COGNITION_EVALUATION_ENABLED` - Enable evaluation (default: true)
+- `COGNITION_EVALUATION_DEFAULT_SCORERS` - Default scorers to run
+- `COGNITION_EVALUATION_CUSTOM_SCORERS` - Custom scorer paths
+
+**Built-in Scorers:**
+- `correctness` - Factual accuracy of responses
+- `helpfulness` - Actionability and relevance
+- `safety` - Policy compliance and toxicity
+- `tool_efficiency` - Appropriate tool usage
+
 ## Security Best Practices
 
 ### API Keys and Secrets
@@ -581,6 +721,19 @@ If upgrading from Cognition v1:
 | `agent.interrupt_on` | `COGNITION_AGENT_INTERRUPT_ON` | dict | `{}` | Interrupt settings |
 | `persistence.backend` | `COGNITION_PERSISTENCE_BACKEND` | string | `sqlite` | Backend type |
 | `persistence.uri` | `COGNITION_PERSISTENCE_URI` | string | `.cognition/state.db` | Connection URI |
+| `scoping.enabled` | `COGNITION_SCOPING_ENABLED` | bool | `false` | Enable session scoping |
+| `scoping.keys` | `COGNITION_SCOPE_KEYS` | list | `["user"]` | Scope dimensions |
+| `observability.enabled` | `COGNITION_OBSERVABILITY_ENABLED` | bool | `true` | Observability master switch |
+| `observability.otel_enabled` | `COGNITION_OTEL_ENABLED` | bool | `true` | Enable OpenTelemetry |
+| `observability.mlflow_enabled` | `COGNITION_MLFLOW_ENABLED` | bool | `false` | Enable MLflow |
+| `observability.mlflow_tracking_uri` | `COGNITION_MLFLOW_TRACKING_URI` | string | `null` | MLflow tracking URI |
+| `observability.mlflow_experiment_name` | `COGNITION_MLFLOW_EXPERIMENT_NAME` | string | `cognition` | MLflow experiment |
+| `execution.backend` | `COGNITION_SANDBOX_BACKEND` | string | `local` | Execution backend |
+| `execution.docker.image` | `COGNITION_DOCKER_IMAGE` | string | `cognition-sandbox` | Docker image |
+| `execution.docker.network_mode` | `COGNITION_DOCKER_NETWORK_MODE` | string | `none` | Network isolation |
+| `execution.docker.memory_limit` | `COGNITION_DOCKER_MEMORY_LIMIT` | string | `512m` | Memory limit |
+| `execution.docker.cpu_limit` | `COGNITION_DOCKER_CPU_LIMIT` | float | `1.0` | CPU limit |
+| `evaluation.enabled` | `COGNITION_EVALUATION_ENABLED` | bool | `true` | Enable evaluation |
 | `test.llm_mode` | `COGNITION_TEST_LLM_MODE` | string | `mock` | Test LLM mode |
 
 **Secret fields** (set via env vars only): `OPENAI_API_KEY`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `COGNITION_OPENAI_COMPATIBLE_API_KEY`
