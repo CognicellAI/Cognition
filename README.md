@@ -1,6 +1,6 @@
 # Cognition
 
-> Secure execution, durable state, and forensic audit for AI agents.
+> Secure execution, durable state, and audit trails for AI agents.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/release/python-3110/)
@@ -26,7 +26,7 @@ Cognition provides four fundamental primitives that you compose to build your pl
 
 *   🏗️ **The Cell (Execution)**: A secure, sandboxed environment (local process or hardened container) where "Thought" becomes "Action". Bring the code to the data safely.
 *   🧬 **The Thread (State)**: Durable, checkpoint-based memory. Every step is saved; if the server crashes, the agent picks up *exactly* where it left off.
-*   🔍 **The Trace (Audit)**: Native OpenTelemetry integration. Immutable forensic proof of every file read, API call, and reasoning step.
+*   🔍 **The Trace (Audit)**: Native OpenTelemetry integration. Immutable audit trail of every file read, API call, and reasoning step.
 *   🔌 **The Plug (Extensibility)**: A five-tier extensibility model from simple no-code instructions to deep Python middleware.
 
 ## Quick Start
@@ -121,7 +121,7 @@ Cognition uses a "Convention over Configuration" model. Most customizations requ
 The CLI is just one example of what you can build on Cognition. See our [Blueprints](./docs/v2/README.md#blueprints) for reference architectures:
 
 *   **[Cognition CLI](./docs/v2/blueprints/cognition-cli.md)**: A high-fidelity terminal assistant.
-*   **[BreachLens](./docs/v2/blueprints/cyber-investigation.md)**: Forensic analysis for cybersecurity investigations.
+*   **[BreachLens](./docs/v2/blueprints/cyber-investigation.md)**: Security analysis for cybersecurity investigations.
 *   **[GeneSmith](./docs/v2/blueprints/genesmith.md)**: Secure biological foundry for protein design.
 *   **[DataLens](./docs/v2/blueprints/data-analyst.md)**: Headless data science for sensitive datasets.
 *   **[StarKeep](./docs/v2/blueprints/starkeep.md)**: SpaceOps administrator for satellite repair.
