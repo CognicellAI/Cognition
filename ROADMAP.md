@@ -16,11 +16,9 @@ This roadmap is derived from [FIRST-PRINCIPLE-EVALUTION.md](./FIRST-PRINCIPLE-EV
 | Priority | Tasks | Complete | Status |
 |----------|-------|----------|--------|
 | **P0** (Table Stakes) | 6 | 6/6 | **100% ✅** |
-| **P0** (GUI & Extensibility) | 4 | 0/4 | **NEW — In Progress** |
 | **P1** (Production Ready) | 6 | 6/6 | **100% ✅** |
-| **P1** (Extensibility Enhancements) | 2 | 0/2 | **NEW — Not Started** |
-| **P2** (Robustness) | 7 | 5/7 | **~85%** |
-| **P3** (Full Vision) | 5 | 0/5 | **~30% partial** |
+| **P2** (Robustness + GUI Extensibility) | 11 | 5/11 | **~45%** |
+| **P3** (Full Vision) | 7 | 0/7 | **~10%** |
 
 **Unit tests:** 223 passed, 2 skipped, 0 warnings (except 1 collection warning)
 **Live tests:** 40/41 pass across 9 phases (sole failure: MLflow async tracing — upstream bug)
@@ -90,6 +88,8 @@ OTel/MLflow gating via settings toggles. `mlflow.langchain.autolog(run_tracer_in
 ---
 
 ## P1 — Production Ready ✅ 100% Complete
+
+All production-ready features implemented.
 
 ### P1-1: Unified StorageBackend Protocol ✅
 
@@ -165,159 +165,9 @@ Cognition-owned `AgentRuntime` protocol wrapping Deep Agents. Methods: `astream_
 
 ---
 
-## P0 — GUI & Extensibility APIs (NEW - Immediate Priority)
+## P2 — Robustness + GUI Extensibility (~45% Complete)
 
-*Note: These P0 items are new priorities to enable external GUI applications to build on Cognition. They do not block existing P0 table stakes (which are complete).*
-
-### P0-1: SessionManager (Application-Scoped Session Management)
-
-| Field | Value |
-|-------|-------|
-| **Layer** | 4 (Agent Runtime) / 6 (API) |
-| **File** | `server/app/session_manager.py` (new) |
-| **Effort** | ~3 days |
-
-**Purpose:** Enable GUI applications to manage sessions across multiple workspaces.
-
-**Acceptance Criteria:**
-- [ ] `SessionManager` class for application-level session management
-- [ ] Cross-workspace session listing (`list_all_sessions()`)
-- [ ] Session lifecycle events (`on_session_created`, `on_session_deleted`, `on_session_updated`)
-- [ ] Per-session agent instances with isolated tool/middleware stacks
-- [ ] Clear documentation on session-based vs immediate reload behavior
-
-**API Design:**
-```python
-from cognition import SessionManager, Settings
-
-manager = SessionManager(settings)
-session = await manager.create_session(workspace_path="/project")
-await manager.delete_session(session.id)
-```
-
-### P0-2: AgentRegistry (Per-Session Tool/Middleware Management)
-
-| Field | Value |
-|-------|-------|
-| **Layer** | 4 (Agent Runtime) |
-| **File** | `server/app/agent_registry.py` (new) |
-| **Effort** | ~4 days |
-
-**Purpose:** Enable GUI apps to register tools and middleware that apply per-session.
-
-**Acceptance Criteria:**
-- [ ] `AgentRegistry` class for registering tool/middleware factories
-- [ ] Factory pattern for fresh instances per session
-- [ ] `register_tool(name, factory)` and `register_middleware(factory)` methods
-- [ ] `create_agent_with_extensions()` that combines registered extensions
-- [ ] Support for both programmatic and file-based registration
-
-**API Design:**
-```python
-from cognition import AgentRegistry
-from langchain_core.tools import tool
-
-registry = AgentRegistry()
-
-@tool
-def gui_file_picker(description: str) -> str:
-    """Open file picker dialog."""
-    pass
-
-registry.register_tool("file_picker", lambda: gui_file_picker)
-agent = registry.create_agent_with_extensions(project_path, settings)
-```
-
-### P0-3: File Watcher & Hot-Reload API
-
-| Field | Value |
-|-------|-------|
-| **Layer** | 1 (Foundation) |
-| **File** | `server/app/file_watcher.py` (new) |
-| **Effort** | ~3 days |
-| **Dependencies** | watchdog library |
-
-**Purpose:** Enable GUI apps to watch workspace files and trigger reloads.
-
-**Acceptance Criteria:**
-- [ ] `WorkspaceWatcher` class for monitoring file changes
-- [ ] Watch `.cognition/tools/` for tool hot-reload (immediate)
-- [ ] Watch `.cognition/middleware/` for middleware session-based reload
-- [ ] Watch `.cognition/config.yaml` for config changes
-- [ ] Callbacks for GUI notifications
-- [ ] Clear distinction: tools=immediate, middleware=session-based
-
-**API Design:**
-```python
-from cognition import WorkspaceWatcher
-
-watcher = WorkspaceWatcher("/workspace")
-watcher.watch_tools(lambda path, event: registry.reload_tools())
-watcher.watch_middleware(lambda path, event: registry.mark_middleware_pending())
-watcher.start()
-```
-
-### P0-4: CLI Tool/Middleware Scaffolding
-
-| Field | Value |
-|-------|-------|
-| **Layer** | 1 (Foundation) |
-| **File** | `server/app/cli.py` (extend) |
-| **Effort** | ~2 days |
-
-**Purpose:** Help users create tool and middleware templates.
-
-**Acceptance Criteria:**
-- [ ] `cognition tool create <name>` — generates `.cognition/tools/{name}.py`
-- [ ] `cognition middleware create <name>` — generates `.cognition/middleware/{name}.py`
-- [ ] Templates include proper imports and structure
-- [ ] Automatic directory creation
-
-**Example:**
-```bash
-cognition tool create my-api-client
-# Creates .cognition/tools/my_api_client.py with @tool decorator template
-```
-
----
-
-## P1 — Extensibility Enhancements
-
-### P1-1: GUITool Base Class
-
-| Field | Value |
-|-------|-------|
-| **Layer** | 4 (Agent Runtime) |
-| **File** | `server/app/agent/gui_tool.py` (new) |
-| **Effort** | ~2 days |
-
-**Purpose:** Base class for tools that need GUI interaction.
-
-**Acceptance Criteria:**
-- [ ] `GUITool` base class with `set_gui_callback()` method
-- [ ] `request_gui_action()` method for GUI interaction
-- [ ] Documentation for GUI app integration
-
-### P1-2: Dynamic Tool Validation
-
-| Field | Value |
-|-------|-------|
-| **Layer** | 4 (Agent Runtime) |
-| **File** | `server/app/agent/tool_validator.py` (new) |
-| **Effort** | ~2 days |
-
-**Purpose:** Validate tools at registration time, not runtime.
-
-**Acceptance Criteria:**
-- [ ] `cognition validate` CLI command
-- [ ] Check all tools are loadable
-- [ ] Verify @tool decorator present
-- [ ] Validate middleware inherits from AgentMiddleware
-- [ ] Provide helpful error messages with suggestions
-
----
-
-## P2 — Robustness (~85% Complete)
+This priority tier combines robustness improvements with new extensibility APIs for GUI applications.
 
 ### P2-1: SSE Reconnection ✅
 
@@ -328,7 +178,7 @@ cognition tool create my-api-client
 
 Event IDs (`{counter}-{uuid}`), `retry:` directive (3000ms), keepalive heartbeat (15s), Last-Event-ID resume, circular event buffer. 38 unit tests.
 
-### P2-2: Circuit Breaker 🔄 PARTIAL (Implemented, Not Wired)
+### P2-2: Circuit Breaker 🔄 PARTIAL
 
 | Field | Value |
 |-------|-------|
@@ -390,17 +240,134 @@ Settings-driven CORS: `cors_origins`, `cors_methods`, `cors_headers`, `cors_cred
 
 `ContextManager` wired into `cognition_agent.py`. Project indexing, file relevance scoring, context pruning.
 
+### P2-8: SessionManager (Application-Scoped Session Management)
+
+| Field | Value |
+|-------|-------|
+| **Layer** | 4 (Agent Runtime) / 6 (API) |
+| **File** | `server/app/session_manager.py` (new) |
+| **Effort** | ~3 days |
+| **Status** | Not Started |
+
+**Purpose:** Enable GUI applications to manage sessions across multiple workspaces.
+
+**Acceptance Criteria:**
+- [ ] `SessionManager` class for application-level session management
+- [ ] Cross-workspace session listing (`list_all_sessions()`)
+- [ ] Session lifecycle events (`on_session_created`, `on_session_deleted`, `on_session_updated`)
+- [ ] Per-session agent instances with isolated tool/middleware stacks
+- [ ] Clear documentation on session-based vs immediate reload behavior
+
+**API Design:**
+```python
+from cognition import SessionManager, Settings
+
+manager = SessionManager(settings)
+session = await manager.create_session(workspace_path="/project")
+await manager.delete_session(session.id)
+```
+
+### P2-9: AgentRegistry (Per-Session Tool/Middleware Management)
+
+| Field | Value |
+|-------|-------|
+| **Layer** | 4 (Agent Runtime) |
+| **File** | `server/app/agent_registry.py` (new) |
+| **Effort** | ~4 days |
+| **Status** | Not Started |
+
+**Purpose:** Enable GUI apps to register tools and middleware that apply per-session.
+
+**Acceptance Criteria:**
+- [ ] `AgentRegistry` class for registering tool/middleware factories
+- [ ] Factory pattern for fresh instances per session
+- [ ] `register_tool(name, factory)` and `register_middleware(factory)` methods
+- [ ] `create_agent_with_extensions()` that combines registered extensions
+- [ ] Support for both programmatic and file-based registration
+
+**API Design:**
+```python
+from cognition import AgentRegistry
+from langchain_core.tools import tool
+
+registry = AgentRegistry()
+
+@tool
+def gui_file_picker(description: str) -> str:
+    """Open file picker dialog."""
+    pass
+
+registry.register_tool("file_picker", lambda: gui_file_picker)
+agent = registry.create_agent_with_extensions(project_path, settings)
+```
+
+### P2-10: File Watcher & Hot-Reload API
+
+| Field | Value |
+|-------|-------|
+| **Layer** | 1 (Foundation) |
+| **File** | `server/app/file_watcher.py` (new) |
+| **Effort** | ~3 days |
+| **Dependencies** | watchdog library |
+| **Status** | Not Started |
+
+**Purpose:** Enable GUI apps to watch workspace files and trigger reloads.
+
+**Acceptance Criteria:**
+- [ ] `WorkspaceWatcher` class for monitoring file changes
+- [ ] Watch `.cognition/tools/` for tool hot-reload (immediate)
+- [ ] Watch `.cognition/middleware/` for middleware session-based reload
+- [ ] Watch `.cognition/config.yaml` for config changes
+- [ ] Callbacks for GUI notifications
+- [ ] Clear distinction: tools=immediate, middleware=session-based
+
+**API Design:**
+```python
+from cognition import WorkspaceWatcher
+
+watcher = WorkspaceWatcher("/workspace")
+watcher.watch_tools(lambda path, event: registry.reload_tools())
+watcher.watch_middleware(lambda path, event: registry.mark_middleware_pending())
+watcher.start()
+```
+
+### P2-11: CLI Tool/Middleware Scaffolding
+
+| Field | Value |
+|-------|-------|
+| **Layer** | 1 (Foundation) |
+| **File** | `server/app/cli.py` (extend) |
+| **Effort** | ~2 days |
+| **Status** | Not Started |
+
+**Purpose:** Help users create tool and middleware templates.
+
+**Acceptance Criteria:**
+- [ ] `cognition tool create <name>` — generates `.cognition/tools/{name}.py`
+- [ ] `cognition middleware create <name>` — generates `.cognition/middleware/{name}.py`
+- [ ] Templates include proper imports and structure
+- [ ] Automatic directory creation
+
+**Example:**
+```bash
+cognition tool create my-api-client
+# Creates .cognition/tools/my_api_client.py with @tool decorator template
+```
+
 ---
 
-## P3 — Full Vision (~30% Partial)
+## P3 — Full Vision (~10% Complete)
 
-### P3-1: MLflow Evaluation Workflows 🔄 PARTIAL (40%)
+Advanced features for complete platform vision.
+
+### P3-1: MLflow Evaluation Workflows 🔄 PARTIAL
 
 | Field | Value |
 |-------|-------|
 | **Layer** | 7 (Observability) |
 | **File** | `server/app/evaluation/workflows.py` |
 | **Effort remaining** | ~2 weeks |
+| **Status** | 40% complete |
 
 **What exists:**
 - ✅ `SessionEvaluation` model with feedback, scores, and metrics
@@ -416,13 +383,14 @@ Settings-driven CORS: `cors_origins`, `cors_methods`, `cors_headers`, `cors_cred
 - [ ] Quality trend dashboards in Grafana
 - [ ] CLI command: `cognition eval`
 
-### P3-2: Prompt Registry 🔄 PARTIAL (60%)
+### P3-2: Prompt Registry 🔄 PARTIAL
 
 | Field | Value |
 |-------|-------|
 | **Layer** | 7 (Observability) / 4 (Agent Runtime) |
 | **File** | `server/app/agent/prompt_registry.py` |
 | **Effort remaining** | ~3 days |
+| **Status** | 60% complete |
 
 **What exists:**
 - ✅ `PromptRegistryBackend` protocol
@@ -435,12 +403,46 @@ Settings-driven CORS: `cors_origins`, `cors_methods`, `cors_headers`, `cors_cred
 - [ ] Support registry references in `AgentDefinition` (e.g., `prompt: "mlflow:security-expert:v1"`)
 - [ ] Integration tests with live MLflow server
 
-### P3-3: Cloud Execution Backends
+### P3-3: GUITool Base Class
+
+| Field | Value |
+|-------|-------|
+| **Layer** | 4 (Agent Runtime) |
+| **File** | `server/app/agent/gui_tool.py` (new) |
+| **Effort** | ~2 days |
+| **Status** | Not Started |
+
+**Purpose:** Base class for tools that need GUI interaction.
+
+**Acceptance Criteria:**
+- [ ] `GUITool` base class with `set_gui_callback()` method
+- [ ] `request_gui_action()` method for GUI interaction
+- [ ] Documentation for GUI app integration
+
+### P3-4: Dynamic Tool Validation
+
+| Field | Value |
+|-------|-------|
+| **Layer** | 4 (Agent Runtime) |
+| **File** | `server/app/agent/tool_validator.py` (new) |
+| **Effort** | ~2 days |
+| **Status** | Not Started |
+
+**Purpose:** Validate tools at registration time, not runtime.
+
+**Acceptance Criteria:**
+- [ ] `cognition validate` CLI command
+- [ ] Check all tools are loadable
+- [ ] Verify @tool decorator present
+- [ ] Validate middleware inherits from AgentMiddleware
+- [ ] Provide helpful error messages with suggestions
+
+### P3-5: Cloud Execution Backends
 
 | Field | Value |
 |-------|-------|
 | **Layer** | 3 (Execution) |
-| **Status** | Not started |
+| **Status** | Not Started |
 | **Effort** | ~2-4 weeks per backend |
 | **Dependencies** | P2-6 (ExecutionBackend Protocol) ✅ |
 
@@ -451,12 +453,12 @@ Settings-driven CORS: `cors_origins`, `cors_methods`, `cors_headers`, `cors_cred
 - [ ] Cost-aware scheduling
 - [ ] Configuration-driven backend selection
 
-### P3-4: Ollama Provider + LLM Resilience
+### P3-6: Ollama Provider + LLM Resilience
 
 | Field | Value |
 |-------|-------|
 | **Layer** | 5 (LLM Provider) |
-| **Status** | Not started |
+| **Status** | Not Started |
 | **Effort** | ~1-2 weeks |
 | **Dependencies** | P2-2 (Circuit Breaker) — partially done |
 
@@ -466,12 +468,12 @@ Settings-driven CORS: `cors_origins`, `cors_methods`, `cors_headers`, `cors_cred
 - [ ] Provider factories return typed protocol, not `Any`
 - [ ] Gateway integration option (MLflow AI Gateway or LiteLLM)
 
-### P3-5: Human Feedback Loop
+### P3-7: Human Feedback Loop
 
 | Field | Value |
 |-------|-------|
 | **Layer** | 7 (Observability) / 6 (API & Streaming) |
-| **Status** | Not started |
+| **Status** | Not Started |
 | **Effort** | ~1-2 weeks |
 | **Dependencies** | P3-1 (MLflow Evaluation Workflows) |
 
@@ -526,21 +528,24 @@ All modules are in their correct architectural layer:
 
 ## Next Steps
 
-**Immediate (GUI/Extensibility - P0):**
-1. **GUI Public APIs** — SessionManager, AgentRegistry, file watching (P0-1 to P0-4)
-2. Wire circuit breaker into `ProviderFallbackChain` (P2-2 completion — ~2 days)
-3. Wire prompt registry into `create_cognition_agent()` (P3-2 completion — ~3 days)
+**Immediate (highest impact, lowest effort):**
+1. SessionManager (P2-8) — Enable GUI apps to manage sessions
+2. Wire circuit breaker into `ProviderFallbackChain` (P2-2 completion)
+3. AgentRegistry (P2-9) — Per-session tool/middleware management
 
-**Short-term (P1):**
-4. Add API routes for evaluation service (P3-1 — ~1 week)
-5. Persist evaluation feedback to database (P3-1 — ~3 days)
-6. Human feedback loop endpoint (P3-5 — ~1-2 weeks)
+**Short-term:**
+4. File Watcher & Hot-Reload API (P2-10)
+5. CLI Tool/Middleware Scaffolding (P2-11)
+6. Wire prompt registry into `create_cognition_agent()` (P3-2 completion)
 
 **Medium-term:**
-7. Ollama provider + LLM resilience (P3-4 — ~1-2 weeks)
+7. Add API routes for evaluation service (P3-1)
+8. GUITool Base Class (P3-3)
+9. Dynamic Tool Validation (P3-4)
 
 **Long-term:**
-8. Cloud execution backends (P3-3 — ~2-4 weeks per backend)
+10. Cloud execution backends (P3-5)
+11. Human feedback loop endpoint (P3-7)
 
 ---
 
