@@ -399,6 +399,8 @@ class SqliteStorageBackend:
                 total = row[0] if row else 0
 
             # Get paginated messages
+            # Handle limit=-1 (no limit) by using total count
+            query_limit = total if limit < 0 else limit
             async with db.execute(
                 """
                 SELECT * FROM messages 
@@ -406,7 +408,7 @@ class SqliteStorageBackend:
                 ORDER BY created_at ASC
                 LIMIT ? OFFSET ?
                 """,
-                (session_id, limit, offset),
+                (session_id, query_limit, offset),
             ) as cursor:
                 async for row in cursor:
                     messages.append(self._row_to_message(row))

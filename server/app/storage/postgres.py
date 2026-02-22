@@ -415,6 +415,8 @@ class PostgresStorageBackend:
             total = total_row[0]
 
             # Get paginated messages
+            # Handle limit=-1 (no limit) by using a large number
+            query_limit = total if limit < 0 else limit
             rows = await conn.fetch(
                 """
                 SELECT * FROM messages 
@@ -423,7 +425,7 @@ class PostgresStorageBackend:
                 LIMIT $2 OFFSET $3
                 """,
                 session_id,
-                limit,
+                query_limit,
                 offset,
             )
 
