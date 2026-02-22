@@ -10,16 +10,21 @@ from datetime import UTC, datetime
 
 from server.app.models import Session, SessionConfig, SessionStatus
 from server.app.api.scoping import SessionScope
-from server.app.session_store import SqliteSessionStore
+from server.app.storage.sqlite import SqliteStorageBackend
 
 
 @pytest.fixture
-def session_store(tmp_path):
+async def session_store(tmp_path):
     """Create a temporary session store for testing."""
     workspace = tmp_path / "workspace"
     workspace.mkdir()
-    store = SqliteSessionStore(str(workspace))
-    return store
+    store = SqliteStorageBackend(
+        connection_string=str(workspace / "test.db"),
+        workspace_path=str(workspace),
+    )
+    await store.initialize()
+    yield store
+    await store.close()
 
 
 class TestSessionScope:
@@ -166,8 +171,8 @@ class TestSessionModel:
         assert session.scopes == {}
 
 
-class TestSessionStoreScoping:
-    """Test SqliteSessionStore scoping functionality."""
+class TestStorageBackendScoping:
+    """Test StorageBackend scoping functionality."""
 
     @pytest.mark.asyncio
     async def test_create_session_with_scopes(self, session_store):

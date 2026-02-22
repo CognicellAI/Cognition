@@ -356,7 +356,11 @@ class SessionManager:
         session.updated_at = datetime.now(timezone.utc).isoformat()
 
         # Update in storage
-        await self._storage.update_session(session)
+        await self._storage.update_session(
+            session_id=session_id,
+            title=session.title,
+            status=session.status.value,
+        )
 
         # Update in cache
         if session_id in self._sessions:

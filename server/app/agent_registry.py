@@ -29,7 +29,7 @@ from langchain_core.tools import BaseTool
 
 from server.app.agent.cognition_agent import (
     create_cognition_agent,
-    invalidate_agent_cache,
+    clear_agent_cache,
 )
 from server.app.session_manager import SessionManager, get_session_manager
 from server.app.settings import Settings
@@ -148,7 +148,7 @@ class AgentRegistry:
         )
 
         # Invalidate agent cache to force recompilation
-        invalidate_agent_cache()
+        clear_agent_cache()
 
         logger.info(
             "Tool registered",
@@ -167,7 +167,7 @@ class AgentRegistry:
         """
         if name in self._tools:
             del self._tools[name]
-            invalidate_agent_cache()
+            clear_agent_cache()
             logger.info("Tool unregistered", tool_name=name)
             return True
         return False
@@ -578,7 +578,7 @@ class AgentRegistry:
         count = self.discover_tools()
 
         # Invalidate agent cache
-        invalidate_agent_cache()
+        clear_agent_cache()
 
         logger.info("Tools hot-reloaded", tools_reloaded=count)
         return count

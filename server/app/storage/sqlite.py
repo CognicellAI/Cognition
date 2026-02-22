@@ -125,6 +125,7 @@ class SqliteStorageBackend:
         thread_id: str,
         config: SessionConfig,
         title: Optional[str] = None,
+        scopes: Optional[dict[str, str]] = None,
     ) -> Session:
         """Create a new session."""
         now = datetime.now(UTC).isoformat()
@@ -139,6 +140,7 @@ class SqliteStorageBackend:
             created_at=now,
             updated_at=now,
             message_count=0,
+            scopes=scopes or {},
         )
 
         config_json = json.dumps(
@@ -151,13 +153,15 @@ class SqliteStorageBackend:
             }
         )
 
+        scopes_json = json.dumps(scopes or {})
+
         async with aiosqlite.connect(self.db_path) as db:
             await db.execute(
                 """
                 INSERT INTO sessions (
                     id, workspace_path, title, thread_id, status, 
-                    config, message_count, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    config, scopes, message_count, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     session.id,
@@ -166,6 +170,7 @@ class SqliteStorageBackend:
                     session.thread_id,
                     session.status.value,
                     config_json,
+                    scopes_json,
                     session.message_count,
                     session.created_at,
                     session.updated_at,
@@ -205,6 +210,7 @@ class SqliteStorageBackend:
         self,
         session_id: str,
         title: Optional[str] = None,
+        status: Optional[str] = None,
         config: Optional[SessionConfig] = None,
     ) -> Optional[Session]:
         """Update a session."""
@@ -219,6 +225,11 @@ class SqliteStorageBackend:
             updates.append("title = ?")
             params.append(title)
             session.title = title
+
+        if status is not None:
+            updates.append("status = ?")
+            params.append(status)
+            session.status = SessionStatus(status)
 
         if config is not None:
             existing_config = session.config
@@ -472,6 +483,7 @@ class SqliteStorageBackend:
     def _row_to_session(self, row: aiosqlite.Row) -> Session:
         """Convert a database row to a Session."""
         config_data = json.loads(row["config"])
+        scopes_data = json.loads(row["scopes"]) if row["scopes"] else {}
         return Session(
             id=row["id"],
             workspace_path=row["workspace_path"],
@@ -488,6 +500,7 @@ class SqliteStorageBackend:
             created_at=row["created_at"],
             updated_at=row["updated_at"],
             message_count=row["message_count"],
+            scopes=scopes_data,
         )
 
     def _row_to_message(self, row: aiosqlite.Row) -> Message:

@@ -213,6 +213,7 @@ class StorageBackend(Protocol):
         thread_id: str,
         config: SessionConfig,
         title: Optional[str] = None,
+        scopes: Optional[dict[str, str]] = None,
     ) -> Session:
         """Create a new session."""
         ...
@@ -229,6 +230,7 @@ class StorageBackend(Protocol):
         self,
         session_id: str,
         title: Optional[str] = None,
+        status: Optional[str] = None,
         config: Optional[SessionConfig] = None,
     ) -> Optional[Session]:
         """Update a session."""
