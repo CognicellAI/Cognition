@@ -256,6 +256,35 @@ class CircuitBreaker:
         self._half_open_calls = 0
         logger.info("Circuit breaker manually reset", name=self.config.name)
 
+    async def record_failure(self, error: str) -> None:
+        """Manually record a failure.
+
+        This is used by the fallback chain to record failures
+        that occur outside of the circuit breaker call flow.
+
+        Args:
+            error: Description of the error
+        """
+        async with self._lock:
+            self._metrics.failed_calls += 1
+            self._metrics.consecutive_failures += 1
+            self._metrics.consecutive_successes = 0
+            self._metrics.last_failure_time = time.time()
+
+            if self._state == CircuitState.CLOSED:
+                if self._metrics.consecutive_failures >= self.config.failure_threshold:
+                    await self._transition_to(CircuitState.OPEN)
+            elif self._state == CircuitState.HALF_OPEN:
+                await self._transition_to(CircuitState.OPEN)
+
+            logger.warning(
+                "Failure recorded on circuit breaker",
+                name=self.config.name,
+                error=error,
+                consecutive_failures=self._metrics.consecutive_failures,
+                state=self._state.name,
+            )
+
 
 class RetryWithBackoff:
     """Retry logic with exponential backoff.
