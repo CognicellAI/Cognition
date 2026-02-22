@@ -3,12 +3,12 @@
 - Automatic project indexing
 - File relevance scoring
 - Smart file inclusion in context
-- Long-term memory via StoreBackend
 """
 
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
@@ -282,19 +282,3 @@ class ContextManager:
         if result.exit_code == 0:
             return result.output
         return None
-
-    def save_memory(self, key: str, content: str) -> None:
-        """Save to long-term memory (if store available)."""
-        # This would integrate with StoreBackend if available
-        # For now, just log it
-        import logging
-
-        logging.getLogger(__name__).info(f"Memory: {key} = {content[:50]}...")
-
-    def load_memory(self, key: str) -> Optional[str]:
-        """Load from long-term memory."""
-        # This would integrate with StoreBackend if available
-        return None
-
-
-import re  # Import at end to avoid circular import issues

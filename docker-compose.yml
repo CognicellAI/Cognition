@@ -74,7 +74,7 @@ services:
 
       # Persistence — PostgreSQL
       - COGNITION_PERSISTENCE_BACKEND=postgres
-      - COGNITION_PERSISTENCE_URI=postgresql+asyncpg://${POSTGRES_USER:-cognition}:${POSTGRES_PASSWORD:-cognition}@postgres:5432/${POSTGRES_DB:-cognition}
+      - COGNITION_PERSISTENCE_URI=postgresql://${POSTGRES_USER:-cognition}:${POSTGRES_PASSWORD:-cognition}@postgres:5432/${POSTGRES_DB:-cognition}
 
       # MLflow — Tracing & Evaluation
       - COGNITION_MLFLOW_ENABLED=true
