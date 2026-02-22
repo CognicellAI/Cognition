@@ -519,6 +519,8 @@ class PostgresStorageBackend:
     def _row_to_session(self, row: asyncpg.Record) -> Session:
         """Convert a database row to a Session."""
         config_data = json.loads(row["config"])
+        scopes_data = row.get("scopes")
+        scopes = json.loads(scopes_data) if scopes_data else {}
         return Session(
             id=row["id"],
             workspace_path=row["workspace_path"],
@@ -532,6 +534,7 @@ class PostgresStorageBackend:
                 max_tokens=config_data.get("max_tokens"),
                 system_prompt=config_data.get("system_prompt"),
             ),
+            scopes=scopes,
             created_at=row["created_at"].isoformat(),
             updated_at=row["updated_at"].isoformat(),
             message_count=row["message_count"],
