@@ -96,7 +96,7 @@ cognition/
 ## Key Workflows
 
 ### Extending Cognition
-Cognition is designed to be highly pluggable using native `deepagents` extension points.
+Cognition is designed to be highly pluggable using native `deepagents` extension points. Deep Agents is the higher-level abstraction that Cognition is built on — it wraps LangGraph and provides its own primitives (tools, middleware, skills, subagents, memory, sandbox backends). We should prefer Deep Agents' API surface over reaching down to raw LangGraph.
 
 #### Custom Tools
 1. Define your tool as a plain Python callable or LangChain `BaseTool`.

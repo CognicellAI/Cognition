@@ -22,7 +22,7 @@ from langgraph.checkpoint.base import BaseCheckpointSaver
 
 from server.app.agent.cognition_agent import create_cognition_agent
 from server.app.agent.definition import AgentDefinition
-from server.app.persistence.factory import create_persistence_backend
+from server.app.storage.factory import create_storage_backend
 from server.app.settings import Settings, get_settings
 
 
@@ -431,10 +431,10 @@ async def create_agent_runtime(
     settings = settings or get_settings()
     workspace_path = Path(workspace_path).resolve()
 
-    # Get checkpointer from persistence backend if not provided
+    # Get checkpointer from storage backend if not provided
     if checkpointer is None:
-        persistence_backend = create_persistence_backend(settings)
-        checkpointer = await persistence_backend.get_checkpointer()
+        storage_backend = create_storage_backend(settings)
+        checkpointer = await storage_backend.get_checkpointer()
 
     # Resolve tool paths
     tools: list[Any] = []

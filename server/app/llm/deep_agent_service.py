@@ -18,7 +18,7 @@ from langchain_core.messages import HumanMessage, SystemMessage
 
 from server.app.settings import Settings
 from server.app.agent import create_cognition_agent
-from server.app.persistence.factory import create_persistence_backend
+from server.app.storage.factory import create_storage_backend
 
 logger = structlog.get_logger(__name__)
 
@@ -131,7 +131,7 @@ class DeepAgentStreamingService:
             settings: Application settings for LLM configuration.
         """
         self.settings = settings
-        self.persistence_backend = create_persistence_backend(settings)
+        self.storage_backend = create_storage_backend(settings)
 
     async def stream_response(
         self,
@@ -166,8 +166,8 @@ class DeepAgentStreamingService:
             # Get the model with specific settings
             model = await self._get_model(llm_settings)
 
-            # Get checkpointer from persistence backend
-            checkpointer = await self.persistence_backend.get_checkpointer()
+            # Get checkpointer from storage backend
+            checkpointer = await self.storage_backend.get_checkpointer()
 
             # Create the deep agent for this session with the model
             agent = create_cognition_agent(
@@ -214,7 +214,7 @@ class DeepAgentStreamingService:
                     # Chunk might be a list, Command object, or message
                     chunks = chunk if isinstance(chunk, list) else [chunk]
                     for c in chunks:
-                        content = None
+                        content: str = ""
                         # Handle Command objects from LangGraph
                         if hasattr(c, "update") and isinstance(c.update, dict):
                             messages = c.update.get("messages", [])
