@@ -222,7 +222,7 @@ class StorageBackend(Protocol):
         """Get a session by ID."""
         ...
 
-    async def list_sessions(self) -> list[Session]:
+    async def list_sessions(self, filter_scopes: Optional[dict[str, str]] = None) -> list[Session]:
         """List all sessions."""
         ...
 

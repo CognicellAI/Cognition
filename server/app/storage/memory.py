@@ -94,13 +94,21 @@ class MemoryStorageBackend:
         """Get a session by ID."""
         return self._sessions.get(session_id)
 
-    async def list_sessions(self) -> list[Session]:
+    async def list_sessions(self, filter_scopes: Optional[dict[str, str]] = None) -> list[Session]:
         """List all sessions."""
-        return sorted(
+        sessions = sorted(
             self._sessions.values(),
             key=lambda s: s.updated_at,
             reverse=True,
         )
+
+        # Filter by scopes if specified
+        if filter_scopes:
+            sessions = [
+                s for s in sessions if all(s.scopes.get(k) == v for k, v in filter_scopes.items())
+            ]
+
+        return sessions
 
     async def update_session(
         self,

@@ -207,13 +207,19 @@ class PostgresStorageBackend:
                 return self._row_to_session(row)
         return None
 
-    async def list_sessions(self) -> list[Session]:
+    async def list_sessions(self, filter_scopes: Optional[dict[str, str]] = None) -> list[Session]:
         """List all sessions."""
         sessions = []
         async with self._pool.acquire() as conn:
             rows = await conn.fetch("SELECT * FROM sessions ORDER BY updated_at DESC")
             for row in rows:
-                sessions.append(self._row_to_session(row))
+                session = self._row_to_session(row)
+                # Filter by scopes if specified
+                if filter_scopes:
+                    if all(session.scopes.get(k) == v for k, v in filter_scopes.items()):
+                        sessions.append(session)
+                else:
+                    sessions.append(session)
         return sessions
 
     async def update_session(

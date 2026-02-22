@@ -196,14 +196,20 @@ class SqliteStorageBackend:
                     return self._row_to_session(row)
         return None
 
-    async def list_sessions(self) -> list[Session]:
+    async def list_sessions(self, filter_scopes: Optional[dict[str, str]] = None) -> list[Session]:
         """List all sessions."""
         sessions = []
         async with aiosqlite.connect(self.db_path) as db:
             db.row_factory = aiosqlite.Row
             async with db.execute("SELECT * FROM sessions ORDER BY updated_at DESC") as cursor:
                 async for row in cursor:
-                    sessions.append(self._row_to_session(row))
+                    session = self._row_to_session(row)
+                    # Filter by scopes if specified
+                    if filter_scopes:
+                        if all(session.scopes.get(k) == v for k, v in filter_scopes.items()):
+                            sessions.append(session)
+                    else:
+                        sessions.append(session)
         return sessions
 
     async def update_session(
