@@ -448,12 +448,12 @@ scenario_3_sse_streaming() {
 
     # Send message with SSE streaming
     local temp_file=$(mktemp)
-    curl -s -X POST \
-        -H "Content-Type: application/json" \
-        -H "Accept: text/event-stream" \
-        -d '{"content": "Hello, please give me a short greeting."}' \
-        -o "$temp_file" \
-        "$BASE_URL/sessions/$session_id/messages" 2>/dev/null
+    local curl_cmd="curl -s -X POST"
+    if [[ -n "$SCOPE_HEADER" ]]; then
+        curl_cmd="$curl_cmd -H '$SCOPE_HEADER'"
+    fi
+    curl_cmd="$curl_cmd -H 'Content-Type: application/json' -H 'Accept: text/event-stream' -d '{\"content\": \"Hello, please give me a short greeting.\"}' -o '$temp_file' '$BASE_URL/sessions/$session_id/messages'"
+    eval "$curl_cmd" 2>/dev/null
 
     local content_type=$(file -b --mime-type "$temp_file" 2>/dev/null || echo "unknown")
 
@@ -675,11 +675,12 @@ scenario_5_multi_turn() {
     for msg in "${messages[@]}"; do
         ((msg_num++))
         echo "  ${YELLOW}[INFO]${NC} Sending message $msg_num/3..."
-        curl -s -X POST \
-            -H "Content-Type: application/json" \
-            -H "Accept: text/event-stream" \
-            -d "{\"content\": \"$msg\"}" \
-            "$BASE_URL/sessions/$session_id/messages" > /dev/null 2>&1
+        local curl_cmd="curl -s -X POST"
+        if [[ -n "$SCOPE_HEADER" ]]; then
+            curl_cmd="$curl_cmd -H '$SCOPE_HEADER'"
+        fi
+        curl_cmd="$curl_cmd -H 'Content-Type: application/json' -H 'Accept: text/event-stream' -d '{\"content\": \"$msg\"}' '$BASE_URL/sessions/$session_id/messages' > /dev/null 2>&1"
+        eval "$curl_cmd"
         sleep 1
     done
 
