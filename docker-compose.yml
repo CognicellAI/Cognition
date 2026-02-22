@@ -86,6 +86,10 @@ services:
       # with COGNITION_SANDBOX_BACKEND=docker instead.
       - COGNITION_SANDBOX_BACKEND=local
 
+      # Session Scoping — Multi-tenant isolation
+      - COGNITION_SCOPING_ENABLED=true
+      - COGNITION_SCOPE_KEYS=user,project,org
+
       # OpenTelemetry — Jaeger
       - COGNITION_OTEL_ENABLED=true
       - COGNITION_OTEL_ENDPOINT=http://jaeger:4317
