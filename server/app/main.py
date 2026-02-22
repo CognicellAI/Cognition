@@ -108,7 +108,7 @@ async def health_check() -> HealthStatus:
     for name, breaker in breaker_registry.items():
         if name.startswith("llm_provider_"):
             provider = name.replace("llm_provider_", "")
-            metrics = breaker.get_metrics()
+            metrics = breaker.metrics
             circuit_breakers.append(
                 CircuitBreakerStatus(
                     provider=provider,
