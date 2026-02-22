@@ -45,6 +45,7 @@ async def get_config(
             "session_timeout_seconds": yaml_config.get("server", {}).get(
                 "session_timeout_seconds", settings.session_timeout_seconds
             ),
+            "scoping_enabled": settings.scoping_enabled,
         },
         llm={
             "provider": yaml_config.get("llm", {}).get("provider", settings.llm_provider),

@@ -117,9 +117,9 @@ class Settings(BaseSettings):
         alias="COGNITION_CORS_CREDENTIALS",
     )
 
-    @field_validator("cors_origins", "cors_methods", "cors_headers", mode="before")
+    @field_validator("cors_origins", "cors_methods", "cors_headers", "scope_keys", mode="before")
     @classmethod
-    def parse_cors_list(cls, v: Any) -> list[str] | Any:
+    def parse_comma_separated_list(cls, v: Any) -> list[str] | Any:
         """Parse comma-separated string into list."""
         if isinstance(v, str):
             return [item.strip() for item in v.split(",")]
