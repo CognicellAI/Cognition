@@ -477,6 +477,9 @@ class PostgresStorageBackend:
         )
         self._checkpointer = await self._checkpointer_context.__aenter__()
 
+        # Run migrations to create checkpoints table
+        await self._checkpointer.setup()
+
         return self._checkpointer
 
     async def close_checkpointer(self) -> None:
