@@ -548,11 +548,12 @@ scenario_4_message_persistence() {
         session_id=$(get_body "$response" | jq -r '.id // empty')
 
         # Send a message if this is a new session
-        curl -s -X POST \
-            -H "Content-Type: application/json" \
-            -H "Accept: text/event-stream" \
-            -d '{"content": "Test message for pagination"}' \
-            "$BASE_URL/sessions/$session_id/messages" > /dev/null 2>&1
+        local curl_cmd="curl -s -X POST"
+        if [[ -n "$SCOPE_HEADER" ]]; then
+            curl_cmd="$curl_cmd -H '$SCOPE_HEADER'"
+        fi
+        curl_cmd="$curl_cmd -H 'Content-Type: application/json' -H 'Accept: text/event-stream' -d '{\"content\": \"Test message for pagination\"}' '$BASE_URL/sessions/$session_id/messages' > /dev/null 2>&1"
+        eval "$curl_cmd"
         sleep 2
     fi
 
@@ -685,7 +686,7 @@ scenario_5_multi_turn() {
     done
 
     # Wait for all to complete
-    sleep 3
+    sleep 5
 
     # Verify we have 6 messages (3 user + 3 assistant)
     local messages_response=$(http_get "$BASE_URL/sessions/$session_id/messages")
