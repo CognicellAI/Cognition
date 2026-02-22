@@ -88,7 +88,7 @@ services:
 
       # Session Scoping — Multi-tenant isolation
       - COGNITION_SCOPING_ENABLED=true
-      - COGNITION_SCOPE_KEYS=["user","project","org"]
+      - COGNITION_SCOPE_KEYS=["user"]
 
       # OpenTelemetry — Jaeger
       - COGNITION_OTEL_ENABLED=true

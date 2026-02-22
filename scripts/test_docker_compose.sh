@@ -23,6 +23,9 @@ JAEGER_URL="${JAEGER_URL:-http://localhost:16686}"
 POSTGRES_HOST="${POSTGRES_HOST:-localhost}"
 POSTGRES_PORT="${POSTGRES_PORT:-5432}"
 
+# Scoping configuration (set dynamically based on server config)
+SCOPE_HEADER=""
+
 # Counters
 TESTS_PASSED=0
 TESTS_FAILED=0
@@ -58,11 +61,14 @@ fail() {
     ((TESTS_FAILED++))
 }
 
-# HTTP request helpers
+# HTTP request helpers - include scope header when scoping is enabled
 http_get() {
     local url="$1"
     local headers="${2:-}"
     local cmd="curl -s -w \"\\n%{http_code}\""
+    if [[ -n "$SCOPE_HEADER" ]]; then
+        cmd="$cmd -H \"$SCOPE_HEADER\""
+    fi
     if [[ -n "$headers" ]]; then
         cmd="$cmd -H \"$headers\""
     fi
@@ -78,6 +84,9 @@ http_post() {
     if [[ -n "$data" ]]; then
         cmd="$cmd -H \"Content-Type: application/json\" -d '$data'"
     fi
+    if [[ -n "$SCOPE_HEADER" ]]; then
+        cmd="$cmd -H \"$SCOPE_HEADER\""
+    fi
     if [[ -n "$headers" ]]; then
         cmd="$cmd -H \"$headers\""
     fi
@@ -89,17 +98,24 @@ http_patch() {
     local url="$1"
     local data="$2"
     local headers="${3:-}"
-    curl -s -w "\n%{http_code}" -X PATCH \
-        -H "Content-Type: application/json" \
-        -H "$headers" \
-        -d "$data" \
-        "$url" 2>/dev/null
+    local cmd="curl -s -w \"\\n%{http_code}\" -X PATCH"
+    if [[ -n "$SCOPE_HEADER" ]]; then
+        cmd="$cmd -H \"$SCOPE_HEADER\""
+    fi
+    if [[ -n "$headers" ]]; then
+        cmd="$cmd -H \"$headers\""
+    fi
+    cmd="$cmd -H \"Content-Type: application/json\" -d '$data' \"$url\""
+    eval "$cmd" 2>/dev/null
 }
 
 http_delete() {
     local url="$1"
     local headers="${2:-}"
     local cmd="curl -s -w \"\\n%{http_code}\" -X DELETE"
+    if [[ -n "$SCOPE_HEADER" ]]; then
+        cmd="$cmd -H \"$SCOPE_HEADER\""
+    fi
     if [[ -n "$headers" ]]; then
         cmd="$cmd -H \"$headers\""
     fi
@@ -963,6 +979,14 @@ main() {
 
     # Wait for server
     wait_for_server
+
+    # Check if scoping is enabled and set scope header
+    local config_response=$(curl -s "$BASE_URL/config")
+    local scoping_enabled=$(echo "$config_response" | jq -r '.server.scoping_enabled // false')
+    if [[ "$scoping_enabled" == "true" ]]; then
+        SCOPE_HEADER="X-Cognition-Scope-User: test-user"
+        log_info "Session scoping is enabled, using scope header: $SCOPE_HEADER"
+    fi
 
     # Run scenarios
     scenario_1_health
