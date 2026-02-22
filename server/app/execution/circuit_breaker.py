@@ -139,6 +139,14 @@ class CircuitBreaker:
             rejection_count=self._metrics.rejection_count,
         )
 
+    def get_metrics(self) -> CircuitBreakerMetrics:
+        """Get current circuit metrics (alias for metrics property).
+
+        Returns:
+            Current metrics snapshot
+        """
+        return self.metrics
+
     def is_open(self) -> bool:
         """Check if circuit breaker is open.
 
