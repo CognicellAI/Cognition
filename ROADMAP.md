@@ -172,9 +172,20 @@ Cognition-owned `AgentRuntime` protocol wrapping Deep Agents. Methods: `astream_
 
 This priority tier combines robustness improvements, technical debt cleanup, and new extensibility APIs for GUI applications. A key theme is **aligning with LangGraph/Deep Agents primitives** — removing custom code that duplicates what the framework already provides, and building only what LangGraph cannot.
 
-### LangGraph Primitive Alignment
+### Deep Agents / LangGraph Alignment
 
-Before building new features, the following cleanup is required to eliminate duplication and simplify the architecture. LangGraph natively provides: `thread_id`-based sessions, checkpointers (InMemory, SQLite, Postgres), `Store` for cross-thread memory, and `Runtime` context for per-invocation configuration.
+Before building new features, the following cleanup is required to eliminate duplication and simplify the architecture. Always prefer **Deep Agents** primitives (the higher-level abstraction Cognition is built on) over raw LangGraph/LangChain where available.
+
+**Deep Agents provides:**
+- `create_deep_agent()` — agent factory with `tools`, `middleware`, `skills`, `memory`, `subagents`, `backend`, `context_schema`, `checkpointer`, `store`
+- **Middleware:** `FilesystemMiddleware`, `MemoryMiddleware`, `SkillsMiddleware`, `SubAgentMiddleware`, `SummarizationMiddleware`
+- **Backends:** `BackendProtocol`, `SandboxBackendProtocol` with 6 implementations (`StateBackend`, `StoreBackend`, `FilesystemBackend`, `LocalShellBackend`, `CompositeBackend`, `BaseSandbox`)
+
+**LangGraph provides (lower level):**
+- `thread_id`-based sessions, checkpointers, `Store` for cross-thread memory, `Runtime` context
+
+**LangChain provides:**
+- `AgentMiddleware` protocol (the base class for all middleware)
 
 #### P2-CLEANUP-1: Remove Legacy `persistence/` Package
 
@@ -185,12 +196,12 @@ Before building new features, the following cleanup is required to eliminate dup
 | **Effort** | ~1 day |
 | **Status** | Not Started |
 
-The `server/app/persistence/` package is a checkpointer-only wrapper that is a strict subset of the `server/app/storage/` package. Both wrap the same LangGraph checkpointers (`InMemorySaver`, `AsyncSqliteSaver`, `AsyncPostgresSaver`).
+The `server/app/persistence/` package is a checkpointer-only wrapper that is a strict subset of the `server/app/storage/` package. Both wrap the same LangGraph checkpointers (`InMemorySaver`, `AsyncSqliteSaver`, `AsyncPostgresSaver`) that Deep Agents accepts via `create_deep_agent(checkpointer=...)`.
 
 **Action:**
 - [ ] Remove `server/app/persistence/` package entirely
-- [ ] Update `deep_agent_service.py` to accept checkpointer from `StorageBackend` instead of creating its own via `create_persistence_backend()`
-- [ ] Update `agent/runtime.py` to accept checkpointer from caller instead of creating its own
+- [ ] Update `deep_agent_service.py` to pass checkpointer from `StorageBackend` to `create_deep_agent(checkpointer=...)` instead of creating its own
+- [ ] Update `agent/runtime.py` to accept checkpointer from caller
 
 #### P2-CLEANUP-2: Wire Unified StorageBackend, Remove Standalone Stores
 
@@ -227,7 +238,7 @@ Event types (`TokenEvent`, `ToolCallEvent`, `DoneEvent`, etc.) are defined in th
 - [ ] Remove duplicate dataclasses from `deep_agent_service.py`
 - [ ] Update `api/models.py` to serialize from the canonical types
 
-#### P2-CLEANUP-4: Replace ContextManager Memory Stubs with LangGraph Store
+#### P2-CLEANUP-4: Replace ContextManager Memory Stubs with Deep Agents/LangGraph Store
 
 | Field | Value |
 |-------|-------|
@@ -236,12 +247,13 @@ Event types (`TokenEvent`, `ToolCallEvent`, `DoneEvent`, etc.) are defined in th
 | **Effort** | ~1 day |
 | **Status** | Not Started |
 
-`ContextManager.save_memory()` / `load_memory()` are stubs for a custom memory system. LangGraph provides `InMemoryStore`, `PostgresStore`, and `RedisStore` via the `BaseStore` interface. The `create_cognition_agent()` function already accepts a `store` parameter.
+`ContextManager.save_memory()` / `load_memory()` are stubs for a custom memory system. Deep Agents already provides `MemoryMiddleware` for AGENTS.md file loading. For cross-thread persistent memory, LangGraph provides `Store` (via `InMemoryStore`, `PostgresStore`, `RedisStore`).
 
 **Action:**
 - [ ] Remove `save_memory()` / `load_memory()` stubs
-- [ ] Wire LangGraph `Store` into `create_cognition_agent()` when cross-thread memory is needed
-- [ ] Use `runtime.store` in nodes (LangGraph's `Runtime` context injects the store automatically)
+- [ ] AGENTS.md already handled by Deep Agents `MemoryMiddleware`
+- [ ] Pass LangGraph `Store` to `create_deep_agent(store=...)` when cross-thread memory is needed
+- [ ] Access store in nodes via Deep Agents `Runtime.store` (injected automatically when context_schema includes store)
 
 #### P2-CLEANUP-5: Cache Compiled Agents Per Session
 
@@ -338,7 +350,7 @@ Settings-driven CORS: `cors_origins`, `cors_methods`, `cors_headers`, `cors_cred
 
 ### New GUI Extensibility Items
 
-### P2-8: SessionManager (Thin Facade over LangGraph Threads)
+### P2-8: SessionManager (Thin Facade over Deep Agents/LangGraph)
 
 | Field | Value |
 |-------|-------|
@@ -350,18 +362,20 @@ Settings-driven CORS: `cors_origins`, `cors_methods`, `cors_headers`, `cors_cred
 
 **Purpose:** Enable GUI applications to manage sessions across multiple workspaces.
 
-**LangGraph provides:** `thread_id`-based sessions, checkpointers for persistence, `Store` for cross-thread memory, `context_schema` / `Runtime` for per-invocation user/org context.
+**Deep Agents provides:** `create_deep_agent(checkpointer=..., store=..., context_schema=..., backend=...)`, built-in middleware for AGENTS.md (`MemoryMiddleware`) and skills (`SkillsMiddleware`).
+
+**LangGraph provides:** `thread_id`-based sessions via checkpointer, `Runtime` context injection, `Store` for cross-thread memory.
 
 **What Cognition adds on top:**
 - Session lifecycle events (`on_session_created`, `on_session_deleted`) for GUI callbacks
-- Cross-workspace session queries (LangGraph threads are per-graph)
+- Cross-workspace session queries (Deep Agents threads are per-graph)
 - Per-session agent instances with different tool/middleware stacks
-- Session metadata (title, status, workspace_path) that LangGraph doesn't track
+- Session metadata (title, status, workspace_path) that Deep Agents doesn't track
 
 **Acceptance Criteria:**
-- [ ] `SessionManager` wraps `StorageBackend` + LangGraph checkpointer
-- [ ] Uses LangGraph `thread_id` as the session identifier (no separate concept)
-- [ ] Uses LangGraph `context_schema` for `user_id`/`org_id` scoping
+- [ ] `SessionManager` wraps `StorageBackend` + Deep Agents `create_deep_agent()`
+- [ ] Uses LangGraph `thread_id` (via Deep Agents) as the session identifier
+- [ ] Uses Deep Agents `context_schema` for `user_id`/`org_id` scoping
 - [ ] Session lifecycle events for GUI integration
 - [ ] Manages cached compiled agents per session (from P2-CLEANUP-5)
 
@@ -371,7 +385,7 @@ from cognition import SessionManager, Settings
 
 manager = SessionManager(settings)
 
-# Creates session, maps to LangGraph thread_id, caches agent
+# Creates session, maps to Deep Agents/LangGraph thread_id, caches agent
 session = await manager.create_session(workspace_path="/project")
 
 # Lifecycle callbacks for GUI
@@ -388,19 +402,20 @@ manager.on_session_deleted(lambda sid: gui.remove_from_sidebar(sid))
 | **Effort** | ~4 days |
 | **Status** | Not Started |
 
-**Purpose:** Enable GUI apps to register tools and middleware that apply per-session. This is genuinely new functionality — LangGraph's compile-once model does not support dynamic tool/middleware registration after graph compilation.
+**Purpose:** Enable GUI apps to register tools and middleware that apply per-session. This is genuinely new functionality — Deep Agents' `create_deep_agent()` compiles the graph once, and the compiled graph is immutable.
 
-**Why LangGraph can't do this:**
-- Tools are baked into `ToolNode` at `graph.compile()` time
-- Middleware is compiled into `StateGraph` nodes and edges
+**Why Deep Agents/LangGraph can't do this:**
+- `create_deep_agent()` passes `tools` and `middleware` to `create_agent()` which compiles a LangGraph `StateGraph`
+- Tools are baked into `ToolNode` at compile time via `model.bind_tools()`
+- Middleware is compiled into graph nodes and edges
 - Once compiled, the graph structure is immutable
-- No file-based auto-discovery mechanism exists
+- No file-based auto-discovery mechanism exists in either framework
 
 **Acceptance Criteria:**
 - [ ] `AgentRegistry` class for registering tool/middleware factories
 - [ ] Factory pattern — fresh tool/middleware instances per session
 - [ ] Auto-discovery from `.cognition/tools/` and `.cognition/middleware/` directories
-- [ ] `create_agent_with_extensions()` triggers new `graph.compile()` with updated tools
+- [ ] `create_agent_with_extensions()` calls `create_deep_agent()` triggering new graph compilation with updated tools
 - [ ] Tools: immediate hot-reload (reload module, recompile graph for new sessions)
 - [ ] Middleware: session-based reload (new sessions get updated middleware, existing sessions unchanged)
 
@@ -417,8 +432,7 @@ def gui_file_picker(description: str) -> str:
     pass
 
 registry.register_tool("file_picker", lambda: gui_file_picker)
-
-# Triggers graph recompilation with new tools
+# Calls create_deep_agent() internally with registered tools
 agent = registry.create_agent_with_extensions(project_path, settings)
 ```
 
@@ -636,7 +650,7 @@ All modules are in their correct architectural layer:
 
 ## Next Steps
 
-**Immediate — LangGraph Alignment Cleanup (do first):**
+**Immediate — Deep Agents / LangGraph Alignment Cleanup (do first):**
 1. Remove legacy `persistence/` package (P2-CLEANUP-1 — ~1 day)
 2. Wire `StorageBackend` into API routes, delete standalone stores (P2-CLEANUP-2 — ~3 days)
 3. Cache compiled agents per session (P2-CLEANUP-5 — ~2 days)
