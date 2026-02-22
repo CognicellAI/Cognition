@@ -25,6 +25,7 @@ This roadmap is derived from [FIRST-PRINCIPLE-EVALUTION.md](./FIRST-PRINCIPLE-EV
 
 **Unit tests:** 223 passed, 2 skipped, 0 warnings (except 1 collection warning)
 **Live tests:** 40/41 pass across 9 phases (sole failure: MLflow async tracing — upstream bug)
+**API Proof Script:** 45/45 assertions pass across 9 scenarios with session scoping enabled
 
 ---
 
@@ -58,6 +59,8 @@ Commands parsed with `shlex.split()`. Shell metacharacters are not interpreted.
 | **File** | `server/app/api/scoping.py` |
 
 Generic composable scoping via `X-Cognition-Scope-{Key}` headers. Multi-dimensional support. Fail-closed when enabled. 19 unit tests.
+
+**Enabled by default in docker-compose** with `COGNITION_SCOPING_ENABLED=true` and `COGNITION_SCOPE_KEYS=["user"]`.
 
 ### P0-4: Wire Rate Limiter ✅
 
@@ -537,6 +540,11 @@ All modules are in their correct architectural layer:
   - Phase 7 (Prometheus Metrics): 3/3
   - Phase 8 (Distributed Tracing): 2/2
   - Phase 9 (Security & Resilience): 3/3
+- **API Proof Script:** 45/45 assertions across 9 scenarios
+  - `scripts/test_docker_compose.sh` - Comprehensive bash script testing all 12 API endpoints
+  - Tests session scoping, SSE streaming, CRUD operations, multi-turn conversations
+  - Color-coded output with pass/fail reporting
+  - CI-friendly with non-zero exit on failures
 
 ### Known Issues
 
@@ -546,11 +554,28 @@ All modules are in their correct architectural layer:
 | Prompt registry not wired into agent factory | Low | Implementation exists, integration pending (P3-2) |
 | Evaluation feedback stored in-memory only | Low | Needs persistence backend (P3-1) |
 
+### New Testing Tools
+
+| Tool | Purpose | Location |
+|------|---------|----------|
+| API Proof Script | End-to-end API testing with docker-compose | `scripts/test_docker_compose.sh` |
+| | - Tests all 12 API endpoints | |
+| | - 9 scenarios covering health, CRUD, SSE, scoping, observability | |
+| | - Self-contained (requires only curl + jq) | |
+| | - Supports session scoping with automatic header injection | |
+
 ---
 
 ## Next Steps
 
-**P2 Complete!** All robustness and GUI extensibility items finished.
+**P2 Complete!** All robustness and GUI extensibility items finished. Session scoping enabled and tested.
+
+### Recently Completed
+- ✅ API Proof Script (`scripts/test_docker_compose.sh`) - 45/45 assertions passing
+- ✅ Session scoping enabled in docker-compose with multi-tenant isolation
+- ✅ All CircuitBreaker methods implemented and wired
+- ✅ PostgreSQL checkpointer using psycopg for LangGraph
+- ✅ Storage backend fixes for scopes and message columns
 
 **Immediate — P3 Full Vision:**
 1. Wire prompt registry into `create_cognition_agent()` (P3-2 — ~3 days)
