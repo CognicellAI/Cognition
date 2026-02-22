@@ -8,19 +8,6 @@
 
 Cognition is the open-source **Agent Substrate** — a hardened runtime engine that handles the critical infrastructure AI platforms need, but shouldn't have to build. Execution safety, durable persistence, and compliance-ready auditability come out of the box so you can focus on building your domain logic.
 
-## What's New in v2.0
-
-🚀 **Production-Ready Features Now Available:**
-
-- **SQLite & PostgreSQL backends** with connection pooling and Alembic migrations
-- **Multi-tenant session scoping** via `X-Cognition-Scope-*` headers
-- **Docker sandbox backend** with container-per-session isolation
-- **Rate limiting** with configurable per-minute/burst limits
-- **MLflow integration** for evaluation and prompt registry
-- **Circuit breaker pattern** for resilient LLM provider failover
-- **CORS middleware** for cross-origin web apps
-- **OpenTelemetry gating** - enable/disable observability backends
-
 ## The Platform Paradox
 
 We are in the midst of a platform shift. Every industry—from Cybersecurity to BioTech—is rushing to build "AI Agents" into their core workflows. 
@@ -45,10 +32,20 @@ Cognition provides four fundamental primitives that you compose to build your pl
 ## Quick Start
 
 ### 1. Install Cognition
+
+> **Note:** Cognition is currently in Beta. Install from GitHub while we prepare the PyPI release.
+
 ```bash
-pip install cognition
-# Or with uv (recommended)
-uv pip install cognition
+# Install from GitHub (recommended during Beta)
+pip install git+https://github.com/CognicellAI/Cognition.git
+
+# Or with uv
+uv pip install git+https://github.com/CognicellAI/Cognition.git
+
+# With specific LLM provider support
+pip install "git+https://github.com/CognicellAI/Cognition.git#egg=cognition[openai]"
+# or
+pip install "git+https://github.com/CognicellAI/Cognition.git#egg=cognition[all]"
 ```
 
 ### 2. Configure Your Environment
@@ -233,9 +230,9 @@ uv run pytest tests/unit/test_message_store.py -v
 ```
 
 **Current Status:**
-- ✅ 30+ unit tests passing
-- ✅ 19/23 E2E tests passing (4 require real LLM/external services)
-- ✅ Code coverage for all P0-P3-2 features
+- ✅ 223+ unit tests passing
+- ✅ 40/41 E2E tests passing (1 MLflow async issue - upstream)
+- ✅ Code coverage for P0/P1 features
 
 ## Documentation
 
