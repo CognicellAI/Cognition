@@ -56,6 +56,7 @@ class PostgresStorageBackend:
 
         # Checkpointer state
         self._checkpointer: Optional[AsyncPostgresSaver] = None
+        self._checkpointer_context: Optional[Any] = None
 
         logger.debug(
             "PostgresStorageBackend initialized",
@@ -469,17 +470,20 @@ class PostgresStorageBackend:
         if self._checkpointer:
             return self._checkpointer
 
-        # AsyncPostgresSaver now uses from_conn_string class method
-        self._checkpointer = await AsyncPostgresSaver.from_conn_string(
+        # AsyncPostgresSaver.from_conn_string returns an async context manager
+        # We need to use async with to properly manage the lifecycle
+        self._checkpointer_context = AsyncPostgresSaver.from_conn_string(
             self.connection_string,
         )
+        self._checkpointer = await self._checkpointer_context.__aenter__()
 
         return self._checkpointer
 
     async def close_checkpointer(self) -> None:
         """Close the checkpointer connection."""
-        if self._checkpointer:
-            await self._checkpointer.aclose()
+        if self._checkpointer_context:
+            await self._checkpointer_context.__aexit__(None, None, None)
+            self._checkpointer_context = None
             self._checkpointer = None
 
     # Health check
