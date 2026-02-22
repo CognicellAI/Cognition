@@ -169,7 +169,7 @@ class ProviderFallbackChain:
                 attempts.append((config.provider, None))
 
                 # Record success
-                breaker.record_success()
+                await breaker.record_success()
 
                 logger.info(
                     "Provider selected",
@@ -199,7 +199,7 @@ class ProviderFallbackChain:
                 attempts.append((config.provider, error_msg))
 
                 # Record failure
-                breaker.record_failure(error_msg)
+                await breaker.record_failure(error_msg)
 
                 logger.warning(
                     "Provider failed, trying next",

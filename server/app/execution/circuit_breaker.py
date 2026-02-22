@@ -293,6 +293,28 @@ class CircuitBreaker:
                 state=self._state.name,
             )
 
+    async def record_success(self) -> None:
+        """Manually record a success.
+
+        This is used by the fallback chain to record successes
+        that occur outside of the circuit breaker call flow.
+        """
+        async with self._lock:
+            self._metrics.successful_calls += 1
+            self._metrics.consecutive_successes += 1
+            self._metrics.consecutive_failures = 0
+
+            if self._state == CircuitState.HALF_OPEN:
+                if self._metrics.consecutive_successes >= self.config.success_threshold:
+                    await self._transition_to(CircuitState.CLOSED)
+
+            logger.debug(
+                "Success recorded on circuit breaker",
+                name=self.config.name,
+                consecutive_successes=self._metrics.consecutive_successes,
+                state=self._state.name,
+            )
+
 
 class RetryWithBackoff:
     """Retry logic with exponential backoff.
