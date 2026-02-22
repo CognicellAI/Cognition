@@ -42,9 +42,8 @@ async def lifespan(app: FastAPI):
     await rate_limiter.start()
     logger.info(
         "Server configuration",
-        host=settings.host,
-        port=settings.port,
         llm_provider=settings.llm_provider,
+        otel_enabled=settings.otel_enabled,
     )
     yield
     logger.info("Shutting down Cognition server")
