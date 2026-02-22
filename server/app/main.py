@@ -89,13 +89,38 @@ app.include_router(config.router)
 @app.get("/health", response_model=HealthStatus, tags=["health"])
 async def health_check() -> HealthStatus:
     """Health check endpoint."""
+    from server.app.execution.circuit_breaker import get_circuit_breaker_registry
+    from server.app.llm.provider_fallback import ProviderFallbackChain
+    from server.app.api.models import CircuitBreakerStatus
+
     storage_backend = get_storage_backend()
     sessions_list = await storage_backend.list_sessions()
+
+    # Get circuit breaker status for all providers
+    breaker_registry = get_circuit_breaker_registry()
+    circuit_breakers = []
+
+    for name, breaker in breaker_registry.items():
+        if name.startswith("llm_provider_"):
+            provider = name.replace("llm_provider_", "")
+            metrics = breaker.get_metrics()
+            circuit_breakers.append(
+                CircuitBreakerStatus(
+                    provider=provider,
+                    state=metrics.state,
+                    total_calls=metrics.total_calls,
+                    successful_calls=metrics.successful_calls,
+                    failed_calls=metrics.failed_calls,
+                    consecutive_failures=metrics.consecutive_failures,
+                    last_failure_time=metrics.last_failure_time,
+                )
+            )
 
     return HealthStatus(
         status="healthy",
         version="0.1.0",
         active_sessions=len(sessions_list),
+        circuit_breakers=circuit_breakers,
         timestamp=datetime.now(UTC),
     )
 

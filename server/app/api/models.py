@@ -193,12 +193,27 @@ class UsageEvent(BaseModel):
 # ============================================================================
 
 
+class CircuitBreakerStatus(BaseModel):
+    """Circuit breaker status for a provider."""
+
+    provider: str = Field(..., description="Provider name")
+    state: str = Field(..., description="Circuit state (closed, open, half_open)")
+    total_calls: int = Field(..., description="Total calls made")
+    successful_calls: int = Field(..., description="Successful calls")
+    failed_calls: int = Field(..., description="Failed calls")
+    consecutive_failures: int = Field(..., description="Consecutive failures")
+    last_failure_time: Optional[float] = Field(None, description="Timestamp of last failure")
+
+
 class HealthStatus(BaseModel):
     """Health check response."""
 
     status: Literal["healthy", "unhealthy"] = Field(..., description="Overall health status")
     version: str = Field(..., description="Server version")
     active_sessions: int = Field(..., description="Number of active sessions")
+    circuit_breakers: list[CircuitBreakerStatus] = Field(
+        default_factory=list, description="Circuit breaker status for each provider"
+    )
     timestamp: datetime = Field(..., description="Health check timestamp")
 
 
