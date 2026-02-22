@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any, Literal, Optional
 
 import asyncpg
+import psycopg
 import structlog
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
@@ -470,23 +471,30 @@ class PostgresStorageBackend:
         if self._checkpointer:
             return self._checkpointer
 
-        # AsyncPostgresSaver.from_conn_string returns an async context manager
-        # We need to use async with to properly manage the lifecycle
-        self._checkpointer_context = AsyncPostgresSaver.from_conn_string(
-            self.connection_string,
-        )
-        self._checkpointer = await self._checkpointer_context.__aenter__()
+        # AsyncPostgresSaver requires psycopg, not asyncpg
+        # Create a psycopg connection for the checkpointer
+        # Convert asyncpg connection string to psycopg format
+        conn_string = self.connection_string.replace("postgresql+asyncpg://", "postgresql://")
 
-        # Run migrations to create checkpoints table
+        # Create async psycopg connection
+        conn = await psycopg.AsyncConnection.connect(
+            conn_string,
+            row_factory=psycopg.rows.dict_row,
+        )
+
+        # Create the saver with the connection
+        self._checkpointer = AsyncPostgresSaver(conn)
         await self._checkpointer.setup()
 
         return self._checkpointer
 
     async def close_checkpointer(self) -> None:
         """Close the checkpointer connection."""
-        if self._checkpointer_context:
-            await self._checkpointer_context.__aexit__(None, None, None)
-            self._checkpointer_context = None
+        if self._checkpointer:
+            try:
+                await self._checkpointer.conn.close()
+            except Exception:
+                pass  # Ignore errors during cleanup
             self._checkpointer = None
 
     # Health check
