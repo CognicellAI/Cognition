@@ -469,11 +469,10 @@ class PostgresStorageBackend:
         if self._checkpointer:
             return self._checkpointer
 
-        # AsyncPostgresSaver manages its own connection
-        self._checkpointer = AsyncPostgresSaver(
-            conn_string=self.connection_string,
+        # AsyncPostgresSaver now uses from_conn_string class method
+        self._checkpointer = await AsyncPostgresSaver.from_conn_string(
+            self.connection_string,
         )
-        await self._checkpointer.setup()
 
         return self._checkpointer
 
