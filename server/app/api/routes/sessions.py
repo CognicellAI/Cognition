@@ -32,8 +32,8 @@ from server.app.api.models import (
     EvaluationResponse,
 )
 from server.app.models import SessionConfig
-from server.app.session_store import get_session_store, LocalSessionStore
 from server.app.settings import Settings, get_settings
+from server.app.storage import get_storage_backend
 from server.app.llm.deep_agent_service import (
     get_session_agent_manager,
     SessionAgentManager,
@@ -119,7 +119,7 @@ async def create_session(
     )
 
     # Get session store for this workspace
-    store = get_session_store(workspace_path)
+    store = get_storage_backend()
 
     # Create session with scope
     session = await store.create_session(
@@ -151,7 +151,7 @@ async def list_sessions(
     If scoping is enabled, only returns sessions matching the current scope.
     """
     workspace_path = str(settings.workspace_path)
-    store = get_session_store(workspace_path)
+    store = get_storage_backend()
 
     # Filter by scope if provided
     filter_scopes = scope.get_all() if not scope.is_empty() else None
@@ -180,7 +180,7 @@ async def get_session(
     Only returns sessions from the server's current workspace.
     """
     workspace_path = str(settings.workspace_path)
-    store = get_session_store(workspace_path)
+    store = get_storage_backend()
     session = await store.get_session(session_id)
 
     if session is None:
@@ -217,7 +217,7 @@ async def update_session(
     Updates session metadata (title) or configuration (model, temperature, etc.).
     """
     workspace_path = str(settings.workspace_path)
-    store = get_session_store(workspace_path)
+    store = get_storage_backend()
 
     # Check session exists and scope matches
     existing_session = await store.get_session(session_id)
@@ -274,7 +274,7 @@ async def delete_session(
     Deletes a session and all associated messages.
     """
     workspace_path = str(settings.workspace_path)
-    store = get_session_store(workspace_path)
+    store = get_storage_backend()
 
     # Check if session exists
     session = await store.get_session(session_id)
@@ -315,7 +315,7 @@ async def abort_session(
     Cancels any in-progress agent operation.
     """
     workspace_path = str(settings.workspace_path)
-    store = get_session_store(workspace_path)
+    store = get_storage_backend()
 
     session = await store.get_session(session_id)
     if session is None:

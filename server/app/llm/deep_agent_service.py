@@ -144,10 +144,10 @@ class DeepAgentStreamingService:
         """Stream LLM response using DeepAgents with multi-step support."""
         try:
             # Get session to get its specific LLM config
-            from server.app.session_store import get_session_store
+            from server.app.storage import get_storage_backend
 
-            store = get_session_store(project_path)
-            session = await store.get_session(session_id)
+            storage = get_storage_backend()
+            session = await storage.get_session(session_id)
 
             # Use session settings if available, else fallback to global
             llm_settings = self.settings

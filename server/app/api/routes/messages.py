@@ -24,9 +24,8 @@ from server.app.api.models import (
     ToolCallResponse,
 )
 from server.app.api.sse import SSEStream, EventBuilder, get_last_event_id
-from server.app.session_store import get_session_store
-from server.app.message_store import get_message_store
 from server.app.settings import Settings, get_settings
+from server.app.storage import get_storage_backend
 from server.app.rate_limiter import get_rate_limiter, RateLimiter
 from server.app.api.scoping import SessionScope, create_scope_dependency
 from server.app.llm.deep_agent_service import (
@@ -87,7 +86,7 @@ async def agent_event_stream(
             service = agent_manager.register_session(session_id, workspace_path)
 
         # Get session from store
-        store = get_session_store(workspace_path)
+        store = get_storage_backend()
         session = await store.get_session(session_id)
 
         if not session:
@@ -233,7 +232,7 @@ async def send_message(
     await rate_limiter.check_rate_limit(rate_limit_key)
 
     # Check if session exists using the store
-    store = get_session_store(workspace_path)
+    store = get_storage_backend()
     session = await store.get_session(session_id)
 
     if session is None:
@@ -258,7 +257,7 @@ async def send_message(
         session.thread_id = thread_id
 
     # Create user message
-    message_store = get_message_store(workspace_path)
+    message_store = get_storage_backend()
     user_message = await message_store.create_message(
         message_id=str(uuid.uuid4()),
         session_id=session_id,
@@ -349,7 +348,7 @@ async def list_messages(
     workspace_path = str(settings.workspace_path)
 
     # Check if session exists and scope matches
-    store = get_session_store(workspace_path)
+    store = get_storage_backend()
     session = await store.get_session(session_id)
     if session is None:
         raise HTTPException(
@@ -365,7 +364,7 @@ async def list_messages(
         )
 
     # Get messages for this session from database
-    message_store = get_message_store(workspace_path)
+    message_store = get_storage_backend()
     messages, total = await message_store.get_messages_by_session(session_id, limit, offset)
 
     # Convert domain models to API models
@@ -419,7 +418,7 @@ async def get_message(
     workspace_path = str(settings.workspace_path)
 
     # Check if session exists and scope matches
-    store = get_session_store(workspace_path)
+    store = get_storage_backend()
     session = await store.get_session(session_id)
     if session is None:
         raise HTTPException(
@@ -435,7 +434,7 @@ async def get_message(
         )
 
     # Find message
-    message_store = get_message_store(workspace_path)
+    message_store = get_storage_backend()
     message = await message_store.get_message(message_id)
 
     if message and message.session_id == session_id:

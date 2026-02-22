@@ -17,8 +17,8 @@ from server.app.api.middleware import ObservabilityMiddleware, SecurityHeadersMi
 from server.app.observability.mlflow_tracing import setup_mlflow_tracing
 from server.app.observability import setup_metrics, setup_tracing
 from server.app.rate_limiter import get_rate_limiter
-from server.app.session_store import get_session_store
 from server.app.settings import get_settings
+from server.app.storage import create_storage_backend, get_storage_backend, set_storage_backend
 
 logger = structlog.get_logger(__name__)
 
@@ -28,6 +28,13 @@ async def lifespan(app: FastAPI):
     """Application lifespan context manager."""
     logger.info("Starting Cognition server")
     settings = get_settings()
+
+    # Initialize storage backend
+    storage_backend = create_storage_backend(settings)
+    await storage_backend.initialize()
+    set_storage_backend(storage_backend)
+    logger.info("Storage backend initialized")
+
     setup_tracing(
         endpoint=settings.otel_endpoint,
         app=app,
@@ -48,6 +55,9 @@ async def lifespan(app: FastAPI):
     yield
     logger.info("Shutting down Cognition server")
     await rate_limiter.stop()
+    # Close storage backend connections
+    if storage_backend:
+        await storage_backend.close()
     logger.info("Server shutdown complete")
 
 
@@ -79,9 +89,8 @@ app.include_router(config.router)
 @app.get("/health", response_model=HealthStatus, tags=["health"])
 async def health_check() -> HealthStatus:
     """Health check endpoint."""
-    settings = get_settings()
-    store = get_session_store(str(settings.workspace_path))
-    sessions_list = await store.list_sessions()
+    storage_backend = get_storage_backend()
+    sessions_list = await storage_backend.list_sessions()
 
     return HealthStatus(
         status="healthy",
