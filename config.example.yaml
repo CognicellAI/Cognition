@@ -69,7 +69,10 @@ rate_limit:
 
 # Observability settings
 # Configure metrics, tracing, and monitoring.
+# Note: Disabled by default to avoid port conflicts. Enable when you have
+# Prometheus/Otel Collector running.
 observability:
+  otel_enabled: false
   otel_endpoint: null
   metrics_port: 9090
 

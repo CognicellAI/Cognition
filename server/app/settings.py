@@ -81,7 +81,7 @@ class Settings(BaseSettings):
     rate_limit_burst: int = Field(default=10, alias="COGNITION_RATE_LIMIT_BURST")
 
     # Observability settings
-    otel_enabled: bool = Field(default=True, alias="COGNITION_OTEL_ENABLED")
+    otel_enabled: bool = Field(default=False, alias="COGNITION_OTEL_ENABLED")
     otel_endpoint: Optional[str] = Field(default=None, alias="COGNITION_OTEL_ENDPOINT")
     metrics_port: int = Field(default=9090, alias="COGNITION_METRICS_PORT")
 
