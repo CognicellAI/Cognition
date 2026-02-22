@@ -103,6 +103,11 @@ class PostgresStorageBackend:
                     role TEXT NOT NULL,
                     content TEXT,
                     parent_id TEXT,
+                    tool_calls JSONB,
+                    tool_call_id TEXT,
+                    token_count INTEGER,
+                    model_used TEXT,
+                    metadata JSONB,
                     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
                 )
                 """
@@ -145,6 +150,7 @@ class PostgresStorageBackend:
         thread_id: str,
         config: SessionConfig,
         title: Optional[str] = None,
+        scopes: Optional[dict[str, str]] = None,
     ) -> Session:
         """Create a new session."""
         now = datetime.now(UTC)
@@ -156,6 +162,7 @@ class PostgresStorageBackend:
             thread_id=thread_id,
             status=SessionStatus.ACTIVE,
             config=config,
+            scopes=scopes or {},
             created_at=now.isoformat(),
             updated_at=now.isoformat(),
             message_count=0,
@@ -173,15 +180,16 @@ class PostgresStorageBackend:
             await conn.execute(
                 """
                 INSERT INTO sessions (
-                    id, workspace_path, title, thread_id, status, 
-                    config, message_count, created_at, updated_at
-                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+                    id, workspace_path, title, thread_id, status,
+                    scopes, config, message_count, created_at, updated_at
+                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
                 """,
                 session.id,
                 session.workspace_path,
                 session.title,
                 session.thread_id,
                 session.status.value,
+                json.dumps(session.scopes),
                 json.dumps(config_json),
                 session.message_count,
                 now,

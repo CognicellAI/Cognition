@@ -64,6 +64,7 @@ class MemoryStorageBackend:
         thread_id: str,
         config: SessionConfig,
         title: Optional[str] = None,
+        scopes: Optional[dict[str, str]] = None,
     ) -> Session:
         """Create a new session."""
         now = datetime.now(UTC).isoformat()
@@ -75,6 +76,7 @@ class MemoryStorageBackend:
             thread_id=thread_id,
             status=SessionStatus.ACTIVE,
             config=config,
+            scopes=scopes or {},
             created_at=now,
             updated_at=now,
             message_count=0,
