@@ -444,3 +444,12 @@ def get_all_circuit_breaker_metrics() -> dict[str, CircuitBreakerMetrics]:
         Dictionary mapping breaker names to metrics
     """
     return {name: breaker.metrics for name, breaker in _breakers.items()}
+
+
+def get_circuit_breaker_registry() -> dict[str, CircuitBreaker]:
+    """Get the global circuit breaker registry.
+
+    Returns:
+        Dictionary mapping breaker names to CircuitBreaker instances.
+    """
+    return _breakers

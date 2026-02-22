@@ -19,6 +19,7 @@ from server.app.observability import setup_metrics, setup_tracing
 from server.app.rate_limiter import get_rate_limiter
 from server.app.settings import get_settings
 from server.app.storage import create_storage_backend, get_storage_backend, set_storage_backend
+from server.app.session_manager import initialize_session_manager
 
 logger = structlog.get_logger(__name__)
 
@@ -34,6 +35,10 @@ async def lifespan(app: FastAPI):
     await storage_backend.initialize()
     set_storage_backend(storage_backend)
     logger.info("Storage backend initialized")
+
+    # Initialize session manager
+    initialize_session_manager(storage_backend, settings)
+    logger.info("Session manager initialized")
 
     setup_tracing(
         endpoint=settings.otel_endpoint,
