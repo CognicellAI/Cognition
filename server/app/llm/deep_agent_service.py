@@ -10,7 +10,6 @@ This service leverages deepagents' built-in capabilities:
 from __future__ import annotations
 
 import uuid
-from dataclasses import dataclass, field
 from typing import Any, AsyncGenerator, Optional
 
 import structlog
@@ -18,97 +17,21 @@ from langchain_core.messages import HumanMessage, SystemMessage
 
 from server.app.settings import Settings
 from server.app.agent import create_cognition_agent
+from server.app.agent.runtime import (
+    TokenEvent,
+    ToolCallEvent,
+    ToolResultEvent,
+    UsageEvent,
+    DoneEvent,
+    ErrorEvent,
+    PlanningEvent,
+    StepCompleteEvent,
+    StatusEvent,
+    StreamEvent,
+)
 from server.app.storage.factory import create_storage_backend
 
 logger = structlog.get_logger(__name__)
-
-
-@dataclass
-class TokenEvent:
-    """A streaming token from the LLM."""
-
-    content: str
-
-
-@dataclass
-class ToolCallEvent:
-    """A tool call requested by the LLM."""
-
-    name: str
-    args: dict[str, Any]
-    tool_call_id: str
-
-
-@dataclass
-class ToolResultEvent:
-    """Result of a tool execution."""
-
-    tool_call_id: str
-    output: str
-    exit_code: int = 0
-
-
-@dataclass
-class UsageEvent:
-    """Token usage information."""
-
-    input_tokens: int
-    output_tokens: int
-    estimated_cost: float = 0.0
-    provider: str = "unknown"
-    model: str = "unknown"
-
-
-@dataclass
-class DoneEvent:
-    """Stream completion signal."""
-
-    pass
-
-
-@dataclass
-class ErrorEvent:
-    """Error during streaming."""
-
-    message: str
-    code: str = "ERROR"
-
-
-@dataclass
-class PlanningEvent:
-    """Agent is creating a plan for multi-step task."""
-
-    todos: list[dict[str, Any]]
-
-
-@dataclass
-class StepCompleteEvent:
-    """A step in the plan has been completed."""
-
-    step_number: int
-    total_steps: int
-    description: str
-
-
-@dataclass
-class StatusEvent:
-    """Agent status update event."""
-
-    status: str
-
-
-# Union type for all events
-StreamEvent = (
-    TokenEvent
-    | ToolCallEvent
-    | ToolResultEvent
-    | UsageEvent
-    | DoneEvent
-    | ErrorEvent
-    | PlanningEvent
-    | StepCompleteEvent
-    | StatusEvent
-)
 
 
 class DeepAgentStreamingService:

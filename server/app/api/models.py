@@ -122,45 +122,65 @@ class MessageList(BaseModel):
 # ============================================================================
 # SSE Event Models
 # ============================================================================
+# These Pydantic models serialize the canonical event types from agent/runtime.py
+# for API responses. The canonical types are dataclasses used internally.
 
 
 class TokenEvent(BaseModel):
-    """Server-sent event: Token streaming."""
+    """Server-sent event: Token streaming.
+
+    Serializes: server.app.agent.runtime.TokenEvent
+    """
 
     event: Literal["token"] = "token"
     data: dict = Field(..., description="Token data with 'content' field")
 
 
 class ToolCallEvent(BaseModel):
-    """Server-sent event: Tool invocation."""
+    """Server-sent event: Tool invocation.
+
+    Serializes: server.app.agent.runtime.ToolCallEvent
+    """
 
     event: Literal["tool_call"] = "tool_call"
     data: dict = Field(..., description="Tool call with 'name', 'args', 'id'")
 
 
 class ToolResultEvent(BaseModel):
-    """Server-sent event: Tool execution result."""
+    """Server-sent event: Tool execution result.
+
+    Serializes: server.app.agent.runtime.ToolResultEvent
+    """
 
     event: Literal["tool_result"] = "tool_result"
     data: dict = Field(..., description="Tool result with 'tool_call_id', 'output', 'exit_code'")
 
 
 class ErrorEvent(BaseModel):
-    """Server-sent event: Error occurred."""
+    """Server-sent event: Error occurred.
+
+    Serializes: server.app.agent.runtime.ErrorEvent
+    """
 
     event: Literal["error"] = "error"
     data: dict = Field(..., description="Error with 'message' and optional 'code'")
 
 
 class DoneEvent(BaseModel):
-    """Server-sent event: Stream complete."""
+    """Server-sent event: Stream complete.
+
+    Serializes: server.app.agent.runtime.DoneEvent
+    """
 
     event: Literal["done"] = "done"
     data: dict = Field(default_factory=dict)
 
 
 class UsageEvent(BaseModel):
-    """Server-sent event: Token usage update."""
+    """Server-sent event: Token usage update.
+
+    Serializes: server.app.agent.runtime.UsageEvent
+    """
 
     event: Literal["usage"] = "usage"
     data: dict = Field(

@@ -14,7 +14,7 @@ Architecture:
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
 
@@ -26,57 +26,109 @@ from server.app.storage.factory import create_storage_backend
 from server.app.settings import Settings, get_settings
 
 
-# Event types that can be streamed from the runtime
+# ============================================================================
+# Canonical Event Types
+# ============================================================================
+# These event types are the single source of truth for agent runtime events.
+# They are used across:
+# - Agent runtime (this file)
+# - Deep agent service streaming
+# - API layer serialization (converted to Pydantic models in api/models.py)
+
+
+@dataclass
 class AgentEvent:
     """Base class for agent runtime events."""
 
     pass
 
 
+@dataclass
 class TokenEvent(AgentEvent):
     """Streaming token from the LLM."""
 
-    def __init__(self, content: str) -> None:
-        self.content = content
+    content: str
 
 
+@dataclass
 class ToolCallEvent(AgentEvent):
     """Tool call requested by the agent."""
 
-    def __init__(self, name: str, args: dict[str, Any], tool_call_id: str) -> None:
-        self.name = name
-        self.args = args
-        self.tool_call_id = tool_call_id
+    name: str
+    args: dict[str, Any]
+    tool_call_id: str
 
 
+@dataclass
 class ToolResultEvent(AgentEvent):
     """Result of tool execution."""
 
-    def __init__(self, tool_call_id: str, output: str, exit_code: int = 0) -> None:
-        self.tool_call_id = tool_call_id
-        self.output = output
-        self.exit_code = exit_code
+    tool_call_id: str
+    output: str
+    exit_code: int = 0
 
 
+@dataclass
 class StatusEvent(AgentEvent):
     """Agent status update."""
 
-    def __init__(self, status: str) -> None:
-        self.status = status
+    status: str
 
 
+@dataclass
 class DoneEvent(AgentEvent):
     """Stream completion signal."""
 
     pass
 
 
+@dataclass
 class ErrorEvent(AgentEvent):
     """Error during execution."""
 
-    def __init__(self, message: str, code: str = "ERROR") -> None:
-        self.message = message
-        self.code = code
+    message: str
+    code: str = "ERROR"
+
+
+@dataclass
+class UsageEvent(AgentEvent):
+    """Token usage information."""
+
+    input_tokens: int
+    output_tokens: int
+    estimated_cost: float = 0.0
+    provider: str = "unknown"
+    model: str = "unknown"
+
+
+@dataclass
+class PlanningEvent(AgentEvent):
+    """Agent is creating a plan for multi-step task."""
+
+    todos: list[dict[str, Any]] = field(default_factory=list)
+
+
+@dataclass
+class StepCompleteEvent(AgentEvent):
+    """A step in the plan has been completed."""
+
+    step_number: int
+    total_steps: int
+    description: str
+
+
+# Union type for all events
+StreamEvent = (
+    TokenEvent
+    | ToolCallEvent
+    | ToolResultEvent
+    | StatusEvent
+    | DoneEvent
+    | ErrorEvent
+    | UsageEvent
+    | PlanningEvent
+    | StepCompleteEvent
+)
 
 
 @runtime_checkable
