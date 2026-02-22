@@ -139,6 +139,14 @@ class CircuitBreaker:
             rejection_count=self._metrics.rejection_count,
         )
 
+    def is_open(self) -> bool:
+        """Check if circuit breaker is open.
+
+        Returns:
+            True if circuit is open, False otherwise
+        """
+        return self._state == CircuitState.OPEN
+
     async def call(
         self,
         func: Callable[..., Coroutine[Any, Any, T]],
