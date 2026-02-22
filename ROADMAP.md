@@ -17,7 +17,10 @@ This roadmap is derived from [FIRST-PRINCIPLE-EVALUTION.md](./FIRST-PRINCIPLE-EV
 |----------|-------|----------|--------|
 | **P0** (Table Stakes) | 6 | 6/6 | **100% ✅** |
 | **P1** (Production Ready) | 6 | 6/6 | **100% ✅** |
-| **P2** (Robustness + GUI Extensibility) | 11 | 5/11 | **~45%** |
+| **P2** (Robustness + GUI) | 16 | 5/16 | **~31%** |
+| — Cleanup (LangGraph Alignment) | 5 | 0/5 | Not Started |
+| — Robustness | 7 | 5/7 | ~71% |
+| — GUI Extensibility | 4 | 0/4 | Not Started |
 | **P3** (Full Vision) | 7 | 0/7 | **~10%** |
 
 **Unit tests:** 223 passed, 2 skipped, 0 warnings (except 1 collection warning)
@@ -167,7 +170,98 @@ Cognition-owned `AgentRuntime` protocol wrapping Deep Agents. Methods: `astream_
 
 ## P2 — Robustness + GUI Extensibility (~45% Complete)
 
-This priority tier combines robustness improvements with new extensibility APIs for GUI applications.
+This priority tier combines robustness improvements, technical debt cleanup, and new extensibility APIs for GUI applications. A key theme is **aligning with LangGraph/Deep Agents primitives** — removing custom code that duplicates what the framework already provides, and building only what LangGraph cannot.
+
+### LangGraph Primitive Alignment
+
+Before building new features, the following cleanup is required to eliminate duplication and simplify the architecture. LangGraph natively provides: `thread_id`-based sessions, checkpointers (InMemory, SQLite, Postgres), `Store` for cross-thread memory, and `Runtime` context for per-invocation configuration.
+
+#### P2-CLEANUP-1: Remove Legacy `persistence/` Package
+
+| Field | Value |
+|-------|-------|
+| **Layer** | 2 (Persistence) |
+| **Files to remove** | `server/app/persistence/base.py`, `memory.py`, `sqlite.py`, `factory.py` |
+| **Effort** | ~1 day |
+| **Status** | Not Started |
+
+The `server/app/persistence/` package is a checkpointer-only wrapper that is a strict subset of the `server/app/storage/` package. Both wrap the same LangGraph checkpointers (`InMemorySaver`, `AsyncSqliteSaver`, `AsyncPostgresSaver`).
+
+**Action:**
+- [ ] Remove `server/app/persistence/` package entirely
+- [ ] Update `deep_agent_service.py` to accept checkpointer from `StorageBackend` instead of creating its own via `create_persistence_backend()`
+- [ ] Update `agent/runtime.py` to accept checkpointer from caller instead of creating its own
+
+#### P2-CLEANUP-2: Wire Unified StorageBackend, Remove Standalone Stores
+
+| Field | Value |
+|-------|-------|
+| **Layer** | 2 (Persistence) / 6 (API) |
+| **Files to remove** | `server/app/session_store.py`, `server/app/message_store.py` |
+| **Effort** | ~3 days |
+| **Status** | Not Started |
+
+The standalone `session_store.py` and `message_store.py` duplicate the session/message operations already implemented in the unified `StorageBackend` (`storage/sqlite.py`, `storage/postgres.py`). The `StorageBackend` was built as the replacement (P1-1) but never wired into the API routes.
+
+**Action:**
+- [ ] Wire `StorageBackend` into API routes (`sessions.py`, `messages.py`, `main.py`)
+- [ ] Delete `server/app/session_store.py`
+- [ ] Delete `server/app/message_store.py`
+- [ ] All persistence goes through one `StorageBackend` instance
+
+**Note:** The custom `messages` table is intentionally kept alongside LangGraph checkpoints. Checkpoints are the source of truth for agent state continuity; the messages table serves API/query needs (pagination, message-level retrieval, enriched metadata like token counts).
+
+#### P2-CLEANUP-3: Consolidate Event Types
+
+| Field | Value |
+|-------|-------|
+| **Layer** | 4 (Agent Runtime) / 6 (API) |
+| **Files affected** | `deep_agent_service.py`, `agent/runtime.py`, `api/models.py` |
+| **Effort** | ~1 day |
+| **Status** | Not Started |
+
+Event types (`TokenEvent`, `ToolCallEvent`, `DoneEvent`, etc.) are defined in three separate locations. Consolidate to one canonical set in `agent/runtime.py` (the protocol layer). The API layer should only handle serialization.
+
+**Action:**
+- [ ] Make `agent/runtime.py` event classes the single source of truth
+- [ ] Remove duplicate dataclasses from `deep_agent_service.py`
+- [ ] Update `api/models.py` to serialize from the canonical types
+
+#### P2-CLEANUP-4: Replace ContextManager Memory Stubs with LangGraph Store
+
+| Field | Value |
+|-------|-------|
+| **Layer** | 4 (Agent Runtime) |
+| **File** | `server/app/agent/context.py` (lines 286-297) |
+| **Effort** | ~1 day |
+| **Status** | Not Started |
+
+`ContextManager.save_memory()` / `load_memory()` are stubs for a custom memory system. LangGraph provides `InMemoryStore`, `PostgresStore`, and `RedisStore` via the `BaseStore` interface. The `create_cognition_agent()` function already accepts a `store` parameter.
+
+**Action:**
+- [ ] Remove `save_memory()` / `load_memory()` stubs
+- [ ] Wire LangGraph `Store` into `create_cognition_agent()` when cross-thread memory is needed
+- [ ] Use `runtime.store` in nodes (LangGraph's `Runtime` context injects the store automatically)
+
+#### P2-CLEANUP-5: Cache Compiled Agents Per Session
+
+| Field | Value |
+|-------|-------|
+| **Layer** | 4 (Agent Runtime) |
+| **File** | `server/app/llm/deep_agent_service.py` |
+| **Effort** | ~2 days |
+| **Status** | Not Started |
+
+Currently `create_cognition_agent()` (which compiles a LangGraph StateGraph) runs on **every message**. The checkpointer provides conversation continuity, but the graph compilation overhead is unnecessary. The `SessionAgentManager` should cache compiled agents and only recompile when tools/middleware change.
+
+**Action:**
+- [ ] Cache compiled agent per session in `SessionAgentManager`
+- [ ] Recompile only when tool/middleware configuration changes (ties into P2-9)
+- [ ] Simplify `SessionAgentManager` to stop duplicating session metadata tracking (already in `StorageBackend`)
+
+---
+
+### Existing Robustness Items
 
 ### P2-1: SSE Reconnection ✅
 
@@ -240,31 +334,49 @@ Settings-driven CORS: `cors_origins`, `cors_methods`, `cors_headers`, `cors_cred
 
 `ContextManager` wired into `cognition_agent.py`. Project indexing, file relevance scoring, context pruning.
 
-### P2-8: SessionManager (Application-Scoped Session Management)
+---
+
+### New GUI Extensibility Items
+
+### P2-8: SessionManager (Thin Facade over LangGraph Threads)
 
 | Field | Value |
 |-------|-------|
 | **Layer** | 4 (Agent Runtime) / 6 (API) |
 | **File** | `server/app/session_manager.py` (new) |
-| **Effort** | ~3 days |
+| **Effort** | ~2 days |
 | **Status** | Not Started |
+| **Dependencies** | P2-CLEANUP-1, P2-CLEANUP-2 |
 
 **Purpose:** Enable GUI applications to manage sessions across multiple workspaces.
 
+**LangGraph provides:** `thread_id`-based sessions, checkpointers for persistence, `Store` for cross-thread memory, `context_schema` / `Runtime` for per-invocation user/org context.
+
+**What Cognition adds on top:**
+- Session lifecycle events (`on_session_created`, `on_session_deleted`) for GUI callbacks
+- Cross-workspace session queries (LangGraph threads are per-graph)
+- Per-session agent instances with different tool/middleware stacks
+- Session metadata (title, status, workspace_path) that LangGraph doesn't track
+
 **Acceptance Criteria:**
-- [ ] `SessionManager` class for application-level session management
-- [ ] Cross-workspace session listing (`list_all_sessions()`)
-- [ ] Session lifecycle events (`on_session_created`, `on_session_deleted`, `on_session_updated`)
-- [ ] Per-session agent instances with isolated tool/middleware stacks
-- [ ] Clear documentation on session-based vs immediate reload behavior
+- [ ] `SessionManager` wraps `StorageBackend` + LangGraph checkpointer
+- [ ] Uses LangGraph `thread_id` as the session identifier (no separate concept)
+- [ ] Uses LangGraph `context_schema` for `user_id`/`org_id` scoping
+- [ ] Session lifecycle events for GUI integration
+- [ ] Manages cached compiled agents per session (from P2-CLEANUP-5)
 
 **API Design:**
 ```python
 from cognition import SessionManager, Settings
 
 manager = SessionManager(settings)
+
+# Creates session, maps to LangGraph thread_id, caches agent
 session = await manager.create_session(workspace_path="/project")
-await manager.delete_session(session.id)
+
+# Lifecycle callbacks for GUI
+manager.on_session_created(lambda s: gui.add_to_sidebar(s))
+manager.on_session_deleted(lambda sid: gui.remove_from_sidebar(sid))
 ```
 
 ### P2-9: AgentRegistry (Per-Session Tool/Middleware Management)
@@ -276,14 +388,21 @@ await manager.delete_session(session.id)
 | **Effort** | ~4 days |
 | **Status** | Not Started |
 
-**Purpose:** Enable GUI apps to register tools and middleware that apply per-session.
+**Purpose:** Enable GUI apps to register tools and middleware that apply per-session. This is genuinely new functionality — LangGraph's compile-once model does not support dynamic tool/middleware registration after graph compilation.
+
+**Why LangGraph can't do this:**
+- Tools are baked into `ToolNode` at `graph.compile()` time
+- Middleware is compiled into `StateGraph` nodes and edges
+- Once compiled, the graph structure is immutable
+- No file-based auto-discovery mechanism exists
 
 **Acceptance Criteria:**
 - [ ] `AgentRegistry` class for registering tool/middleware factories
-- [ ] Factory pattern for fresh instances per session
-- [ ] `register_tool(name, factory)` and `register_middleware(factory)` methods
-- [ ] `create_agent_with_extensions()` that combines registered extensions
-- [ ] Support for both programmatic and file-based registration
+- [ ] Factory pattern — fresh tool/middleware instances per session
+- [ ] Auto-discovery from `.cognition/tools/` and `.cognition/middleware/` directories
+- [ ] `create_agent_with_extensions()` triggers new `graph.compile()` with updated tools
+- [ ] Tools: immediate hot-reload (reload module, recompile graph for new sessions)
+- [ ] Middleware: session-based reload (new sessions get updated middleware, existing sessions unchanged)
 
 **API Design:**
 ```python
@@ -298,6 +417,8 @@ def gui_file_picker(description: str) -> str:
     pass
 
 registry.register_tool("file_picker", lambda: gui_file_picker)
+
+# Triggers graph recompilation with new tools
 agent = registry.create_agent_with_extensions(project_path, settings)
 ```
 
@@ -308,28 +429,17 @@ agent = registry.create_agent_with_extensions(project_path, settings)
 | **Layer** | 1 (Foundation) |
 | **File** | `server/app/file_watcher.py` (new) |
 | **Effort** | ~3 days |
-| **Dependencies** | watchdog library |
+| **Dependencies** | watchdog library, P2-9 (AgentRegistry) |
 | **Status** | Not Started |
 
-**Purpose:** Enable GUI apps to watch workspace files and trigger reloads.
+**Purpose:** Enable GUI apps to watch workspace files and trigger reloads. LangGraph's CLI has dev-mode hot-reload, but it recompiles the entire graph — no partial reload and no API for GUI integration.
 
 **Acceptance Criteria:**
 - [ ] `WorkspaceWatcher` class for monitoring file changes
-- [ ] Watch `.cognition/tools/` for tool hot-reload (immediate)
-- [ ] Watch `.cognition/middleware/` for middleware session-based reload
-- [ ] Watch `.cognition/config.yaml` for config changes
-- [ ] Callbacks for GUI notifications
-- [ ] Clear distinction: tools=immediate, middleware=session-based
-
-**API Design:**
-```python
-from cognition import WorkspaceWatcher
-
-watcher = WorkspaceWatcher("/workspace")
-watcher.watch_tools(lambda path, event: registry.reload_tools())
-watcher.watch_middleware(lambda path, event: registry.mark_middleware_pending())
-watcher.start()
-```
+- [ ] Watch `.cognition/tools/` — triggers `AgentRegistry.reload_tools()` (immediate for new sessions)
+- [ ] Watch `.cognition/middleware/` — triggers `AgentRegistry.mark_middleware_pending()` (session-based)
+- [ ] Watch `.cognition/config.yaml` — triggers settings reload
+- [ ] Callbacks for GUI notifications (`on_tools_changed`, `on_middleware_changed`, `on_config_changed`)
 
 ### P2-11: CLI Tool/Middleware Scaffolding
 
@@ -340,19 +450,13 @@ watcher.start()
 | **Effort** | ~2 days |
 | **Status** | Not Started |
 
-**Purpose:** Help users create tool and middleware templates.
+**Purpose:** Help users create tool and middleware templates. LangGraph provides `langgraph new` for project scaffolding, but nothing for individual tool/middleware files.
 
 **Acceptance Criteria:**
-- [ ] `cognition tool create <name>` — generates `.cognition/tools/{name}.py`
-- [ ] `cognition middleware create <name>` — generates `.cognition/middleware/{name}.py`
+- [ ] `cognition tool create <name>` — generates `.cognition/tools/{name}.py` with `@tool` decorator template
+- [ ] `cognition middleware create <name>` — generates `.cognition/middleware/{name}.py` with `AgentMiddleware` template
 - [ ] Templates include proper imports and structure
 - [ ] Automatic directory creation
-
-**Example:**
-```bash
-cognition tool create my-api-client
-# Creates .cognition/tools/my_api_client.py with @tool decorator template
-```
 
 ---
 
@@ -523,29 +627,35 @@ All modules are in their correct architectural layer:
 | Circuit breaker not wired into LLM fallback chain | Medium | Implementation exists, integration pending (P2-2) |
 | Prompt registry not wired into agent factory | Low | Implementation exists, integration pending (P3-2) |
 | Evaluation feedback stored in-memory only | Low | Needs persistence backend (P3-1) |
+| Legacy `persistence/` package duplicates `storage/` | Medium | Remove and consolidate (P2-CLEANUP-1) |
+| `session_store.py` / `message_store.py` not using unified StorageBackend | Medium | Wire StorageBackend into routes (P2-CLEANUP-2) |
+| Event types defined in 3 places | Low | Consolidate to `agent/runtime.py` (P2-CLEANUP-3) |
+| Agent recompiled on every message (no caching) | Medium | Cache per session (P2-CLEANUP-5) |
 
 ---
 
 ## Next Steps
 
-**Immediate (highest impact, lowest effort):**
-1. SessionManager (P2-8) — Enable GUI apps to manage sessions
-2. Wire circuit breaker into `ProviderFallbackChain` (P2-2 completion)
-3. AgentRegistry (P2-9) — Per-session tool/middleware management
+**Immediate — LangGraph Alignment Cleanup (do first):**
+1. Remove legacy `persistence/` package (P2-CLEANUP-1 — ~1 day)
+2. Wire `StorageBackend` into API routes, delete standalone stores (P2-CLEANUP-2 — ~3 days)
+3. Cache compiled agents per session (P2-CLEANUP-5 — ~2 days)
+4. Consolidate event types (P2-CLEANUP-3 — ~1 day)
 
-**Short-term:**
-4. File Watcher & Hot-Reload API (P2-10)
-5. CLI Tool/Middleware Scaffolding (P2-11)
-6. Wire prompt registry into `create_cognition_agent()` (P3-2 completion)
+**Short-term — GUI Extensibility:**
+5. SessionManager as thin facade over LangGraph threads (P2-8 — ~2 days)
+6. AgentRegistry for per-session tool/middleware management (P2-9 — ~4 days)
+7. Wire circuit breaker into `ProviderFallbackChain` (P2-2 — ~2 days)
 
-**Medium-term:**
-7. Add API routes for evaluation service (P3-1)
-8. GUITool Base Class (P3-3)
-9. Dynamic Tool Validation (P3-4)
+**Medium-term — Developer Experience:**
+8. File Watcher & Hot-Reload API (P2-10 — ~3 days)
+9. CLI Tool/Middleware Scaffolding (P2-11 — ~2 days)
+10. Wire prompt registry into `create_cognition_agent()` (P3-2 — ~3 days)
 
-**Long-term:**
-10. Cloud execution backends (P3-5)
-11. Human feedback loop endpoint (P3-7)
+**Long-term — Full Vision:**
+11. Add API routes for evaluation service (P3-1)
+12. Cloud execution backends (P3-5)
+13. Human feedback loop endpoint (P3-7)
 
 ---
 
