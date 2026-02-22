@@ -8,10 +8,15 @@ Both backends provide:
 - File operations (ls, read, write, edit) via FilesystemBackend
 - Search operations (glob, grep)
 - Multi-step ReAct loop with automatic tool chaining
+
+Agent Caching:
+Compiled agents are cached per configuration to avoid recompilation overhead.
+Use invalidate_agent_cache() or clear_agent_cache() to force recompilation.
 """
 
 from __future__ import annotations
 
+import hashlib
 from pathlib import Path
 from typing import Any, Mapping, Optional, Sequence, cast
 
@@ -24,6 +29,100 @@ from server.app.agent.middleware import (
 from server.app.agent.sandbox_backend import create_sandbox_backend
 from server.app.agent.context import ContextManager
 from server.app.settings import Settings, get_settings
+
+
+# Global agent cache: cache_key -> compiled_agent
+_agent_cache: dict[str, Any] = {}
+
+
+def _generate_cache_key(
+    project_path: str | Path,
+    model: Any,
+    store: Any,
+    system_prompt: str | None,
+    memory: Sequence[str] | None,
+    skills: Sequence[str] | None,
+    subagents: Sequence[Any] | None,
+    interrupt_on: Mapping[str, Any] | None,
+    middleware: Sequence[Any] | None,
+    tools: Sequence[Any] | None,
+    settings: Settings | None,
+) -> str:
+    """Generate a cache key for agent configuration.
+
+    The cache key is a hash of all configuration parameters that affect
+    the compiled agent structure.
+
+    Args:
+        All parameters passed to create_cognition_agent
+
+    Returns:
+        MD5 hash string representing the configuration
+    """
+    # Build a string representation of the configuration
+    config_parts = [
+        str(Path(project_path).resolve()),
+        str(type(model).__name__) if model else "None",
+        str(store.__class__.__name__) if store else "None",
+        str(system_prompt) if system_prompt else "default",
+        str(sorted(memory)) if memory else "None",
+        str(sorted(skills)) if skills else "None",
+        str(len(subagents)) if subagents else "0",
+        str(sorted(interrupt_on.keys())) if interrupt_on else "None",
+        str(len(middleware)) if middleware else "0",
+        str(len(tools)) if tools else "0",
+        str(settings.llm_provider) if settings else "default",
+        str(settings.llm_model) if settings else "default",
+        str(settings.sandbox_backend) if settings else "default",
+    ]
+
+    config_str = "|".join(config_parts)
+    return hashlib.md5(config_str.encode()).hexdigest()
+
+
+def get_cached_agent(cache_key: str) -> Any | None:
+    """Get a cached agent by cache key.
+
+    Args:
+        cache_key: The configuration hash key
+
+    Returns:
+        Cached compiled agent or None if not found
+    """
+    return _agent_cache.get(cache_key)
+
+
+def cache_agent(cache_key: str, agent: Any) -> None:
+    """Cache a compiled agent.
+
+    Args:
+        cache_key: The configuration hash key
+        agent: The compiled agent to cache
+    """
+    _agent_cache[cache_key] = agent
+
+
+def invalidate_agent_cache(cache_key: str) -> None:
+    """Invalidate a specific cached agent.
+
+    Args:
+        cache_key: The configuration hash key to invalidate
+    """
+    _agent_cache.pop(cache_key, None)
+
+
+def clear_agent_cache() -> None:
+    """Clear all cached agents."""
+    _agent_cache.clear()
+
+
+def get_agent_cache_stats() -> dict[str, int]:
+    """Get cache statistics.
+
+    Returns:
+        Dict with 'size' key indicating number of cached agents
+    """
+    return {"size": len(_agent_cache)}
 
 
 SYSTEM_PROMPT = """You are Cognition, an expert AI coding assistant.
@@ -100,6 +199,26 @@ def create_cognition_agent(
     settings = settings or get_settings()
     project_path = Path(project_path).resolve()
 
+    # Generate cache key and check cache
+    cache_key = _generate_cache_key(
+        project_path=project_path,
+        model=model,
+        store=store,
+        system_prompt=system_prompt,
+        memory=memory,
+        skills=skills,
+        subagents=subagents,
+        interrupt_on=interrupt_on,
+        middleware=middleware,
+        tools=tools,
+        settings=settings,
+    )
+
+    # Check if we have a cached agent for this configuration
+    cached_agent = get_cached_agent(cache_key)
+    if cached_agent is not None:
+        return cached_agent
+
     # Create the sandbox backend using settings-driven factory
     sandbox_id = f"cognition-{project_path.name}"
     backend = create_sandbox_backend(
@@ -171,5 +290,8 @@ def create_cognition_agent(
         interrupt_on=cast(Any, agent_interrupt_on),
         middleware=agent_middleware,
     )
+
+    # Cache the compiled agent
+    cache_agent(cache_key, agent)
 
     return agent
