@@ -308,3 +308,45 @@ class ProviderList(BaseModel):
     providers: list[ProviderInfo] = Field(default_factory=list)
     default_provider: str | None = Field(None, description="Default provider ID")
     default_model: str | None = Field(None, description="Default model ID")
+
+
+# ============================================================================
+# Config Update Models
+# ============================================================================
+
+
+class ConfigUpdateRequest(BaseModel):
+    """Request to update configuration.
+
+    Only specific safe fields can be updated via PATCH /config.
+    Protected fields (server endpoints, secrets, backends) are rejected.
+    """
+
+    llm: dict[str, Any] | None = Field(
+        None, description="LLM settings (temperature, max_tokens)"
+    )
+    agent: dict[str, Any] | None = Field(
+        None, description="Agent settings (memory, skills)"
+    )
+    rate_limit: dict[str, Any] | None = Field(
+        None, description="Rate limiting settings (per_minute, burst)"
+    )
+    observability: dict[str, Any] | None = Field(
+        None, description="Observability settings (otel_enabled, metrics_port)"
+    )
+
+
+class ConfigUpdateResponse(BaseModel):
+    """Response from config update."""
+
+    updated: bool = Field(..., description="Whether update was successful")
+    changes: dict[str, Any] = Field(..., description="Fields that were changed")
+    backup_created: bool = Field(..., description="Whether backup was created")
+    timestamp: str = Field(..., description="Timestamp of update (ISO format)")
+
+
+class ConfigRollbackResponse(BaseModel):
+    """Response from config rollback."""
+
+    rolled_back: bool = Field(..., description="Whether rollback was successful")
+    timestamp: str = Field(..., description="Timestamp of rollback (ISO format)")
