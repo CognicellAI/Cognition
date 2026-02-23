@@ -69,3 +69,4 @@ Thumbs.db
 .cognition-cli-state.json
 state.db*
 sessions.json
+mlflow.db
