@@ -21,7 +21,7 @@ This roadmap is derived from [FIRST-PRINCIPLE-EVALUTION.md](./FIRST-PRINCIPLE-EV
 | — Cleanup (LangGraph Alignment) | 5 | 5/5 | ✅ Complete |
 | — Robustness | 7 | 7/7 | ✅ Complete |
 | — GUI Extensibility | 4 | 4/4 | ✅ Complete |
-| **P3** (Full Vision) | 5 | 2/5 | **~60%** |
+| **P3** (Full Vision) | 3 | 2/3 | **~75%** |
 
 **Unit tests:** 263 passed, 4 skipped, 1 warning
 **E2E Business Scenarios:** 16/16 scenarios passing across P2 Cleanup, Robustness, and GUI Extensibility
@@ -399,47 +399,13 @@ CLI commands for creating tool and middleware templates with proper structure.
 
 ---
 
-## P3 — Full Vision (~60% Complete)
+## P3 — Full Vision (~75% Complete)
 
 Advanced features for complete platform vision.
 
 **Note:** Evaluation and feedback are handled by MLflow Native capabilities. Cognition focuses on trace generation; users leverage MLflow's built-in assessment UI and APIs.
 
-### P3-1: GUITool Base Class
-
-| Field | Value |
-|-------|-------|
-| **Layer** | 4 (Agent Runtime) |
-| **File** | `server/app/agent/gui_tool.py` (new) |
-| **Effort** | ~2 days |
-| **Status** | Not Started |
-
-**Purpose:** Base class for tools that need GUI interaction.
-
-**Acceptance Criteria:**
-- [ ] `GUITool` base class with `set_gui_callback()` method
-- [ ] `request_gui_action()` method for GUI interaction
-- [ ] Documentation for GUI app integration
-
-### P3-4: Dynamic Tool Validation
-
-| Field | Value |
-|-------|-------|
-| **Layer** | 4 (Agent Runtime) |
-| **File** | `server/app/agent/tool_validator.py` (new) |
-| **Effort** | ~2 days |
-| **Status** | Not Started |
-
-**Purpose:** Validate tools at registration time, not runtime.
-
-**Acceptance Criteria:**
-- [ ] `cognition validate` CLI command
-- [ ] Check all tools are loadable
-- [ ] Verify @tool decorator present
-- [ ] Validate middleware inherits from AgentMiddleware
-- [ ] Provide helpful error messages with suggestions
-
-### P3-5: Cloud Execution Backends
+### P3-1: Cloud Execution Backends
 
 | Field | Value |
 |-------|-------|
@@ -455,7 +421,7 @@ Advanced features for complete platform vision.
 - [ ] Cost-aware scheduling
 - [ ] Configuration-driven backend selection
 
-### P3-6: Ollama Provider + LLM Resilience
+### P3-3: Ollama Provider + LLM Resilience
 
 | Field | Value |
 |-------|-------|
@@ -512,7 +478,7 @@ All modules are in their correct architectural layer:
 | Issue | Severity | Status |
 |-------|----------|--------|
 | MLflow `autolog()` ContextVar error in async contexts | Medium | Upstream MLflow bug. `run_tracer_inline=True` applied but insufficient. OTel tracing works as alternative. |
-| Prompt registry not wired into agent factory | Low | Implementation exists, integration pending (P3-2) |
+| Prompt registry not wired into agent factory | Low | Implementation exists, integration pending (GUITool was removed) |
 | Evaluation feedback stored in-memory only | Low | Needs persistence backend (P3-1) |
 
 ### New Testing Tools
@@ -539,14 +505,14 @@ All modules are in their correct architectural layer:
 - ✅ Storage backend fixes for scopes and message columns
 
 **Immediate — P3 Full Vision:**
-1. Wire prompt registry into `create_cognition_agent()` (P3-2 — ~3 days)
+1. Wire prompt registry into `create_cognition_agent()` (GUITool was removed — ~3 days)
 2. Add API routes for evaluation service (P3-1)
-3. Human feedback loop endpoint (P3-7)
+3. Human feedback loop endpoint (Human feedback loop was removed)
 
 **Medium-term:**
-4. Cloud execution backends (P3-5)
-5. Ollama provider + LLM resilience (P3-6)
-6. Dynamic tool validation CLI (P3-4)
+4. Cloud execution backends (P3-2)
+5. Ollama provider + LLM resilience (P3-3)
+6. Dynamic tool validation CLI (Dynamic Tool Validation was removed)
 
 **Long-term:**
 7. GUITool base class (P3-3)
