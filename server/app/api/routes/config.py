@@ -29,16 +29,32 @@ router = APIRouter(prefix="/config", tags=["config"])
 
 logger = structlog.get_logger(__name__)
 
-# Allowed config fields for PATCH (security whitelist)
+# Allowed config fields for PATCH
 ALLOWED_CONFIG_PATHS = {
+    # LLM settings
     "llm.temperature",
     "llm.max_tokens",
+    "llm.model",
+    "llm.provider",
+    
+    # Agent settings
     "agent.memory",
     "agent.skills",
+    "agent.interrupt_on",
+    "agent.subagents",
+    
+    # Rate limiting
     "rate_limit.per_minute",
     "rate_limit.burst",
+    
+    # Observability
     "observability.otel_enabled",
     "observability.metrics_port",
+    "observability.otel_endpoint",
+    
+    # MLflow
+    "mlflow.enabled",
+    "mlflow.experiment_name",
 }
 
 
@@ -57,18 +73,6 @@ def validate_and_extract_changes(
                     detail=f"Field '{path}' is not allowed to be updated",
                 )
             changes[path] = value
-            
-            # Validate ranges
-            if key == "temperature" and not (0 <= value <= 2):
-                raise HTTPException(
-                    status_code=422,
-                    detail="temperature must be between 0 and 2",
-                )
-            if key == "max_tokens" and not (1 <= value <= 100000):
-                raise HTTPException(
-                    status_code=422,
-                    detail="max_tokens must be between 1 and 100000",
-                )
     
     if updates.agent:
         for key, value in updates.agent.items():
@@ -89,17 +93,20 @@ def validate_and_extract_changes(
                     detail=f"Field '{path}' is not allowed to be updated",
                 )
             changes[path] = value
-            
-            # Validate positive values
-            if value < 0:
-                raise HTTPException(
-                    status_code=422,
-                    detail=f"{key} must be non-negative",
-                )
     
     if updates.observability:
         for key, value in updates.observability.items():
             path = f"observability.{key}"
+            if path not in ALLOWED_CONFIG_PATHS:
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"Field '{path}' is not allowed to be updated",
+                )
+            changes[path] = value
+    
+    if updates.mlflow:
+        for key, value in updates.mlflow.items():
+            path = f"mlflow.{key}"
             if path not in ALLOWED_CONFIG_PATHS:
                 raise HTTPException(
                     status_code=422,

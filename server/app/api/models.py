@@ -332,6 +332,9 @@ class ConfigUpdateRequest(BaseModel):
         None, description="Rate limiting settings (per_minute, burst)"
     )
     observability: dict[str, Any] | None = Field(
+        None, description="Observability settings (otel_enabled, metrics_port, otel_endpoint)"
+    )
+    mlflow: dict[str, Any] | None = Field(
         None, description="Observability settings (otel_enabled, metrics_port)"
     )
 
