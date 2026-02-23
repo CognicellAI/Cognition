@@ -112,9 +112,9 @@ You will see a stream of events:
 
 Because Cognition is built for trust, you can inspect exactly what happened.
 
-Open your browser to [http://localhost:16686](http://localhost:16686) (Jaeger UI).
-1.  Select Service: `cognition`
-2.  Click **Find Traces**
+Open your browser to [http://localhost:5050](http://localhost:5050) (MLflow UI).
+1.  Click on the **Experiments** tab
+2.  Select the `cognition` experiment
 3.  Click on the most recent trace.
 
 You will see a waterfall diagram showing:

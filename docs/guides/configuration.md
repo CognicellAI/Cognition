@@ -241,12 +241,14 @@ observability:
 ```
 Metrics available at `http://localhost:9090/metrics`
 
-**With OpenTelemetry (Jaeger/Grafana):**
+**With OpenTelemetry (MLflow/Grafana):**
 ```yaml
 observability:
-  otel_endpoint: "http://jaeger:4317"
+  otel_endpoint: "http://otel-collector:4317"
   metrics_port: 9090
 ```
+
+Traces are exported to MLflow via the OpenTelemetry Collector. View traces in the MLflow UI at `http://localhost:5050`.
 
 ### Agent Behavior (`agent`)
 
@@ -462,7 +464,7 @@ observability:
 | false | true | MLflow traces only |
 | true | true | Full stack (all backends) |
 
-> **Note:** MLflow LangChain autologging uses `run_tracer_inline=True` for async compatibility. However, an upstream MLflow bug causes ContextVar propagation errors in async uvicorn contexts. OpenTelemetry tracing to Jaeger works correctly as an alternative for trace visibility.
+> **Note:** Traces flow from Cognition → OpenTelemetry Collector → MLflow. This architecture avoids async compatibility issues and provides reliable trace capture. View traces in MLflow UI at `http://localhost:5050`.
 
 ### Execution Backend (`execution`)
 
@@ -503,34 +505,6 @@ Docker sandbox containers are hardened with the following security measures:
 - `cap_drop=ALL` — all Linux capabilities are dropped from the container
 - `no-new-privileges` — prevents privilege escalation via setuid/setgid binaries
 - Read-only root filesystem with tmpfs mounts for `/tmp` and `/home` to allow necessary writes while preventing persistent filesystem modifications
-
-### Evaluation (`evaluation`)
-
-Configure MLflow-based evaluation pipeline.
-
-```yaml
-evaluation:
-  enabled: true            # Enable evaluation tracking
-  default_scorers:         # Built-in scorers to run
-    - "correctness"
-    - "helpfulness"
-    - "tool_efficiency"
-  custom_scorers:          # Paths to custom scorer modules
-    - "./my_scorers/"
-```
-
-**Environment Variables:**
-- `COGNITION_EVALUATION_ENABLED` - Enable evaluation (default: true)
-- `COGNITION_EVALUATION_DEFAULT_SCORERS` - Default scorers to run
-- `COGNITION_EVALUATION_CUSTOM_SCORERS` - Custom scorer paths
-
-**Built-in Scorers:**
-- `correctness` - Factual accuracy of responses
-- `helpfulness` - Actionability and relevance
-- `safety` - Policy compliance and toxicity
-- `tool_efficiency` - Appropriate tool usage
-
-> **Note:** The evaluation pipeline is partially implemented (P3-1). The `EvaluationService` with built-in scorers exists, but API routes for triggering evaluations and persistent feedback storage are not yet available.
 
 ## Security Best Practices
 
@@ -745,7 +719,6 @@ If upgrading from Cognition v1:
 | `execution.docker.network_mode` | `COGNITION_DOCKER_NETWORK_MODE` | string | `none` | Network isolation |
 | `execution.docker.memory_limit` | `COGNITION_DOCKER_MEMORY_LIMIT` | string | `512m` | Memory limit |
 | `execution.docker.cpu_limit` | `COGNITION_DOCKER_CPU_LIMIT` | float | `1.0` | CPU limit |
-| `evaluation.enabled` | `COGNITION_EVALUATION_ENABLED` | bool | `true` | Enable evaluation |
 | `test.llm_mode` | `COGNITION_TEST_LLM_MODE` | string | `mock` | Test LLM mode |
 
 **Secret fields** (set via env vars only): `OPENAI_API_KEY`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `COGNITION_OPENAI_COMPATIBLE_API_KEY`

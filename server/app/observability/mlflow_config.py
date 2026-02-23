@@ -1,12 +1,15 @@
-"""MLflow integration for Cognition observability.
+"""MLflow configuration for Cognition.
 
-Provides MLflow tracing integration with graceful degradation
-when MLflow is not installed.
+Provides MLflow experiment setup and configuration.
+
+NOTE: Actual tracing is handled via OpenTelemetry Collector → MLflow.
+This module only handles experiment creation, tracking URI setup,
+and MLflow availability checks.
 """
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import structlog
 
@@ -21,10 +24,10 @@ _mlflow_available = False
 
 
 def setup_mlflow_tracing(settings: Settings) -> None:
-    """Initialize MLflow tracing for LangChain.
+    """Initialize MLflow tracing for Cognition.
 
-    Configures MLflow to automatically log LangChain traces when enabled.
-    Gracefully handles the case where MLflow is not installed.
+    Configures MLflow tracking with experiment setup.
+    Traces are ingested via OpenTelemetry Collector.
 
     Args:
         settings: Application settings containing MLflow configuration
@@ -44,7 +47,6 @@ def setup_mlflow_tracing(settings: Settings) -> None:
 
     try:
         import mlflow
-        from mlflow.langchain import autolog
 
         # Configure tracking URI if provided
         if settings.mlflow_tracking_uri:
@@ -56,18 +58,14 @@ def setup_mlflow_tracing(settings: Settings) -> None:
 
         # Set experiment name
         experiment_name = settings.mlflow_experiment_name or "cognition"
-        mlflow.set_experiment(experiment_name)
+        experiment = mlflow.set_experiment(experiment_name)
         logger.info(
             "MLflow experiment configured",
             experiment=experiment_name,
+            experiment_id=experiment.experiment_id,
         )
 
-        # Enable LangChain autologging with inline tracing.
-        # run_tracer_inline=True runs the tracer callback in the main async
-        # task instead of a background thread, which avoids ContextVar
-        # propagation failures under uvicorn / asyncio.
-        autolog(log_traces=True, run_tracer_inline=True)
-        logger.info("MLflow LangChain autologging enabled (inline tracing)")
+        logger.info("MLflow experiment configured for evaluation")
 
         _mlflow_available = True
 
@@ -101,3 +99,22 @@ def is_mlflow_setup_attempted() -> bool:
         True if setup_mlflow_tracing was called, False otherwise
     """
     return _mlflow_setup_attempted
+
+
+def get_current_experiment_id() -> str | None:
+    """Get the current MLflow experiment ID.
+
+    Returns:
+        Experiment ID string or None if MLflow not available
+    """
+    if not _mlflow_available:
+        return None
+
+    try:
+        import mlflow
+
+        experiment = mlflow.get_experiment_by_name("cognition")
+        return experiment.experiment_id if experiment else None
+    except Exception as e:
+        logger.debug("Failed to get experiment ID", error=str(e))
+        return None

@@ -15,7 +15,7 @@ from server.app.api.models import HealthStatus, ReadyStatus
 from server.app.api.routes import config, messages, sessions
 from server.app.exceptions import RateLimitError
 from server.app.observability import setup_metrics, setup_tracing
-from server.app.observability.mlflow_tracing import setup_mlflow_tracing
+from server.app.observability.mlflow_config import setup_mlflow_tracing
 from server.app.rate_limiter import get_rate_limiter
 from server.app.session_manager import initialize_session_manager
 from server.app.settings import get_settings

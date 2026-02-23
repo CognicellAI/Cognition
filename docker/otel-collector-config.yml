@@ -1,0 +1,45 @@
+# OpenTelemetry Collector Configuration
+# Receives OTel traces and exports to MLflow for AI-specific features
+# (evaluation, prompt registry, feedback loops)
+
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+
+processors:
+  batch:
+    timeout: 1s
+    send_batch_size: 1024
+
+exporters:
+  # MLflow trace ingestion endpoint
+  # This enables evaluation, prompt registry, and feedback features
+  otlphttp/mlflow:
+    endpoint: http://mlflow:5000
+    headers:
+      x-mlflow-experiment-id: "1"
+    compression: none
+    # MLflow uses OTLP/HTTP for trace ingestion
+    # The exporter appends /v1/traces to the endpoint automatically
+
+  # Debug exporter for troubleshooting (optional, logs to stdout)
+  debug:
+    verbosity: detailed
+
+service:
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [otlphttp/mlflow]
+
+  # Enable telemetry about the collector itself
+  telemetry:
+    logs:
+      level: info
+    metrics:
+      level: detailed

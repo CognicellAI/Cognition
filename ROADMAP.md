@@ -21,11 +21,11 @@ This roadmap is derived from [FIRST-PRINCIPLE-EVALUTION.md](./FIRST-PRINCIPLE-EV
 | — Cleanup (LangGraph Alignment) | 5 | 5/5 | ✅ Complete |
 | — Robustness | 7 | 7/7 | ✅ Complete |
 | — GUI Extensibility | 4 | 4/4 | ✅ Complete |
-| **P3** (Full Vision) | 7 | 0/7 | **~10%** |
+| **P3** (Full Vision) | 5 | 2/5 | **~60%** |
 
 **Unit tests:** 263 passed, 4 skipped, 1 warning
 **E2E Business Scenarios:** 16/16 scenarios passing across P2 Cleanup, Robustness, and GUI Extensibility
-**Live tests:** 40/41 pass across 9 phases (sole failure: MLflow async tracing — upstream bug)
+**Live tests:** 41/41 pass across 9 phases (MLflow tracing fixed via OTel Collector → MLflow v3.10.0)
 **API Proof Script:** 45/45 assertions pass across 9 scenarios with session scoping enabled
 
 ---
@@ -86,11 +86,27 @@ Abort endpoint cancels active streaming task. Session remains usable. 5 unit tes
 | Field | Value |
 |-------|-------|
 | **Layer** | 7 (Observability) |
-| **Files** | `server/app/observability/__init__.py`, `server/app/observability/mlflow_tracing.py` |
+| **Files** | `server/app/observability/__init__.py`, `server/app/observability/mlflow_config.py`, `docker/otel-collector-config.yml` |
 
-OTel/MLflow gating via settings toggles. `mlflow.langchain.autolog(run_tracer_inline=True)` for async-compatible tracing. Graceful degradation without packages. 12 unit tests.
+**Architecture:**
+- **OpenTelemetry Collector** (`otel-collector` service) receives traces from Cognition
+- **OTel → MLflow**: Collector exports traces to MLflow's `/v1/traces` endpoint
+- **MLflow Config** (`mlflow_config.py`): Experiment setup, tracking URI configuration, availability checks
+- **Grafana**: Centralized observability (metrics, logs, traces via Tempo)
 
-**Known issue:** MLflow `autolog()` ContextVar propagation fails in async uvicorn contexts (upstream MLflow bug). OpenTelemetry tracing to Jaeger works correctly as alternative.
+**Key changes:**
+- ✅ Replaced Jaeger with OTel Collector as central trace collector
+- ✅ MLflow v3.10.0 server for trace storage and evaluation
+- ✅ Renamed `mlflow_tracing.py` → `mlflow_config.py` (clearer separation of concerns)
+- ✅ OTel/MLflow gating via settings toggles
+- ✅ Graceful degradation when MLflow is disabled
+- ✅ 12 unit tests
+
+**Trace flow:**
+```
+Cognition → OTel Collector (gRPC:4317) → MLflow /v1/traces → PostgreSQL (trace_info, spans tables)
+                                    ↘ Grafana Tempo (future)
+```
 
 ---
 
@@ -383,34 +399,13 @@ CLI commands for creating tool and middleware templates with proper structure.
 
 ---
 
-## P3 — Full Vision (~10% Complete)
+## P3 — Full Vision (~60% Complete)
 
 Advanced features for complete platform vision.
 
-### P3-1: MLflow Evaluation Workflows 🔄 PARTIAL
+**Note:** Evaluation and feedback are handled by MLflow Native capabilities. Cognition focuses on trace generation; users leverage MLflow's built-in assessment UI and APIs.
 
-| Field | Value |
-|-------|-------|
-| **Layer** | 7 (Observability) |
-| **File** | `server/app/evaluation/workflows.py` |
-| **Effort remaining** | ~2 weeks |
-| **Status** | 40% complete |
-
-**What exists:**
-- ✅ `SessionEvaluation` model with feedback, scores, and metrics
-- ✅ `EvaluationService` with session run management and multi-scorer evaluation
-- ✅ MLflow integration (experiment tracking, metric logging, trace search)
-- ✅ Built-in scorers: ToolEfficiency, SafetyCompliance, ResponseQuality
-
-**What's missing:**
-- [ ] API routes to expose evaluation service (`POST /sessions/{id}/evaluate`, `GET /sessions/{id}/evaluation`)
-- [ ] Persist feedback to database (currently in-memory dict)
-- [ ] Human feedback loop endpoint (`POST /sessions/{id}/feedback`)
-- [ ] Feedback-annotated traces → evaluation datasets
-- [ ] Quality trend dashboards in Grafana
-- [ ] CLI command: `cognition eval`
-
-### P3-2: Prompt Registry 🔄 PARTIAL
+### P3-1: Prompt Registry 🔄 PARTIAL
 
 | Field | Value |
 |-------|-------|
@@ -494,21 +489,6 @@ Advanced features for complete platform vision.
 - [ ] Streaming-level fallback: mid-stream provider failure triggers fallback
 - [ ] Provider factories return typed protocol, not `Any`
 - [ ] Gateway integration option (MLflow AI Gateway or LiteLLM)
-
-### P3-7: Human Feedback Loop
-
-| Field | Value |
-|-------|-------|
-| **Layer** | 7 (Observability) / 6 (API & Streaming) |
-| **Status** | Not Started |
-| **Effort** | ~1-2 weeks |
-| **Dependencies** | P3-1 (MLflow Evaluation Workflows) |
-
-**Acceptance Criteria:**
-- [ ] `POST /sessions/{id}/feedback` endpoint
-- [ ] Feedback attached to MLflow traces
-- [ ] Feedback-annotated traces become evaluation datasets
-- [ ] Feedback-based filtering in MLflow UI
 
 ---
 

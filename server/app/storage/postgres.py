@@ -85,8 +85,10 @@ class PostgresStorageBackend:
             await conn.run_sync(metadata.create_all)
 
         # Create connection pool for operations
+        # asyncpg expects 'postgresql://' not 'postgresql+asyncpg://'
+        asyncpg_dsn = self.connection_string.replace("postgresql+asyncpg://", "postgresql://")
         self._pool = await asyncpg.create_pool(
-            self.connection_string,
+            asyncpg_dsn,
             min_size=self.min_pool_size,
             max_size=self.max_pool_size,
             command_timeout=60,

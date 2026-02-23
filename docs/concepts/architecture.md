@@ -138,7 +138,7 @@ Every internal component is instrumented with **OpenTelemetry**.
 
 1.  **Trace Context Propagation:** The Trace ID is passed from the FastAPI request down into the LangGraph execution.
 2.  **Granular Spans:** Every tool execution and LLM call is recorded as a nested span.
-3.  **Audit Trail:** The result is a complete, auditable waterfall in Jaeger or Grafana showing exactly how the engine arrived at a conclusion.
+3.  **Audit Trail:** The result is a complete, auditable waterfall in MLflow (via OpenTelemetry Collector) showing exactly how the engine arrived at a conclusion.
 
 ---
 

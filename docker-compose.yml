@@ -7,14 +7,14 @@
 #   docker-compose down -v        # Stop and remove volumes
 #
 # Services:
-#   - cognition:    FastAPI server (port 8000)
-#   - postgres:     PostgreSQL database (port 5432)
-#   - mlflow:       MLflow tracking server (port 5000)
-#   - prometheus:   Metrics collection (port 9091)
-#   - grafana:      Dashboards (port 3000)
-#   - jaeger:       Distributed tracing (port 16686)
-#   - loki:         Log aggregation
-#   - promtail:     Log shipping
+#   - cognition:       FastAPI server (port 8000)
+#   - postgres:        PostgreSQL database (port 5432)
+#   - mlflow:          MLflow tracking server (port 5000)
+#   - prometheus:      Metrics collection (port 9091)
+#   - grafana:         Dashboards (port 3000)
+#   - otel-collector:  OpenTelemetry trace collector
+#   - loki:            Log aggregation
+#   - promtail:        Log shipping
 
 services:
   # ──────────────────────────────────────────────────────
@@ -74,7 +74,7 @@ services:
 
       # Persistence — PostgreSQL
       - COGNITION_PERSISTENCE_BACKEND=postgres
-      - COGNITION_PERSISTENCE_URI=postgresql://${POSTGRES_USER:-cognition}:${POSTGRES_PASSWORD:-cognition}@postgres:5432/${POSTGRES_DB:-cognition}
+      - COGNITION_PERSISTENCE_URI=postgresql+asyncpg://${POSTGRES_USER:-cognition}:${POSTGRES_PASSWORD:-cognition}@postgres:5432/${POSTGRES_DB:-cognition}
 
       # MLflow — Tracing & Evaluation
       - COGNITION_MLFLOW_ENABLED=true
@@ -90,18 +90,20 @@ services:
       - COGNITION_SCOPING_ENABLED=true
       - COGNITION_SCOPE_KEYS=["user"]
 
-      # OpenTelemetry — Jaeger
+      # OpenTelemetry — OTel Collector
       - COGNITION_OTEL_ENABLED=true
-      - COGNITION_OTEL_ENDPOINT=http://jaeger:4317
+      - COGNITION_OTEL_ENDPOINT=http://otel-collector:4317
       - LANGSMITH_TRACING=false
-      - OTEL_EXPORTER_OTLP_ENDPOINT=http://jaeger:4318
-      - OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317
+      - OTEL_EXPORTER_OTLP_PROTOCOL=grpc
       - OTEL_SERVICE_NAME=cognition
       - OTEL_TRACES_EXPORTER=otlp
       - OTEL_LOG_LEVEL=debug
     volumes:
       - ./workspaces:/workspace
       - ./.cognition:/app/.cognition
+      - ./tests:/app/tests
+      - mlflow-artifacts:/mlflow/artifacts
     networks:
       - cognition-network
     depends_on:
@@ -126,7 +128,7 @@ services:
     build:
       context: .
       dockerfile_inline: |
-        FROM ghcr.io/mlflow/mlflow:v3.5.0
+        FROM ghcr.io/mlflow/mlflow:v3.10.0
         RUN pip install --no-cache-dir psycopg2-binary
     container_name: cognition-mlflow
     command: >
@@ -135,6 +137,7 @@ services:
       --port 5000
       --backend-store-uri postgresql://${POSTGRES_USER:-cognition}:${POSTGRES_PASSWORD:-cognition}@postgres:5432/${POSTGRES_DB:-cognition}
       --default-artifact-root /mlflow/artifacts
+      --disable-security-middleware
     ports:
       - "5050:5000"
     volumes:
@@ -197,18 +200,23 @@ services:
       - loki
     restart: unless-stopped
 
-  # Jaeger - Distributed Tracing
-  jaeger:
-    image: jaegertracing/all-in-one:1.50
-    container_name: cognition-jaeger
-    environment:
-      - COLLECTOR_OTLP_ENABLED=true
+  # OpenTelemetry Collector - Central trace collector
+  # Receives OTel traces and fans out to MLflow (for eval/prompt registry)
+  # and Grafana (for centralized observability)
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.96.0
+    container_name: cognition-otel-collector
+    command: ["--config=/etc/otel-collector-config.yml"]
     ports:
-      - "16686:16686"   # Jaeger UI
       - "4317:4317"     # OTLP gRPC
       - "4318:4318"     # OTLP HTTP
+    volumes:
+      - ./docker/otel-collector-config.yml:/etc/otel-collector-config.yml:ro
     networks:
       - cognition-network
+    depends_on:
+      mlflow:
+        condition: service_healthy
     restart: unless-stopped
 
   # Loki - Log Aggregation

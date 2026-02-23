@@ -60,7 +60,7 @@ calls `create_sandbox_backend()` which dispatches based on this setting:
 
 | Variable | Description | Default |
 | :--- | :--- | :--- |
-| `COGNITION_OTEL_ENDPOINT` | OTLP Collector URL | `http://jaeger:4318` |
+| `COGNITION_OTEL_ENDPOINT` | OTLP Collector URL | `http://otel-collector:4317` |
 
 ## Security Hardening
 
@@ -115,7 +115,7 @@ Cognition runs directly on the host while supporting services run in Docker Comp
 
 ```bash
 # Start supporting services
-docker compose up -d postgres mlflow jaeger
+docker compose up -d postgres mlflow otel-collector
 
 # Run Cognition on the host
 COGNITION_SANDBOX_BACKEND=docker uv run uvicorn server.app.main:app --reload --port 8000
