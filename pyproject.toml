@@ -165,6 +165,7 @@ markers = [
     "integration: Integration tests (test component interactions)",
     "e2e: End-to-end tests (full workflow)",
     "slow: Slow tests (skip with -m 'not slow')",
+    "mlflow: MLflow integration tests (require MLflow server)",
 ]
 
 [tool.coverage.run]

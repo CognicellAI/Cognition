@@ -1,6 +1,6 @@
-# P2 Business Scenarios (Python)
+# Business Scenarios (Python)
 
-Comprehensive end-to-end tests for P2 (Robustness + GUI Extensibility) features written in Python using pytest.
+Comprehensive end-to-end tests for P2 (Robustness + GUI Extensibility) and P3 (MLflow Integration) features written in Python using pytest.
 
 ## Overview
 
@@ -28,12 +28,17 @@ tests/e2e/test_scenarios/
 │   ├── test_cross_domain_access.py
 │   ├── test_isolated_execution.py
 │   └── test_project_awareness.py
-└── p2_gui/                     # GUI extensibility scenarios
+├── p2_gui/                     # GUI extensibility scenarios
+│   ├── __init__.py
+│   ├── test_multi_user_management.py
+│   ├── test_dynamic_capability.py
+│   ├── test_configuration_updates.py
+│   └── test_tool_scaffolding.py
+└── p3_mlflow/                  # MLflow integration scenarios
     ├── __init__.py
-    ├── test_multi_user_management.py
-    ├── test_dynamic_capability.py
-    ├── test_configuration_updates.py
-    └── test_tool_scaffolding.py
+    ├── test_tracing_integration.py
+    ├── test_evaluation.py
+    └── test_feedback_loop.py
 ```
 
 ## Quick Start
@@ -108,6 +113,29 @@ Tests GUI extensibility features:
 3. **Configuration Updates** - Zero-downtime config changes
 4. **Tool Scaffolding** - Rapid custom tool development
 
+### P3 MLflow (3 scenarios, 20 tests)
+
+Tests MLflow integration for observability and evaluation:
+
+1. **Tracing Integration** (8 tests) - Automatic trace capture in MLflow
+2. **Evaluation & Scoring** (7 tests) - Quality assessment with MLflow scorers
+3. **Human Feedback Loop** (7 tests) - Feedback collection and datasets
+
+**Note:** P3 scenarios require MLflow to be enabled and running. Tests skip gracefully when MLflow is not available.
+
+## Running P3 MLflow Scenarios
+
+```bash
+# Run only MLflow scenarios (requires MLflow server)
+pytest tests/e2e/test_scenarios/p3_mlflow/ -v
+
+# Skip MLflow scenarios (run without MLflow)
+pytest tests/e2e/test_scenarios/ -v -m "not mlflow"
+
+# Run all scenarios including MLflow
+pytest tests/e2e/test_scenarios/ -v
+```
+
 ## Business Value Summary
 
 | Scenario | Business Value | P2 Item |
@@ -128,6 +156,9 @@ Tests GUI extensibility features:
 | Dynamic Capability Extension | Runtime tool registration | P2-9: AgentRegistry |
 | Configuration Updates | Zero-downtime config changes | P2-10: File Watcher |
 | Tool Scaffolding | Rapid custom tool development | P2-11: CLI Scaffolding |
+| Tracing Integration | Complete agent observability | P3-1: MLflow Tracing |
+| Evaluation & Scoring | Systematic quality assessment | P3-1: MLflow Evaluation |
+| Human Feedback Loop | Human-in-the-loop improvement | P3-7: MLflow Feedback |
 
 ## Fixtures
 
@@ -234,12 +265,21 @@ If tests fail with 403 errors, scoping may be enabled. The test client automatic
 
 ## Success Criteria
 
-All P2 scenarios should pass against a properly configured Cognition server:
+All scenarios should pass against a properly configured Cognition server:
 
+### P2 Scenarios (Core System)
 - **Cleanup Scenarios:** 5/5 passing
-- **Robustness Scenarios:** 7/7 passing  
+- **Robustness Scenarios:** 7/7 passing
 - **GUI Scenarios:** 4/4 passing
-- **Total:** 16/16 scenarios passing
+- **P2 Total:** 16/16 scenarios passing
+
+### P3 Scenarios (MLflow Integration - Optional)
+- **Tracing Integration:** 8/8 tests passing (requires MLflow)
+- **Evaluation & Scoring:** 7/7 tests passing (requires MLflow)
+- **Human Feedback Loop:** 7/7 tests passing (requires MLflow)
+- **P3 Total:** 22/22 tests passing (when MLflow enabled)
+
+**Note:** P3 scenarios skip gracefully when MLflow is not available. Core functionality works without MLflow.
 
 ## Related Documentation
 
