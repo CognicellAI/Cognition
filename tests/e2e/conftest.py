@@ -9,7 +9,6 @@ import time
 from pathlib import Path
 
 import httpx
-import pytest
 import pytest_asyncio
 
 

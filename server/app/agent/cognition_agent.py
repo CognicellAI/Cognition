@@ -17,19 +17,19 @@ Use invalidate_agent_cache() or clear_agent_cache() to force recompilation.
 from __future__ import annotations
 
 import hashlib
+from collections.abc import Mapping, Sequence
 from pathlib import Path
-from typing import Any, Mapping, Optional, Sequence, cast
+from typing import Any, cast
 
 from deepagents import create_deep_agent
 
+from server.app.agent.context import ContextManager
 from server.app.agent.middleware import (
     CognitionObservabilityMiddleware,
     CognitionStreamingMiddleware,
 )
 from server.app.agent.sandbox_backend import create_sandbox_backend
-from server.app.agent.context import ContextManager
 from server.app.settings import Settings, get_settings
-
 
 # Global agent cache: cache_key -> compiled_agent
 _agent_cache: dict[str, Any] = {}

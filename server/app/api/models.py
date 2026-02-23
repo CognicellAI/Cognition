@@ -7,12 +7,12 @@ These wrap the core domain models from server.app.models.
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, Literal, Optional
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
-from server.app.models import Session as CoreSession, SessionConfig
-
+from server.app.models import Session as CoreSession
+from server.app.models import SessionConfig
 
 # ============================================================================
 # Session Models
@@ -25,14 +25,14 @@ class SessionCreate(BaseModel):
     Server uses global settings exclusively - no per-session config.
     """
 
-    title: Optional[str] = Field(None, max_length=200, description="Optional session title")
+    title: str | None = Field(None, max_length=200, description="Optional session title")
 
 
 class SessionResponse(BaseModel):
     """Session information response."""
 
     id: str = Field(..., description="Unique session identifier")
-    title: Optional[str] = Field(None, description="Session title")
+    title: str | None = Field(None, description="Session title")
     thread_id: str = Field(..., description="LangGraph thread ID for checkpointing")
     status: Literal["active", "inactive", "error"] = Field(..., description="Session status")
     created_at: str = Field(..., description="Session creation timestamp (ISO format)")
@@ -40,7 +40,7 @@ class SessionResponse(BaseModel):
     message_count: int = Field(0, description="Number of messages in session")
 
     @classmethod
-    def from_core(cls, session: CoreSession) -> "SessionResponse":
+    def from_core(cls, session: CoreSession) -> SessionResponse:
         """Create from core domain model."""
         return cls(
             id=session.id,
@@ -66,8 +66,8 @@ class SessionUpdate(BaseModel):
     Allows updating metadata and LLM configuration.
     """
 
-    title: Optional[str] = Field(None, max_length=200)
-    config: Optional[SessionConfig] = Field(None, description="Update LLM configuration")
+    title: str | None = Field(None, max_length=200)
+    config: SessionConfig | None = Field(None, description="Update LLM configuration")
 
 
 # ============================================================================
@@ -87,8 +87,8 @@ class MessageCreate(BaseModel):
     """Request to send a message."""
 
     content: str = Field(..., min_length=1, description="Message content")
-    parent_id: Optional[str] = Field(None, description="ID of parent message for threading")
-    model: Optional[str] = Field(
+    parent_id: str | None = Field(None, description="ID of parent message for threading")
+    model: str | None = Field(
         None,
         description="Model to use for this message (e.g., 'gpt-4o', 'claude-3-sonnet'). Uses server default if not specified.",
     )
@@ -100,15 +100,15 @@ class MessageResponse(BaseModel):
     id: str = Field(..., description="Unique message identifier")
     session_id: str = Field(..., description="Associated session ID")
     role: Literal["user", "assistant", "system", "tool"] = Field(..., description="Message role")
-    content: Optional[str] = Field(None, description="Message content (if complete)")
-    parent_id: Optional[str] = Field(None, description="Parent message ID")
-    model: Optional[str] = Field(default=None, description="Model used for this message")
+    content: str | None = Field(None, description="Message content (if complete)")
+    parent_id: str | None = Field(None, description="Parent message ID")
+    model: str | None = Field(default=None, description="Model used for this message")
     created_at: datetime = Field(..., description="Message creation timestamp")
-    tool_calls: Optional[list[ToolCallResponse]] = Field(None, description="Tool invocations")
-    tool_call_id: Optional[str] = Field(None, description="ID of tool being responded to")
-    token_count: Optional[int] = Field(None, description="Token usage for this message")
-    model_used: Optional[str] = Field(None, description="Model that generated response")
-    metadata: Optional[dict[str, Any]] = Field(None, description="Additional metadata")
+    tool_calls: list[ToolCallResponse] | None = Field(None, description="Tool invocations")
+    tool_call_id: str | None = Field(None, description="ID of tool being responded to")
+    token_count: int | None = Field(None, description="Token usage for this message")
+    model_used: str | None = Field(None, description="Model that generated response")
+    metadata: dict[str, Any] | None = Field(None, description="Additional metadata")
 
 
 class MessageList(BaseModel):
@@ -202,7 +202,7 @@ class CircuitBreakerStatus(BaseModel):
     successful_calls: int = Field(..., description="Successful calls")
     failed_calls: int = Field(..., description="Failed calls")
     consecutive_failures: int = Field(..., description="Consecutive failures")
-    last_failure_time: Optional[float] = Field(None, description="Timestamp of last failure")
+    last_failure_time: float | None = Field(None, description="Timestamp of last failure")
 
 
 class HealthStatus(BaseModel):
@@ -240,13 +240,13 @@ class FeedbackCreate(BaseModel):
         le=1.0,
         description="Numeric value (e.g., 1.0 for thumbs up, 0.0 for thumbs down)",
     )
-    trace_id: Optional[str] = Field(
+    trace_id: str | None = Field(
         None, description="Optional MLflow trace ID to attach feedback to"
     )
-    rationale: Optional[str] = Field(
+    rationale: str | None = Field(
         None, max_length=1000, description="Explanation for the feedback"
     )
-    metadata: Optional[dict[str, Any]] = Field(default=None, description="Additional metadata")
+    metadata: dict[str, Any] | None = Field(default=None, description="Additional metadata")
 
 
 class FeedbackResponse(BaseModel):
@@ -277,8 +277,8 @@ class ErrorResponse(BaseModel):
     """Error response."""
 
     error: str = Field(..., description="Error message")
-    code: Optional[str] = Field(None, description="Error code")
-    details: Optional[dict[str, Any]] = Field(None, description="Additional error details")
+    code: str | None = Field(None, description="Error code")
+    details: dict[str, Any] | None = Field(None, description="Additional error details")
 
 
 # ============================================================================
@@ -306,5 +306,5 @@ class ProviderList(BaseModel):
     """List of available providers and models."""
 
     providers: list[ProviderInfo] = Field(default_factory=list)
-    default_provider: Optional[str] = Field(None, description="Default provider ID")
-    default_model: Optional[str] = Field(None, description="Default model ID")
+    default_provider: str | None = Field(None, description="Default provider ID")
+    default_model: str | None = Field(None, description="Default model ID")

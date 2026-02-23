@@ -6,9 +6,9 @@ REST endpoints for server configuration.
 from fastapi import APIRouter, Depends
 
 from server.app.api.models import ConfigResponse
-from server.app.config_loader import ConfigLoader, load_config
-from server.app.settings import Settings, get_settings
+from server.app.config_loader import load_config
 from server.app.llm.discovery import DiscoveryEngine
+from server.app.settings import Settings, get_settings
 
 router = APIRouter(prefix="/config", tags=["config"])
 

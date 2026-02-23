@@ -7,8 +7,9 @@ on failure. Integrates with the circuit breaker pattern.
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Sequence
 from dataclasses import dataclass, field
-from typing import Any, Optional, Sequence
+from typing import Any
 
 import structlog
 
@@ -34,9 +35,9 @@ class ProviderConfig:
     max_retries: int = 2
 
     # Provider-specific overrides
-    api_key: Optional[str] = None
-    base_url: Optional[str] = None
-    region: Optional[str] = None
+    api_key: str | None = None
+    base_url: str | None = None
+    region: str | None = None
 
 
 @dataclass
@@ -45,7 +46,7 @@ class FallbackResult:
 
     model: Any  # The LLM model instance
     provider_config: ProviderConfig
-    attempts: list[tuple[str, Optional[str]]] = field(
+    attempts: list[tuple[str, str | None]] = field(
         default_factory=list
     )  # (provider, error_or_None)
 
@@ -133,7 +134,7 @@ class ProviderFallbackChain:
             LLMUnavailableError: If all providers fail.
             CircuitBreakerOpenError: If a provider's circuit breaker is open.
         """
-        attempts: list[tuple[str, Optional[str]]] = []
+        attempts: list[tuple[str, str | None]] = []
         active_providers = self.providers
 
         if not active_providers:

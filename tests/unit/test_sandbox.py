@@ -1,8 +1,9 @@
 """Unit tests for the sandbox module."""
 
-import pytest
 import tempfile
 from pathlib import Path
+
+import pytest
 
 from server.app.execution.sandbox import LocalSandbox
 

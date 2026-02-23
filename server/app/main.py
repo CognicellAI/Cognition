@@ -10,16 +10,16 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from server.app.api.models import ErrorResponse, HealthStatus, ReadyStatus
+from server.app.api.middleware import ObservabilityMiddleware, SecurityHeadersMiddleware
+from server.app.api.models import HealthStatus, ReadyStatus
 from server.app.api.routes import config, messages, sessions
 from server.app.exceptions import RateLimitError
-from server.app.api.middleware import ObservabilityMiddleware, SecurityHeadersMiddleware
-from server.app.observability.mlflow_tracing import setup_mlflow_tracing
 from server.app.observability import setup_metrics, setup_tracing
+from server.app.observability.mlflow_tracing import setup_mlflow_tracing
 from server.app.rate_limiter import get_rate_limiter
+from server.app.session_manager import initialize_session_manager
 from server.app.settings import get_settings
 from server.app.storage import create_storage_backend, get_storage_backend, set_storage_backend
-from server.app.session_manager import initialize_session_manager
 
 logger = structlog.get_logger(__name__)
 
@@ -94,9 +94,8 @@ app.include_router(config.router)
 @app.get("/health", response_model=HealthStatus, tags=["health"])
 async def health_check() -> HealthStatus:
     """Health check endpoint."""
-    from server.app.execution.circuit_breaker import get_circuit_breaker_registry
-    from server.app.llm.provider_fallback import ProviderFallbackChain
     from server.app.api.models import CircuitBreakerStatus
+    from server.app.execution.circuit_breaker import get_circuit_breaker_registry
 
     storage_backend = get_storage_backend()
     sessions_list = await storage_backend.list_sessions()

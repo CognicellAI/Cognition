@@ -5,11 +5,12 @@ Tests that sessions are properly scoped and isolated based on scope metadata.
 
 from __future__ import annotations
 
-import pytest
 from datetime import UTC, datetime
 
-from server.app.models import Session, SessionConfig, SessionStatus
+import pytest
+
 from server.app.api.scoping import SessionScope
+from server.app.models import Session, SessionConfig, SessionStatus
 from server.app.storage.sqlite import SqliteStorageBackend
 
 

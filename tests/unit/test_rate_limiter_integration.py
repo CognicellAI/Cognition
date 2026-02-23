@@ -3,15 +3,15 @@
 Tests that the rate limiter is properly wired to endpoints.
 """
 
+import asyncio
+from unittest.mock import MagicMock, patch
+
 import pytest
 from fastapi.testclient import TestClient
-from unittest.mock import patch, MagicMock
-import asyncio
 
-from server.app.main import app
-from server.app.rate_limiter import RateLimiter, RateLimitConfig, get_rate_limiter
 from server.app.exceptions import RateLimitError
-
+from server.app.main import app
+from server.app.rate_limiter import RateLimitConfig, RateLimiter
 
 client = TestClient(app)
 

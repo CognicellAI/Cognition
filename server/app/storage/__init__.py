@@ -18,7 +18,7 @@ from server.app.storage.backend import (
 from server.app.storage.factory import create_storage_backend
 
 # Global storage backend instance (initialized in main.py lifespan)
-_storage_backend: Optional[StorageBackend] = None
+_storage_backend: StorageBackend | None = None
 
 
 def get_storage_backend() -> StorageBackend:

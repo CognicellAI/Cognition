@@ -7,7 +7,7 @@ persistence into a single cohesive interface.
 
 from __future__ import annotations
 
-from typing import Any, Literal, Optional, Protocol, runtime_checkable
+from typing import Any, Literal, Protocol, runtime_checkable
 
 from langgraph.checkpoint.base import BaseCheckpointSaver
 
@@ -23,7 +23,7 @@ class SessionStore(Protocol):
         session_id: str,
         thread_id: str,
         config: SessionConfig,
-        title: Optional[str] = None,
+        title: str | None = None,
     ) -> Session:
         """Create a new session.
 
@@ -38,7 +38,7 @@ class SessionStore(Protocol):
         """
         ...
 
-    async def get_session(self, session_id: str) -> Optional[Session]:
+    async def get_session(self, session_id: str) -> Session | None:
         """Get a session by ID.
 
         Args:
@@ -60,9 +60,9 @@ class SessionStore(Protocol):
     async def update_session(
         self,
         session_id: str,
-        title: Optional[str] = None,
-        config: Optional[SessionConfig] = None,
-    ) -> Optional[Session]:
+        title: str | None = None,
+        config: SessionConfig | None = None,
+    ) -> Session | None:
         """Update a session.
 
         Args:
@@ -105,13 +105,13 @@ class MessageStore(Protocol):
         message_id: str,
         session_id: str,
         role: Literal["user", "assistant", "system", "tool"],
-        content: Optional[str],
-        parent_id: Optional[str] = None,
-        tool_calls: Optional[list] = None,
-        tool_call_id: Optional[str] = None,
-        token_count: Optional[int] = None,
-        model_used: Optional[str] = None,
-        metadata: Optional[dict[str, Any]] = None,
+        content: str | None,
+        parent_id: str | None = None,
+        tool_calls: list | None = None,
+        tool_call_id: str | None = None,
+        token_count: int | None = None,
+        model_used: str | None = None,
+        metadata: dict[str, Any] | None = None,
     ) -> Message:
         """Create a new message.
 
@@ -132,7 +132,7 @@ class MessageStore(Protocol):
         """
         ...
 
-    async def get_message(self, message_id: str) -> Optional[Message]:
+    async def get_message(self, message_id: str) -> Message | None:
         """Get a message by ID.
 
         Args:
@@ -212,27 +212,27 @@ class StorageBackend(Protocol):
         session_id: str,
         thread_id: str,
         config: SessionConfig,
-        title: Optional[str] = None,
-        scopes: Optional[dict[str, str]] = None,
+        title: str | None = None,
+        scopes: dict[str, str] | None = None,
     ) -> Session:
         """Create a new session."""
         ...
 
-    async def get_session(self, session_id: str) -> Optional[Session]:
+    async def get_session(self, session_id: str) -> Session | None:
         """Get a session by ID."""
         ...
 
-    async def list_sessions(self, filter_scopes: Optional[dict[str, str]] = None) -> list[Session]:
+    async def list_sessions(self, filter_scopes: dict[str, str] | None = None) -> list[Session]:
         """List all sessions."""
         ...
 
     async def update_session(
         self,
         session_id: str,
-        title: Optional[str] = None,
-        status: Optional[str] = None,
-        config: Optional[SessionConfig] = None,
-    ) -> Optional[Session]:
+        title: str | None = None,
+        status: str | None = None,
+        config: SessionConfig | None = None,
+    ) -> Session | None:
         """Update a session."""
         ...
 
@@ -250,13 +250,13 @@ class StorageBackend(Protocol):
         message_id: str,
         session_id: str,
         role: Literal["user", "assistant", "system"],
-        content: Optional[str],
-        parent_id: Optional[str] = None,
+        content: str | None,
+        parent_id: str | None = None,
     ) -> Message:
         """Create a new message."""
         ...
 
-    async def get_message(self, message_id: str) -> Optional[Message]:
+    async def get_message(self, message_id: str) -> Message | None:
         """Get a message by ID."""
         ...
 

@@ -113,10 +113,12 @@ Cognition is designed to be highly pluggable using native `deepagents` extension
 #### Subagents
 1. Define specialized subagents in `.cognition/config.yaml` to handle complex domain-specific tasks in isolated contexts.
 
-### Testing
+### Testing & Scenarios
 - **Unit Tests**: Fast, mocked dependencies. No containers.
 - **E2E Tests**: Use `tests/e2e/`. May require running server.
 - **Mocking**: Use `unittest.mock` or `pytest-mock` for external services (LLMs).
+- **Scenarios**: Scenarios are business logic use case against the APIs. They should be tested in E2E tests with realistic inputs against the docker-compose environment.
+  - If keys are not available for external services, let the user know to set them in `.env`.
 
 ## Security & Safety
 - **Path Traversal**: Validate all file paths against workspace root.

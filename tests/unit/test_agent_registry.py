@@ -3,19 +3,16 @@
 Tests for dynamic tool and middleware registration with auto-discovery.
 """
 
-import pytest
-import tempfile
 from pathlib import Path
-from unittest.mock import MagicMock, Mock
+from unittest.mock import MagicMock
 
+import pytest
 from langchain_core.tools import tool as langchain_tool
 
 from server.app.agent_registry import (
     AgentRegistry,
-    ToolRegistration,
-    MiddlewareRegistration,
-    initialize_agent_registry,
     get_agent_registry,
+    initialize_agent_registry,
     set_agent_registry,
 )
 from server.app.session_manager import SessionManager

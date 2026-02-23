@@ -10,14 +10,13 @@ kernel-level isolation per session for production.
 
 from __future__ import annotations
 
-import structlog
 from pathlib import Path
-from typing import Optional
 
+import structlog
 from deepagents.backends import FilesystemBackend
 from deepagents.backends.protocol import (
-    SandboxBackendProtocol,
     ExecuteResponse,
+    SandboxBackendProtocol,
 )
 
 from server.app.execution.sandbox import LocalSandbox
@@ -36,7 +35,7 @@ class CognitionLocalSandboxBackend(FilesystemBackend, SandboxBackendProtocol):
     - Captures stdout/stderr with truncation limits
     """
 
-    def __init__(self, root_dir: str | Path, sandbox_id: Optional[str] = None):
+    def __init__(self, root_dir: str | Path, sandbox_id: str | None = None):
         """Initialize the local sandbox backend.
 
         Args:
@@ -104,7 +103,7 @@ class CognitionDockerSandboxBackend(FilesystemBackend, SandboxBackendProtocol):
     def __init__(
         self,
         root_dir: str | Path,
-        sandbox_id: Optional[str] = None,
+        sandbox_id: str | None = None,
         image: str = "cognition-sandbox:latest",
         network_mode: str = "none",
         memory_limit: str = "512m",
@@ -134,7 +133,7 @@ class CognitionDockerSandboxBackend(FilesystemBackend, SandboxBackendProtocol):
         self._host_workspace = host_workspace
 
         # Lazy-init the Docker execution backend
-        self._docker_backend: Optional[object] = None
+        self._docker_backend: object | None = None
 
     @property
     def id(self) -> str:
@@ -198,7 +197,7 @@ class CognitionDockerSandboxBackend(FilesystemBackend, SandboxBackendProtocol):
 
 def create_sandbox_backend(
     root_dir: str | Path,
-    sandbox_id: Optional[str] = None,
+    sandbox_id: str | None = None,
     sandbox_backend: str = "local",
     docker_image: str = "cognition-sandbox:latest",
     docker_network: str = "none",

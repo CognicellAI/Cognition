@@ -12,7 +12,7 @@ Cognition's architectural independence.
 
 from __future__ import annotations
 
-from abc import ABC, abstractmethod
+from abc import abstractmethod
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
@@ -433,8 +433,8 @@ class DockerExecutionBackend:
 
     def _ensure_container(self):
         """Ensure container is running."""
+
         import docker
-        import subprocess
 
         if self._container is None:
             client = docker.from_env()
@@ -502,8 +502,8 @@ class DockerExecutionBackend:
     def read_file(self, path: str) -> str:
         """Read file from container."""
         self._ensure_container()
-        import tempfile
         import subprocess
+        import tempfile
 
         with tempfile.TemporaryDirectory() as tmpdir:
             temp_file = Path(tmpdir) / "file"
@@ -517,8 +517,8 @@ class DockerExecutionBackend:
     def write_file(self, path: str, content: str) -> None:
         """Write file to container."""
         self._ensure_container()
-        import tempfile
         import subprocess
+        import tempfile
 
         with tempfile.TemporaryDirectory() as tmpdir:
             temp_file = Path(tmpdir) / "file"

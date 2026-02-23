@@ -12,7 +12,6 @@ import subprocess
 import sys
 import time
 from pathlib import Path
-from typing import Any, AsyncGenerator, Optional
 
 import httpx
 import typer
@@ -49,7 +48,7 @@ class SSEParser:
         self._current_event = None
         self._current_data = []
 
-    def parse_line(self, line: str) -> Optional[tuple[str, dict]]:
+    def parse_line(self, line: str) -> tuple[str, dict] | None:
         """Parse a single line of SSE stream.
 
         Returns:
@@ -195,7 +194,7 @@ def load_state() -> dict:
 
 @session_app.command("create")
 def create_session(
-    title: Optional[str] = typer.Option(None, "--title", "-t", help="Session title"),
+    title: str | None = typer.Option(None, "--title", "-t", help="Session title"),
 ):
     """Create a new agent session."""
     ensure_engine()
@@ -258,7 +257,7 @@ def list_sessions():
 
 
 async def stream_chat(
-    session_id: str, message: str, stats_callback: Optional[Callable[[dict], None]] = None
+    session_id: str, message: str, stats_callback: Callable[[dict], None] | None = None
 ):
     """Stream a chat message and display tokens with high-fidelity word-by-word printing."""
     url = f"{get_server_url()}/sessions/{session_id}/messages"
@@ -280,7 +279,7 @@ async def stream_chat(
                     return
 
                 # Print header for raw stream
-                console.print(f"\n[bold magenta]»»» AGENT_COGNITION_INBOUND[/bold magenta]")
+                console.print("\n[bold magenta]»»» AGENT_COGNITION_INBOUND[/bold magenta]")
 
                 # Check if we are in a TTY for Live display
                 is_tty = sys.stdout.isatty()
@@ -366,13 +365,13 @@ async def stream_chat(
         console.print(f"\n[bold red]COMM_LINK_FAILURE:[/bold red] {e}")
 
 
-from typing import Callable
+from collections.abc import Callable
 
 
 @app.command("chat")
 def chat(
-    message: Optional[str] = typer.Argument(None, help="Message to send"),
-    session_id: Optional[str] = typer.Option(None, "--session", "-s", help="Session ID"),
+    message: str | None = typer.Argument(None, help="Message to send"),
+    session_id: str | None = typer.Option(None, "--session", "-s", help="Session ID"),
     interactive: bool = typer.Option(True, "--interactive/--single", help="Interactive mode"),
 ):
     """Enter interactive chat mode or send a single message."""

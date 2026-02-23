@@ -3,11 +3,9 @@
 Tests for the Phase 5 REST API implementation with workspace-based sessions.
 """
 
-import pytest
 from fastapi.testclient import TestClient
 
 from server.app.main import app
-
 
 # Create test client
 client = TestClient(app)

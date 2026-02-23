@@ -205,7 +205,7 @@ class TestSandboxWorkflow:
 
             print("\n✅ Multi-step sandbox workflow completed successfully!")
             print(f"   Workspace: {session['workspace']}")
-            print(f"   File: hello.py")
+            print("   File: hello.py")
             print(f"   Total events: {len(events)}")
 
     async def test_sandbox_command_execution(self, session):
@@ -244,7 +244,7 @@ class TestSandboxWorkflow:
             ]
 
             if execute_calls:
-                print(f"   ✓ Agent used execute tool")
+                print("   ✓ Agent used execute tool")
                 cmd = execute_calls[0]["data"]["args"].get("command", "")
                 print(f"   ✓ Command: {cmd}")
             else:

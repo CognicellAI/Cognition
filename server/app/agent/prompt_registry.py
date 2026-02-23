@@ -16,7 +16,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from enum import Enum
 from pathlib import Path
-from typing import Any, Optional, Protocol
+from typing import Any, Protocol
 
 import structlog
 
@@ -149,9 +149,9 @@ class PromptRegistryBackend(Protocol):
     async def get_prompt(
         self,
         name: str,
-        version: Optional[str] = None,
-        alias: Optional[str] = None,
-    ) -> Optional[PromptVersion]:
+        version: str | None = None,
+        alias: str | None = None,
+    ) -> PromptVersion | None:
         """Get a prompt by name.
 
         Args:
@@ -192,7 +192,7 @@ class PromptRegistryBackend(Protocol):
 class LocalPromptRegistry:
     """Local file-based prompt registry."""
 
-    def __init__(self, prompts_dir: Optional[Path] = None):
+    def __init__(self, prompts_dir: Path | None = None):
         """Initialize local registry.
 
         Args:
@@ -215,7 +215,7 @@ class LocalPromptRegistry:
             tags={"default": "true", "type": "system"},
         )
 
-    def _load_from_file(self, name: str) -> Optional[PromptVersion]:
+    def _load_from_file(self, name: str) -> PromptVersion | None:
         """Load a prompt from file.
 
         Args:
@@ -252,9 +252,9 @@ class LocalPromptRegistry:
     async def get_prompt(
         self,
         name: str,
-        version: Optional[str] = None,
-        alias: Optional[str] = None,
-    ) -> Optional[PromptVersion]:
+        version: str | None = None,
+        alias: str | None = None,
+    ) -> PromptVersion | None:
         """Get a prompt by name."""
         # Return cached prompt if available
         if name in self._prompts:
@@ -319,7 +319,7 @@ class LocalPromptRegistry:
 class MLflowPromptRegistry:
     """MLflow-based prompt registry."""
 
-    def __init__(self, tracking_uri: Optional[str] = None):
+    def __init__(self, tracking_uri: str | None = None):
         """Initialize MLflow registry.
 
         Args:
@@ -327,7 +327,7 @@ class MLflowPromptRegistry:
         """
         self.tracking_uri = tracking_uri
         self._available = False
-        self._mlflow: Optional[Any] = None
+        self._mlflow: Any | None = None
 
         self._init_mlflow()
 
@@ -367,9 +367,9 @@ class MLflowPromptRegistry:
     async def get_prompt(
         self,
         name: str,
-        version: Optional[str] = None,
-        alias: Optional[str] = None,
-    ) -> Optional[PromptVersion]:
+        version: str | None = None,
+        alias: str | None = None,
+    ) -> PromptVersion | None:
         """Get a prompt from MLflow."""
         if not self._available or self._mlflow is None:
             return None
@@ -417,7 +417,6 @@ class MLflowPromptRegistry:
             return []
 
         try:
-            import mlflow
 
             # List registered prompts
             prompts = []
@@ -464,8 +463,8 @@ class PromptRegistry:
     def __init__(
         self,
         prompt_source: PromptSource = PromptSource.LOCAL,
-        mlflow_tracking_uri: Optional[str] = None,
-        prompts_dir: Optional[Path] = None,
+        mlflow_tracking_uri: str | None = None,
+        prompts_dir: Path | None = None,
         fallback_to_local: bool = True,
     ):
         """Initialize the prompt registry.
@@ -481,7 +480,7 @@ class PromptRegistry:
 
         # Initialize backends
         self._local_registry = LocalPromptRegistry(prompts_dir)
-        self._mlflow_registry: Optional[MLflowPromptRegistry] = None
+        self._mlflow_registry: MLflowPromptRegistry | None = None
 
         if prompt_source == PromptSource.MLFLOW:
             self._mlflow_registry = MLflowPromptRegistry(mlflow_tracking_uri)
@@ -492,9 +491,9 @@ class PromptRegistry:
     async def get_prompt(
         self,
         name: str,
-        version: Optional[str] = None,
-        alias: Optional[str] = None,
-        format_vars: Optional[dict[str, Any]] = None,
+        version: str | None = None,
+        alias: str | None = None,
+        format_vars: dict[str, Any] | None = None,
     ) -> tuple[str, PromptVersion]:
         """Get a prompt with automatic fallback.
 
@@ -510,7 +509,7 @@ class PromptRegistry:
         Raises:
             ValueError: If prompt not found and no fallback available
         """
-        prompt: Optional[PromptVersion] = None
+        prompt: PromptVersion | None = None
         used_fallback = False
 
         # Try primary source first
@@ -555,8 +554,8 @@ class PromptRegistry:
 
     async def get_system_prompt(
         self,
-        workspace_path: Optional[str] = None,
-        custom_vars: Optional[dict[str, Any]] = None,
+        workspace_path: str | None = None,
+        custom_vars: dict[str, Any] | None = None,
     ) -> tuple[str, PromptVersion]:
         """Get the system prompt with workspace context.
 
@@ -591,7 +590,7 @@ class PromptRegistry:
 
         return await self._local_registry.get_versions(name)
 
-    async def get_lineage(self, prompt_name: Optional[str] = None) -> list[PromptLineage]:
+    async def get_lineage(self, prompt_name: str | None = None) -> list[PromptLineage]:
         """Get lineage information for prompts.
 
         Args:
@@ -637,13 +636,13 @@ class PromptRegistry:
 # ============================================================================
 
 
-_registry: Optional[PromptRegistry] = None
+_registry: PromptRegistry | None = None
 
 
 def get_prompt_registry(
     prompt_source: PromptSource = PromptSource.LOCAL,
-    mlflow_tracking_uri: Optional[str] = None,
-    prompts_dir: Optional[Path] = None,
+    mlflow_tracking_uri: str | None = None,
+    prompts_dir: Path | None = None,
     fallback_to_local: bool = True,
 ) -> PromptRegistry:
     """Get or create the global prompt registry.

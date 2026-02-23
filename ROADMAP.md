@@ -23,7 +23,8 @@ This roadmap is derived from [FIRST-PRINCIPLE-EVALUTION.md](./FIRST-PRINCIPLE-EV
 | — GUI Extensibility | 4 | 4/4 | ✅ Complete |
 | **P3** (Full Vision) | 7 | 0/7 | **~10%** |
 
-**Unit tests:** 223 passed, 2 skipped, 0 warnings (except 1 collection warning)
+**Unit tests:** 263 passed, 4 skipped, 1 warning
+**E2E Business Scenarios:** 16/16 scenarios passing across P2 Cleanup, Robustness, and GUI Extensibility
 **Live tests:** 40/41 pass across 9 phases (sole failure: MLflow async tracing — upstream bug)
 **API Proof Script:** 45/45 assertions pass across 9 scenarios with session scoping enabled
 

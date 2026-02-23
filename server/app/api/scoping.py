@@ -6,9 +6,8 @@ Sessions can be scoped by any number of dimensions (user, project, team, etc.).
 
 from __future__ import annotations
 
-from typing import Optional
-
 from fastapi import Header, HTTPException, status
+
 from server.app.settings import Settings
 
 
@@ -27,7 +26,7 @@ class SessionScope:
         """
         self._scopes = scopes
 
-    def get(self, key: str) -> Optional[str]:
+    def get(self, key: str) -> str | None:
         """Get a scope value by key."""
         return self._scopes.get(key)
 
@@ -55,7 +54,7 @@ class SessionScope:
         return f"SessionScope({self._scopes})"
 
 
-def extract_scope_from_headers(settings: Settings, **header_values: Optional[str]) -> SessionScope:
+def extract_scope_from_headers(settings: Settings, **header_values: str | None) -> SessionScope:
     """Extract scope from request headers.
 
     Args:

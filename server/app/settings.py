@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, List, Literal, Optional
+from typing import Any, Literal
 
 from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -37,16 +37,16 @@ class Settings(BaseSettings):
         alias="COGNITION_LLM_PROVIDER",
     )
     llm_model: str = Field(default="gpt-4o", alias="COGNITION_LLM_MODEL")
-    llm_temperature: Optional[float] = Field(default=None, alias="COGNITION_LLM_TEMPERATURE")
-    llm_max_tokens: Optional[int] = Field(default=None, alias="COGNITION_LLM_MAX_TOKENS")
-    llm_system_prompt: Optional[str] = Field(default=None, alias="COGNITION_LLM_SYSTEM_PROMPT")
+    llm_temperature: float | None = Field(default=None, alias="COGNITION_LLM_TEMPERATURE")
+    llm_max_tokens: int | None = Field(default=None, alias="COGNITION_LLM_MAX_TOKENS")
+    llm_system_prompt: str | None = Field(default=None, alias="COGNITION_LLM_SYSTEM_PROMPT")
 
     # OpenAI settings - use SecretStr to prevent accidental logging
-    openai_api_key: Optional[SecretStr] = Field(default=None, alias="OPENAI_API_KEY")
-    openai_api_base: Optional[str] = Field(default=None, alias="OPENAI_API_BASE")
+    openai_api_key: SecretStr | None = Field(default=None, alias="OPENAI_API_KEY")
+    openai_api_base: str | None = Field(default=None, alias="OPENAI_API_BASE")
 
     # OpenAI Compatible settings
-    openai_compatible_base_url: Optional[str] = Field(
+    openai_compatible_base_url: str | None = Field(
         default=None, alias="COGNITION_OPENAI_COMPATIBLE_BASE_URL"
     )
     openai_compatible_api_key: SecretStr = Field(
@@ -56,8 +56,8 @@ class Settings(BaseSettings):
 
     # Bedrock settings - use SecretStr for credentials
     aws_region: str = Field(default="us-east-1", alias="AWS_REGION")
-    aws_access_key_id: Optional[SecretStr] = Field(default=None, alias="AWS_ACCESS_KEY_ID")
-    aws_secret_access_key: Optional[SecretStr] = Field(default=None, alias="AWS_SECRET_ACCESS_KEY")
+    aws_access_key_id: SecretStr | None = Field(default=None, alias="AWS_ACCESS_KEY_ID")
+    aws_secret_access_key: SecretStr | None = Field(default=None, alias="AWS_SECRET_ACCESS_KEY")
     bedrock_model_id: str = Field(
         default="anthropic.claude-3-sonnet-20240229-v1:0",
         alias="COGNITION_BEDROCK_MODEL_ID",
@@ -82,13 +82,13 @@ class Settings(BaseSettings):
 
     # Observability settings
     otel_enabled: bool = Field(default=False, alias="COGNITION_OTEL_ENABLED")
-    otel_endpoint: Optional[str] = Field(default=None, alias="COGNITION_OTEL_ENDPOINT")
+    otel_endpoint: str | None = Field(default=None, alias="COGNITION_OTEL_ENDPOINT")
     metrics_port: int = Field(default=9090, alias="COGNITION_METRICS_PORT")
 
     # MLflow settings
     mlflow_enabled: bool = Field(default=False, alias="COGNITION_MLFLOW_ENABLED")
-    mlflow_tracking_uri: Optional[str] = Field(default=None, alias="COGNITION_MLFLOW_TRACKING_URI")
-    mlflow_experiment_name: Optional[str] = Field(
+    mlflow_tracking_uri: str | None = Field(default=None, alias="COGNITION_MLFLOW_TRACKING_URI")
+    mlflow_experiment_name: str | None = Field(
         default="cognition", alias="COGNITION_MLFLOW_EXPERIMENT_NAME"
     )
 
@@ -97,18 +97,18 @@ class Settings(BaseSettings):
         default="local", alias="COGNITION_PROMPT_SOURCE"
     )
     prompt_fallback_to_local: bool = Field(default=True, alias="COGNITION_PROMPT_FALLBACK_TO_LOCAL")
-    prompts_dir: Optional[str] = Field(default=".cognition/prompts", alias="COGNITION_PROMPTS_DIR")
+    prompts_dir: str | None = Field(default=".cognition/prompts", alias="COGNITION_PROMPTS_DIR")
 
     # CORS settings
-    cors_origins: List[str] = Field(
+    cors_origins: list[str] = Field(
         default=["*"],
         alias="COGNITION_CORS_ORIGINS",
     )
-    cors_methods: List[str] = Field(
+    cors_methods: list[str] = Field(
         default=["*"],
         alias="COGNITION_CORS_METHODS",
     )
-    cors_headers: List[str] = Field(
+    cors_headers: list[str] = Field(
         default=["*"],
         alias="COGNITION_CORS_HEADERS",
     )
@@ -259,9 +259,9 @@ class Settings(BaseSettings):
         @dataclass
         class SimpleConfig:
             model: str
-            api_key: Optional[str] = None
-            base_url: Optional[str] = None
-            region: Optional[str] = None
+            api_key: str | None = None
+            base_url: str | None = None
+            region: str | None = None
 
         factory = get_provider_factory(self.llm_provider)
         config = SimpleConfig(model=self.llm_model)
@@ -284,8 +284,9 @@ def get_settings() -> Settings:
     global _settings
     if _settings is None:
         # Load config from YAML files
-        from server.app.config_loader import ConfigLoader
         import os
+
+        from server.app.config_loader import ConfigLoader
 
         loader = ConfigLoader()
         config_env_vars = loader.to_env_vars()

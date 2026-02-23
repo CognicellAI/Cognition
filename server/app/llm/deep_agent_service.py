@@ -10,25 +10,26 @@ This service leverages deepagents' built-in capabilities:
 from __future__ import annotations
 
 import uuid
-from typing import Any, AsyncGenerator, Optional
+from collections.abc import AsyncGenerator
+from typing import Any
 
 import structlog
 from langchain_core.messages import HumanMessage, SystemMessage
 
-from server.app.settings import Settings
 from server.app.agent import create_cognition_agent
 from server.app.agent.runtime import (
+    DoneEvent,
+    ErrorEvent,
+    PlanningEvent,
+    StatusEvent,
+    StepCompleteEvent,
+    StreamEvent,
     TokenEvent,
     ToolCallEvent,
     ToolResultEvent,
     UsageEvent,
-    DoneEvent,
-    ErrorEvent,
-    PlanningEvent,
-    StepCompleteEvent,
-    StatusEvent,
-    StreamEvent,
 )
+from server.app.settings import Settings
 from server.app.storage.factory import create_storage_backend
 
 logger = structlog.get_logger(__name__)
@@ -62,7 +63,7 @@ class DeepAgentStreamingService:
         thread_id: str,
         project_path: str,
         content: str,
-        system_prompt: Optional[str] = None,
+        system_prompt: str | None = None,
     ) -> AsyncGenerator[StreamEvent, None]:
         """Stream LLM response using DeepAgents with multi-step support."""
         try:
@@ -215,7 +216,7 @@ class DeepAgentStreamingService:
             logger.error("DeepAgents streaming error", error=str(e), session_id=session_id)
             yield ErrorEvent(message=str(e), code="STREAMING_ERROR")
 
-    def _build_messages(self, content: str, custom_system_prompt: Optional[str] = None) -> list:
+    def _build_messages(self, content: str, custom_system_prompt: str | None = None) -> list:
         """Build message list with system prompt.
 
         Args:
@@ -343,7 +344,7 @@ class SessionAgentManager:
 
         return service
 
-    def get_service(self, session_id: str) -> Optional[DeepAgentStreamingService]:
+    def get_service(self, session_id: str) -> DeepAgentStreamingService | None:
         """Get the agent service for a session.
 
         Args:
@@ -354,7 +355,7 @@ class SessionAgentManager:
         """
         return self._services.get(session_id)
 
-    def get_project_path(self, session_id: str) -> Optional[str]:
+    def get_project_path(self, session_id: str) -> str | None:
         """Get the project path for a session.
 
         Args:

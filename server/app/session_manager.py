@@ -15,10 +15,10 @@ This is a thin facade over:
 from __future__ import annotations
 
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from pathlib import Path
-from typing import Any, Callable, Optional, Protocol
-from datetime import datetime, timezone
+from datetime import UTC, datetime
+from typing import Any
 
 import structlog
 
@@ -51,8 +51,8 @@ class SessionContext:
     without polluting the conversation state.
     """
 
-    user_id: Optional[str] = None
-    org_id: Optional[str] = None
+    user_id: str | None = None
+    org_id: str | None = None
     session_id: str = ""
     workspace_path: str = ""
     scopes: dict[str, str] = field(default_factory=dict)
@@ -72,9 +72,9 @@ class ManagedSession:
     """
 
     session: Session
-    agent: Optional[Any] = None
-    last_accessed: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
-    created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    agent: Any | None = None
+    last_accessed: datetime = field(default_factory=lambda: datetime.now(UTC))
+    created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
 
 
 # ============================================================================
@@ -186,11 +186,11 @@ class SessionManager:
     async def create_session(
         self,
         workspace_path: str,
-        title: Optional[str] = None,
-        config: Optional[SessionConfig] = None,
-        user_id: Optional[str] = None,
-        org_id: Optional[str] = None,
-        scopes: Optional[dict[str, str]] = None,
+        title: str | None = None,
+        config: SessionConfig | None = None,
+        user_id: str | None = None,
+        org_id: str | None = None,
+        scopes: dict[str, str] | None = None,
     ) -> Session:
         """Create a new session.
 
@@ -210,7 +210,7 @@ class SessionManager:
         """
         session_id = str(uuid.uuid4())
         thread_id = str(uuid.uuid4())
-        now = datetime.now(timezone.utc).isoformat()
+        now = datetime.now(UTC).isoformat()
 
         session = Session(
             id=session_id,
@@ -251,7 +251,7 @@ class SessionManager:
 
         return session
 
-    async def get_session(self, session_id: str) -> Optional[Session]:
+    async def get_session(self, session_id: str) -> Session | None:
         """Get a session by ID.
 
         First checks the in-memory cache, then falls back to StorageBackend.
@@ -266,7 +266,7 @@ class SessionManager:
         # Check cache first
         if session_id in self._sessions:
             managed = self._sessions[session_id]
-            managed.last_accessed = datetime.now(timezone.utc)
+            managed.last_accessed = datetime.now(UTC)
             return managed.session
 
         # Fall back to storage
@@ -278,8 +278,8 @@ class SessionManager:
 
     async def list_sessions(
         self,
-        workspace_path: Optional[str] = None,
-        filter_scopes: Optional[dict[str, str]] = None,
+        workspace_path: str | None = None,
+        filter_scopes: dict[str, str] | None = None,
     ) -> list[Session]:
         """List sessions with optional filtering.
 
@@ -331,9 +331,9 @@ class SessionManager:
     async def update_session(
         self,
         session_id: str,
-        title: Optional[str] = None,
-        status: Optional[SessionStatus] = None,
-    ) -> Optional[Session]:
+        title: str | None = None,
+        status: SessionStatus | None = None,
+    ) -> Session | None:
         """Update a session's metadata.
 
         Args:
@@ -353,7 +353,7 @@ class SessionManager:
         if status is not None:
             session.status = status
 
-        session.updated_at = datetime.now(timezone.utc).isoformat()
+        session.updated_at = datetime.now(UTC).isoformat()
 
         # Update in storage
         await self._storage.update_session(
@@ -378,8 +378,8 @@ class SessionManager:
     async def get_or_create_agent(
         self,
         session_id: str,
-        model: Optional[Any] = None,
-    ) -> Optional[Any]:
+        model: Any | None = None,
+    ) -> Any | None:
         """Get or create the compiled agent for a session.
 
         Uses the agent cache in cognition_agent.py. If the agent doesn't
@@ -402,7 +402,7 @@ class SessionManager:
 
         # Return cached agent if available
         if managed.agent is not None:
-            managed.last_accessed = datetime.now(timezone.utc)
+            managed.last_accessed = datetime.now(UTC)
             return managed.agent
 
         # Create new agent via create_cognition_agent
@@ -420,7 +420,7 @@ class SessionManager:
         )
 
         managed.agent = agent
-        managed.last_accessed = datetime.now(timezone.utc)
+        managed.last_accessed = datetime.now(UTC)
 
         logger.info(
             "Agent created for session",
@@ -450,9 +450,9 @@ class SessionManager:
     def create_context(
         self,
         session_id: str,
-        user_id: Optional[str] = None,
-        org_id: Optional[str] = None,
-    ) -> Optional[SessionContext]:
+        user_id: str | None = None,
+        org_id: str | None = None,
+    ) -> SessionContext | None:
         """Create a SessionContext for Deep Agents context_schema.
 
         This context is passed to Deep Agents via the Runtime and can
@@ -502,7 +502,7 @@ class SessionManager:
 # Global Session Manager
 # ============================================================================
 
-_session_manager: Optional[SessionManager] = None
+_session_manager: SessionManager | None = None
 
 
 def get_session_manager() -> SessionManager:

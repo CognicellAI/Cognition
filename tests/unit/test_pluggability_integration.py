@@ -1,12 +1,12 @@
-import pytest
-import os
 import asyncio
-from pathlib import Path
+import os
 from unittest.mock import MagicMock, patch
+
+import pytest
+
 from server.app.agent.cognition_agent import create_cognition_agent
-from server.app.llm.registry import register_provider, get_provider_factory
+from server.app.llm.registry import register_provider
 from server.app.settings import get_settings
-from langchain_core.messages import HumanMessage, SystemMessage
 
 
 @pytest.mark.asyncio
@@ -82,7 +82,6 @@ async def test_middleware_execution_integration():
     # might be brittle if deepagents internals change.
 
     # Instead, let's verify the middleware classes themselves work as expected when called.
-    from server.app.observability import LLM_CALL_DURATION
 
     mw = CognitionObservabilityMiddleware()
     mock_handler = MagicMock(return_value=asyncio.Future())

@@ -1,12 +1,13 @@
 from __future__ import annotations
 
-from typing import Any, Callable, Dict
+from collections.abc import Callable
+from typing import Any
 
 # Registry for LLM provider factory functions
 # Signature: (config: Any, settings: Any) -> Any
 # 'config' is expected to have 'provider', 'model', 'api_key', 'base_url', 'region' attributes
 # 'settings' is the global settings object
-PROVIDER_REGISTRY: Dict[str, Callable[[Any, Any], Any]] = {}
+PROVIDER_REGISTRY: dict[str, Callable[[Any, Any], Any]] = {}
 
 
 def register_provider(name: str, factory: Callable[[Any, Any], Any]) -> None:

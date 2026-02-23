@@ -6,7 +6,6 @@ import shlex
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional, Union
 
 
 @dataclass
@@ -41,7 +40,7 @@ class LocalSandbox:
         if not self.root_dir.exists():
             self.root_dir.mkdir(parents=True, exist_ok=True)
 
-    def _parse_command(self, command: Union[str, list[str]]) -> list[str]:
+    def _parse_command(self, command: str | list[str]) -> list[str]:
         """Parse command into argument list.
 
         Args:
@@ -56,9 +55,9 @@ class LocalSandbox:
 
     def execute(
         self,
-        command: Union[str, list[str]],
-        timeout: Optional[float] = 300.0,
-        env: Optional[dict[str, str]] = None,
+        command: str | list[str],
+        timeout: float | None = 300.0,
+        env: dict[str, str] | None = None,
     ) -> ExecuteResult:
         """Execute a command in the sandbox.
 

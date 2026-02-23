@@ -26,7 +26,7 @@ class StorageBackendError(CognitionError):
         )
 
 
-def create_storage_backend(settings: "Settings") -> "StorageBackend":
+def create_storage_backend(settings: Settings) -> StorageBackend:
     """Create storage backend based on settings.
 
     Args:

@@ -11,7 +11,6 @@ import asyncio
 import httpx
 import pytest
 
-
 # Generous timeout for SSE streams through mock LLM
 SSE_TIMEOUT = httpx.Timeout(30.0, connect=10.0)
 
@@ -154,7 +153,7 @@ class TestP0EndToEnd:
             # Wait for stream to start (or timeout)
             try:
                 await asyncio.wait_for(stream_started.wait(), timeout=5.0)
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 task.cancel()
                 pytest.fail("Stream did not start within 5s")
 

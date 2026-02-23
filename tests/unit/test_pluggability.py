@@ -1,6 +1,7 @@
+from unittest.mock import patch
+
 import pytest
-from pathlib import Path
-from unittest.mock import patch, MagicMock
+
 from server.app.agent.cognition_agent import create_cognition_agent
 from server.app.settings import get_settings
 

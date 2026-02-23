@@ -14,9 +14,10 @@ from __future__ import annotations
 
 import asyncio
 import time
-from dataclasses import dataclass, field
+from collections.abc import Callable, Coroutine
+from dataclasses import dataclass
 from enum import Enum, auto
-from typing import Any, Callable, Coroutine, Optional, TypeVar
+from typing import Any, TypeVar
 
 import structlog
 
@@ -54,8 +55,8 @@ class CircuitBreakerMetrics:
     failed_calls: int = 0
     consecutive_failures: int = 0
     consecutive_successes: int = 0
-    last_failure_time: Optional[float] = None
-    last_state_change: Optional[float] = None
+    last_failure_time: float | None = None
+    last_state_change: float | None = None
     rejection_count: int = 0
 
     def to_dict(self) -> dict[str, Any]:
@@ -76,7 +77,7 @@ class CircuitBreakerMetrics:
 class CircuitBreakerOpenError(Exception):
     """Exception raised when circuit breaker is open."""
 
-    def __init__(self, breaker_name: str, last_failure: Optional[str] = None):
+    def __init__(self, breaker_name: str, last_failure: str | None = None):
         self.breaker_name = breaker_name
         self.last_failure = last_failure
         super().__init__(
@@ -385,7 +386,7 @@ class RetryWithBackoff:
         Raises:
             Exception: The last exception from all retry attempts
         """
-        last_exception: Optional[Exception] = None
+        last_exception: Exception | None = None
 
         for attempt in range(self.max_retries + 1):
             try:
@@ -434,8 +435,8 @@ class ResilientProviderClient:
         self,
         provider_name: str,
         create_model_func: Callable[..., Coroutine[Any, Any, T]],
-        breaker_config: Optional[CircuitBreakerConfig] = None,
-        retry_config: Optional[RetryWithBackoff] = None,
+        breaker_config: CircuitBreakerConfig | None = None,
+        retry_config: RetryWithBackoff | None = None,
     ):
         """Initialize resilient client.
 
@@ -482,7 +483,7 @@ class ResilientProviderClient:
 _breakers: dict[str, CircuitBreaker] = {}
 
 
-def get_circuit_breaker(name: str) -> Optional[CircuitBreaker]:
+def get_circuit_breaker(name: str) -> CircuitBreaker | None:
     """Get circuit breaker by name from registry.
 
     Args:

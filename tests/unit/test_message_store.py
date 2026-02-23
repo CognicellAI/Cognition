@@ -3,13 +3,13 @@
 Tests for the StorageBackend message operations (unified storage layer).
 """
 
-import pytest
 import tempfile
 from datetime import datetime
-from pathlib import Path
 
+import pytest
+
+from server.app.models import SessionConfig
 from server.app.storage.sqlite import SqliteStorageBackend
-from server.app.models import Message, SessionConfig
 
 
 class TestStorageBackendMessages:

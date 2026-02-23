@@ -12,7 +12,6 @@ import pytest
 from fastapi import Request
 
 from server.app.api.sse import (
-    BufferedEvent,
     EventBuffer,
     EventBuilder,
     SSEEvent,

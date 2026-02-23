@@ -8,9 +8,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, Literal, Optional
 from enum import Enum
-
+from typing import Any, Literal
 
 from pydantic import BaseModel
 
@@ -26,11 +25,11 @@ class SessionStatus(str, Enum):
 class SessionConfig(BaseModel):
     """Session configuration options."""
 
-    provider: Optional[Literal["openai", "bedrock", "mock", "openai_compatible"]] = None
-    model: Optional[str] = None
-    temperature: Optional[float] = None
-    max_tokens: Optional[int] = None
-    system_prompt: Optional[str] = None
+    provider: Literal["openai", "bedrock", "mock", "openai_compatible"] | None = None
+    model: str | None = None
+    temperature: float | None = None
+    max_tokens: int | None = None
+    system_prompt: str | None = None
 
 
 @dataclass
@@ -39,7 +38,7 @@ class Session:
 
     id: str
     workspace_path: str
-    title: Optional[str]
+    title: str | None
     thread_id: str
     status: SessionStatus
     config: SessionConfig
@@ -70,7 +69,7 @@ class Session:
         }
 
     @classmethod
-    def from_dict(cls, data: dict) -> "Session":
+    def from_dict(cls, data: dict) -> Session:
         """Create from dictionary."""
         config_data = data.get("config", {})
         return cls(
@@ -109,14 +108,14 @@ class Message:
     id: str
     session_id: str
     role: Literal["user", "assistant", "system", "tool"]
-    content: Optional[str]
-    parent_id: Optional[str]
+    content: str | None
+    parent_id: str | None
     created_at: datetime
-    tool_calls: Optional[list[ToolCall]] = None
-    tool_call_id: Optional[str] = None
-    token_count: Optional[int] = None
-    model_used: Optional[str] = None
-    metadata: Optional[dict[str, Any]] = None
+    tool_calls: list[ToolCall] | None = None
+    tool_call_id: str | None = None
+    token_count: int | None = None
+    model_used: str | None = None
+    metadata: dict[str, Any] | None = None
 
 
 @dataclass
@@ -125,4 +124,4 @@ class ExecutionResult:
 
     output: str
     exit_code: int
-    duration_ms: Optional[int] = None
+    duration_ms: int | None = None

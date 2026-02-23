@@ -14,32 +14,26 @@ Git-Style Workspace Model:
 
 from __future__ import annotations
 
-import os
 import uuid
-from pathlib import Path
-from typing import Optional
 
-from fastapi import APIRouter, HTTPException, Query, Depends, status, Header
+from fastapi import APIRouter, Depends, Header, HTTPException, status
 
 from server.app.api.models import (
-    SessionCreate,
-    SessionResponse,
-    SessionList,
-    SessionUpdate,
     ErrorResponse,
-    FeedbackCreate,
-    FeedbackResponse,
-    EvaluationResponse,
+    SessionCreate,
+    SessionList,
+    SessionResponse,
+    SessionUpdate,
 )
+from server.app.api.scoping import SessionScope
+from server.app.llm.deep_agent_service import (
+    SessionAgentManager,
+    get_session_agent_manager,
+)
+from server.app.llm.discovery import DiscoveryEngine
 from server.app.models import SessionConfig
 from server.app.settings import Settings, get_settings
 from server.app.storage import get_storage_backend
-from server.app.llm.deep_agent_service import (
-    get_session_agent_manager,
-    SessionAgentManager,
-)
-from server.app.llm.discovery import DiscoveryEngine
-from server.app.api.scoping import SessionScope, create_scope_dependency
 
 router = APIRouter(prefix="/sessions", tags=["sessions"])
 
@@ -56,8 +50,8 @@ def get_agent_manager(settings: Settings = Depends(get_settings_dependency)) -> 
 
 async def get_scope_dependency(
     settings: Settings = Depends(get_settings_dependency),
-    user: Optional[str] = Header(None, alias="x-cognition-scope-user"),
-    project: Optional[str] = Header(None, alias="x-cognition-scope-project"),
+    user: str | None = Header(None, alias="x-cognition-scope-user"),
+    project: str | None = Header(None, alias="x-cognition-scope-project"),
 ) -> SessionScope:
     """Get the session scope from headers."""
     scopes = {}

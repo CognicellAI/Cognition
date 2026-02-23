@@ -9,11 +9,8 @@ Commands:
 
 from __future__ import annotations
 
-import asyncio
 import subprocess
-import sys
 from pathlib import Path
-from typing import Optional
 
 import typer
 from rich.console import Console
@@ -25,9 +22,8 @@ from server.app.config_loader import (
     get_project_config_path,
     init_global_config,
     init_project_config,
-    load_config,
 )
-from server.app.settings import Settings, get_settings
+from server.app.settings import get_settings
 
 app = typer.Typer(
     name="cognition",
@@ -57,11 +53,11 @@ project_root = Path(__file__).parent.parent.parent
 
 @app.command()
 def serve(
-    host: Optional[str] = typer.Option(None, "--host", "-h", help="Host to bind to"),
-    port: Optional[int] = typer.Option(None, "--port", "-p", help="Port to bind to"),
-    log_level: Optional[str] = typer.Option(None, "--log-level", "-l", help="Log level"),
+    host: str | None = typer.Option(None, "--host", "-h", help="Host to bind to"),
+    port: int | None = typer.Option(None, "--port", "-p", help="Port to bind to"),
+    log_level: str | None = typer.Option(None, "--log-level", "-l", help="Log level"),
     reload: bool = typer.Option(False, "--reload", help="Enable auto-reload (development)"),
-    config_file: Optional[Path] = typer.Option(None, "--config", "-c", help="Path to config file"),
+    config_file: Path | None = typer.Option(None, "--config", "-c", help="Path to config file"),
 ):
     """Start the Cognition API server.
 
@@ -77,7 +73,7 @@ def serve(
     port = port or settings.port
     log_level = log_level or settings.log_level
 
-    console.print(f"[bold green]Starting Cognition server...[/bold green]")
+    console.print("[bold green]Starting Cognition server...[/bold green]")
     console.print(f"Host: {host}")
     console.print(f"Port: {port}")
     console.print(f"Log Level: {log_level}")
@@ -97,7 +93,7 @@ def serve(
 def init(
     global_config: bool = typer.Option(False, "--global", "-g", help="Initialize global config"),
     project: bool = typer.Option(False, "--project", "-p", help="Initialize project config"),
-    path: Optional[Path] = typer.Option(None, "--path", help="Path for project config"),
+    path: Path | None = typer.Option(None, "--path", help="Path for project config"),
 ):
     """Initialize configuration files.
 
@@ -128,18 +124,18 @@ def config(
         path = get_global_config_path()
         console.print(f"Global config: {path}")
         if path.exists():
-            console.print(f"[green]Exists[/green]")
+            console.print("[green]Exists[/green]")
         else:
-            console.print(f"[yellow]Not created yet[/yellow]")
+            console.print("[yellow]Not created yet[/yellow]")
         return
 
     if show_project:
         path = get_project_config_path()
         if path:
             console.print(f"Project config: {path}")
-            console.print(f"[green]Exists[/green]")
+            console.print("[green]Exists[/green]")
         else:
-            console.print(f"Project config: [yellow]Not found[/yellow]")
+            console.print("Project config: [yellow]Not found[/yellow]")
         return
 
     if show_values:
@@ -176,13 +172,13 @@ def config(
         if project_path:
             console.print(f"  [green]✓[/green] Project: {project_path}")
         else:
-            console.print(f"  [yellow]○[/yellow] Project: Not found in current directory")
+            console.print("  [yellow]○[/yellow] Project: Not found in current directory")
 
 
 @app.command()
 def health(
-    host: Optional[str] = typer.Option(None, "--host", "-h", help="Server host"),
-    port: Optional[int] = typer.Option(None, "--port", "-p", help="Server port"),
+    host: str | None = typer.Option(None, "--host", "-h", help="Server host"),
+    port: int | None = typer.Option(None, "--port", "-p", help="Server port"),
 ):
     """Check server health.
 
@@ -201,14 +197,14 @@ def health(
         data = response.json()
 
         if response.status_code == 200:
-            console.print(f"[bold green]✓ Server is healthy[/bold green]")
+            console.print("[bold green]✓ Server is healthy[/bold green]")
             console.print(f"Version: {data.get('version', 'unknown')}")
             console.print(f"Active Sessions: {data.get('active_sessions', 0)}")
         else:
-            console.print(f"[bold red]✗ Server unhealthy[/bold red]")
+            console.print("[bold red]✗ Server unhealthy[/bold red]")
             console.print(f"Status: {response.status_code}")
     except Exception as e:
-        console.print(f"[bold red]✗ Cannot connect to server[/bold red]")
+        console.print("[bold red]✗ Cannot connect to server[/bold red]")
         console.print(f"Error: {e}")
 
 
@@ -228,7 +224,6 @@ def db_upgrade(
         cognition db upgrade              # Upgrade to latest
         cognition db upgrade --revision 001  # Upgrade to specific revision
     """
-    import os
 
     # Ensure we're using the correct working directory
     alembic_ini = Path(__file__).parent.parent / "alembic.ini"
@@ -256,11 +251,11 @@ def db_upgrade(
         if sql:
             console.print(result.stdout)
         else:
-            console.print(f"[bold green]✓ Database upgraded successfully[/bold green]")
+            console.print("[bold green]✓ Database upgraded successfully[/bold green]")
             if result.stdout:
                 console.print(result.stdout)
     except subprocess.CalledProcessError as e:
-        console.print(f"[bold red]✗ Database upgrade failed[/bold red]")
+        console.print("[bold red]✗ Database upgrade failed[/bold red]")
         console.print(f"Error: {e.stderr}")
         raise typer.Exit(1)
 
@@ -305,11 +300,11 @@ def db_downgrade(
         if sql:
             console.print(result.stdout)
         else:
-            console.print(f"[bold green]✓ Database downgraded successfully[/bold green]")
+            console.print("[bold green]✓ Database downgraded successfully[/bold green]")
             if result.stdout:
                 console.print(result.stdout)
     except subprocess.CalledProcessError as e:
-        console.print(f"[bold red]✗ Database downgrade failed[/bold red]")
+        console.print("[bold red]✗ Database downgrade failed[/bold red]")
         console.print(f"Error: {e.stderr}")
         raise typer.Exit(1)
 
@@ -352,10 +347,10 @@ def db_migrate(
             check=True,
         )
 
-        console.print(f"[bold green]✓ Migration created successfully[/bold green]")
+        console.print("[bold green]✓ Migration created successfully[/bold green]")
         console.print(result.stdout)
     except subprocess.CalledProcessError as e:
-        console.print(f"[bold red]✗ Migration creation failed[/bold red]")
+        console.print("[bold red]✗ Migration creation failed[/bold red]")
         console.print(f"Error: {e.stderr}")
         raise typer.Exit(1)
 
@@ -385,10 +380,10 @@ def db_current(
             check=True,
         )
 
-        console.print(f"[bold blue]Current database revision:[/bold blue]")
+        console.print("[bold blue]Current database revision:[/bold blue]")
         console.print(result.stdout)
     except subprocess.CalledProcessError as e:
-        console.print(f"[bold red]✗ Failed to get current revision[/bold red]")
+        console.print("[bold red]✗ Failed to get current revision[/bold red]")
         console.print(f"Error: {e.stderr}")
         raise typer.Exit(1)
 
@@ -424,10 +419,10 @@ def db_history(
             check=True,
         )
 
-        console.print(f"[bold blue]Migration history:[/bold blue]")
+        console.print("[bold blue]Migration history:[/bold blue]")
         console.print(result.stdout)
     except subprocess.CalledProcessError as e:
-        console.print(f"[bold red]✗ Failed to get migration history[/bold red]")
+        console.print("[bold red]✗ Failed to get migration history[/bold red]")
         console.print(f"Error: {e.stderr}")
         raise typer.Exit(1)
 
@@ -446,7 +441,7 @@ def db_init():
         raise typer.Exit(1)
 
     settings = get_settings()
-    console.print(f"[bold blue]Initializing database...[/bold blue]")
+    console.print("[bold blue]Initializing database...[/bold blue]")
     console.print(f"Backend: {settings.persistence_backend}")
     console.print(f"URI: {settings.persistence_uri}")
 
@@ -461,11 +456,11 @@ def db_init():
             check=True,
         )
 
-        console.print(f"[bold green]✓ Database initialized successfully[/bold green]")
+        console.print("[bold green]✓ Database initialized successfully[/bold green]")
         if result.stdout:
             console.print(result.stdout)
     except subprocess.CalledProcessError as e:
-        console.print(f"[bold red]✗ Database initialization failed[/bold red]")
+        console.print("[bold red]✗ Database initialization failed[/bold red]")
         console.print(f"Error: {e.stderr}")
         raise typer.Exit(1)
 
@@ -473,10 +468,10 @@ def db_init():
 @create_app.command("tool")
 def create_tool(
     name: str = typer.Argument(..., help="Name of the tool to create"),
-    path: Optional[Path] = typer.Option(
+    path: Path | None = typer.Option(
         None, "--path", "-p", help="Target directory (default: .cognition/tools/)"
     ),
-    description: Optional[str] = typer.Option(None, "--description", "-d", help="Tool description"),
+    description: str | None = typer.Option(None, "--description", "-d", help="Tool description"),
 ):
     """Create a new tool template.
 
@@ -574,10 +569,10 @@ def {tool_name}_advanced(
 @create_app.command("middleware")
 def create_middleware(
     name: str = typer.Argument(..., help="Name of the middleware to create"),
-    path: Optional[Path] = typer.Option(
+    path: Path | None = typer.Option(
         None, "--path", "-p", help="Target directory (default: .cognition/middleware/)"
     ),
-    description: Optional[str] = typer.Option(
+    description: str | None = typer.Option(
         None, "--description", "-d", help="Middleware description"
     ),
 ):

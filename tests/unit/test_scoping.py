@@ -3,14 +3,13 @@
 Tests for the generic session scoping via X-Cognition-Scope headers.
 """
 
-import pytest
-from fastapi.testclient import TestClient
 from unittest.mock import patch
 
-from server.app.main import app
-from server.app.api.scoping import SessionScope, extract_scope_from_headers, create_scope_dependency
-from server.app.settings import Settings
+from fastapi.testclient import TestClient
 
+from server.app.api.scoping import SessionScope, extract_scope_from_headers
+from server.app.main import app
+from server.app.settings import Settings
 
 client = TestClient(app)
 

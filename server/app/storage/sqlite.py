@@ -9,7 +9,7 @@ from __future__ import annotations
 import json
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Literal, Optional
+from typing import Any, Literal
 
 import aiosqlite
 import structlog
@@ -53,8 +53,8 @@ class SqliteStorageBackend:
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
 
         # Checkpointer state
-        self._checkpointer: Optional[AsyncSqliteSaver] = None
-        self._checkpointer_context: Optional[Any] = None
+        self._checkpointer: AsyncSqliteSaver | None = None
+        self._checkpointer_context: Any | None = None
 
         logger.debug(
             "SqliteStorageBackend initialized",
@@ -63,50 +63,28 @@ class SqliteStorageBackend:
         )
 
     async def initialize(self) -> None:
-        """Initialize the database schema."""
-        async with aiosqlite.connect(self.db_path) as db:
-            # Sessions table
-            await db.execute(
-                """
-                CREATE TABLE IF NOT EXISTS sessions (
-                    id TEXT PRIMARY KEY,
-                    workspace_path TEXT NOT NULL,
-                    title TEXT,
-                    thread_id TEXT NOT NULL,
-                    status TEXT NOT NULL,
-                    config TEXT NOT NULL,
-                    scopes TEXT DEFAULT '{}',
-                    message_count INTEGER DEFAULT 0,
-                    created_at TEXT NOT NULL,
-                    updated_at TEXT NOT NULL
-                )
-                """
-            )
+        """Initialize the database schema from centralized schema definitions."""
+        from sqlalchemy import create_engine
+        from sqlalchemy.dialects import sqlite
 
-            # Messages table
-            await db.execute(
-                """
-                CREATE TABLE IF NOT EXISTS messages (
-                    id TEXT PRIMARY KEY,
-                    session_id TEXT NOT NULL,
-                    role TEXT NOT NULL,
-                    content TEXT,
-                    parent_id TEXT,
-                    created_at TEXT NOT NULL,
-                    FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
-                )
-                """
-            )
+        from server.app.storage.schema import metadata
 
-            # Message index for efficient querying
-            await db.execute(
-                """
-                CREATE INDEX IF NOT EXISTS idx_messages_session 
-                ON messages(session_id, created_at)
-                """
-            )
+        # Generate DDL statements from centralized schema for SQLite dialect
+        engine = create_engine("sqlite:///:memory:")
 
-            await db.commit()
+        def generate_schema(connection):
+            # Create all tables
+            metadata.create_all(connection)
+
+        # Use sync engine to create schema in our database
+        sync_engine = create_engine(f"sqlite:///{self.db_path}")
+        with sync_engine.begin() as conn:
+            metadata.create_all(conn)
+
+        logger.info(
+            "SQLite storage initialized",
+            db_path=str(self.db_path),
+        )
 
         logger.info(
             "SQLite storage initialized",
@@ -124,8 +102,8 @@ class SqliteStorageBackend:
         session_id: str,
         thread_id: str,
         config: SessionConfig,
-        title: Optional[str] = None,
-        scopes: Optional[dict[str, str]] = None,
+        title: str | None = None,
+        scopes: dict[str, str] | None = None,
     ) -> Session:
         """Create a new session."""
         now = datetime.now(UTC).isoformat()
@@ -186,7 +164,7 @@ class SqliteStorageBackend:
 
         return session
 
-    async def get_session(self, session_id: str) -> Optional[Session]:
+    async def get_session(self, session_id: str) -> Session | None:
         """Get a session by ID."""
         async with aiosqlite.connect(self.db_path) as db:
             db.row_factory = aiosqlite.Row
@@ -196,7 +174,7 @@ class SqliteStorageBackend:
                     return self._row_to_session(row)
         return None
 
-    async def list_sessions(self, filter_scopes: Optional[dict[str, str]] = None) -> list[Session]:
+    async def list_sessions(self, filter_scopes: dict[str, str] | None = None) -> list[Session]:
         """List all sessions."""
         sessions = []
         async with aiosqlite.connect(self.db_path) as db:
@@ -215,10 +193,10 @@ class SqliteStorageBackend:
     async def update_session(
         self,
         session_id: str,
-        title: Optional[str] = None,
-        status: Optional[str] = None,
-        config: Optional[SessionConfig] = None,
-    ) -> Optional[Session]:
+        title: str | None = None,
+        status: str | None = None,
+        config: SessionConfig | None = None,
+    ) -> Session | None:
         """Update a session."""
         session = await self.get_session(session_id)
         if not session:
@@ -312,13 +290,13 @@ class SqliteStorageBackend:
         message_id: str,
         session_id: str,
         role: Literal["user", "assistant", "system", "tool"],
-        content: Optional[str],
-        parent_id: Optional[str] = None,
-        tool_calls: Optional[list[ToolCall]] = None,
-        tool_call_id: Optional[str] = None,
-        token_count: Optional[int] = None,
-        model_used: Optional[str] = None,
-        metadata: Optional[dict[str, Any]] = None,
+        content: str | None,
+        parent_id: str | None = None,
+        tool_calls: list[ToolCall] | None = None,
+        tool_call_id: str | None = None,
+        token_count: int | None = None,
+        model_used: str | None = None,
+        metadata: dict[str, Any] | None = None,
     ) -> Message:
         """Create a new message."""
         now = datetime.now(UTC).isoformat()
@@ -371,7 +349,7 @@ class SqliteStorageBackend:
 
         return message
 
-    async def get_message(self, message_id: str) -> Optional[Message]:
+    async def get_message(self, message_id: str) -> Message | None:
         """Get a message by ID."""
         async with aiosqlite.connect(self.db_path) as db:
             db.row_factory = aiosqlite.Row

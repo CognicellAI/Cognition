@@ -10,38 +10,35 @@ Git-Style Workspace Model:
 from __future__ import annotations
 
 import uuid
-from datetime import datetime
-from pathlib import Path
-from typing import AsyncGenerator, Optional
+from collections.abc import AsyncGenerator
 
-from fastapi import APIRouter, HTTPException, Request, Depends, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 
 from server.app.api.models import (
-    MessageCreate,
-    MessageResponse,
-    MessageList,
     ErrorResponse,
+    MessageCreate,
+    MessageList,
+    MessageResponse,
     ToolCallResponse,
 )
-from server.app.api.sse import SSEStream, EventBuilder, get_last_event_id
-from server.app.settings import Settings, get_settings
-from server.app.storage import get_storage_backend
-from server.app.rate_limiter import get_rate_limiter, RateLimiter
 from server.app.api.scoping import SessionScope, create_scope_dependency
+from server.app.api.sse import EventBuilder, SSEStream, get_last_event_id
 from server.app.llm.deep_agent_service import (
-    get_session_agent_manager,
-    DeepAgentStreamingService,
+    DoneEvent,
+    ErrorEvent,
+    PlanningEvent,
     SessionAgentManager,
+    StatusEvent,
+    StepCompleteEvent,
     TokenEvent,
     ToolCallEvent,
     ToolResultEvent,
     UsageEvent,
-    DoneEvent,
-    ErrorEvent,
-    PlanningEvent,
-    StepCompleteEvent,
-    StatusEvent,
+    get_session_agent_manager,
 )
+from server.app.rate_limiter import RateLimiter, get_rate_limiter
+from server.app.settings import Settings, get_settings
+from server.app.storage import get_storage_backend
 
 router = APIRouter(prefix="/sessions/{session_id}/messages", tags=["messages"])
 

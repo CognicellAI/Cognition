@@ -23,9 +23,8 @@ from langgraph.checkpoint.base import BaseCheckpointSaver
 
 from server.app.agent.cognition_agent import create_cognition_agent
 from server.app.agent.definition import AgentDefinition
-from server.app.storage.factory import create_storage_backend
 from server.app.settings import Settings, get_settings
-
+from server.app.storage.factory import create_storage_backend
 
 # ============================================================================
 # Canonical Event Types
@@ -537,5 +536,8 @@ __all__ = [
     "StatusEvent",
     "DoneEvent",
     "ErrorEvent",
+    "StepCompleteEvent",
+    "PlanningEvent",
+    "UsageEvent",
     "AgentRuntimeType",
 ]

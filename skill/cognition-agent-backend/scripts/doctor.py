@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 
-import os
-import sys
-import socket
 import importlib.util
+import os
+import socket
+import sys
 
 
 def check_python_version():

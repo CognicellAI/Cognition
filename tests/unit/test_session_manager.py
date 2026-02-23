@@ -4,21 +4,19 @@ Tests the application-level session management with lifecycle events
 and Deep Agents integration.
 """
 
-import pytest
-from datetime import datetime, timezone
-from unittest.mock import MagicMock, AsyncMock
+from unittest.mock import MagicMock
 
+import pytest
+
+from server.app.models import SessionStatus
 from server.app.session_manager import (
     SessionManager,
-    ManagedSession,
-    SessionContext,
-    initialize_session_manager,
     get_session_manager,
+    initialize_session_manager,
     set_session_manager,
 )
-from server.app.storage.sqlite import SqliteStorageBackend
 from server.app.settings import Settings
-from server.app.models import SessionConfig, SessionStatus
+from server.app.storage.sqlite import SqliteStorageBackend
 
 
 @pytest.fixture

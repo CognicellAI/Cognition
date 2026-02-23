@@ -7,11 +7,9 @@
 
 from __future__ import annotations
 
-import json
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional
 
 from server.app.execution.sandbox import LocalSandbox
 
@@ -22,10 +20,10 @@ class FileInfo:
 
     path: str
     size: int
-    language: Optional[str] = None
-    last_modified: Optional[float] = None
+    language: str | None = None
+    last_modified: float | None = None
     importance_score: float = 0.0
-    content_preview: Optional[str] = None
+    content_preview: str | None = None
 
 
 @dataclass
@@ -43,7 +41,7 @@ class ProjectIndex:
         self.total_size += info.size
         self.file_count += 1
 
-    def get_file(self, path: str) -> Optional[FileInfo]:
+    def get_file(self, path: str) -> FileInfo | None:
         """Get file info by path."""
         return self.files.get(path)
 
@@ -104,7 +102,7 @@ class FileRelevanceScorer:
                 return True
         return False
 
-    def score_importance(self, path: str, content: Optional[str] = None) -> float:
+    def score_importance(self, path: str, content: str | None = None) -> float:
         """Score how important a file is (0.0 to 1.0)."""
         score = 0.0
 
@@ -125,7 +123,7 @@ class FileRelevanceScorer:
         return min(score, 1.0)
 
     def score_relevance_to_query(
-        self, query: str, path: str, content: Optional[str] = None
+        self, query: str, path: str, content: str | None = None
     ) -> float:
         """Score how relevant a file is to a specific query."""
         query_lower = query.lower()
@@ -157,7 +155,7 @@ class ContextManager:
     def __init__(self, sandbox: LocalSandbox, max_context_files: int = 20):
         self.sandbox = sandbox
         self.max_context_files = max_context_files
-        self.index: Optional[ProjectIndex] = None
+        self.index: ProjectIndex | None = None
         self.scorer = FileRelevanceScorer()
 
     def build_index(self) -> ProjectIndex:
@@ -165,7 +163,7 @@ class ContextManager:
         self.index = ProjectIndex(root_path=str(self.sandbox.root_dir))
 
         # Find all files
-        result = self.sandbox.execute('find . -type f -not -path "./\.*" | head -1000')
+        result = self.sandbox.execute(r'find . -type f -not -path "./\.*" | head -1000')
 
         for line in result.output.strip().split("\n"):
             path = line.strip()
@@ -196,7 +194,7 @@ class ContextManager:
 
         return self.index
 
-    def _detect_language(self, path: str) -> Optional[str]:
+    def _detect_language(self, path: str) -> str | None:
         """Detect programming language from file extension."""
         ext = Path(path).suffix.lower()
         lang_map = {
@@ -276,7 +274,7 @@ class ContextManager:
 
         return "\n".join(context_parts)
 
-    def get_file_content(self, path: str, max_lines: int = 100) -> Optional[str]:
+    def get_file_content(self, path: str, max_lines: int = 100) -> str | None:
         """Get content of a specific file."""
         result = self.sandbox.execute(f'head -n {max_lines} "{path}"')
         if result.exit_code == 0:

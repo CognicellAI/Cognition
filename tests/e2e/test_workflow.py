@@ -8,13 +8,7 @@ These tests verify the complete system works together:
 5. Error handling
 """
 
-import asyncio
 import json
-import os
-import subprocess
-import sys
-import time
-from pathlib import Path
 
 import httpx
 import pytest
@@ -148,33 +142,32 @@ class TestMessageWorkflow:
 
     async def test_send_message_sse_stream(self, server, session):
         """Test sending a message and receiving SSE stream."""
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            async with client.stream(
-                "POST",
-                f"{server}/sessions/{session}/messages",
-                json={"content": "Hello, world!"},
-                headers={"Accept": "text/event-stream"},
-            ) as response:
-                assert response.status_code == 200
-                assert "text/event-stream" in response.headers.get("content-type", "")
+        async with httpx.AsyncClient(timeout=30.0) as client, client.stream(
+            "POST",
+            f"{server}/sessions/{session}/messages",
+            json={"content": "Hello, world!"},
+            headers={"Accept": "text/event-stream"},
+        ) as response:
+            assert response.status_code == 200
+            assert "text/event-stream" in response.headers.get("content-type", "")
 
-                # Collect events
-                events = []
-                event_type = None
-                async for line in response.aiter_lines():
-                    if line.startswith("event: "):
-                        event_type = line[7:]
-                    elif line.startswith("data: "):
-                        data = json.loads(line[6:])
-                        if event_type:
-                            events.append({"event": event_type, "data": data})
+            # Collect events
+            events = []
+            event_type = None
+            async for line in response.aiter_lines():
+                if line.startswith("event: "):
+                    event_type = line[7:]
+                elif line.startswith("data: "):
+                    data = json.loads(line[6:])
+                    if event_type:
+                        events.append({"event": event_type, "data": data})
 
-                # Verify we got events
-                assert len(events) > 0
+            # Verify we got events
+            assert len(events) > 0
 
-                # Should have at least a done event
-                done_events = [e for e in events if e["event"] == "done"]
-                assert len(done_events) == 1
+            # Should have at least a done event
+            done_events = [e for e in events if e["event"] == "done"]
+            assert len(done_events) == 1
 
     async def test_list_messages_after_send(self, server, session):
         """Test listing messages after sending."""

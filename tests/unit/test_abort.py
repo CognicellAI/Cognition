@@ -3,14 +3,13 @@
 Tests for the abort endpoint that cancels streaming tasks.
 """
 
+from unittest.mock import MagicMock, patch
+
 import pytest
 from fastapi.testclient import TestClient
-from unittest.mock import patch, MagicMock, AsyncMock
-import asyncio
 
-from server.app.main import app
 from server.app.llm.deep_agent_service import SessionAgentManager
-
+from server.app.main import app
 
 client = TestClient(app)
 

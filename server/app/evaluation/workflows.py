@@ -12,11 +12,10 @@ This module integrates with MLflow's GenAI capabilities to provide:
 
 from __future__ import annotations
 
-import asyncio
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from enum import Enum
-from typing import Any, Optional, Protocol
+from typing import Any, Protocol
 from uuid import uuid4
 
 import structlog
@@ -56,10 +55,10 @@ class FeedbackEntry:
 
     id: str
     session_id: str
-    trace_id: Optional[str]
+    trace_id: str | None
     feedback_type: FeedbackType
     value: float
-    rationale: Optional[str] = None
+    rationale: str | None = None
     source: str = "human"  # "human" or "system"
     created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
     metadata: dict[str, Any] = field(default_factory=dict)
@@ -100,8 +99,8 @@ class EvaluationScore:
 
     category: ScoreCategory
     score: float
-    rationale: Optional[str] = None
-    scorer_name: Optional[str] = None
+    rationale: str | None = None
+    scorer_name: str | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
@@ -120,7 +119,7 @@ class SessionEvaluation:
     """Complete evaluation results for a session."""
 
     session_id: str
-    run_id: Optional[str]  # MLflow run ID
+    run_id: str | None  # MLflow run ID
     scores: list[EvaluationScore] = field(default_factory=list)
     feedback_entries: list[FeedbackEntry] = field(default_factory=list)
     evaluated_at: datetime = field(default_factory=lambda: datetime.now(UTC))
@@ -149,7 +148,7 @@ class EvaluationScorer(Protocol):
         session_id: str,
         inputs: dict[str, Any],
         outputs: dict[str, Any],
-        traces: Optional[list[dict[str, Any]]] = None,
+        traces: list[dict[str, Any]] | None = None,
     ) -> EvaluationScore:
         """Score a session based on inputs, outputs, and traces.
 
@@ -180,7 +179,7 @@ class ToolEfficiencyScorer:
         session_id: str,
         inputs: dict[str, Any],
         outputs: dict[str, Any],
-        traces: Optional[list[dict[str, Any]]] = None,
+        traces: list[dict[str, Any]] | None = None,
     ) -> EvaluationScore:
         """Score tool efficiency based on trace data."""
         if not traces:
@@ -245,7 +244,7 @@ class SafetyComplianceScorer:
         session_id: str,
         inputs: dict[str, Any],
         outputs: dict[str, Any],
-        traces: Optional[list[dict[str, Any]]] = None,
+        traces: list[dict[str, Any]] | None = None,
     ) -> EvaluationScore:
         """Score safety based on tool call patterns."""
         violations = []
@@ -285,7 +284,7 @@ class ResponseQualityScorer:
         session_id: str,
         inputs: dict[str, Any],
         outputs: dict[str, Any],
-        traces: Optional[list[dict[str, Any]]] = None,
+        traces: list[dict[str, Any]] | None = None,
     ) -> EvaluationScore:
         """Score response quality based on output characteristics."""
         response = outputs.get("response", "")
@@ -359,7 +358,7 @@ class ResponseQualityScorer:
 class EvaluationService:
     """Service for managing evaluations and feedback."""
 
-    def __init__(self, mlflow_enabled: bool = False, mlflow_tracking_uri: Optional[str] = None):
+    def __init__(self, mlflow_enabled: bool = False, mlflow_tracking_uri: str | None = None):
         """Initialize the evaluation service.
 
         Args:
@@ -412,10 +411,10 @@ class EvaluationService:
         self,
         session_id: str,
         workspace_path: str,
-        model: Optional[str] = None,
-        provider: Optional[str] = None,
-        tags: Optional[dict[str, Any]] = None,
-    ) -> Optional[str]:
+        model: str | None = None,
+        provider: str | None = None,
+        tags: dict[str, Any] | None = None,
+    ) -> str | None:
         """Start an MLflow run for a session.
 
         Args:
@@ -468,7 +467,7 @@ class EvaluationService:
         self,
         session_id: str,
         status: str = "completed",
-        metrics: Optional[dict[str, float]] = None,
+        metrics: dict[str, float] | None = None,
     ) -> None:
         """End an MLflow run for a session.
 
@@ -514,9 +513,9 @@ class EvaluationService:
         session_id: str,
         feedback_type: FeedbackType,
         value: float,
-        trace_id: Optional[str] = None,
-        rationale: Optional[str] = None,
-        metadata: Optional[dict[str, Any]] = None,
+        trace_id: str | None = None,
+        rationale: str | None = None,
+        metadata: dict[str, Any] | None = None,
     ) -> FeedbackEntry:
         """Add feedback to a session.
 
@@ -598,7 +597,7 @@ class EvaluationService:
         session_id: str,
         inputs: dict[str, Any],
         outputs: dict[str, Any],
-        scorer_names: Optional[list[str]] = None,
+        scorer_names: list[str] | None = None,
     ) -> SessionEvaluation:
         """Evaluate a session using registered scorers.
 
@@ -672,7 +671,7 @@ class EvaluationService:
     async def _get_traces_for_session(
         self,
         session_id: str,
-    ) -> Optional[list[dict[str, Any]]]:
+    ) -> list[dict[str, Any]] | None:
         """Get traces from MLflow for a session.
 
         Args:
@@ -697,8 +696,8 @@ class EvaluationService:
 
     async def create_evaluation_dataset(
         self,
-        session_ids: Optional[list[str]] = None,
-        min_feedback_score: Optional[float] = None,
+        session_ids: list[str] | None = None,
+        min_feedback_score: float | None = None,
         include_positive_only: bool = False,
     ) -> list[dict[str, Any]]:
         """Create an evaluation dataset from feedback-annotated sessions.
@@ -817,12 +816,12 @@ class EvaluationService:
 # ============================================================================
 
 
-_evaluation_service: Optional[EvaluationService] = None
+_evaluation_service: EvaluationService | None = None
 
 
 def get_evaluation_service(
     mlflow_enabled: bool = False,
-    mlflow_tracking_uri: Optional[str] = None,
+    mlflow_tracking_uri: str | None = None,
 ) -> EvaluationService:
     """Get or create the global evaluation service.
 

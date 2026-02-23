@@ -6,10 +6,7 @@ with graceful degradation when packages are not installed.
 
 from __future__ import annotations
 
-import sys
 from unittest.mock import MagicMock, patch
-
-import pytest
 
 
 class TestOTelConfiguration:
@@ -61,7 +58,6 @@ class TestMLflowConfiguration:
 
         Mocks the MLflow imports so setup completes without network calls.
         """
-        from server.app.observability.mlflow_tracing import setup_mlflow_tracing
 
         mock_settings = MagicMock()
         mock_settings.mlflow_enabled = True
@@ -76,6 +72,7 @@ class TestMLflowConfiguration:
             ):
                 # Re-import to pick up mocked modules
                 import importlib
+
                 import server.app.observability.mlflow_tracing as mod
 
                 importlib.reload(mod)
@@ -88,7 +85,6 @@ class TestMLflowConfiguration:
 
     def test_setup_mlflow_graceful_degradation_when_package_missing(self):
         """Test graceful degradation when MLflow package is not installed."""
-        from server.app.observability.mlflow_tracing import setup_mlflow_tracing
 
         mock_settings = MagicMock()
         mock_settings.mlflow_enabled = True
@@ -98,6 +94,7 @@ class TestMLflowConfiguration:
         # Force ImportError by removing mlflow from sys.modules
         with patch.dict("sys.modules", {"mlflow": None, "mlflow.langchain": None}):
             import importlib
+
             import server.app.observability.mlflow_tracing as mod
 
             importlib.reload(mod)
@@ -109,14 +106,14 @@ class TestMLflowConfiguration:
 class TestSettingsValidation:
     """Test observability settings validation."""
 
-    def test_otel_enabled_defaults_to_true(self):
-        """Test that otel_enabled defaults to True."""
+    def test_otel_enabled_defaults_to_false(self):
+        """Test that otel_enabled defaults to False."""
         from server.app.settings import Settings
 
         # Create settings with no explicit otel_enabled
         settings = Settings()
 
-        assert settings.otel_enabled is True
+        assert settings.otel_enabled is False
 
     def test_mlflow_enabled_defaults_to_false(self):
         """Test that mlflow_enabled defaults to False."""

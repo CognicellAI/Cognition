@@ -12,7 +12,6 @@ All configuration mappings are auto-generated from Settings class definitions.
 from __future__ import annotations
 
 import json
-import os
 from pathlib import Path
 from typing import Any
 
@@ -62,7 +61,7 @@ def load_yaml_file(path: Path) -> dict[str, Any]:
         return {}
 
     try:
-        with open(path, "r") as f:
+        with open(path) as f:
             import yaml
 
             content = yaml.safe_load(f)
@@ -230,7 +229,6 @@ def _get_settings_schema() -> list[dict[str, Any]]:
 
         # Skip SecretStr fields from config generation (security)
         # but still include them in the mapping for env vars
-        from pydantic import SecretStr
 
         is_secret = "SecretStr" in str(field_info.annotation)
 

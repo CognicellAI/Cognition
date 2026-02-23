@@ -1,12 +1,13 @@
 """Pytest configuration and shared fixtures."""
 
-import pytest
 import tempfile
 from pathlib import Path
 
-from server.app.storage.sqlite import SqliteStorageBackend
-from server.app.storage import set_storage_backend
+import pytest
+
 from server.app.settings import Settings
+from server.app.storage import set_storage_backend
+from server.app.storage.sqlite import SqliteStorageBackend
 
 
 @pytest.fixture(autouse=True)

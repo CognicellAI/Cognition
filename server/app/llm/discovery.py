@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
-from typing import Any, List, Optional
 
 import httpx
 import structlog
@@ -32,7 +31,7 @@ class DiscoveryEngine:
     def __init__(self, settings: Settings):
         self.settings = settings
 
-    async def discover_models(self) -> List[DiscoveredModel]:
+    async def discover_models(self) -> list[DiscoveredModel]:
         """Discover models from all configured providers."""
         tasks = [
             self._probe_openai_compatible(),
@@ -49,7 +48,7 @@ class DiscoveryEngine:
 
         return discovered
 
-    async def _probe_openai_compatible(self) -> List[DiscoveredModel]:
+    async def _probe_openai_compatible(self) -> list[DiscoveredModel]:
         """Probe OpenRouter/Local providers."""
         base_url = self.settings.openai_compatible_base_url
         if not base_url:
@@ -82,7 +81,7 @@ class DiscoveryEngine:
             )
         ]
 
-    async def _probe_openai(self) -> List[DiscoveredModel]:
+    async def _probe_openai(self) -> list[DiscoveredModel]:
         """Probe OpenAI if configured."""
         if not self.settings.openai_api_key:
             return []
@@ -94,7 +93,7 @@ class DiscoveryEngine:
             DiscoveredModel(id="o1-preview", name="o1 Preview", provider_id="openai"),
         ]
 
-    async def _probe_bedrock(self) -> List[DiscoveredModel]:
+    async def _probe_bedrock(self) -> list[DiscoveredModel]:
         """Probe AWS Bedrock if configured."""
         if not self.settings.aws_access_key_id:
             return []
@@ -113,11 +112,11 @@ class DiscoveryEngine:
             ),
         ]
 
-    async def _probe_mock(self) -> List[DiscoveredModel]:
+    async def _probe_mock(self) -> list[DiscoveredModel]:
         """Return the mock model."""
         return [DiscoveredModel(id="mock-model", name="Mock Model", provider_id="mock")]
 
-    async def get_provider_for_model(self, model_id: str) -> Optional[str]:
+    async def get_provider_for_model(self, model_id: str) -> str | None:
         """Find the provider for a given model ID."""
         models = await self.discover_models()
         for m in models:

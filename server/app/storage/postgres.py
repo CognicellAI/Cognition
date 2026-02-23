@@ -10,7 +10,7 @@ from __future__ import annotations
 import json
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Literal, Optional
+from typing import Any, Literal
 
 import asyncpg
 import psycopg
@@ -20,6 +20,7 @@ from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 
 from server.app.models import Message, Session, SessionConfig, SessionStatus, ToolCall
 from server.app.storage.backend import StorageBackend
+from server.app.storage.migrations import run_migrations_async
 
 logger = structlog.get_logger(__name__)
 
@@ -53,11 +54,11 @@ class PostgresStorageBackend:
         self.max_pool_size = max_pool_size
 
         # Connection pool
-        self._pool: Optional[asyncpg.Pool] = None
+        self._pool: asyncpg.Pool | None = None
 
         # Checkpointer state
-        self._checkpointer: Optional[AsyncPostgresSaver] = None
-        self._checkpointer_context: Optional[Any] = None
+        self._checkpointer: AsyncPostgresSaver | None = None
+        self._checkpointer_context: Any | None = None
 
         logger.debug(
             "PostgresStorageBackend initialized",
@@ -67,13 +68,35 @@ class PostgresStorageBackend:
         )
 
     async def initialize(self) -> None:
-        """Initialize the database schema."""
-        # Create connection pool
+        """Initialize the database schema from centralized schema definitions."""
+        from sqlalchemy.ext.asyncio import create_async_engine
+
+        from server.app.storage.schema import metadata
+
+        # Create async SQLAlchemy engine
+        async_engine = create_async_engine(
+            self.connection_string,
+            pool_size=self.min_pool_size,
+            max_overflow=self.max_pool_size - self.min_pool_size,
+        )
+
+        # Create all tables from centralized schema
+        async with async_engine.begin() as conn:
+            await conn.run_sync(metadata.create_all)
+
+        # Create connection pool for operations
         self._pool = await asyncpg.create_pool(
             self.connection_string,
             min_size=self.min_pool_size,
             max_size=self.max_pool_size,
             command_timeout=60,
+        )
+
+        await async_engine.dispose()
+
+        logger.info(
+            "PostgreSQL storage initialized",
+            workspace=str(self.workspace_path),
         )
 
         # Create tables
@@ -151,8 +174,8 @@ class PostgresStorageBackend:
         session_id: str,
         thread_id: str,
         config: SessionConfig,
-        title: Optional[str] = None,
-        scopes: Optional[dict[str, str]] = None,
+        title: str | None = None,
+        scopes: dict[str, str] | None = None,
     ) -> Session:
         """Create a new session."""
         now = datetime.now(UTC)
@@ -206,7 +229,7 @@ class PostgresStorageBackend:
 
         return session
 
-    async def get_session(self, session_id: str) -> Optional[Session]:
+    async def get_session(self, session_id: str) -> Session | None:
         """Get a session by ID."""
         async with self._pool.acquire() as conn:
             row = await conn.fetchrow(
@@ -217,7 +240,7 @@ class PostgresStorageBackend:
                 return self._row_to_session(row)
         return None
 
-    async def list_sessions(self, filter_scopes: Optional[dict[str, str]] = None) -> list[Session]:
+    async def list_sessions(self, filter_scopes: dict[str, str] | None = None) -> list[Session]:
         """List all sessions."""
         sessions = []
         async with self._pool.acquire() as conn:
@@ -235,9 +258,9 @@ class PostgresStorageBackend:
     async def update_session(
         self,
         session_id: str,
-        title: Optional[str] = None,
-        config: Optional[SessionConfig] = None,
-    ) -> Optional[Session]:
+        title: str | None = None,
+        config: SessionConfig | None = None,
+    ) -> Session | None:
         """Update a session."""
         session = await self.get_session(session_id)
         if not session:
@@ -339,13 +362,13 @@ class PostgresStorageBackend:
         message_id: str,
         session_id: str,
         role: Literal["user", "assistant", "system", "tool"],
-        content: Optional[str],
-        parent_id: Optional[str] = None,
-        tool_calls: Optional[list[ToolCall]] = None,
-        tool_call_id: Optional[str] = None,
-        token_count: Optional[int] = None,
-        model_used: Optional[str] = None,
-        metadata: Optional[dict[str, Any]] = None,
+        content: str | None,
+        parent_id: str | None = None,
+        tool_calls: list[ToolCall] | None = None,
+        tool_call_id: str | None = None,
+        token_count: int | None = None,
+        model_used: str | None = None,
+        metadata: dict[str, Any] | None = None,
     ) -> Message:
         """Create a new message."""
         now = datetime.now(UTC)
@@ -393,7 +416,7 @@ class PostgresStorageBackend:
 
         return message
 
-    async def get_message(self, message_id: str) -> Optional[Message]:
+    async def get_message(self, message_id: str) -> Message | None:
         """Get a message by ID."""
         async with self._pool.acquire() as conn:
             row = await conn.fetchrow(

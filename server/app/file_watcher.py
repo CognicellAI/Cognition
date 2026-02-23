@@ -8,9 +8,10 @@ from __future__ import annotations
 
 import asyncio
 import fnmatch
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Callable, Optional
+from typing import TYPE_CHECKING
 
 import structlog
 from watchdog.events import (
@@ -70,7 +71,7 @@ class FileWatcherChangeEvent:
         self,
         event_type: str,
         src_path: str,
-        dest_path: Optional[str] = None,
+        dest_path: str | None = None,
         is_directory: bool = False,
     ):
         self.event_type = event_type
@@ -119,7 +120,7 @@ class WorkspaceFileHandler(FileSystemEventHandler):
         return False
 
     def _notify_change(
-        self, event_type: str, src_path: str, dest_path: Optional[str] = None
+        self, event_type: str, src_path: str, dest_path: str | None = None
     ) -> None:
         """Notify watchers of a change."""
         if self._should_ignore(src_path):
@@ -185,8 +186,8 @@ class WorkspaceWatcher:
 
     def __init__(
         self,
-        agent_registry: Optional["AgentRegistry"] = None,
-        config: Optional[FileWatcherConfig] = None,
+        agent_registry: AgentRegistry | None = None,
+        config: FileWatcherConfig | None = None,
     ):
         """Initialize workspace watcher.
 
@@ -197,7 +198,7 @@ class WorkspaceWatcher:
         self.agent_registry = agent_registry
         self.config = config or FileWatcherConfig()
 
-        self._observer: Optional[Observer] = None
+        self._observer: Observer | None = None
         self._handlers: dict[str, WorkspaceFileHandler] = {}
         self._debounce_timers: dict[str, asyncio.TimerHandle] = {}
 
@@ -208,7 +209,7 @@ class WorkspaceWatcher:
 
         logger.debug("WorkspaceWatcher initialized", enabled=self.config.enabled)
 
-    def watch_tools(self, tools_dir: str) -> "WorkspaceWatcher":
+    def watch_tools(self, tools_dir: str) -> WorkspaceWatcher:
         """Watch the tools directory for changes.
 
         When tools change, triggers AgentRegistry.reload_tools() and
@@ -237,7 +238,7 @@ class WorkspaceWatcher:
 
         return self
 
-    def watch_middleware(self, middleware_dir: str) -> "WorkspaceWatcher":
+    def watch_middleware(self, middleware_dir: str) -> WorkspaceWatcher:
         """Watch the middleware directory for changes.
 
         When middleware changes, triggers AgentRegistry.mark_middleware_pending()
@@ -266,7 +267,7 @@ class WorkspaceWatcher:
 
         return self
 
-    def watch_config(self, config_path: str) -> "WorkspaceWatcher":
+    def watch_config(self, config_path: str) -> WorkspaceWatcher:
         """Watch the config file for changes.
 
         When config changes, triggers settings reload and notifies GUI callbacks.
@@ -294,7 +295,7 @@ class WorkspaceWatcher:
 
         return self
 
-    def on_tools_changed(self, callback: Callable[[], None]) -> "WorkspaceWatcher":
+    def on_tools_changed(self, callback: Callable[[], None]) -> WorkspaceWatcher:
         """Register a callback for when tools change.
 
         Args:
@@ -306,7 +307,7 @@ class WorkspaceWatcher:
         self._tools_changed_callbacks.append(callback)
         return self
 
-    def on_middleware_changed(self, callback: Callable[[], None]) -> "WorkspaceWatcher":
+    def on_middleware_changed(self, callback: Callable[[], None]) -> WorkspaceWatcher:
         """Register a callback for when middleware changes.
 
         Args:
@@ -318,7 +319,7 @@ class WorkspaceWatcher:
         self._middleware_changed_callbacks.append(callback)
         return self
 
-    def on_config_changed(self, callback: Callable[[], None]) -> "WorkspaceWatcher":
+    def on_config_changed(self, callback: Callable[[], None]) -> WorkspaceWatcher:
         """Register a callback for when config changes.
 
         Args:
@@ -469,7 +470,7 @@ class WorkspaceWatcher:
                 error=str(e),
             )
 
-    def __enter__(self) -> "WorkspaceWatcher":
+    def __enter__(self) -> WorkspaceWatcher:
         """Context manager entry."""
         self.start()
         return self
@@ -516,8 +517,8 @@ class SimpleFileWatcher:
         self.path = Path(path).resolve()
         self.callback = callback
         self.recursive = recursive
-        self._observer: Optional[Observer] = None
-        self._handler: Optional[_SimpleFileHandler] = None
+        self._observer: Observer | None = None
+        self._handler: _SimpleFileHandler | None = None
 
     def start(self) -> None:
         """Start watching."""
@@ -543,7 +544,7 @@ class SimpleFileWatcher:
             self._observer = None
             logger.info("SimpleFileWatcher stopped")
 
-    def __enter__(self) -> "SimpleFileWatcher":
+    def __enter__(self) -> SimpleFileWatcher:
         """Context manager entry."""
         self.start()
         return self

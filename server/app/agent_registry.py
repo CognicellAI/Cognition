@@ -19,17 +19,18 @@ from __future__ import annotations
 import importlib
 import inspect
 import sys
-from dataclasses import dataclass, field
+from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Optional, TypeVar
 from types import ModuleType
+from typing import Any, TypeVar
 
 import structlog
 from langchain_core.tools import BaseTool
 
 from server.app.agent.cognition_agent import (
-    create_cognition_agent,
     clear_agent_cache,
+    create_cognition_agent,
 )
 from server.app.session_manager import SessionManager, get_session_manager
 from server.app.settings import Settings
@@ -58,7 +59,7 @@ class ToolRegistration:
     name: str
     factory: ToolFactory
     source: str  # 'programmatic' or file path
-    module: Optional[str] = None
+    module: str | None = None
 
 
 @dataclass
@@ -93,8 +94,8 @@ class AgentRegistry:
 
     def __init__(
         self,
-        session_manager: Optional[SessionManager] = None,
-        settings: Optional[Settings] = None,
+        session_manager: SessionManager | None = None,
+        settings: Settings | None = None,
     ):
         """Initialize the agent registry.
 
@@ -115,8 +116,8 @@ class AgentRegistry:
         self._middleware_modules: dict[str, ModuleType] = {}
 
         # Auto-discovery paths
-        self._tools_path: Optional[Path] = None
-        self._middleware_path: Optional[Path] = None
+        self._tools_path: Path | None = None
+        self._middleware_path: Path | None = None
 
         # Pending changes flag (for middleware session-based reload)
         self._middleware_pending: bool = False
@@ -180,7 +181,7 @@ class AgentRegistry:
         """
         return list(self._tools.values())
 
-    def get_tool(self, name: str) -> Optional[ToolRegistration]:
+    def get_tool(self, name: str) -> ToolRegistration | None:
         """Get a tool registration by name.
 
         Args:
@@ -498,11 +499,11 @@ class AgentRegistry:
     async def create_agent_with_extensions(
         self,
         project_path: str | Path,
-        session_id: Optional[str] = None,
-        model: Optional[Any] = None,
-        checkpointer: Optional[Any] = None,
-        system_prompt: Optional[str] = None,
-        settings: Optional[Settings] = None,
+        session_id: str | None = None,
+        model: Any | None = None,
+        checkpointer: Any | None = None,
+        system_prompt: str | None = None,
+        settings: Settings | None = None,
     ) -> Any:
         """Create an agent with all registered extensions.
 
@@ -629,7 +630,7 @@ class AgentRegistry:
 # Global Agent Registry
 # ============================================================================
 
-_agent_registry: Optional[AgentRegistry] = None
+_agent_registry: AgentRegistry | None = None
 
 
 def get_agent_registry() -> AgentRegistry:
@@ -661,8 +662,8 @@ def set_agent_registry(registry: AgentRegistry) -> None:
 
 
 def initialize_agent_registry(
-    session_manager: Optional[SessionManager] = None,
-    settings: Optional[Settings] = None,
+    session_manager: SessionManager | None = None,
+    settings: Settings | None = None,
 ) -> AgentRegistry:
     """Initialize and return the global agent registry.
 
