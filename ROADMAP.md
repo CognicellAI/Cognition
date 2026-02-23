@@ -405,27 +405,7 @@ Advanced features for complete platform vision.
 
 **Note:** Evaluation and feedback are handled by MLflow Native capabilities. Cognition focuses on trace generation; users leverage MLflow's built-in assessment UI and APIs.
 
-### P3-1: Prompt Registry 🔄 PARTIAL
-
-| Field | Value |
-|-------|-------|
-| **Layer** | 7 (Observability) / 4 (Agent Runtime) |
-| **File** | `server/app/agent/prompt_registry.py` |
-| **Effort remaining** | ~3 days |
-| **Status** | 60% complete |
-
-**What exists:**
-- ✅ `PromptRegistryBackend` protocol
-- ✅ `LocalPromptRegistry` — file-based, loads from `.cognition/prompts/`
-- ✅ `MLflowPromptRegistry` — uses `mlflow.genai.load_prompt()` API
-- ✅ `PromptRegistry` — unified with MLflow-first + local fallback, template formatting, lineage tracking
-
-**What's missing:**
-- [ ] Wire into `create_cognition_agent()` — currently the agent factory uses its own hardcoded `SYSTEM_PROMPT` and `settings.llm_system_prompt`, ignoring the registry
-- [ ] Support registry references in `AgentDefinition` (e.g., `prompt: "mlflow:security-expert:v1"`)
-- [ ] Integration tests with live MLflow server
-
-### P3-3: GUITool Base Class
+### P3-1: GUITool Base Class
 
 | Field | Value |
 |-------|-------|
