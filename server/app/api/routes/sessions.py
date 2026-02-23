@@ -104,12 +104,18 @@ async def create_session(
     workspace_path = str(settings.workspace_path)
 
     # Use server settings exclusively (no client-provided config)
+    # Resolve system prompt from configuration
+    try:
+        system_prompt_text = settings.system_prompt.get_prompt_text()
+    except (FileNotFoundError, RuntimeError):
+        system_prompt_text = None
+
     config = SessionConfig(
         provider=settings.llm_provider,
         model=settings.llm_model,
         temperature=getattr(settings, "llm_temperature", None),
         max_tokens=getattr(settings, "llm_max_tokens", None),
-        system_prompt=getattr(settings, "llm_system_prompt", None),
+        system_prompt=system_prompt_text,
     )
 
     # Get session store for this workspace

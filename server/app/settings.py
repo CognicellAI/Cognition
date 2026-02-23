@@ -8,6 +8,8 @@ from typing import Any, Literal
 from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from server.app.models import PromptConfig
+
 
 class Settings(BaseSettings):
     """Application settings loaded from environment variables."""
@@ -39,7 +41,13 @@ class Settings(BaseSettings):
     llm_model: str = Field(default="gpt-4o", alias="COGNITION_LLM_MODEL")
     llm_temperature: float | None = Field(default=None, alias="COGNITION_LLM_TEMPERATURE")
     llm_max_tokens: int | None = Field(default=None, alias="COGNITION_LLM_MAX_TOKENS")
-    llm_system_prompt: str | None = Field(default=None, alias="COGNITION_LLM_SYSTEM_PROMPT")
+    # System prompt configuration with explicit type/value
+    # type: "file" | "inline" | "mlflow"
+    # value: prompt text, file name, or mlflow reference
+    system_prompt: PromptConfig = Field(
+        default_factory=lambda: PromptConfig(type="file", value="system"),
+        alias="COGNITION_SYSTEM_PROMPT",
+    )
 
     # OpenAI settings - use SecretStr to prevent accidental logging
     openai_api_key: SecretStr | None = Field(default=None, alias="OPENAI_API_KEY")

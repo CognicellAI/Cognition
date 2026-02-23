@@ -22,6 +22,66 @@ class SessionStatus(str, Enum):
     ERROR = "error"
 
 
+class PromptConfig(BaseModel):
+    """Prompt configuration with explicit type and value.
+
+    Supports three prompt sources:
+    - file: Load from .cognition/prompts/{value}.md
+    - inline: Use value directly as prompt text
+    - mlflow: Load from MLflow registry (requires mlflow_enabled)
+
+    Examples:
+        file: "security-expert" -> loads .cognition/prompts/security-expert.md
+        inline: "You are a helpful assistant" -> uses text directly
+        mlflow: "my-prompt:v1" -> loads from MLflow registry
+    """
+
+    type: Literal["file", "inline", "mlflow"] = "file"
+    value: str = "system"
+
+    def get_prompt_text(self, prompts_dir: str = ".cognition/prompts") -> str:
+        """Resolve prompt configuration to actual text.
+
+        Args:
+            prompts_dir: Directory for file-type prompts
+
+        Returns:
+            Resolved prompt text
+
+        Raises:
+            FileNotFoundError: If file-type prompt not found
+            RuntimeError: If mlflow-type but MLflow not available
+        """
+        from pathlib import Path
+
+        if self.type == "inline":
+            return self.value
+
+        elif self.type == "file":
+            path = Path(prompts_dir) / f"{self.value}.md"
+            if not path.exists():
+                # Try without .md extension
+                path = Path(prompts_dir) / self.value
+            if not path.exists():
+                raise FileNotFoundError(f"Prompt file not found: {path}")
+            return path.read_text()
+
+        elif self.type == "mlflow":
+            # Lazy import to avoid dependency when MLflow not used
+            try:
+                import mlflow
+                from mlflow.genai import load_prompt
+
+                return load_prompt(self.value)
+            except ImportError:
+                raise RuntimeError("MLflow not installed. Install with: pip install mlflow[genai]")
+            except Exception as e:
+                raise RuntimeError(f"Failed to load MLflow prompt '{self.value}': {e}")
+
+        else:
+            raise ValueError(f"Unknown prompt type: {self.type}")
+
+
 class SessionConfig(BaseModel):
     """Session configuration options."""
 
@@ -29,7 +89,7 @@ class SessionConfig(BaseModel):
     model: str | None = None
     temperature: float | None = None
     max_tokens: int | None = None
-    system_prompt: str | None = None
+    system_prompt: str | None = None  # Kept for backward compatibility
 
 
 @dataclass

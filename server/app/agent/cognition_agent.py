@@ -256,11 +256,15 @@ def create_cognition_agent(
         SYSTEM_PROMPT_WITH_CONTEXT = SYSTEM_PROMPT
 
     # Use provided values or defaults from settings
-    prompt = (
-        system_prompt
-        if system_prompt
-        else (settings.llm_system_prompt or SYSTEM_PROMPT_WITH_CONTEXT)
-    )
+    if system_prompt:
+        prompt = system_prompt
+    else:
+        # Resolve prompt from settings.system_prompt configuration
+        try:
+            prompt = settings.system_prompt.get_prompt_text()
+        except (FileNotFoundError, RuntimeError):
+            # Fall back to default if prompt file not found or MLflow unavailable
+            prompt = SYSTEM_PROMPT_WITH_CONTEXT
     agent_memory = list(memory) if memory is not None else settings.agent_memory
     agent_skills = list(skills) if skills is not None else settings.agent_skills
     agent_subagents = list(subagents) if subagents is not None else settings.agent_subagents
