@@ -240,12 +240,8 @@ class FeedbackCreate(BaseModel):
         le=1.0,
         description="Numeric value (e.g., 1.0 for thumbs up, 0.0 for thumbs down)",
     )
-    trace_id: str | None = Field(
-        None, description="Optional MLflow trace ID to attach feedback to"
-    )
-    rationale: str | None = Field(
-        None, max_length=1000, description="Explanation for the feedback"
-    )
+    trace_id: str | None = Field(None, description="Optional MLflow trace ID to attach feedback to")
+    rationale: str | None = Field(None, max_length=1000, description="Explanation for the feedback")
     metadata: dict[str, Any] | None = Field(default=None, description="Additional metadata")
 
 
@@ -292,6 +288,39 @@ class ConfigResponse(BaseModel):
     server: dict = Field(..., description="Server configuration")
     llm: dict = Field(..., description="LLM default configuration")
     rate_limit: dict = Field(..., description="Rate limiting configuration")
+
+
+class ConfigUpdateRequest(BaseModel):
+    """Request to update configuration.
+
+    Only specific safe fields can be updated via PATCH /config.
+    Protected fields (server endpoints, secrets, backends) are rejected.
+    """
+
+    llm: dict[str, Any] | None = Field(None, description="LLM settings (temperature, max_tokens)")
+    agent: dict[str, Any] | None = Field(None, description="Agent settings (memory, skills)")
+    rate_limit: dict[str, Any] | None = Field(
+        None, description="Rate limiting settings (per_minute, burst)"
+    )
+    observability: dict[str, Any] | None = Field(
+        None, description="Observability settings (otel_enabled, metrics_port)"
+    )
+
+
+class ConfigUpdateResponse(BaseModel):
+    """Response from config update."""
+
+    updated: bool = Field(..., description="Whether update was successful")
+    changes: dict[str, Any] = Field(..., description="Fields that were changed")
+    backup_created: bool = Field(..., description="Whether backup was created")
+    timestamp: str = Field(..., description="Timestamp of update (ISO format)")
+
+
+class ConfigRollbackResponse(BaseModel):
+    """Response from config rollback."""
+
+    rolled_back: bool = Field(..., description="Whether rollback was successful")
+    timestamp: str = Field(..., description="Timestamp of rollback (ISO format)")
 
 
 class ProviderInfo(BaseModel):

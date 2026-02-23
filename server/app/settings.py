@@ -195,6 +195,16 @@ class Settings(BaseSettings):
         alias="COGNITION_SCOPE_KEYS",
     )
 
+    # Config authorization settings (scope-only for PATCH /config)
+    config_auth_scope_key: str = Field(
+        default="role",
+        alias="COGNITION_CONFIG_AUTH_SCOPE_KEY",
+    )
+    config_auth_scope_value: str = Field(
+        default="admin",
+        alias="COGNITION_CONFIG_AUTH_SCOPE_VALUE",
+    )
+
     # SSE (Server-Sent Events) settings
     sse_retry_interval_ms: int = Field(
         default=3000,
