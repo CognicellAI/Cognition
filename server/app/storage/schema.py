@@ -16,8 +16,6 @@ Usage:
 
 from __future__ import annotations
 
-from typing import Any
-
 from sqlalchemy import (
     JSON,
     Column,
@@ -52,6 +50,7 @@ sessions_table = Table(
     ),
     Column("scopes", JSON, default=dict),
     Column("message_count", Integer, default=0),
+    Column("agent_name", String(100), nullable=False, default="default"),
     Column(
         "created_at",
         DateTime(timezone=True),

@@ -105,6 +105,7 @@ class Session:
     created_at: str
     updated_at: str
     message_count: int = 0
+    agent_name: str = "default"
     scopes: dict[str, str] = field(default_factory=dict)
 
     def to_dict(self) -> dict:
@@ -125,6 +126,7 @@ class Session:
             "created_at": self.created_at,
             "updated_at": self.updated_at,
             "message_count": self.message_count,
+            "agent_name": self.agent_name,
             "scopes": self.scopes,
         }
 
@@ -148,6 +150,7 @@ class Session:
             created_at=data["created_at"],
             updated_at=data["updated_at"],
             message_count=data.get("message_count", 0),
+            agent_name=data.get("agent_name", "default"),
             scopes=data.get("scopes", {}),
         )
 

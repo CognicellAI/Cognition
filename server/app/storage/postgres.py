@@ -20,7 +20,6 @@ from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 
 from server.app.models import Message, Session, SessionConfig, SessionStatus, ToolCall
 from server.app.storage.backend import StorageBackend
-from server.app.storage.migrations import run_migrations_async
 
 logger = structlog.get_logger(__name__)
 
@@ -178,6 +177,7 @@ class PostgresStorageBackend:
         config: SessionConfig,
         title: str | None = None,
         scopes: dict[str, str] | None = None,
+        agent_name: str = "default",
     ) -> Session:
         """Create a new session."""
         now = datetime.now(UTC)
@@ -193,6 +193,7 @@ class PostgresStorageBackend:
             created_at=now.isoformat(),
             updated_at=now.isoformat(),
             message_count=0,
+            agent_name=agent_name,
         )
 
         config_json = {
@@ -208,8 +209,8 @@ class PostgresStorageBackend:
                 """
                 INSERT INTO sessions (
                     id, workspace_path, title, thread_id, status,
-                    scopes, config, message_count, created_at, updated_at
-                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+                    scopes, config, message_count, agent_name, created_at, updated_at
+                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
                 """,
                 session.id,
                 session.workspace_path,
@@ -219,6 +220,7 @@ class PostgresStorageBackend:
                 json.dumps(session.scopes),
                 json.dumps(config_json),
                 session.message_count,
+                session.agent_name,
                 now,
                 now,
             )
@@ -571,6 +573,7 @@ class PostgresStorageBackend:
             created_at=row["created_at"].isoformat(),
             updated_at=row["updated_at"].isoformat(),
             message_count=row["message_count"],
+            agent_name=row.get("agent_name", "default"),
         )
 
     def _row_to_message(self, row: asyncpg.Record) -> Message:

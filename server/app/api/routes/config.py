@@ -36,22 +36,22 @@ ALLOWED_CONFIG_PATHS = {
     "llm.max_tokens",
     "llm.model",
     "llm.provider",
-    
+
     # Agent settings
     "agent.memory",
     "agent.skills",
     "agent.interrupt_on",
     "agent.subagents",
-    
+
     # Rate limiting
     "rate_limit.per_minute",
     "rate_limit.burst",
-    
+
     # Observability
     "observability.otel_enabled",
     "observability.metrics_port",
     "observability.otel_endpoint",
-    
+
     # MLflow
     "mlflow.enabled",
     "mlflow.experiment_name",
@@ -63,7 +63,7 @@ def validate_and_extract_changes(
 ) -> dict[str, Any]:
     """Validate request and extract allowed changes."""
     changes = {}
-    
+
     if updates.llm:
         for key, value in updates.llm.items():
             path = f"llm.{key}"
@@ -73,7 +73,7 @@ def validate_and_extract_changes(
                     detail=f"Field '{path}' is not allowed to be updated",
                 )
             changes[path] = value
-    
+
     if updates.agent:
         for key, value in updates.agent.items():
             path = f"agent.{key}"
@@ -83,7 +83,7 @@ def validate_and_extract_changes(
                     detail=f"Field '{path}' is not allowed to be updated",
                 )
             changes[path] = value
-    
+
     if updates.rate_limit:
         for key, value in updates.rate_limit.items():
             path = f"rate_limit.{key}"
@@ -93,7 +93,7 @@ def validate_and_extract_changes(
                     detail=f"Field '{path}' is not allowed to be updated",
                 )
             changes[path] = value
-    
+
     if updates.observability:
         for key, value in updates.observability.items():
             path = f"observability.{key}"
@@ -103,7 +103,7 @@ def validate_and_extract_changes(
                     detail=f"Field '{path}' is not allowed to be updated",
                 )
             changes[path] = value
-    
+
     if updates.mlflow:
         for key, value in updates.mlflow.items():
             path = f"mlflow.{key}"
@@ -113,14 +113,14 @@ def validate_and_extract_changes(
                     detail=f"Field '{path}' is not allowed to be updated",
                 )
             changes[path] = value
-    
+
     return changes
 
 
 def merge_configs(current: dict, changes: dict[str, Any]) -> dict:
     """Merge changes into current config."""
     result = current.copy()
-    
+
     for path, value in changes.items():
         parts = path.split(".")
         target = result
@@ -129,7 +129,7 @@ def merge_configs(current: dict, changes: dict[str, Any]) -> dict:
                 target[part] = {}
             target = target[part]
         target[parts[-1]] = value
-    
+
     return result
 
 
@@ -191,22 +191,22 @@ async def patch_config(
 ) -> ConfigUpdateResponse:
     """Update server configuration. Apps handle auth via middleware."""
     changes = validate_and_extract_changes(updates)
-    
+
     if not changes:
         raise HTTPException(status_code=422, detail="No valid changes provided")
-    
+
     current_config = load_config()
     config_path = Path(".cognition/config.yaml")
     backup_path = Path(".cognition/config.yaml.backup")
-    
+
     if config_path.exists():
         save_config(current_config, backup_path)
-    
+
     new_config = merge_configs(current_config, changes)
     save_config(new_config, config_path)
-    
+
     logger.info("config_updated", changes=changes)
-    
+
     return ConfigUpdateResponse(
         updated=True,
         changes=changes,
@@ -223,15 +223,15 @@ async def rollback_config(
     backup_path = Path(".cognition/config.yaml.backup")
     if not backup_path.exists():
         raise HTTPException(status_code=404, detail="No backup found to rollback to")
-    
-    with open(backup_path, "r") as f:
+
+    with open(backup_path) as f:
         backup_config = yaml.safe_load(f)
-    
+
     config_path = Path(".cognition/config.yaml")
     save_config(backup_config, config_path)
-    
+
     logger.info("config_rolled_back")
-    
+
     return ConfigRollbackResponse(
         rolled_back=True,
         timestamp=datetime.now(UTC).isoformat(),

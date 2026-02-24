@@ -21,7 +21,8 @@ This roadmap is derived from [FIRST-PRINCIPLE-EVALUTION.md](./FIRST-PRINCIPLE-EV
 | — Cleanup (LangGraph Alignment) | 5 | 5/5 | ✅ Complete |
 | — Robustness | 7 | 7/7 | ✅ Complete |
 | — GUI Extensibility | 4 | 4/4 | ✅ Complete |
-| **P3** (Full Vision) | 3 | 2/3 | **~75%** |
+| **P3** (Multi-Agent Registry) | 4 | 0/4 | **0% — Active** |
+| **P4** (Extended Vision) | 2 | 0/2 | **0% — Deferred** |
 
 **Unit tests:** 263 passed, 4 skipped, 1 warning
 **E2E Business Scenarios:** 16/16 scenarios passing across P2 Cleanup, Robustness, and GUI Extensibility
@@ -399,13 +400,231 @@ CLI commands for creating tool and middleware templates with proper structure.
 
 ---
 
-## P3 — Full Vision (~75% Complete)
+## P3 — Full Vision (0% Complete)
 
-Advanced features for complete platform vision.
+Multi-agent registry, per-agent configuration, and agent-scoped sessions. This is the next active priority.
 
-**Note:** Evaluation and feedback are handled by MLflow Native capabilities. Cognition focuses on trace generation; users leverage MLflow's built-in assessment UI and APIs.
+**Design principle:** Leverage Deep Agents' native `SubAgent` TypedDict and `create_deep_agent(subagents=[...])` as the compilation primitive. Cognition owns only the registry, YAML/Markdown loading, translation layer, storage, and API surface. No custom routing logic.
 
-### P3-1: Cloud Execution Backends
+**Deep Agents integration model:**
+- Primary agents → compiled via `create_deep_agent(system_prompt=..., subagents=[...])`
+- Subagent-mode agents → translated to `SubAgent` TypedDicts, passed into the primary agent's `create_deep_agent()` call; routing handled automatically by Deep Agents' injected `task` tool
+- Per-agent model, temperature, skills overrides → mapped directly to `SubAgent.model`, `SubAgent.skills`, etc.
+
+---
+
+### P3-1: `AgentDefinitionRegistry` + Built-in Agents
+
+| Field | Value |
+|-------|-------|
+| **Layer** | 4 (Agent Runtime) |
+| **File** | `server/app/agent/agent_registry.py` |
+| **Status** | Not Started |
+| **Effort** | ~3–4 days |
+| **Dependencies** | P1-5 (`AgentDefinition` model) ✅ |
+
+A catalog of all known agents: built-in (hardcoded, `native=True`) and user-defined (loaded from `.cognition/agents/`). Merges both sources at startup and on reload.
+
+**Built-in agents shipped with the server:**
+
+| Name | Mode | Description |
+|------|------|-------------|
+| `default` | `primary` | Full-access coding agent; uses the existing `SYSTEM_PROMPT` constant |
+| `readonly` | `primary` | Analysis-only agent; write/edit/execute tools disabled via `interrupt_on`; useful for CI, code review |
+
+**`AgentDefinitionRegistry` interface:**
+```python
+class AgentDefinitionRegistry:
+    def list(self, include_hidden: bool = False) -> list[AgentDefinition]: ...
+    def get(self, name: str) -> AgentDefinition | None: ...
+    def reload(self) -> None: ...  # re-scans .cognition/agents/
+    def subagents(self) -> list[AgentDefinition]: ...  # mode in ("subagent", "all")
+    def primaries(self) -> list[AgentDefinition]: ...  # mode in ("primary", "all")
+```
+
+**Global singleton helpers:** `get_agent_definition_registry()`, `initialize_agent_definition_registry(workspace_path)`.
+
+**Acceptance Criteria:**
+- [ ] Built-in `default` and `readonly` agents present in every registry instance
+- [ ] `initialize_agent_definition_registry(workspace_path)` scans `.cognition/agents/` and merges user-defined agents
+- [ ] User agents override built-in agents when names collide (user wins)
+- [ ] `reload()` rescans without server restart
+- [ ] Unit tests covering: list, get, reload, built-ins present, user override
+
+---
+
+### P3-2: Markdown + YAML Agent File Loading
+
+| Field | Value |
+|-------|-------|
+| **Layer** | 4 (Agent Runtime) |
+| **File** | `server/app/agent/definition.py` |
+| **Status** | Not Started |
+| **Effort** | ~2 days |
+| **Dependencies** | P3-1 |
+
+Extend `AgentDefinition` with registry-facing fields and add a Markdown loader so users can define agents using the OpenCode-compatible format.
+
+**New fields on `AgentDefinition`:**
+```python
+mode: Literal["primary", "subagent", "all"] = "all"
+description: str | None = None
+hidden: bool = False
+native: bool = False   # True = built-in; set by registry, not user config
+```
+
+**Markdown format** (`.cognition/agents/review.md`):
+```markdown
+---
+description: Reviews code for best practices and security issues
+mode: subagent
+model: anthropic/claude-haiku-4
+temperature: 0.1
+skills:
+  - .cognition/skills/
+---
+You are a code reviewer. Focus on security, performance, and maintainability.
+Provide constructive feedback without making direct changes.
+```
+- Filename stem becomes `name` (e.g., `review.md` → `name="review"`)
+- YAML frontmatter maps to `AgentDefinition` fields
+- Body becomes `system_prompt`
+
+**YAML format** (`.cognition/agents/security-auditor.yaml`) — already supported by `load_agent_definition()`; just needs the new fields added.
+
+**New loader function:** `load_agent_definition_from_markdown(path) -> AgentDefinition`
+
+**Translation to Deep Agents `SubAgent` TypedDict:**
+```python
+def to_subagent(self) -> SubAgent:
+    spec: SubAgent = {
+        "name": self.name,
+        "description": self.description or "",
+        "system_prompt": self.system_prompt,
+    }
+    if self.config.model:
+        provider = self.config.provider
+        spec["model"] = f"{provider}:{self.config.model}" if provider else self.config.model
+    if self.skills:
+        spec["skills"] = self.skills
+    return spec
+```
+
+**Acceptance Criteria:**
+- [ ] `load_agent_definition_from_markdown(path)` parses frontmatter + body correctly
+- [ ] `AgentDefinition.to_subagent()` returns a valid `SubAgent` TypedDict
+- [ ] `mode`, `description`, `hidden` fields validated by Pydantic
+- [ ] `native` field is read-only (cannot be set via YAML/Markdown; only set by registry code)
+- [ ] Unit tests: markdown roundtrip, YAML roundtrip, `to_subagent()` translation, validation errors
+
+---
+
+### P3-3: Session–Agent Binding + Storage
+
+| Field | Value |
+|-------|-------|
+| **Layer** | 1 (Foundation) + 2 (Persistence) + 4 (Agent Runtime) |
+| **Files** | `server/app/models.py`, `server/app/storage/schema.py`, `server/app/storage/sqlite.py`, `server/app/storage/postgres.py`, `server/app/llm/deep_agent_service.py` |
+| **Status** | Not Started |
+| **Effort** | ~3 days |
+| **Dependencies** | P3-1, P3-2 |
+
+Bind each session to a named agent at creation time. The selected primary agent is compiled with all registered subagent-mode agents available via the `task` tool.
+
+**`Session` domain model change:**
+```python
+@dataclass
+class Session:
+    ...
+    agent_name: str = "default"
+```
+
+**Storage schema change:** `agent_name TEXT NOT NULL DEFAULT 'default'` added to the sessions table. `to_dict()` / `from_dict()` updated. Alembic migration added.
+
+**Agent compilation change in `DeepAgentStreamingService.stream_response()`:**
+```python
+# Before: always uses global settings
+agent = create_cognition_agent(project_path, model, checkpointer, settings)
+
+# After: looks up definition, passes subagents from registry
+definition = registry.get(session.agent_name)
+subagents = [d.to_subagent() for d in registry.subagents() if d.name != session.agent_name]
+agent = create_cognition_agent(
+    project_path, model, checkpointer, settings,
+    system_prompt=definition.system_prompt,
+    subagents=subagents,
+)
+```
+
+**Acceptance Criteria:**
+- [ ] `Session.agent_name` persisted and loaded correctly from SQLite and Postgres
+- [ ] Sessions with unknown `agent_name` fall back to `"default"` on load (resilience)
+- [ ] Each session's primary agent is compiled with all `subagent`/`all`-mode agents from the registry available as subagents
+- [ ] Agent cache key includes `agent_name` so different agents don't share compiled instances
+- [ ] Unit tests: session persistence roundtrip, compilation path, cache keying
+
+---
+
+### P3-4: `GET /agents` API Endpoint
+
+| Field | Value |
+|-------|-------|
+| **Layer** | 6 (API & Streaming) |
+| **Files** | `server/app/api/routes/agents.py`, `server/app/api/models.py`, `server/app/api/routes/__init__.py` |
+| **Status** | Not Started |
+| **Effort** | ~2 days |
+| **Dependencies** | P3-1, P3-2, P3-3 |
+
+Expose the agent registry via the API. Extend session creation to accept `agent_name`.
+
+**New endpoints:**
+```
+GET  /agents           — list all non-hidden agents
+GET  /agents/{name}    — get single agent (404 if not found or hidden)
+```
+
+**Response model:**
+```python
+class AgentResponse(BaseModel):
+    name: str
+    description: str | None
+    mode: Literal["primary", "subagent", "all"]
+    hidden: bool
+    native: bool
+    model: str | None       # per-agent model override if set
+    temperature: float | None
+
+class AgentList(BaseModel):
+    agents: list[AgentResponse]
+```
+
+**`SessionCreate` change:**
+```python
+class SessionCreate(BaseModel):
+    title: str | None = None
+    agent_name: str | None = None   # if omitted → "default"
+```
+
+Session creation validates that `agent_name` resolves to a known, non-hidden, `primary`/`all`-mode agent. Returns `422` with a clear error if not.
+
+**Scope:** Hidden agents (`hidden=True`) are excluded from `GET /agents` entirely. They remain accessible by exact name for internal use (e.g., by other agents via the `task` tool).
+
+**Acceptance Criteria:**
+- [ ] `GET /agents` returns all non-hidden agents with correct fields
+- [ ] `GET /agents/{name}` returns 404 for unknown or hidden agents
+- [ ] `POST /sessions` with valid `agent_name` creates session bound to that agent
+- [ ] `POST /sessions` with invalid/hidden `agent_name` returns 422
+- [ ] `POST /sessions` without `agent_name` defaults to `"default"`
+- [ ] `GET /sessions/{id}` response includes `agent_name`
+- [ ] Unit tests for all endpoint cases; integration test for full session → agent compilation path
+
+---
+
+## P4 — Extended Vision (0% Complete)
+
+Deferred from P3. Unblocked after P3 is complete.
+
+### P4-1: Cloud Execution Backends
 
 | Field | Value |
 |-------|-------|
@@ -421,14 +640,14 @@ Advanced features for complete platform vision.
 - [ ] Cost-aware scheduling
 - [ ] Configuration-driven backend selection
 
-### P3-3: Ollama Provider + LLM Resilience
+### P4-2: Ollama Provider + LLM Resilience
 
 | Field | Value |
 |-------|-------|
 | **Layer** | 5 (LLM Provider) |
 | **Status** | Not Started |
 | **Effort** | ~1-2 weeks |
-| **Dependencies** | P2-2 (Circuit Breaker) — partially done |
+| **Dependencies** | P2-2 (Circuit Breaker) ✅ |
 
 **Acceptance Criteria:**
 - [ ] Ollama provider factory registered
@@ -504,18 +723,15 @@ All modules are in their correct architectural layer:
 - ✅ PostgreSQL checkpointer using psycopg for LangGraph
 - ✅ Storage backend fixes for scopes and message columns
 
-**Immediate — P3 Full Vision:**
-1. Wire prompt registry into `create_cognition_agent()` (GUITool was removed — ~3 days)
-2. Add API routes for evaluation service (P3-1)
-3. Human feedback loop endpoint (Human feedback loop was removed)
+**Immediate — P3 Multi-Agent Registry:**
+1. P3-1: `AgentDefinitionRegistry` + built-in `default` and `readonly` agents (~3–4 days)
+2. P3-2: Markdown + YAML agent file loading + `AgentDefinition.to_subagent()` (~2 days)
+3. P3-3: Session–agent binding + storage migration (~3 days)
+4. P3-4: `GET /agents` endpoint + `agent_name` on session creation (~2 days)
 
-**Medium-term:**
-4. Cloud execution backends (P3-2)
-5. Ollama provider + LLM resilience (P3-3)
-6. Dynamic tool validation CLI (Dynamic Tool Validation was removed)
-
-**Long-term:**
-7. GUITool base class (P3-3)
+**Deferred to P4:**
+- Cloud execution backends (P4-1)
+- Ollama provider + LLM resilience (P4-2)
 
 ---
 

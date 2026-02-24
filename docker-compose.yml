@@ -102,6 +102,7 @@ services:
     volumes:
       - ./workspaces:/workspace
       - ./.cognition:/app/.cognition
+      - ./.cognition:/workspace/.cognition
       - ./tests:/app/tests
       - mlflow-artifacts:/mlflow/artifacts
     networks:

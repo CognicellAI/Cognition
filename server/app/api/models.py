@@ -26,6 +26,7 @@ class SessionCreate(BaseModel):
     """
 
     title: str | None = Field(None, max_length=200, description="Optional session title")
+    agent_name: str = Field("default", description="Agent to use for this session")
 
 
 class SessionResponse(BaseModel):
@@ -38,6 +39,7 @@ class SessionResponse(BaseModel):
     created_at: str = Field(..., description="Session creation timestamp (ISO format)")
     updated_at: str = Field(..., description="Last activity timestamp (ISO format)")
     message_count: int = Field(0, description="Number of messages in session")
+    agent_name: str = Field("default", description="Agent bound to this session")
 
     @classmethod
     def from_core(cls, session: CoreSession) -> SessionResponse:
@@ -50,6 +52,7 @@ class SessionResponse(BaseModel):
             created_at=session.created_at,
             updated_at=session.updated_at,
             message_count=session.message_count,
+            agent_name=session.agent_name,
         )
 
 
@@ -240,12 +243,8 @@ class FeedbackCreate(BaseModel):
         le=1.0,
         description="Numeric value (e.g., 1.0 for thumbs up, 0.0 for thumbs down)",
     )
-    trace_id: str | None = Field(
-        None, description="Optional MLflow trace ID to attach feedback to"
-    )
-    rationale: str | None = Field(
-        None, max_length=1000, description="Explanation for the feedback"
-    )
+    trace_id: str | None = Field(None, description="Optional MLflow trace ID to attach feedback to")
+    rationale: str | None = Field(None, max_length=1000, description="Explanation for the feedback")
     metadata: dict[str, Any] | None = Field(default=None, description="Additional metadata")
 
 
@@ -322,12 +321,8 @@ class ConfigUpdateRequest(BaseModel):
     Protected fields (server endpoints, secrets, backends) are rejected.
     """
 
-    llm: dict[str, Any] | None = Field(
-        None, description="LLM settings (temperature, max_tokens)"
-    )
-    agent: dict[str, Any] | None = Field(
-        None, description="Agent settings (memory, skills)"
-    )
+    llm: dict[str, Any] | None = Field(None, description="LLM settings (temperature, max_tokens)")
+    agent: dict[str, Any] | None = Field(None, description="Agent settings (memory, skills)")
     rate_limit: dict[str, Any] | None = Field(
         None, description="Rate limiting settings (per_minute, burst)"
     )
@@ -353,3 +348,28 @@ class ConfigRollbackResponse(BaseModel):
 
     rolled_back: bool = Field(..., description="Whether rollback was successful")
     timestamp: str = Field(..., description="Timestamp of rollback (ISO format)")
+
+
+# ============================================================================
+# Agent Models
+# ============================================================================
+
+
+class AgentResponse(BaseModel):
+    """Agent information for API responses."""
+
+    name: str = Field(..., description="Agent name")
+    description: str | None = Field(None, description="Agent description")
+    mode: Literal["primary", "subagent", "all"] = Field(..., description="Agent mode")
+    hidden: bool = Field(..., description="Whether agent is hidden from listings")
+    native: bool = Field(..., description="Whether agent is built-in")
+    model: str | None = Field(None, description="Default model for this agent")
+    temperature: float | None = Field(None, description="Default temperature for this agent")
+
+
+class AgentList(BaseModel):
+    """List of agents response."""
+
+    agents: list[AgentResponse] = Field(
+        default_factory=list, description="List of available agents"
+    )

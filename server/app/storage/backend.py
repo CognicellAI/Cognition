@@ -214,6 +214,7 @@ class StorageBackend(Protocol):
         config: SessionConfig,
         title: str | None = None,
         scopes: dict[str, str] | None = None,
+        agent_name: str = "default",
     ) -> Session:
         """Create a new session."""
         ...

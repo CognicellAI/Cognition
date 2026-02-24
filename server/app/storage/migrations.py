@@ -8,7 +8,6 @@ requiring manual intervention.
 from __future__ import annotations
 
 import asyncio
-import os
 from pathlib import Path
 from typing import Any
 
@@ -18,7 +17,6 @@ from alembic.config import Config
 from alembic.runtime.migration import MigrationContext
 from alembic.script import ScriptDirectory
 from sqlalchemy import create_engine
-from sqlalchemy.ext.asyncio import create_async_engine
 
 logger = structlog.get_logger(__name__)
 

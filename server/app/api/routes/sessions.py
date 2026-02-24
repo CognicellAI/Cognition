@@ -18,6 +18,7 @@ import uuid
 
 from fastapi import APIRouter, Depends, Header, HTTPException, status
 
+from server.app.agent.agent_definition_registry import get_agent_definition_registry
 from server.app.api.models import (
     ErrorResponse,
     SessionCreate,
@@ -99,6 +100,14 @@ async def create_session(
 
     Note: Server uses global settings exclusively. No per-session configuration.
     """
+    # Validate agent_name is a valid primary agent
+    registry = get_agent_definition_registry()
+    if registry and not registry.is_valid_primary(request.agent_name):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Invalid or unknown agent: {request.agent_name}",
+        )
+
     session_id = str(uuid.uuid4())
     thread_id = str(uuid.uuid4())  # For LangGraph checkpointing
     workspace_path = str(settings.workspace_path)
@@ -128,6 +137,7 @@ async def create_session(
         config=config,
         title=request.title,
         scopes=scope.get_all(),
+        agent_name=request.agent_name,
     )
 
     # Register session with Agent manager

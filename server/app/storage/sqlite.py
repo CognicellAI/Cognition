@@ -65,7 +65,6 @@ class SqliteStorageBackend:
     async def initialize(self) -> None:
         """Initialize the database schema from centralized schema definitions."""
         from sqlalchemy import create_engine
-        from sqlalchemy.dialects import sqlite
 
         from server.app.storage.schema import metadata
 
@@ -104,6 +103,7 @@ class SqliteStorageBackend:
         config: SessionConfig,
         title: str | None = None,
         scopes: dict[str, str] | None = None,
+        agent_name: str = "default",
     ) -> Session:
         """Create a new session."""
         now = datetime.now(UTC).isoformat()
@@ -118,6 +118,7 @@ class SqliteStorageBackend:
             created_at=now,
             updated_at=now,
             message_count=0,
+            agent_name=agent_name,
             scopes=scopes or {},
         )
 
@@ -137,9 +138,9 @@ class SqliteStorageBackend:
             await db.execute(
                 """
                 INSERT INTO sessions (
-                    id, workspace_path, title, thread_id, status, 
-                    config, scopes, message_count, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    id, workspace_path, title, thread_id, status,
+                    config, scopes, message_count, agent_name, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     session.id,
@@ -150,6 +151,7 @@ class SqliteStorageBackend:
                     config_json,
                     scopes_json,
                     session.message_count,
+                    session.agent_name,
                     session.created_at,
                     session.updated_at,
                 ),
@@ -486,6 +488,7 @@ class SqliteStorageBackend:
             created_at=row["created_at"],
             updated_at=row["updated_at"],
             message_count=row["message_count"],
+            agent_name=row["agent_name"] if "agent_name" in row.keys() else "default",
             scopes=scopes_data,
         )
 

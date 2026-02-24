@@ -12,11 +12,14 @@ from fastapi.responses import JSONResponse
 
 from server.app.api.middleware import ObservabilityMiddleware, SecurityHeadersMiddleware
 from server.app.api.models import HealthStatus, ReadyStatus
-from server.app.api.routes import config, messages, sessions
+from server.app.api.routes import agents, config, messages, sessions
 from server.app.exceptions import RateLimitError
 from server.app.observability import setup_metrics, setup_tracing
 from server.app.observability.mlflow_config import setup_mlflow_tracing
 from server.app.rate_limiter import get_rate_limiter
+from server.app.agent.agent_definition_registry import (
+    initialize_agent_definition_registry,
+)
 from server.app.session_manager import initialize_session_manager
 from server.app.settings import get_settings
 from server.app.storage import create_storage_backend, get_storage_backend, set_storage_backend
@@ -39,6 +42,10 @@ async def lifespan(app: FastAPI):
     # Initialize session manager
     initialize_session_manager(storage_backend, settings)
     logger.info("Session manager initialized")
+
+    # Initialize agent definition registry
+    initialize_agent_definition_registry(settings.workspace_path)
+    logger.info("Agent definition registry initialized")
 
     setup_tracing(
         endpoint=settings.otel_endpoint,
@@ -89,6 +96,7 @@ app.add_middleware(ObservabilityMiddleware)
 app.include_router(sessions.router)
 app.include_router(messages.router)
 app.include_router(config.router)
+app.include_router(agents.router)
 
 
 @app.get("/health", response_model=HealthStatus, tags=["health"])

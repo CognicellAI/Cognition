@@ -94,9 +94,14 @@ class ScenarioTestClient:
 
         return events
 
-    async def create_session(self, title: str = "Test Session") -> str:
+    async def create_session(
+        self, title: str = "Test Session", agent_name: str | None = None
+    ) -> str:
         """Create a new session and return its ID."""
-        response = await self.post("/sessions", json={"title": title})
+        payload: dict[str, Any] = {"title": title}
+        if agent_name is not None:
+            payload["agent_name"] = agent_name
+        response = await self.post("/sessions", json=payload)
         assert response.status_code == 201, f"Failed to create session: {response.status_code}"
         return response.json()["id"]
 

@@ -23,7 +23,6 @@ from server.app.api.models import (
 )
 from server.app.api.scoping import SessionScope, create_scope_dependency
 from server.app.api.sse import EventBuilder, SSEStream, get_last_event_id
-from server.app.observability.mlflow_config import is_mlflow_available
 from server.app.llm.deep_agent_service import (
     DoneEvent,
     ErrorEvent,

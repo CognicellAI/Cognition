@@ -4,6 +4,11 @@ Enhanced tool system, context management, and agent workflows
 built on top of the deepagents foundation.
 """
 
+from server.app.agent.agent_definition_registry import (
+    AgentDefinitionRegistry,
+    get_agent_definition_registry,
+    initialize_agent_definition_registry,
+)
 from server.app.agent.cognition_agent import create_cognition_agent
 from server.app.agent.context import (
     ContextManager,
@@ -16,6 +21,7 @@ from server.app.agent.definition import (
     SubagentDefinition,
     create_default_agent_definition,
     load_agent_definition,
+    load_agent_definition_from_markdown,
 )
 from server.app.agent.runtime import (
     AgentEvent,
@@ -44,7 +50,12 @@ __all__ = [
     "AgentDefinition",
     "SubagentDefinition",
     "load_agent_definition",
+    "load_agent_definition_from_markdown",
     "create_default_agent_definition",
+    # Registry
+    "AgentDefinitionRegistry",
+    "get_agent_definition_registry",
+    "initialize_agent_definition_registry",
     # Runtime
     "AgentRuntime",
     "DeepAgentRuntime",
