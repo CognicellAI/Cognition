@@ -39,7 +39,7 @@ class TestMLflowConfiguration:
 
     def test_setup_mlflow_skipped_when_mlflow_disabled(self):
         """Test that MLflow setup is skipped when mlflow_enabled=False."""
-        from server.app.observability.mlflow_tracing import setup_mlflow_tracing
+        from server.app.observability.mlflow_config import setup_mlflow_tracing
 
         # Create mock settings with mlflow_enabled=False
         mock_settings = MagicMock()
@@ -57,6 +57,7 @@ class TestMLflowConfiguration:
         """Test that MLflow setup is called when mlflow_enabled=True.
 
         Mocks the MLflow imports so setup completes without network calls.
+        Note: Tracing is handled via OpenTelemetry Collector, not direct autolog.
         """
 
         mock_settings = MagicMock()
@@ -64,16 +65,15 @@ class TestMLflowConfiguration:
         mock_settings.mlflow_tracking_uri = "http://localhost:5000"
         mock_settings.mlflow_experiment_name = "cognition-test"
 
-        with patch("server.app.observability.mlflow_tracing.mlflow", create=True) as mock_mlflow:
-            mock_autolog = MagicMock()
+        with patch("server.app.observability.mlflow_config.mlflow", create=True) as mock_mlflow:
             with patch.dict(
                 "sys.modules",
-                {"mlflow": mock_mlflow, "mlflow.langchain": MagicMock(autolog=mock_autolog)},
+                {"mlflow": mock_mlflow},
             ):
                 # Re-import to pick up mocked modules
                 import importlib
 
-                import server.app.observability.mlflow_tracing as mod
+                import server.app.observability.mlflow_config as mod
 
                 importlib.reload(mod)
                 result = mod.setup_mlflow_tracing(mock_settings)
@@ -81,7 +81,6 @@ class TestMLflowConfiguration:
                 assert result is None
                 mock_mlflow.set_tracking_uri.assert_called_once_with("http://localhost:5000")
                 mock_mlflow.set_experiment.assert_called_once_with("cognition-test")
-                mock_autolog.assert_called_once_with(log_traces=True, run_tracer_inline=True)
 
     def test_setup_mlflow_graceful_degradation_when_package_missing(self):
         """Test graceful degradation when MLflow package is not installed."""
@@ -95,7 +94,7 @@ class TestMLflowConfiguration:
         with patch.dict("sys.modules", {"mlflow": None, "mlflow.langchain": None}):
             import importlib
 
-            import server.app.observability.mlflow_tracing as mod
+            import server.app.observability.mlflow_config as mod
 
             importlib.reload(mod)
             result = mod.setup_mlflow_tracing(mock_settings)
