@@ -1,125 +1,73 @@
 # Cognition
 
-> Secure execution, durable state, and audit trails for AI agents.
+> A batteries-included backend for building production AI agent platforms. Define your agent; get REST API, streaming, persistence, sandboxing, and observability automatically.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/release/python-3110/)
 [![Status: Beta](https://img.shields.io/badge/Status-Beta-green.svg)](#)
 
-Cognition is the open-source **Agent Substrate** — a hardened runtime engine that handles the critical infrastructure AI platforms need, but shouldn't have to build. Execution safety, durable persistence, and compliance-ready auditability come out of the box so you can focus on building your domain logic.
-
-## The Platform Paradox
-
-We are in the midst of a platform shift. Every industry—from Cybersecurity to BioTech—is rushing to build "AI Agents" into their core workflows. 
-
-But building a production-grade Agent Platform requires solving three incredibly hard infrastructure problems that have nothing to do with the AI model itself:
-
-1.  **Isolation (Execution):** How do you let an AI run code or tools safely without endangering your production infrastructure?
-2.  **State (Persistence):** How do you ensure an investigation or workflow survives server restarts and remains resumable for weeks?
-3.  **Trust (Auditability):** How do you prove to a regulator or legal team *exactly* what data the AI accessed and why it made a decision?
-
-Most teams waste months building this scaffolding. **Cognition is that scaffolding.**
-
-## Core Primitives
-
-Cognition provides four fundamental primitives that you compose to build your platform:
-
-*   🏗️ **The Cell (Execution)**: Pluggable sandbox backends (Local, Docker, Cloud) with secure command execution. No `shell=True`—commands parsed with `shlex` for safety.
-*   🧬 **The Thread (State)**: Unified StorageBackend protocol supporting SQLite (dev) and PostgreSQL (production). Every step checkpointed; survives crashes and restarts.
-*   🔍 **The Trace (Audit)**: Composable observability with OpenTelemetry and MLflow. Toggle backends via config—run OTel only, MLflow only, both, or neither.
-*   🔌 **The Plug (Extensibility)**: Five-tier customization from `AGENTS.md` files to Python middleware, plus session scoping for multi-tenant isolation.
+Cognition is a headless backend that handles the hard infrastructure problems of production AI agents: sandboxed execution, durable session state, and full observability. Built on [Deep Agents](https://github.com/CognicellAI/Cognition) and [LangGraph](https://langchain-ai.github.io/langgraph/), it provides a declarative model where you define agents and tools, and Cognition provides the runtime, API, and operational infrastructure.
 
 ## Quick Start
 
-### 1. Install Cognition
-
-> **Note:** Cognition is currently in Beta. Install from GitHub while we prepare the PyPI release.
+### Option A — Docker Compose (fastest, no install required)
 
 ```bash
-# Install from GitHub (recommended during Beta)
-pip install git+https://github.com/CognicellAI/Cognition.git
+# Clone and start
+git clone https://github.com/CognicellAI/Cognition.git
+cd Cognition
 
-# Or with uv
-uv pip install git+https://github.com/CognicellAI/Cognition.git
+# Copy environment config and add your API key
+cp .env.example .env
+# Edit .env to add: OPENAI_API_KEY=sk-...
 
-# With specific LLM provider support
+# Start the server
+docker-compose up -d
+
+# Verify it's running
+curl -s http://localhost:8000/health | jq .
+
+# Create a session
+SESSION=$(curl -s -X POST http://localhost:8000/sessions \
+  -H "Content-Type: application/json" \
+  -d '{"title": "My first session"}' | jq -r .id)
+
+# Send a message (streams via Server-Sent Events)
+curl -N -X POST "http://localhost:8000/sessions/$SESSION/messages" \
+  -H "Content-Type: application/json" \
+  -d '{"content": "List the files in the workspace."}'
+```
+
+### Option B — pip install (embed in an existing project)
+
+```bash
+# Install from GitHub
 pip install "git+https://github.com/CognicellAI/Cognition.git#egg=cognition[openai]"
-# or
-pip install "git+https://github.com/CognicellAI/Cognition.git#egg=cognition[all]"
-```
 
-### 2. Configure Your Environment
-
-**Basic Setup:**
-```bash
-# Create config directory
-mkdir -p .cognition
-
-# Create config file
-cat > .cognition/config.yaml << 'EOF'
-server:
-  host: "127.0.0.1"
-  port: 8000
-  log_level: "info"
-
-llm:
-  provider: "openai"
-  model: "gpt-4o"
-  temperature: 0.7
-
-# Enable session scoping for multi-tenancy
-scoping:
-  enabled: true
-  keys: ["user", "project"]
-
-# Configure observability
-observability:
-  otel_enabled: true
-  mlflow_enabled: false
-  metrics_port: 9090
-
-# Choose persistence backend
-persistence:
-  backend: "sqlite"
-  uri: ".cognition/state.db"
-EOF
-```
-
-### 3. Start the Server
-```bash
 # Set your API key
 export OPENAI_API_KEY="sk-..."
 
 # Start the server
 cognition-server
-# Or: uv run python -m server.app.main
 ```
 
-### 4. Create a Multi-Tenant Session
-```bash
-# Create a session with scoping headers
-curl -X POST http://localhost:8000/sessions \
-  -H "Content-Type: application/json" \
-  -H "X-Cognition-Scope-User: alice" \
-  -H "X-Cognition-Scope-Project: security-review" \
-  -d '{"title": "Security Investigation"}'
-```
+## What Cognition Provides
 
-### 5. Stream a Response (SSE)
-```bash
-curl -N -X POST http://localhost:8000/sessions/{id}/messages \
-  -H "Content-Type: application/json" \
-  -H "Accept: text/event-stream" \
-  -H "X-Cognition-Scope-User: alice" \
-  -H "X-Cognition-Scope-Project: security-review" \
-  -d '{"content": "Analyze the logs in ./data/incident-404"}'
-```
+- **Sandboxed Execution** — Pluggable backends: local subprocess, Docker container, or cloud. No `shell=True`; commands parsed with `shlex` for safety.
+- **Durable Sessions** — StorageBackend protocol: SQLite (dev) or PostgreSQL (prod). Every agent step checkpointed; survives crashes and restarts.
+- **Full Observability** — OpenTelemetry traces → MLflow. Toggle independently; zero-config when disabled.
+- **Multi-Tenant Isolation** — Session scoping via `X-Cognition-Scope-*` headers. Rate limiting, CORS, and circuit breaker built in.
+- **Multi-Agent Registry** — Built-in agents (`default`, `readonly`) plus user-defined agents in `.cognition/agents/`. Session-agent binding via `agent_name`.
 
-### 6. Run Database Migrations (Production)
-```bash
-# For PostgreSQL deployments
-cognition db upgrade
-```
+## The Problem Cognition Solves
+
+Building a production AI agent platform requires solving infrastructure problems that have nothing to do with the model itself:
+
+- **Isolation:** How do you let an agent run code or shell commands without endangering your infrastructure?
+- **State:** How do you ensure a workflow survives server restarts and remains resumable across days?
+- **Auditability:** How do you prove to an auditor exactly what the agent accessed and what logic it used?
+
+Cognition solves these three problems so you don't have to.
 
 ## Architecture
 
@@ -181,10 +129,39 @@ Cognition uses a "Convention over Configuration" model. Most customizations requ
 | Level | Mechanism | Effort | Example |
 |---|---|---|---|
 | **Memory** | `AGENTS.md` | No Code | Project-specific rules & style |
-| **Skills** | `SKILL.md` files | No Code | Reusable runbooks (e.g., "how to deploy") |
-| **Subagents** | YAML Config | Config | Delegated specialists (e.g., "security-expert") |
+| **Skills** | `.cognition/skills/` | No Code | Reusable runbooks (e.g., "how to deploy") |
+| **Agents** | `.cognition/agents/` | Config | Delegated specialists (e.g., "security-expert") |
 | **Tools** | Python Functions | Code | Proprietary API integrations |
 | **Middleware** | Python Classes | Code | Approval gates, custom telemetry |
+
+## Multi-Agent Registry
+
+Cognition ships with built-in agents and loads user-defined agents from `.cognition/agents/`:
+
+| Agent | Mode | Description |
+|---|---|---|
+| `default` | primary | Full-access coding agent with all tools enabled |
+| `readonly` | primary | Analysis-only agent; write and execute tools disabled |
+| Your agents | primary or subagent | Defined in `.cognition/agents/*.md` or `*.yaml` |
+
+**Agent Modes:**
+- `primary` — Can be used as the main agent for a session
+- `subagent` — Can only be invoked by other agents via the `task` tool
+- `all` — Can function as both
+
+Create a session with a specific agent:
+
+```bash
+curl -X POST http://localhost:8000/sessions \
+  -H "Content-Type: application/json" \
+  -d '{"agent_name": "readonly", "title": "Code Review"}'
+```
+
+List all available agents:
+
+```bash
+curl http://localhost:8000/agents
+```
 
 ## Blueprints
 
@@ -198,7 +175,7 @@ The CLI is just one example of what you can build on Cognition. See our [Bluepri
 
 ## Production Features
 
-Cognition is built for production deployments with comprehensive table-stakes, robustness, and full-vision features:
+Cognition is built for production deployments:
 
 | Feature | Status | Description |
 |---------|--------|-------------|
@@ -212,7 +189,8 @@ Cognition is built for production deployments with comprehensive table-stakes, r
 | **Alembic Migrations** | ✅ | Database schema versioning |
 | **Circuit Breaker** | ✅ | Resilient LLM provider failover |
 | **CORS** | ✅ | Cross-origin web app support |
-| **MLflow Evaluation** | ✅ | Offline evaluation and prompt registry |
+| **MLflow Evaluation** | ✅ | Offline evaluation pipeline with 3 built-in scorers |
+| **Multi-Agent Registry** | ✅ | Built-in + user-defined agents; `GET /agents` endpoint |
 
 ## Testing
 
@@ -230,9 +208,9 @@ uv run pytest tests/unit/test_message_store.py -v
 ```
 
 **Current Status:**
-- ✅ 223+ unit tests passing
-- ✅ 40/41 E2E tests passing (1 MLflow async issue - upstream)
-- ✅ Code coverage for P0/P1 features
+- ✅ 308+ unit tests passing
+- ✅ 29/29 E2E scenario tests passing
+- ✅ Code coverage for P0/P1/P2/P3 features
 
 ## Documentation
 
@@ -240,6 +218,10 @@ uv run pytest tests/unit/test_message_store.py -v
 *   🛠️ **[Extending Agents](./docs/guides/extending-agents.md)**: How to add memory, skills, and tools.
 *   ⚙️ **[Configuration Reference](./docs/guides/configuration.md)**: YAML and Environment variable details.
 *   🚀 **[Deployment Guide](./docs/guides/deployment.md)**: Running in Docker and Kubernetes.
+
+## Contributing
+
+Bug reports, questions, and pull requests are welcome. Open an issue before submitting large changes. See the test suite for patterns: `uv run pytest tests/unit/ -v`.
 
 ## License
 
