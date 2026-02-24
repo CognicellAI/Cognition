@@ -122,7 +122,30 @@ Managed by `AsyncSqliteSaver` (from LangGraph) or database-specific checkpointer
 *   **Purpose:** If the server process is killed mid-turn, the agent loads the latest checkpoint and resumes its exact internal state.
 *   **Durability:** PostgreSQL backend for production deployments.
 
-## 5. Middleware Layer (The Hooks)
+## 5. Multi-Agent Registry
+
+Cognition supports a **Multi-Agent Registry** that enables multiple specialized agents within a single workspace. The registry manages built-in agents (shipped with the server) and user-defined agents (loaded from `.cognition/agents/`).
+
+### Agent Modes
+
+| Mode | Description | Session Creation | Subagent Delegation |
+|------|-------------|------------------|---------------------|
+| `primary` | Full session agents | ✅ Yes | Via `task` tool |
+| `subagent` | Specialized experts | ❌ No | Via `task` tool |
+| `all` | Dual-purpose agents | ✅ Yes | Via `task` tool |
+
+### Registry Components
+
+- **`AgentDefinitionRegistry`** (`server/app/agent/agent_definition_registry.py`): Central catalog managing both built-in and user-defined agents
+- **Built-in Agents**: `default` (full access) and `readonly` (analysis-only) — always present
+- **User-Defined Agents**: Loaded from `.cognition/agents/*.md` and `.cognition/agents/*.yaml`
+- **`to_subagent()`**: Translates `AgentDefinition` to Deep Agents' `SubAgent` TypedDict
+
+### Session-Agent Binding
+
+Each session is bound to a primary agent at creation time (`agent_name` field). The selected agent is compiled with all available subagents from the registry passed to Deep Agents' `create_deep_agent(subagents=[...])`.
+
+## 6. Middleware Layer (The Hooks)
 
 Between the Agent Runtime and the Execution Backend lies the **Middleware Layer**. This is where Cognition-specific logic is injected without modifying the core ReAct loop.
 
@@ -147,5 +170,6 @@ Every internal component is instrumented with **OpenTelemetry**.
 - **Language:** Python 3.11+
 - **Framework:** FastAPI, LangGraph, DeepAgents
 - **Database:** SQLite (via aiosqlite) for development; PostgreSQL (via asyncpg) for production
-- **Observability:** OpenTelemetry (OTLP Protocol)
+- **Observability:** OpenTelemetry (OTLP Protocol) → MLflow via OpenTelemetry Collector
+- **Multi-Agent:** Deep Agents native `SubAgent` TypedDict for subagent compilation and routing
 - **Networking:** HTTP/1.1 (REST) + EventSource (SSE)

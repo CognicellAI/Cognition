@@ -47,21 +47,72 @@ To run a security audit:
 
 ---
 
-## 3. Define Subagents (Specialized Experts)
+## 3. Define Custom Agents
 
-For complex tasks, you can define specialized subagents in your configuration.
+Cognition supports a **Multi-Agent Registry** that allows you to define both primary agents (for session creation) and specialized subagents (for delegation via the `task` tool).
 
-Edit `.cognition/config.yaml`:
+### Built-in Agents
 
-```yaml
-agent:
-  subagents:
-    - name: test-runner
-      description: "Specialist in running and debugging Python tests."
-      system_prompt: "You are a test automation expert. Use pytest to find and fix failures."
+Cognition ships with built-in agents available out of the box:
+
+| Agent | Mode | Description |
+|-------|------|-------------|
+| `default` | primary | Full-access coding agent with all tools enabled |
+| `readonly` | primary | Analysis-only agent with write/execute tools disabled |
+
+### Creating Custom Agents
+
+Create agent definition files in `.cognition/agents/`:
+
+**Markdown format** (`.cognition/agents/researcher.md`):
+```markdown
+---
+name: researcher
+description: A specialized research agent for gathering information
+mode: subagent
+---
+
+You are a specialized research agent focused on gathering and synthesizing information.
+You should search for relevant information, analyze sources, and provide comprehensive summaries.
 ```
 
-**Result:** Your primary agent will get a `task` tool. It can say: *"I'll use the test-runner subagent to debug this failure."*
+**YAML format** (`.cognition/agents/security-auditor.yaml`):
+```yaml
+name: security-auditor
+description: Security-focused code reviewer
+mode: subagent
+system_prompt: |
+  You are a security auditor. Focus on identifying vulnerabilities,
+  unsafe patterns, and compliance issues in the code.
+```
+
+**Agent Modes:**
+- `primary` — Can be used to create sessions (e.g., `POST /sessions` with `agent_name`)
+- `subagent` — Can only be invoked by other agents via the `task` tool
+- `all` — Can function as both primary and subagent
+
+### Using Custom Agents
+
+**For sessions:** Create a session with a specific primary agent:
+```bash
+curl -X POST http://localhost:8000/sessions \
+  -H "Content-Type: application/json" \
+  -d '{"agent_name": "readonly", "title": "Code Review"}'
+```
+
+**For subagent delegation:** All `subagent` and `all` mode agents are automatically available to primary agents via Deep Agents' native `task` tool. Your primary agent can say: *"I'll use the researcher subagent to gather more information."*
+
+### Agent API
+
+Query available agents via the API:
+
+```bash
+# List all non-hidden agents
+curl http://localhost:8000/agents
+
+# Get specific agent details
+curl http://localhost:8000/agents/readonly
+```
 
 ---
 

@@ -52,6 +52,22 @@ curl -X POST http://localhost:8000/sessions \
 
 Save the `id` from the response. We'll use it as `SESSION_ID`.
 
+### Choose an Agent (Optional)
+
+By default, sessions use the `default` agent. You can specify a different agent:
+
+```bash
+# Use the readonly agent for analysis-only tasks
+curl -X POST http://localhost:8000/sessions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "title": "Code Review",
+    "agent_name": "readonly"
+  }'
+```
+
+Available agents: `default` (full access), `readonly` (analysis only). Custom agents can be defined in `.cognition/agents/`.
+
 ### Multi-Tenant Scoping (Optional)
 
 For multi-user platforms, enable session scoping:
