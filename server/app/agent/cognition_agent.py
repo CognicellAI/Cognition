@@ -267,7 +267,13 @@ def create_cognition_agent(
             prompt = SYSTEM_PROMPT_WITH_CONTEXT
     agent_memory = list(memory) if memory is not None else settings.agent_memory
     agent_skills = list(skills) if skills is not None else settings.agent_skills
-    agent_subagents = list(subagents) if subagents is not None else settings.agent_subagents
+    raw_subagents = list(subagents) if subagents is not None else settings.agent_subagents
+    # Normalize subagent specs: ensure required 'description' key is present
+    # (config.yaml subagents may omit it; deepagents requires it)
+    agent_subagents = [
+        {**s, "description": s.get("description", "")} if isinstance(s, dict) else s
+        for s in raw_subagents
+    ]
     agent_interrupt_on = (
         dict(interrupt_on) if interrupt_on is not None else settings.agent_interrupt_on
     )

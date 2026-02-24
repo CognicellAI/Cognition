@@ -26,7 +26,10 @@ def test_create_cognition_agent_pluggability():
         args, kwargs = mock_create.call_args
         assert kwargs["memory"] == ["TEST_MEMORY.md"]
         assert kwargs["skills"] == [".cognition/skills/"]
-        assert kwargs["subagents"] == [{"name": "test-subagent", "system_prompt": "..."}]
+        # description is normalized to "" when missing (required by deepagents SubAgent spec)
+        assert kwargs["subagents"] == [
+            {"name": "test-subagent", "system_prompt": "...", "description": ""}
+        ]
         assert kwargs["interrupt_on"] == {"execute": True}
 
         # Verify middleware includes our custom ones

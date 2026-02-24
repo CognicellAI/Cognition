@@ -31,7 +31,7 @@ async def test_agent_full_config_passing(tmp_path):
     workspace = tmp_path / "workspace"
     workspace.mkdir()
 
-    subagents = [{"name": "test-subagent", "system_prompt": "..."}]
+    subagents = [{"name": "test-subagent", "system_prompt": "...", "description": "Test subagent"}]
     interrupt_on = {"execute": True}
 
     with patch("server.app.agent.cognition_agent.create_deep_agent") as mock_create:
