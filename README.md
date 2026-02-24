@@ -90,8 +90,8 @@ graph TD
         end
         
         subgraph "Storage & Execution"
-            Storage[StorageBackend Protocol<br/>SQLite | PostgreSQL]
-            Exec[ExecutionBackend Protocol<br/>Local | Docker | Cloud]
+            Storage[StorageBackend Protocol]
+            Exec[ExecutionBackend Protocol]
         end
         
         subgraph "Observability"
