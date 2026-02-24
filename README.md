@@ -75,29 +75,29 @@ Cognition is a batteries-included agent backend following a strict 7-layer archi
 
 ```mermaid
 graph TD
-    subgraph "Your Application (The UX)"
+    subgraph "Your Application"
         UI[Custom Dashboard / IDE / CLI]
         API_GW[Your API Gateway]
     end
 
-    subgraph "The Substrate (Cognition Engine)"
+    subgraph "Cognition Engine"
         API[REST API / SSE Stream]
         
-        subgraph "Layer 7: Observability"
-            OTel[OpenTelemetry Traces]
-            MLflow[MLflow Experiments]
-            Prom[Prometheus Metrics]
+        subgraph "Agent Runtime"
+            Router[AgentRuntime Protocol]
+            Circuit[Circuit Breaker]
+            Scope[Session Scoping]
         end
         
-        subgraph "Layer 2-3: Storage & Execution"
+        subgraph "Storage & Execution"
             Storage[StorageBackend Protocol<br/>SQLite | PostgreSQL]
             Exec[ExecutionBackend Protocol<br/>Local | Docker | Cloud]
         end
         
-        subgraph "Layer 4-6: Agent Runtime"
-            Router[AgentRuntime Protocol]
-            Circuit[Circuit Breaker]
-            Scope[Session Scoping]
+        subgraph "Observability"
+            OTel[OpenTelemetry Traces]
+            MLflow[MLflow Experiments]
+            Prom[Prometheus Metrics]
         end
     end
 
@@ -108,8 +108,9 @@ graph TD
     Router --> Circuit
     Circuit --> Storage
     Router --> Exec
-    Router -.-> OTel
-    Router -.-> MLflow
+    Router --> OTel
+    Router --> MLflow
+    Router --> Prom
 ```
 
 ### Key Architectural Patterns
