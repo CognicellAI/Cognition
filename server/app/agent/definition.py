@@ -100,7 +100,7 @@ class AgentDefinition(BaseModel):
     memory: list[str] = Field(default_factory=list)
     subagents: list[SubagentDefinition] = Field(default_factory=list)
     interrupt_on: dict[str, bool] = Field(default_factory=dict)
-    middleware: list[str] = Field(default_factory=list)
+    middleware: list[str | dict[str, Any]] = Field(default_factory=list)
     config: AgentConfig = Field(default_factory=AgentConfig)
     # P3 Multi-Agent Registry additions
     mode: Literal["primary", "subagent", "all"] = Field(default="all")
@@ -151,15 +151,21 @@ class AgentDefinition(BaseModel):
 
     @field_validator("middleware")
     @classmethod
-    def validate_middleware(cls, v: list[str]) -> list[str]:
-        """Validate middleware class paths."""
-        for middleware_path in v:
-            if not middleware_path:
-                raise ValueError("Middleware path cannot be empty")
-            parts = middleware_path.split(".")
-            if len(parts) < 2:
+    def validate_middleware(cls, v: list[str | dict[str, Any]]) -> list[str | dict[str, Any]]:
+        """Validate middleware class paths or dict specs."""
+        for item in v:
+            if isinstance(item, str):
+                if not item:
+                    raise ValueError("Middleware path cannot be empty")
+                parts = item.split(".")
+                if len(parts) < 2:
+                    raise ValueError(f"Middleware path must be a valid Python class path: {item}")
+            elif isinstance(item, dict):
+                if "name" not in item:
+                    raise ValueError("Middleware dict must have a 'name' field")
+            else:
                 raise ValueError(
-                    f"Middleware path must be a valid Python class path: {middleware_path}"
+                    f"Middleware must be a string path or dict spec, got: {type(item)}"
                 )
         return v
 

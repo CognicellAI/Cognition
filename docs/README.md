@@ -112,5 +112,6 @@ Cognition is domain-agnostic. It powers platforms such as:
 1.  **[Core Concepts](./concepts/execution-environments.md):** Understand the primitives (Cell, Thread, Trace, Plug) in detail.
 2.  **[Technical Architecture](./concepts/architecture.md):** Deep dive into the engine's internal design and data flow.
 3.  **[Extending Agents](./guides/extending-agents.md):** Learn how to customize agent behavior with Skills and Memory.
-4.  **[Blueprints](./blueprints/cyber-investigation.md):** See a reference architecture for a Cyber Security Investigation Platform.
-5.  **[Build Guide](./guides/building-platforms.md):** Learn how to integrate the Cognition API into your application.
+4.  **[Tool Registry](./guides/tool-registry.md):** Create custom tools with automatic discovery and hot-reloading.
+5.  **[Blueprints](./blueprints/cyber-investigation.md):** See a reference architecture for a Cyber Security Investigation Platform.
+6.  **[Build Guide](./guides/building-platforms.md):** Learn how to integrate the Cognition API into your application.

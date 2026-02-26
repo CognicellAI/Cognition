@@ -85,6 +85,28 @@ agent:
     - ".cognition/skills/"
   subagents: []
   interrupt_on: {}
+  # Middleware configuration
+  # Supports well-known upstream middleware names with parameters:
+  #   - tool_retry: Exponential backoff on tool failure
+  #     params: max_retries (default: 3), backoff_factor (default: 2.0)
+  #   - tool_call_limit: Enforce per-tool and global call limits
+  #     params: run_limit, thread_limit, per_tool_limits
+  #   - pii: Detect and redact PII in messages
+  #     params: pii_types (email, phone, credit_card, ip, ssn), strategy (redact, mask)
+  #   - human_in_the_loop: Request human approval before tool execution
+  #     params: approve_tools (list of tool names requiring approval)
+  #
+  # Examples:
+  # middleware:
+  #   - name: tool_retry
+  #     max_retries: 3
+  #     backoff_factor: 2.0
+  #   - name: tool_call_limit
+  #     run_limit: 20
+  #   - name: pii
+  #     pii_types: [email, phone]
+  #     strategy: redact
+  middleware: []
 
 # Persistence settings
 # Configure how session state is stored.

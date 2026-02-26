@@ -11,6 +11,69 @@ from server.app.observability import LLM_CALL_DURATION, TOOL_CALL_COUNT, get_log
 logger = get_logger(__name__)
 
 
+class ToolSecurityMiddleware(AgentMiddleware):
+    """Middleware for runtime tool security auditing and blocking.
+
+    This middleware intercepts every tool call and:
+    - Logs tool invocations to the structured log pipeline
+    - Blocks tools on a configurable blocklist
+
+    The blocked_tools list is sourced from Settings.blocked_tools.
+    """
+
+    def __init__(self, blocked_tools: list[str] | None = None) -> None:
+        """Initialize the middleware.
+
+        Args:
+            blocked_tools: List of tool names to block. If None, uses settings.
+        """
+        self._blocked_tools = set(blocked_tools or [])
+
+    @property
+    def name(self) -> str:
+        return "cognition_tool_security"
+
+    async def awrap_tool_call(self, request: Any, handler: Any) -> Any:
+        """Intercept tool calls for security auditing and blocking.
+
+        Args:
+            request: The tool call request.
+            handler: The next handler in the chain.
+
+        Returns:
+            Tool result or error message if blocked.
+        """
+        tool_name = (
+            request.tool_call.get("name", "unknown") if hasattr(request, "tool_call") else "unknown"
+        )
+        session_id = (
+            getattr(request.runtime.config, "configurable", {}).get("thread_id")
+            if hasattr(request, "runtime")
+            else None
+        )
+
+        logger.info(
+            "tool_call",
+            tool=tool_name,
+            session_id=session_id,
+        )
+
+        if tool_name in self._blocked_tools:
+            logger.warning("tool_blocked", tool=tool_name, session_id=session_id)
+            from langchain_core.messages import ToolMessage
+
+            return ToolMessage(
+                content=f"Tool '{tool_name}' is disabled by server policy.",
+                tool_call_id=request.tool_call.get("id")
+                if hasattr(request, "tool_call")
+                else "unknown",
+                name=tool_name,
+                status="error",
+            )
+
+        return await handler(request)
+
+
 class CognitionObservabilityMiddleware(AgentMiddleware):
     """Middleware for tracking LLM and tool metrics."""
 

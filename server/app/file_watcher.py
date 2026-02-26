@@ -11,7 +11,7 @@ import fnmatch
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import structlog
 from watchdog.events import (
@@ -119,9 +119,7 @@ class WorkspaceFileHandler(FileSystemEventHandler):
                 return True
         return False
 
-    def _notify_change(
-        self, event_type: str, src_path: str, dest_path: str | None = None
-    ) -> None:
+    def _notify_change(self, event_type: str, src_path: str, dest_path: str | None = None) -> None:
         """Notify watchers of a change."""
         if self._should_ignore(src_path):
             return
@@ -199,6 +197,7 @@ class WorkspaceWatcher:
         self.config = config or FileWatcherConfig()
 
         self._observer: Observer | None = None
+        self._event_loop: asyncio.AbstractEventLoop | None = None
         self._handlers: dict[str, WorkspaceFileHandler] = {}
         self._debounce_timers: dict[str, asyncio.TimerHandle] = {}
 
@@ -344,6 +343,13 @@ class WorkspaceWatcher:
             logger.warning("Watcher already started")
             return
 
+        # Capture the event loop for use in callbacks from non-asyncio threads
+        try:
+            self._event_loop = asyncio.get_event_loop()
+        except RuntimeError:
+            # No running event loop - will be set when first needed
+            self._event_loop = None
+
         self._observer = Observer()
 
         # Schedule all registered handlers
@@ -384,12 +390,23 @@ class WorkspaceWatcher:
         if key in self._debounce_timers:
             self._debounce_timers[key].cancel()
 
-        # Create new debounced timer
-        loop = asyncio.get_event_loop()
-        timer = loop.call_later(
-            self.config.debounce_seconds,
-            lambda: asyncio.create_task(self._process_change(event, watch_type)),
-        )
+        # Get the event loop - either captured or current running one
+        loop = self._event_loop
+        if loop is None:
+            try:
+                loop = asyncio.get_event_loop()
+            except RuntimeError:
+                # No running event loop - skip the callback
+                logger.warning("No event loop available for file change callback")
+                return
+
+        # Use call_soon_threadsafe to safely schedule from watchdog thread
+        def delayed_process():
+            if loop.is_closed():
+                return
+            asyncio.run_coroutine_threadsafe(self._process_change(event, watch_type), loop)
+
+        timer = loop.call_later(self.config.debounce_seconds, delayed_process)
         self._debounce_timers[key] = timer
 
         logger.debug(
@@ -436,7 +453,8 @@ class WorkspaceWatcher:
 
             elif watch_type == "middleware" and self.agent_registry:
                 # Mark middleware pending (session-based reload)
-                self.agent_registry.mark_middleware_pending()
+                # Set the _middleware_pending flag directly
+                self.agent_registry._middleware_pending = True  # type: ignore[attr-defined]
                 logger.info("Middleware marked pending")
 
                 # Notify GUI callbacks

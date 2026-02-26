@@ -448,6 +448,71 @@ class DeepAgentRuntime:
         return self._checkpointer
 
 
+def _resolve_middleware(mw_spec: str | dict[str, Any]) -> Any | None:
+    """Resolve middleware from string path or dict spec.
+
+    Supports well-known upstream middleware names:
+    - tool_retry -> ToolRetryMiddleware
+    - tool_call_limit -> ToolCallLimitMiddleware
+    - pii -> PIIMiddleware
+    - human_in_the_loop -> HumanInTheLoopMiddleware
+
+    Unknown names fall back to dotted import path resolution.
+
+    Args:
+        mw_spec: Middleware specification (string path or dict with name and kwargs)
+
+    Returns:
+        Instantiated middleware or None if resolution failed
+    """
+    import structlog
+
+    logger = structlog.get_logger(__name__)
+
+    # Handle dict spec: {"name": "...", "max_retries": 3, ...}
+    if isinstance(mw_spec, dict):
+        name = mw_spec.get("name", "")
+        kwargs = {k: v for k, v in mw_spec.items() if k != "name"}
+    else:
+        name = mw_spec
+        kwargs = {}
+
+    # Well-known upstream middleware mappings
+    upstream_middleware: dict[str, tuple[str, str]] = {
+        "tool_retry": ("langchain.agents.middleware", "ToolRetryMiddleware"),
+        "tool_call_limit": ("langchain.agents.middleware", "ToolCallLimitMiddleware"),
+        "pii": ("langchain.agents.middleware", "PIIMiddleware"),
+        "human_in_the_loop": ("langchain.agents.middleware", "HumanInTheLoopMiddleware"),
+    }
+
+    try:
+        if name in upstream_middleware:
+            # Import upstream middleware
+            module_path, class_name = upstream_middleware[name]
+            module = __import__(module_path, fromlist=[class_name])
+            mw_class = getattr(module, class_name)
+            return mw_class(**kwargs)
+        else:
+            # Fall back to dotted import path resolution
+            parts = name.split(".")
+            if len(parts) < 2:
+                logger.warning(f"Invalid middleware path: {name}")
+                return None
+
+            module_path = ".".join(parts[:-1])
+            class_name = parts[-1]
+            module = __import__(module_path, fromlist=[class_name])
+            mw_class = getattr(module, class_name)
+            return mw_class(**kwargs)
+
+    except ImportError as e:
+        logger.warning(f"Failed to import middleware: {name}", error=str(e))
+        return None
+    except Exception as e:
+        logger.warning(f"Failed to instantiate middleware: {name}", error=str(e))
+        return None
+
+
 async def create_agent_runtime(
     definition: AgentDefinition,
     workspace_path: str | Path,
@@ -488,20 +553,58 @@ async def create_agent_runtime(
         storage_backend = create_storage_backend(settings)
         checkpointer = await storage_backend.get_checkpointer()
 
-    # Resolve tool paths
+    # Resolve tool paths with namespace validation
     tools: list[Any] = []
+    trusted_namespaces = (
+        getattr(settings, "trusted_tool_namespaces", ["server.app.tools"])
+        if settings
+        else ["server.app.tools"]
+    )
     for tool_path in definition.tools:
         try:
             module_path, tool_name = tool_path.rsplit(".", 1)
+
+            # Validate namespace allowlist
+            is_trusted = any(
+                module_path == ns or module_path.startswith(ns + ".") for ns in trusted_namespaces
+            )
+            if not is_trusted:
+                from server.app.exceptions import CognitionError
+
+                raise CognitionError(
+                    f"Tool path '{tool_path}' is not in a trusted namespace. "
+                    f"Allowed namespaces: {trusted_namespaces}"
+                )
+
             module = __import__(module_path, fromlist=[tool_name])
             tool = getattr(module, tool_name)
             tools.append(tool)
-        except (ImportError, AttributeError, ValueError):
-            # Log warning but continue
+        except ImportError as e:
             import structlog
 
             logger = structlog.get_logger(__name__)
-            logger.warning(f"Failed to load tool: {tool_path}")
+            logger.warning(f"Failed to import tool: {tool_path}", error=str(e))
+        except AttributeError as e:
+            import structlog
+
+            logger = structlog.get_logger(__name__)
+            logger.warning(f"Tool not found in module: {tool_path}", error=str(e))
+        except Exception as e:
+            # Check if this is a CognitionError by checking module
+            if hasattr(e, "__module__") and "exceptions" in str(e.__module__):
+                # Re-raise our own errors
+                raise
+            import structlog
+
+            logger = structlog.get_logger(__name__)
+            logger.warning(f"Failed to load tool: {tool_path}", error=str(e))
+
+    # Resolve middleware with upstream support
+    resolved_middleware: list[Any] = []
+    for mw_spec in definition.middleware:
+        mw_instance = _resolve_middleware(mw_spec)
+        if mw_instance is not None:
+            resolved_middleware.append(mw_instance)
 
     # Create the Deep Agent
     agent = create_cognition_agent(
@@ -510,6 +613,7 @@ async def create_agent_runtime(
         tools=tools if tools else None,
         memory=definition.memory,
         skills=definition.skills,
+        middleware=resolved_middleware if resolved_middleware else None,
         checkpointer=checkpointer,
         settings=settings,
     )

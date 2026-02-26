@@ -1,68 +1,47 @@
 # Guide: Adding Custom Tools
 
-> **Teach your Agent new skills.**
+> **DEPRECATED: This guide is for manual tool registration. See [Tool Registry](./tool-registry.md) for automatic discovery.**
 
-Out of the box, Cognition knows how to read files and run shell commands. But to build a specialized platform, you need to give it domain-specific tools.
+## ⚠️ This Guide is Deprecated
 
-## 1. Define the Tool
+The Tool Registry now provides **automatic discovery** and **hot-reloading** for custom tools. 
 
-A tool is just a Python function with type hints and a docstring. The Agent uses the docstring to understand *when* and *how* to use the tool.
-
-Create a new file `server/app/agent/custom_tools.py`:
-
-```python
-from langchain_core.tools import tool
-
-@tool
-def fetch_stock_price(symbol: str) -> str:
-    """Fetch the current price of a stock ticker.
-    
-    Args:
-        symbol: The stock symbol (e.g., 'AAPL', 'BTC-USD')
-    """
-    return f"The price of {symbol} is $150.00 (Mock Data)"
-```
-
-## 2. Register the Tool
-
-You need to tell the Agent Factory to include this tool when creating new agents.
-
-Edit `server/app/agent/cognition_agent.py`:
-
-```python
-from server.app.agent.custom_tools import fetch_stock_price
-
-def create_cognition_agent(
-    # ...
-    tools: list[Any] | None = None,
-):
-    # ...
-    agent_tools = list(tools) if tools else []
-    agent_tools.append(fetch_stock_price)
-    
-    agent = create_deep_agent(
-        # ...
-        tools=agent_tools,
-    )
-```
-
-## 3. Verify
-
-Rebuild and start a session:
-
-```bash
-docker-compose up -d --build
-```
-
-Ask the agent: *"What is the price of AAPL?"*
+**Please refer to the [Tool Registry Guide](./tool-registry.md) for current best practices.**
 
 ---
 
-## Alternative: Skills (Zero-Code)
+## Legacy: Manual Tool Registration
 
-If your tool is a multi-step workflow (e.g., "Run a security audit"), you can use **Skills** instead of writing Python code.
+If you need to register tools programmatically (for built-in tools only):
 
-Refer to the **[Extending Agents Guide](./extending-agents.md)** for more information on:
-- **Memory:** Adding project-specific rules via `AGENTS.md`.
-- **Skills:** Defining reusable workflows in `.cognition/skills/`.
-- **Subagents:** Orchestrating specialized experts.
+```python
+from server.app.agent_registry import get_agent_registry
+
+registry = get_agent_registry()
+registry.register_tool(
+    name="my_api_client",
+    factory=lambda: create_api_client(),
+    source="programmatic"
+)
+```
+
+## Why Automatic Discovery is Better
+
+1. **No Code Changes Required**: Drop files in `.cognition/tools/`
+2. **Hot Reload**: Changes picked up immediately
+3. **Security Scanning**: Automatic AST scanning
+4. **Error Visibility**: Clear error messages via CLI/API
+5. **Middleware Support**: Built-in retry, rate limiting, PII redaction
+
+## Quick Reference
+
+- **Create Tool**: `cognition create tool my_tool`
+- **List Tools**: `cognition tools list`
+- **Reload Tools**: `cognition tools reload`
+- **See Errors**: `curl http://localhost:8000/tools/errors`
+
+## Related Documentation
+
+- **[Tool Registry](./tool-registry.md)** - Complete guide for custom tools
+- **[Tool Registry Design](../concepts/tool-registry-design.md)** - Architecture documentation
+- **[Extending Agents](./extending-agents.md)** - Skills and memory

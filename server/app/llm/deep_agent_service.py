@@ -93,6 +93,20 @@ class DeepAgentStreamingService:
             # Get checkpointer from storage backend
             checkpointer = await self.storage_backend.get_checkpointer()
 
+            # Get tools from AgentRegistry if available
+            custom_tools = None
+            try:
+                from server.app.agent_registry import get_agent_registry
+
+                registry = get_agent_registry()
+                custom_tools = registry.create_tools()
+            except RuntimeError:
+                # Registry not initialized (e.g., in test contexts)
+                custom_tools = []
+            except Exception:
+                # Any other error, fall back to no custom tools
+                custom_tools = []
+
             # Create the deep agent for this session with the model
             agent = create_cognition_agent(
                 project_path=project_path,
@@ -100,6 +114,7 @@ class DeepAgentStreamingService:
                 store=None,
                 checkpointer=checkpointer,
                 settings=llm_settings,
+                tools=custom_tools if custom_tools else None,
             )
 
             # Build the input with enhanced system prompt

@@ -12,10 +12,15 @@ Key features:
 - Tool hot-reload (immediate for new sessions)
 - Middleware session-based reload (existing sessions unchanged)
 - Integration with SessionManager for agent lifecycle
+
+Security:
+- AST scanning before exec_module to detect dangerous imports
+- Configurable security levels: "warn" (default) or "strict"
 """
 
 from __future__ import annotations
 
+import ast
 import importlib
 import inspect
 import sys
@@ -38,6 +43,80 @@ from server.app.settings import Settings
 logger = structlog.get_logger(__name__)
 
 T = TypeVar("T")
+
+# ============================================================================
+# Security: Dangerous imports and calls
+# ============================================================================
+
+BANNED_IMPORTS = {
+    "os",
+    "subprocess",
+    "socket",
+    "ctypes",
+    "sys",
+    "shutil",
+    "importlib",
+    "pty",
+    "signal",
+    "multiprocessing",
+    "threading",
+    "concurrent",
+    "code",
+    "codeop",
+    "builtins",
+}
+
+BANNED_CALLS = {"exec", "eval", "compile", "__import__"}
+
+
+class SecurityASTVisitor(ast.NodeVisitor):
+    """AST visitor to detect dangerous imports and calls."""
+
+    def __init__(self) -> None:
+        self.violations: list[str] = []
+
+    def visit_Import(self, node: ast.Import) -> None:
+        for alias in node.names:
+            module = alias.name.split(".")[0]
+            if module in BANNED_IMPORTS:
+                self.violations.append(f"Import of banned module: {alias.name}")
+        self.generic_visit(node)
+
+    def visit_ImportFrom(self, node: ast.ImportFrom) -> None:
+        if node.module:
+            module = node.module.split(".")[0]
+            if module in BANNED_IMPORTS:
+                self.violations.append(f"Import from banned module: {node.module}")
+        self.generic_visit(node)
+
+    def visit_Call(self, node: ast.Call) -> None:
+        func_name = None
+        if isinstance(node.func, ast.Name):
+            func_name = node.func.id
+        elif isinstance(node.func, ast.Attribute):
+            func_name = node.func.attr
+        if func_name in BANNED_CALLS:
+            self.violations.append(f"Call to dangerous function: {func_name}")
+        self.generic_visit(node)
+
+
+def scan_for_security_violations(source_code: str) -> list[str]:
+    """Scan source code for dangerous imports and calls.
+
+    Args:
+        source_code: Python source code to scan.
+
+    Returns:
+        List of violation messages (empty if no violations).
+    """
+    try:
+        tree = ast.parse(source_code)
+        visitor = SecurityASTVisitor()
+        visitor.visit(tree)
+        return visitor.violations
+    except SyntaxError:
+        return []
+
 
 # ============================================================================
 # Factory Types
@@ -69,6 +148,25 @@ class MiddlewareRegistration:
     name: str
     factory: MiddlewareFactory
     source: str  # 'programmatic' or file path
+
+
+@dataclass
+class ToolLoadError:
+    """Error record for tool loading failures."""
+
+    file: str
+    error_type: str
+    message: str
+    timestamp: float
+
+    def to_dict(self) -> dict[str, Any]:
+        """Convert to dict for API response."""
+        return {
+            "file": self.file,
+            "error_type": self.error_type,
+            "error": self.message,
+            "timestamp": self.timestamp,
+        }
 
 
 # ============================================================================
@@ -121,6 +219,9 @@ class AgentRegistry:
 
         # Pending changes flag (for middleware session-based reload)
         self._middleware_pending: bool = False
+
+        # Tool load errors for user feedback
+        self._load_errors: list[ToolLoadError] = []
 
     # ========================================================================
     # Tool Registration
@@ -409,35 +510,113 @@ class AgentRegistry:
         Returns:
             Number of tools loaded.
         """
+        import time
+
         module_name = f"_cognition_tools_{py_file.stem}"
         file_path = str(py_file)
+
+        # Clear any existing error for this file
+        self._load_errors = [e for e in self._load_errors if e.file != str(py_file)]
 
         # Remove existing module if already loaded (for hot reload)
         if module_name in sys.modules:
             del sys.modules[module_name]
 
-        # Load the module
-        spec = importlib.util.spec_from_file_location(module_name, file_path)
-        if not spec or not spec.loader:
-            return 0
+        # AST security scan before loading
+        try:
+            source_code = py_file.read_text()
+            violations = scan_for_security_violations(source_code)
+            if violations:
+                security_level = (
+                    getattr(self._settings, "tool_security", "warn") if self._settings else "warn"
+                )
+                for v in violations:
+                    logger.warning(
+                        "tool_security_violation",
+                        file=str(py_file),
+                        violation=v,
+                        security_level=security_level,
+                    )
+                if security_level == "strict":
+                    error_msg = f"Security violations: {', '.join(violations)}"
+                    self._load_errors.append(
+                        ToolLoadError(
+                            file=str(py_file),
+                            error_type="SecurityError",
+                            message=error_msg,
+                            timestamp=time.time(),
+                        )
+                    )
+                    logger.error(
+                        "tool_blocked_by_security",
+                        file=str(py_file),
+                        violations=violations,
+                    )
+                    return 0
+        except Exception as e:
+            logger.warning("tool_security_scan_failed", file=str(py_file), error=str(e))
 
-        module = importlib.util.module_from_spec(spec)
-        sys.modules[module_name] = module
-        spec.loader.exec_module(module)
+        # Load the module
+        try:
+            spec = importlib.util.spec_from_file_location(module_name, file_path)
+            if not spec or not spec.loader:
+                error_msg = "Failed to create module spec"
+                self._load_errors.append(
+                    ToolLoadError(
+                        file=str(py_file),
+                        error_type="ImportError",
+                        message=error_msg,
+                        timestamp=time.time(),
+                    )
+                )
+                logger.warning("tool_spec_failed", file=str(py_file))
+                return 0
+
+            module = importlib.util.module_from_spec(spec)
+            sys.modules[module_name] = module
+            spec.loader.exec_module(module)
+        except SyntaxError as e:
+            error_msg = f"SyntaxError: {e.msg} (line {e.lineno})"
+            self._load_errors.append(
+                ToolLoadError(
+                    file=str(py_file),
+                    error_type="SyntaxError",
+                    message=error_msg,
+                    timestamp=time.time(),
+                )
+            )
+            logger.error("tool_syntax_error", file=str(py_file), error=str(e))
+            return 0
+        except ImportError as e:
+            error_msg = f"ImportError: {e}"
+            self._load_errors.append(
+                ToolLoadError(
+                    file=str(py_file),
+                    error_type="ImportError",
+                    message=error_msg,
+                    timestamp=time.time(),
+                )
+            )
+            logger.error("tool_import_error", file=str(py_file), error=str(e))
+            return 0
+        except Exception as e:
+            error_msg = f"{type(e).__name__}: {e}"
+            self._load_errors.append(
+                ToolLoadError(
+                    file=str(py_file),
+                    error_type=type(e).__name__,
+                    message=error_msg,
+                    timestamp=time.time(),
+                )
+            )
+            logger.error("tool_load_error", file=str(py_file), error=str(e))
+            return 0
 
         # Find @tool decorated functions
         count = 0
         for name, obj in inspect.getmembers(module):
-            if inspect.isfunction(obj) and hasattr(obj, "_tool_decorator"):
-                # Register the tool
-                self.register_tool(
-                    name=name,
-                    factory=lambda obj=obj: obj,  # Capture obj in closure
-                    source=str(py_file),
-                )
-                count += 1
-            elif isinstance(obj, BaseTool):
-                # Already a tool instance
+            if isinstance(obj, BaseTool):
+                # Already a tool instance (from @tool decorator)
                 self.register_tool(
                     name=name,
                     factory=lambda obj=obj: obj,
@@ -561,15 +740,18 @@ class AgentRegistry:
     # Hot Reload
     # ========================================================================
 
-    def reload_tools(self) -> int:
+    def reload_tools(self) -> dict[str, Any]:
         """Hot-reload tools from the discovery path.
 
         Clears existing file-based tools and re-discovers them.
         This enables immediate updates for GUI development.
 
         Returns:
-            Number of tools reloaded.
+            Dict with 'count' (tools reloaded) and 'errors' (list of errors).
         """
+        # Clear existing errors before reload
+        self.clear_load_errors()
+
         # Remove file-based tools
         to_remove = [name for name, reg in self._tools.items() if reg.source != "programmatic"]
         for name in to_remove:
@@ -578,11 +760,32 @@ class AgentRegistry:
         # Re-discover
         count = self.discover_tools()
 
+        # Get any errors that occurred during reload
+        errors = [e.to_dict() for e in self._load_errors]
+
+        # Emit SSE events for any errors
+        if errors:
+            self._emit_tool_load_errors(errors)
+
         # Invalidate agent cache
         clear_agent_cache()
 
-        logger.info("Tools hot-reloaded", tools_reloaded=count)
-        return count
+        logger.info("Tools hot-reloaded", tools_reloaded=count, errors_count=len(errors))
+        return {"count": count, "errors": errors}
+
+    def _emit_tool_load_errors(self, errors: list[dict[str, Any]]) -> None:
+        """Emit SSE events for tool load errors.
+
+        Args:
+            errors: List of error dicts to emit.
+        """
+        try:
+            for error in errors:
+                # Note: SSE events would be emitted here via adispatch_custom_event
+                # For now, we log the errors which are also available via GET /tools/errors
+                logger.info("tool_load_error_sse", file=error["file"], error=error["error"])
+        except Exception as e:
+            logger.debug("Failed to emit tool load error SSE event", error=str(e))
 
     def reload_middleware(self) -> int:
         """Reload middleware from the discovery path.
@@ -611,6 +814,18 @@ class AgentRegistry:
     # Status
     # ========================================================================
 
+    def get_load_errors(self) -> list[ToolLoadError]:
+        """Get accumulated tool load errors.
+
+        Returns:
+            List of tool load error records.
+        """
+        return list(self._load_errors)
+
+    def clear_load_errors(self) -> None:
+        """Clear all tool load errors."""
+        self._load_errors.clear()
+
     def get_status(self) -> dict[str, Any]:
         """Get registry status.
 
@@ -623,6 +838,7 @@ class AgentRegistry:
             "middleware_pending": self._middleware_pending,
             "tools_path": str(self._tools_path) if self._tools_path else None,
             "middleware_path": str(self._middleware_path) if self._middleware_path else None,
+            "load_errors_count": len(self._load_errors),
         }
 
 

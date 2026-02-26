@@ -36,22 +36,18 @@ ALLOWED_CONFIG_PATHS = {
     "llm.max_tokens",
     "llm.model",
     "llm.provider",
-
     # Agent settings
     "agent.memory",
     "agent.skills",
     "agent.interrupt_on",
     "agent.subagents",
-
     # Rate limiting
     "rate_limit.per_minute",
     "rate_limit.burst",
-
     # Observability
     "observability.otel_enabled",
     "observability.metrics_port",
     "observability.otel_endpoint",
-
     # MLflow
     "mlflow.enabled",
     "mlflow.experiment_name",
@@ -199,6 +195,9 @@ async def patch_config(
     config_path = Path(".cognition/config.yaml")
     backup_path = Path(".cognition/config.yaml.backup")
 
+    # Ensure .cognition directory exists before writing
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+
     if config_path.exists():
         save_config(current_config, backup_path)
 
@@ -228,6 +227,8 @@ async def rollback_config(
         backup_config = yaml.safe_load(f)
 
     config_path = Path(".cognition/config.yaml")
+    # Ensure .cognition directory exists before writing
+    config_path.parent.mkdir(parents=True, exist_ok=True)
     save_config(backup_config, config_path)
 
     logger.info("config_rolled_back")

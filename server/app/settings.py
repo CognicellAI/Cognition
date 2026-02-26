@@ -109,19 +109,20 @@ class Settings(BaseSettings):
 
     # CORS settings
     cors_origins: list[str] = Field(
-        default=["*"],
+        default=["http://localhost:3000", "http://localhost:8080"],
         alias="COGNITION_CORS_ORIGINS",
+        description="Allowed CORS origins. Defaults to common dev ports.",
     )
     cors_methods: list[str] = Field(
-        default=["*"],
+        default=["GET", "POST", "PUT", "DELETE", "PATCH"],
         alias="COGNITION_CORS_METHODS",
     )
     cors_headers: list[str] = Field(
-        default=["*"],
+        default=["Content-Type", "Authorization"],
         alias="COGNITION_CORS_HEADERS",
     )
     cors_credentials: bool = Field(
-        default=False,
+        default=True,
         alias="COGNITION_CORS_CREDENTIALS",
     )
 
@@ -183,6 +184,40 @@ class Settings(BaseSettings):
     docker_cpu_limit: float = Field(
         default=1.0,
         alias="COGNITION_DOCKER_CPU_LIMIT",
+    )
+
+    # Security settings
+    tool_security: Literal["warn", "strict"] = Field(
+        default="warn",
+        alias="COGNITION_TOOL_SECURITY",
+        description=(
+            "Security level for loading tools from .cognition/tools/. "
+            "'warn' logs violations but continues loading; 'strict' blocks loading."
+        ),
+    )
+    protected_paths: list[str] = Field(
+        default=[".cognition"],
+        alias="COGNITION_PROTECTED_PATHS",
+        description=(
+            "List of paths that agents cannot write to or execute commands in. "
+            "Paths are relative to the workspace root."
+        ),
+    )
+    trusted_tool_namespaces: list[str] = Field(
+        default=["server.app.tools"],
+        alias="COGNITION_TRUSTED_TOOL_NAMESPACES",
+        description=(
+            "List of trusted namespaces for tool imports. "
+            "Tools outside these namespaces will be blocked."
+        ),
+    )
+    blocked_tools: list[str] = Field(
+        default=[],
+        alias="COGNITION_BLOCKED_TOOLS",
+        description=(
+            "List of tool names that are blocked from execution. "
+            "Tool names are matched exactly (case-sensitive)."
+        ),
     )
 
     # Session scoping settings

@@ -27,6 +27,7 @@ from server.app.agent.context import ContextManager
 from server.app.agent.middleware import (
     CognitionObservabilityMiddleware,
     CognitionStreamingMiddleware,
+    ToolSecurityMiddleware,
 )
 from server.app.agent.sandbox_backend import create_sandbox_backend
 from server.app.settings import Settings, get_settings
@@ -234,17 +235,14 @@ def create_cognition_agent(
 
     # Initialize context manager (P2-7)
     # This automatically indexes the project and identifies relevant files
-    # Note: Using backend.backend to access the underlying ExecutionBackendAdapter's wrapped backend
-    # This assumes backend is an ExecutionBackendAdapter which wraps a LocalExecutionBackend
-    # Ideally ContextManager should work with the adapter or protocol directly
+    # The backend can be either CognitionLocalSandboxBackend or CognitionDockerSandboxBackend
+    # Both provide execute() method and cwd property that ContextManager supports
     try:
-        # Access the raw LocalExecutionBackend if possible, or use the adapter
-        raw_backend = getattr(backend, "backend", backend)
-        context_manager = ContextManager(raw_backend)
-        context_manager.index_project()
+        context_manager = ContextManager(backend)
+        context_manager.build_index()
 
         # Get relevant context for system prompt
-        context_info = context_manager.get_context_summary()
+        context_info = context_manager.format_context_for_llm("")
 
         # Base system prompt with context
         if context_info:
@@ -280,10 +278,15 @@ def create_cognition_agent(
 
     # Initialize middleware stack
     agent_middleware = list(middleware) if middleware else []
+
+    # Get blocked tools from settings
+    blocked_tools = list(settings.blocked_tools) if hasattr(settings, "blocked_tools") else []
+
     agent_middleware.extend(
         [
             CognitionObservabilityMiddleware(),
             CognitionStreamingMiddleware(),
+            ToolSecurityMiddleware(blocked_tools=blocked_tools),
         ]
     )
 

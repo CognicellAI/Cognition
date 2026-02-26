@@ -504,9 +504,12 @@ class PostgresStorageBackend:
         conn_string = self.connection_string.replace("postgresql+asyncpg://", "postgresql://")
 
         # Create async psycopg connection
+        # autocommit=True is required for AsyncPostgresSaver.setup() to work properly
+        # Without it, CREATE INDEX CONCURRENTLY fails inside transaction block
         conn = await psycopg.AsyncConnection.connect(
             conn_string,
             row_factory=psycopg.rows.dict_row,
+            autocommit=True,
         )
 
         # Create the saver with the connection
