@@ -21,7 +21,10 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any, cast
 
+import structlog
 from deepagents import create_deep_agent
+
+logger = structlog.get_logger(__name__)
 
 from server.app.agent.context import ContextManager
 from server.app.agent.middleware import (
@@ -29,6 +32,9 @@ from server.app.agent.middleware import (
     CognitionStreamingMiddleware,
     ToolSecurityMiddleware,
 )
+from server.app.agent.mcp_adapter import create_mcp_tools
+from server.app.agent.mcp_client import McpManager, McpServerConfig
+from server.app.agent.tools import BrowserTool, InspectPackageTool, SearchTool
 from server.app.agent.sandbox_backend import create_sandbox_backend
 from server.app.settings import Settings, get_settings
 
@@ -154,7 +160,7 @@ For simple tasks (single file edits, quick checks), execute directly.
 The current working directory is the project root. All file paths are relative to this root."""
 
 
-def create_cognition_agent(
+async def create_cognition_agent(
     project_path: str | Path,
     model: Any = None,
     store: Any = None,  # LangGraph store
@@ -167,6 +173,7 @@ def create_cognition_agent(
     middleware: Sequence[Any] | None = None,
     tools: Sequence[Any] | None = None,
     settings: Settings | None = None,
+    mcp_configs: Sequence[McpServerConfig] | None = None,
 ) -> Any:
     """Create a Deep Agent for the Cognition system.
 
@@ -282,6 +289,53 @@ def create_cognition_agent(
     # Get blocked tools from settings
     blocked_tools = list(settings.blocked_tools) if hasattr(settings, "blocked_tools") else []
 
+    # Initialize built-in tools
+    built_in_tools = [BrowserTool(), SearchTool(), InspectPackageTool()]
+    agent_tools = list(tools) if tools else []
+    agent_tools.extend(built_in_tools)
+
+    # Initialize MCP tools if configurations provided
+    if mcp_configs:
+        mcp_manager = McpManager()
+        for config in mcp_configs:
+            if config.enabled:
+                try:
+                    mcp_manager.add_server(config)
+                except ValueError as e:
+                    logger.warning("Failed to add MCP server", server=config.name, error=str(e))
+
+        try:
+            await mcp_manager.connect_all()
+            all_mcp_tools = await mcp_manager.get_all_tools()
+            for server_name, tool_infos in all_mcp_tools.items():
+                mcp_tools = create_mcp_tools(mcp_manager.clients[server_name], tool_infos)
+                agent_tools.extend(mcp_tools)
+                logger.info("Added MCP tools", server=server_name, count=len(mcp_tools))
+        except Exception as e:
+            logger.error("Failed to initialize MCP tools", error=str(e))
+            # Continue without MCP tools rather than failing entirely
+
+    # Initialize MCP tools if configurations provided
+    if mcp_configs:
+        mcp_manager = McpManager()
+        for config in mcp_configs:
+            if config.enabled:
+                try:
+                    mcp_manager.add_server(config)
+                except ValueError as e:
+                    logger.warning("Failed to add MCP server", server=config.name, error=str(e))
+
+        try:
+            await mcp_manager.connect_all()
+            all_mcp_tools = await mcp_manager.get_all_tools()
+            for server_name, tool_infos in all_mcp_tools.items():
+                mcp_tools = create_mcp_tools(mcp_manager.clients[server_name], tool_infos)
+                agent_tools.extend(mcp_tools)
+                logger.info("Added MCP tools", server=server_name, count=len(mcp_tools))
+        except Exception as e:
+            logger.error("Failed to initialize MCP tools", error=str(e))
+            # Continue without MCP tools rather than failing entirely
+
     agent_middleware.extend(
         [
             CognitionObservabilityMiddleware(),
@@ -293,7 +347,7 @@ def create_cognition_agent(
     # Create the agent with multi-step support
     agent = create_deep_agent(
         model=model,
-        tools=tools,
+        tools=agent_tools,
         system_prompt=prompt,
         backend=backend,
         checkpointer=checkpointer,

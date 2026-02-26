@@ -1280,40 +1280,40 @@ Deferred from P3. Unblocked after P3 is complete.
 - [ ] Provider factories return typed protocol, not `Any`
 - [ ] Gateway integration option (MLflow AI Gateway or LiteLLM)
 
----
+### P4-3: Remote MCP (Model Context Protocol) Support ✅
 
-## Codebase Health
+| Field | Value |
+|-------|-------|
+| **Layer** | 4 (Agent Runtime) |
+| **Status** | **Complete** |
+| **Effort** | ~1 week |
+| **Dependencies** | P3-TR (Tool Registry) ✅ |
 
-### File Organization
+**Security-First Design:**
+Cognition implements **remote-only MCP** for security. Local (stdio) MCP servers are explicitly rejected.
 
-All modules are in their correct architectural layer:
+| Capability | Native Tools | MCP Tools |
+|------------|--------------|-----------|
+| Local execution (shell, files) | ✅ Built-in tools | ❌ Not supported |
+| Remote information (GitHub, Jira) | ❌ Limited | ✅ MCP servers |
 
-| Layer | Directory | Contents |
-|-------|-----------|----------|
-| L1 Foundation | `server/app/models.py`, `server/app/exceptions.py`, `server/app/settings.py` | Domain models, exceptions, config |
-| L2 Persistence | `server/app/storage/`, `server/app/session_store.py`, `server/app/message_store.py` | Storage backends, SQLite/Postgres |
-| L3 Execution | `server/app/execution/` | `sandbox.py`, `backend.py`, `circuit_breaker.py` |
-| L4 Agent Runtime | `server/app/agent/` | `cognition_agent.py`, `sandbox_backend.py`, `definition.py`, `runtime.py`, `context.py`, `prompt_registry.py` |
-| L5 LLM Provider | `server/app/llm/` | Provider registry, fallback chain, discovery, mock |
-| L6 API & Streaming | `server/app/api/` | Routes, SSE, models, `scoping.py`, `middleware.py` |
-| L7 Observability | `server/app/observability/` | OTel setup, `mlflow_tracing.py` |
+**Implementation:**
+- `server/app/agent/mcp_client.py` — Remote SSE client with URL validation
+- `server/app/agent/mcp_adapter.py` — LangChain tool adapter  
+- `docs/mcp.md` — User documentation with security stance
+- HTTP/HTTPS only — local (stdio) MCP servers rejected with clear error
+- Configurable via `mcp_servers` in settings or session creation
 
-### Testing Status
+**Acceptance Criteria:**
+- [x] `McpSseClient` connects to remote MCP servers via HTTP/SSE
+- [x] URL validation rejects non-HTTP URLs (file://, stdio commands)
+- [x] `McpAdapterTool` converts MCP tools to LangChain `BaseTool`
+- [x] `create_cognition_agent()` accepts `mcp_configs` parameter
+- [x] MCP tools integrated into agent alongside built-in tools
+- [x] Graceful degradation when MCP connection fails
+- [x] Documentation in `docs/mcp.md` explains security stance
+- [x] 12 E2E tests covering security, connection, integration, errors
 
-- **Unit tests:** 308 passed, 4 skipped, 1 warning
-- **Live tests:** 41/41 across 9 phases
-  - Phase 1 (Service Health): 9/9
-  - Phase 2 (Core API CRUD): 6/6
-  - Phase 3 (Agent Streaming): 6/6
-  - Phase 4 (MLflow Observability): 3/3
-  - Phase 5 (Docker Sandbox): 5/5
-  - Phase 6 (Persistence Across Restart): 4/4
-  - Phase 7 (Prometheus Metrics): 3/3
-  - Phase 8 (Distributed Tracing): 2/2
-  - Phase 9 (Security & Resilience): 3/3
-- **API Proof Script:** 45/45 assertions across 9 scenarios
-  - `scripts/test_docker_compose.sh` - Comprehensive bash script testing all 12 API endpoints
-  - Tests session scoping, SSE streaming, CRUD operations, multi-turn conversations
   - Color-coded output with pass/fail reporting
   - CI-friendly with non-zero exit on failures
 

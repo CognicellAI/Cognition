@@ -37,6 +37,7 @@ from server.app.agent.runtime import (
     create_agent_runtime,
 )
 from server.app.agent.sandbox_backend import CognitionLocalSandboxBackend
+from server.app.agent.tools import BrowserTool, InspectPackageTool, SearchTool
 
 __all__ = [
     # Agent creation
@@ -45,6 +46,10 @@ __all__ = [
     "ContextManager",
     "ProjectIndex",
     "FileRelevanceScorer",
+    # Tools
+    "BrowserTool",
+    "InspectPackageTool",
+    "SearchTool",
     # Definition
     "AgentConfig",
     "AgentDefinition",

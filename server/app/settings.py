@@ -250,6 +250,14 @@ class Settings(BaseSettings):
         alias="COGNITION_TEST_LLM_MODE",
     )
 
+    # MCP (Model Context Protocol) settings
+    # Remote-only: Only HTTP/SSE connections supported
+    mcp_servers: dict[str, Any] = Field(
+        default_factory=dict,
+        alias="COGNITION_MCP_SERVERS",
+        description="Remote MCP server configurations. Only HTTP/SSE URLs allowed.",
+    )
+
     @property
     def workspace_path(self) -> Path:
         """Get the current workspace path.
