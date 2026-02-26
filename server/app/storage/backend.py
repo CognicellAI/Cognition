@@ -233,8 +233,20 @@ class StorageBackend(Protocol):
         title: str | None = None,
         status: str | None = None,
         config: SessionConfig | None = None,
+        agent_name: str | None = None,
     ) -> Session | None:
-        """Update a session."""
+        """Update a session.
+
+        Args:
+            session_id: The session identifier.
+            title: Optional new title.
+            status: Optional new status.
+            config: Optional configuration updates.
+            agent_name: Optional new agent binding.
+
+        Returns:
+            The updated Session if found, None otherwise.
+        """
         ...
 
     async def update_message_count(self, session_id: str, count: int) -> None:

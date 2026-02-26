@@ -109,9 +109,16 @@ Cognition is domain-agnostic. It powers platforms such as:
 
 ## Getting Started
 
-1.  **[Core Concepts](./concepts/execution-environments.md):** Understand the primitives (Cell, Thread, Trace, Plug) in detail.
-2.  **[Technical Architecture](./concepts/architecture.md):** Deep dive into the engine's internal design and data flow.
-3.  **[Extending Agents](./guides/extending-agents.md):** Learn how to customize agent behavior with Skills and Memory.
-4.  **[Tool Registry](./guides/tool-registry.md):** Create custom tools with automatic discovery and hot-reloading.
-5.  **[Blueprints](./blueprints/cyber-investigation.md):** See a reference architecture for a Cyber Security Investigation Platform.
-6.  **[Build Guide](./guides/building-platforms.md):** Learn how to integrate the Cognition API into your application.
+1.  **[Quick Start](./guides/quickstart.md):** Get up and running in 5 minutes.
+2.  **[Core Concepts](./concepts/execution-environments.md):** Understand the primitives (Cell, Thread, Trace, Plug) in detail.
+3.  **[Technical Architecture](./concepts/architecture.md):** Deep dive into the engine's internal design and data flow.
+4.  **[Extending Agents](./guides/extending-agents.md):** Learn how to customize agent behavior with Skills, Memory, and Multi-Agent support.
+5.  **[Tool Registry](./guides/tool-registry.md):** Create custom tools with automatic discovery and hot-reloading.
+6.  **[Blueprints](./blueprints/cyber-investigation.md):** See a reference architecture for a Cyber Security Investigation Platform.
+7.  **[Build Guide](./guides/building-platforms.md):** Learn how to integrate the Cognition API into your application.
+
+## What's New
+
+- **Agent Switching:** Dynamically change the active agent for a session via the API (`PATCH /sessions/{id}`)
+- **Multi-Agent Registry:** Define specialized agents with different capabilities and switch between them
+- **Pluggable Storage:** Choose between SQLite (local) or PostgreSQL (production) backends

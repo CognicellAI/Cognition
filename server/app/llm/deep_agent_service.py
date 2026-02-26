@@ -102,10 +102,49 @@ class DeepAgentStreamingService:
                 custom_tools = registry.create_tools()
             except RuntimeError:
                 # Registry not initialized (e.g., in test contexts)
+                registry = None
                 custom_tools = []
             except Exception:
                 # Any other error, fall back to no custom tools
+                registry = None
                 custom_tools = []
+
+            # Determine agent definition to use
+            # 1. Use session.agent_name if valid
+            # 2. Fall back to "default"
+            # 3. Use generic config if registry is missing
+            system_prompt = system_prompt  # Use override if provided
+            subagents = []
+            agent_skills = []
+
+            if registry and session:
+                from server.app.agent.agent_definition_registry import (
+                    get_agent_definition_registry,
+                )
+
+                def_registry = get_agent_definition_registry()
+                if def_registry:
+                    # Look up the agent definition
+                    agent_def = def_registry.get(session.agent_name)
+                    if not agent_def:
+                        # Fallback to default if bound agent is missing
+                        agent_def = def_registry.get("default")
+
+                    if agent_def:
+                        # Use agent's system prompt if not overridden
+                        if system_prompt is None:
+                            system_prompt = agent_def.system_prompt
+
+                        # Use agent's skills
+                        if agent_def.skills:
+                            agent_skills = agent_def.skills
+
+                        # Add subagents available to this agent
+                        # Primary agents get all subagents except themselves
+                        all_subagents = def_registry.subagents()
+                        subagents = [
+                            s.to_subagent() for s in all_subagents if s.name != agent_def.name
+                        ]
 
             # Create the deep agent for this session with the model
             agent = create_cognition_agent(
@@ -115,10 +154,15 @@ class DeepAgentStreamingService:
                 checkpointer=checkpointer,
                 settings=llm_settings,
                 tools=custom_tools if custom_tools else None,
+                system_prompt=system_prompt,
+                skills=agent_skills,
+                subagents=subagents,
             )
 
             # Build the input with enhanced system prompt
-            messages = self._build_messages(content, system_prompt)
+            # Pass None for system_prompt here because we passed it to create_cognition_agent
+            # The agent factory handles embedding it into the graph state
+            messages = self._build_messages(content, None)
 
             # Track state for the stream
             input_tokens = len(content.split())

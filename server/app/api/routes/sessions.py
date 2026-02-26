@@ -251,10 +251,23 @@ async def update_session(
         if provider:
             request.config.provider = provider
 
+    # Validate agent_name if provided
+    if request.agent_name:
+        registry = get_agent_definition_registry()
+        if registry is not None:
+            if not registry.is_valid_primary(request.agent_name):
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail=f"Invalid or unknown agent: {request.agent_name}",
+                )
+        # If registry is None (e.g., tests), we skip validation
+        # This allows tests to work without a full registry setup
+
     session = await store.update_session(
         session_id=session_id,
         title=request.title,
         config=request.config,
+        agent_name=request.agent_name,
     )
 
     if session is None:

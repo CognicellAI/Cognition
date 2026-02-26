@@ -177,3 +177,38 @@ const session = await api.createSession({
 // Resume an existing Thread (even after server restart)
 const history = await api.getMessages(session.id);
 ```
+
+## Agent Association
+
+Sessions are associated with a specific agent definition that determines:
+- System prompt and persona
+- Available tools and skills
+- Subagent delegation capabilities
+- Human-in-the-loop configuration
+
+### Creating Sessions with Agents
+
+```bash
+# Create with default agent
+curl -X POST http://localhost:8000/sessions \
+  -d '{"title": "Default Agent Session"}'
+
+# Create with specific agent
+curl -X POST http://localhost:8000/sessions \
+  -d '{"title": "Code Review", "agent_name": "readonly"}'
+```
+
+### Switching Agents
+
+You can dynamically switch the agent for an existing session:
+
+```bash
+curl -X PATCH http://localhost:8000/sessions/{session_id} \
+  -d '{"agent_name": "security-auditor"}'
+```
+
+**Behavior:**
+- The new agent's configuration is applied immediately
+- Previous conversation history is preserved
+- Subsequent messages use the new agent's system prompt and tools
+- Validation ensures only valid primary agents can be used

@@ -100,6 +100,15 @@ curl -X POST http://localhost:8000/sessions \
   -d '{"agent_name": "readonly", "title": "Code Review"}'
 ```
 
+**Switching agents mid-session:** You can change the active agent for an existing session:
+```bash
+curl -X PATCH http://localhost:8000/sessions/{session_id} \
+  -H "Content-Type: application/json" \
+  -d '{"agent_name": "researcher"}'
+```
+
+The session will now use the new agent's configuration (system prompt, tools, skills) for subsequent messages. Previous conversation history is preserved.
+
 **For subagent delegation:** All `subagent` and `all` mode agents are automatically available to primary agents via Deep Agents' native `task` tool. Your primary agent can say: *"I'll use the researcher subagent to gather more information."*
 
 ### Agent API

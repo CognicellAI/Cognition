@@ -28,6 +28,8 @@ async def test_llm_provider_registry_integration():
 @pytest.mark.asyncio
 async def test_agent_full_config_passing(tmp_path):
     """Verify that all pluggability settings are correctly passed to the agent runtime."""
+    from unittest.mock import AsyncMock
+
     workspace = tmp_path / "workspace"
     workspace.mkdir()
 
@@ -35,7 +37,8 @@ async def test_agent_full_config_passing(tmp_path):
     interrupt_on = {"execute": True}
 
     with patch("server.app.agent.cognition_agent.create_deep_agent") as mock_create:
-        create_cognition_agent(
+        mock_create.return_value = AsyncMock()
+        await create_cognition_agent(
             project_path=workspace, subagents=subagents, interrupt_on=interrupt_on
         )
 
@@ -47,6 +50,8 @@ async def test_agent_full_config_passing(tmp_path):
 @pytest.mark.asyncio
 async def test_custom_tools_integration():
     """Verify that custom tools can be passed to the agent."""
+    from unittest.mock import AsyncMock
+
     from langchain_core.tools import tool
 
     @tool
@@ -55,7 +60,8 @@ async def test_custom_tools_integration():
         return "result"
 
     with patch("server.app.agent.cognition_agent.create_deep_agent") as mock_create:
-        create_cognition_agent(project_path=".", tools=[my_custom_tool])
+        mock_create.return_value = AsyncMock()
+        await create_cognition_agent(project_path=".", tools=[my_custom_tool])
 
         args, kwargs = mock_create.call_args
         assert my_custom_tool in kwargs["tools"]

@@ -68,6 +68,21 @@ curl -X POST http://localhost:8000/sessions \
 
 Available agents: `default` (full access), `readonly` (analysis only). Custom agents can be defined in `.cognition/agents/`.
 
+### Switch Agents Mid-Session
+
+You can change the active agent for an existing session at any time:
+
+```bash
+export SESSION_ID="<your-session-id>"
+
+# Switch to a different agent
+curl -X PATCH http://localhost:8000/sessions/$SESSION_ID \
+  -H "Content-Type: application/json" \
+  -d '{"agent_name": "security-auditor"}'
+```
+
+The session will now use the new agent's configuration (system prompt, tools, skills) for subsequent messages. Conversation history is preserved.
+
 ### Multi-Tenant Scoping (Optional)
 
 For multi-user platforms, enable session scoping:
