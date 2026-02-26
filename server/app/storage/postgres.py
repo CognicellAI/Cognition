@@ -263,7 +263,9 @@ class PostgresStorageBackend:
         self,
         session_id: str,
         title: str | None = None,
+        status: str | None = None,
         config: SessionConfig | None = None,
+        agent_name: str | None = None,
     ) -> Session | None:
         """Update a session."""
         session = await self.get_session(session_id)
@@ -279,6 +281,18 @@ class PostgresStorageBackend:
             params.append(title)
             param_idx += 1
             session.title = title
+
+        if status is not None:
+            updates.append(f"status = ${param_idx}")
+            params.append(status)
+            param_idx += 1
+            session.status = SessionStatus(status)
+
+        if agent_name is not None:
+            updates.append(f"agent_name = ${param_idx}")
+            params.append(agent_name)
+            param_idx += 1
+            session.agent_name = agent_name
 
         if config is not None:
             existing_config = session.config

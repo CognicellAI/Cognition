@@ -66,10 +66,11 @@ class SessionList(BaseModel):
 class SessionUpdate(BaseModel):
     """Request to update a session.
 
-    Allows updating metadata and LLM configuration.
+    Allows updating metadata, agent binding, and LLM configuration.
     """
 
     title: str | None = Field(None, max_length=200)
+    agent_name: str | None = Field(None, description="Switch agent binding")
     config: SessionConfig | None = Field(None, description="Update LLM configuration")
 
 

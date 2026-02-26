@@ -1,4 +1,5 @@
-from unittest.mock import patch
+import asyncio
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -6,7 +7,8 @@ from server.app.agent.cognition_agent import create_cognition_agent
 from server.app.settings import get_settings
 
 
-def test_create_cognition_agent_pluggability():
+@pytest.mark.asyncio
+async def test_create_cognition_agent_pluggability():
     """Verify that create_cognition_agent correctly applies pluggability settings."""
     settings = get_settings()
 
@@ -20,7 +22,8 @@ def test_create_cognition_agent_pluggability():
         patch.object(settings, "agent_interrupt_on", {"execute": True}),
         patch("server.app.agent.cognition_agent.create_deep_agent") as mock_create,
     ):
-        create_cognition_agent(project_path=".")
+        mock_create.return_value = AsyncMock()
+        await create_cognition_agent(project_path=".")
 
         # Verify create_deep_agent was called with correct parameters
         args, kwargs = mock_create.call_args

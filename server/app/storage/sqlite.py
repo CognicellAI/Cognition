@@ -198,6 +198,7 @@ class SqliteStorageBackend:
         title: str | None = None,
         status: str | None = None,
         config: SessionConfig | None = None,
+        agent_name: str | None = None,
     ) -> Session | None:
         """Update a session."""
         session = await self.get_session(session_id)
@@ -216,6 +217,11 @@ class SqliteStorageBackend:
             updates.append("status = ?")
             params.append(status)
             session.status = SessionStatus(status)
+
+        if agent_name is not None:
+            updates.append("agent_name = ?")
+            params.append(agent_name)
+            session.agent_name = agent_name
 
         if config is not None:
             existing_config = session.config
