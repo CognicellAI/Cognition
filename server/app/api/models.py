@@ -373,3 +373,23 @@ class AgentList(BaseModel):
     agents: list[AgentResponse] = Field(
         default_factory=list, description="List of available agents"
     )
+
+
+# ============================================================================
+# Tool Models
+# ============================================================================
+
+
+class ToolResponse(BaseModel):
+    """Tool information for API responses."""
+
+    name: str = Field(..., description="Tool name")
+    source: str = Field(..., description="Source of the tool (programmatic or file path)")
+    module: str | None = Field(None, description="Module path if loaded from file")
+
+
+class ToolList(BaseModel):
+    """List of tools response."""
+
+    tools: list[ToolResponse] = Field(default_factory=list, description="List of registered tools")
+    count: int = Field(0, description="Total number of tools")

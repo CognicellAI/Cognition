@@ -106,6 +106,12 @@ Cognition is designed to be highly pluggable using native `deepagents` extension
 1. Implement `deepagents.middleware.AgentMiddleware` for lifecycle hooks (observability, status streaming, etc.).
 2. Add to `create_cognition_agent(middleware=[...])`.
 
+**Available upstream middleware** (declarative in `.cognition/agent.yaml`):
+- `tool_retry` - Exponential backoff retry on tool failure
+- `tool_call_limit` - Per-tool and global call limits
+- `human_in_the_loop` - Approve/edit/reject tool calls before execution
+- `pii` - Detect and redact PII (email, credit card, IP, etc.)
+
 #### Skills & Memory
 1. Add `SKILL.md` files to `.cognition/skills/` for progressive disclosure capabilities.
 2. Update `AGENTS.md` in the workspace to provide the agent with project-specific conventions.

@@ -12,7 +12,7 @@ from fastapi.responses import JSONResponse
 
 from server.app.api.middleware import ObservabilityMiddleware, SecurityHeadersMiddleware
 from server.app.api.models import HealthStatus, ReadyStatus
-from server.app.api.routes import agents, config, messages, sessions
+from server.app.api.routes import agents, config, messages, sessions, tools
 from server.app.exceptions import RateLimitError
 from server.app.observability import setup_metrics, setup_tracing
 from server.app.observability.mlflow_config import setup_mlflow_tracing
@@ -20,16 +20,23 @@ from server.app.rate_limiter import get_rate_limiter
 from server.app.agent.agent_definition_registry import (
     initialize_agent_definition_registry,
 )
+from server.app.agent_registry import AgentRegistry, initialize_agent_registry
+from server.app.file_watcher import WorkspaceWatcher
 from server.app.session_manager import initialize_session_manager
 from server.app.settings import get_settings
 from server.app.storage import create_storage_backend, get_storage_backend, set_storage_backend
 
 logger = structlog.get_logger(__name__)
 
+# Global file watcher instance
+file_watcher: WorkspaceWatcher | None = None
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan context manager."""
+    global file_watcher
+
     logger.info("Starting Cognition server")
     settings = get_settings()
 
@@ -46,6 +53,32 @@ async def lifespan(app: FastAPI):
     # Initialize agent definition registry
     initialize_agent_definition_registry(settings.workspace_path)
     logger.info("Agent definition registry initialized")
+
+    # Initialize agent registry for tools and middleware
+    initialize_agent_registry(settings=settings)
+    logger.info("Agent registry initialized")
+
+    # Set up file watcher for hot-reload
+    try:
+        from server.app.agent_registry import get_agent_registry
+
+        registry = get_agent_registry()
+        file_watcher = WorkspaceWatcher(agent_registry=registry)
+
+        # Watch tools and middleware directories
+        tools_path = settings.workspace_path / ".cognition" / "tools"
+        middleware_path = settings.workspace_path / ".cognition" / "middleware"
+
+        # Create directories if they don't exist
+        tools_path.mkdir(parents=True, exist_ok=True)
+        middleware_path.mkdir(parents=True, exist_ok=True)
+
+        file_watcher.watch_tools(str(tools_path))
+        file_watcher.watch_middleware(str(middleware_path))
+        file_watcher.start()
+        logger.info("File watcher started", tools=str(tools_path), middleware=str(middleware_path))
+    except Exception as e:
+        logger.warning("Failed to start file watcher", error=str(e))
 
     setup_tracing(
         endpoint=settings.otel_endpoint,
@@ -66,6 +99,12 @@ async def lifespan(app: FastAPI):
     )
     yield
     logger.info("Shutting down Cognition server")
+
+    # Stop file watcher
+    if file_watcher:
+        file_watcher.stop()
+        logger.info("File watcher stopped")
+
     await rate_limiter.stop()
     # Close storage backend connections
     if storage_backend:
@@ -97,6 +136,7 @@ app.include_router(sessions.router)
 app.include_router(messages.router)
 app.include_router(config.router)
 app.include_router(agents.router)
+app.include_router(tools.router)
 
 
 @app.get("/health", response_model=HealthStatus, tags=["health"])

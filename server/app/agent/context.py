@@ -122,9 +122,7 @@ class FileRelevanceScorer:
         # Cap at 1.0
         return min(score, 1.0)
 
-    def score_relevance_to_query(
-        self, query: str, path: str, content: str | None = None
-    ) -> float:
+    def score_relevance_to_query(self, query: str, path: str, content: str | None = None) -> float:
         """Score how relevant a file is to a specific query."""
         query_lower = query.lower()
         score = 0.0
@@ -152,15 +150,31 @@ class ContextManager:
     - Long-term memory storage
     """
 
-    def __init__(self, sandbox: LocalSandbox, max_context_files: int = 20):
+    def __init__(self, sandbox: LocalSandbox | object, max_context_files: int = 20):
+        """Initialize context manager with a sandbox backend.
+
+        Args:
+            sandbox: A sandbox backend with execute() method and root_dir or cwd property.
+                    Accepts either LocalSandbox or LocalShellBackend/CognitionLocalSandboxBackend.
+        """
         self.sandbox = sandbox
         self.max_context_files = max_context_files
         self.index: ProjectIndex | None = None
         self.scorer = FileRelevanceScorer()
 
+    def _get_root_dir(self) -> str:
+        """Get root directory from sandbox, supporting both LocalSandbox and LocalShellBackend."""
+        if hasattr(self.sandbox, "root_dir"):
+            return str(self.sandbox.root_dir)
+        elif hasattr(self.sandbox, "cwd"):
+            return str(self.sandbox.cwd)
+        else:
+            raise AttributeError("Sandbox must have 'root_dir' or 'cwd' property")
+
     def build_index(self) -> ProjectIndex:
         """Build or refresh the project index."""
-        self.index = ProjectIndex(root_path=str(self.sandbox.root_dir))
+        root_dir = self._get_root_dir()
+        self.index = ProjectIndex(root_path=root_dir)
 
         # Find all files
         result = self.sandbox.execute(r'find . -type f -not -path "./\.*" | head -1000')

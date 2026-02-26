@@ -45,6 +45,13 @@ create_app = typer.Typer(
 )
 app.add_typer(create_app)
 
+# Create tools subcommand group for tool management
+tools_app = typer.Typer(
+    name="tools",
+    help="Manage registered tools",
+)
+app.add_typer(tools_app)
+
 console = Console()
 
 # Project root directory for alembic commands
@@ -495,6 +502,15 @@ def create_tool(
 
     # Sanitize tool name
     tool_name = name.lower().replace("-", "_").replace(" ", "_")
+
+    # Validate tool name is a valid Python identifier
+    if not tool_name.isidentifier():
+        console.print(f"[bold red]Error:[/bold red] '{name}' is not a valid Python identifier.")
+        console.print(
+            "[dim]Tool names must start with a letter or underscore, and contain only letters, numbers, and underscores.[/dim]"
+        )
+        raise typer.Exit(1)
+
     file_path = path / f"{tool_name}.py"
 
     # Check if file already exists
@@ -563,7 +579,6 @@ def {tool_name}_advanced(
     console.print("Next steps:")
     console.print(f"  1. Edit {file_path} to implement your tool logic")
     console.print("  2. The tool will be auto-discovered from .cognition/tools/")
-    console.print("  3. Use AgentRegistry to register the tool for sessions")
 
 
 @create_app.command("middleware")
@@ -618,7 +633,7 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
-from deepagents.middleware import AgentMiddleware
+from langchain.agents.middleware.types import AgentMiddleware
 
 
 class {class_name}(AgentMiddleware):
@@ -720,6 +735,131 @@ class {class_name}(AgentMiddleware):
     console.print("  3. Use AgentRegistry to register the middleware for sessions")
     console.print()
     console.print("Note: Middleware changes apply to new sessions only (session-based reload)")
+
+
+@tools_app.command("list")
+def tools_list(
+    host: str | None = typer.Option(None, "--host", "-h", help="Server host"),
+    port: int | None = typer.Option(None, "--port", "-p", help="Server port"),
+):
+    """List all registered tools.
+
+    Queries the server for registered tools and displays them in a table.
+    Also shows any load errors if present. Exits with code 1 if errors exist.
+
+    Examples:
+        cognition tools list
+        cognition tools list --host localhost --port 8080
+    """
+    import httpx
+
+    settings = get_settings()
+    host = host or settings.host
+    port = port or settings.port
+
+    base_url = f"http://{host}:{port}"
+
+    try:
+        # Get tools list
+        response = httpx.get(f"{base_url}/tools", timeout=10.0)
+        response.raise_for_status()
+        data = response.json()
+
+        tools = data.get("tools", [])
+
+        if not tools:
+            console.print("[yellow]No tools registered[/yellow]")
+        else:
+            table = Table(title="Registered Tools")
+            table.add_column("Name", style="cyan", no_wrap=True)
+            table.add_column("Source", style="green")
+
+            for tool in tools:
+                source = tool.get("source", "unknown")
+                # Truncate long paths
+                if len(source) > 50:
+                    source = "..." + source[-47:]
+                table.add_row(tool.get("name", "unknown"), source)
+
+            console.print(table)
+            console.print(f"[dim]Total: {len(tools)} tool(s)[/dim]")
+
+        # Get errors
+        errors_response = httpx.get(f"{base_url}/tools/errors", timeout=10.0)
+        errors_response.raise_for_status()
+        errors = errors_response.json()
+
+        if errors:
+            console.print()
+            console.print("[bold red]Load Errors:[/bold red]")
+            for error in errors:
+                console.print(f"  [red]✗[/red] {error.get('file', 'unknown')}")
+                console.print(f"    [dim]{error.get('error', 'unknown error')}[/dim]")
+            raise typer.Exit(1)
+
+    except httpx.ConnectError:
+        console.print("[bold red]Error:[/bold red] Cannot connect to server")
+        console.print(f"[dim]Is the server running at {base_url}?[/dim]")
+        raise typer.Exit(1)
+    except httpx.HTTPStatusError as e:
+        console.print(f"[bold red]Error:[/bold red] Server returned {e.response.status_code}")
+        raise typer.Exit(1)
+    except Exception as e:
+        console.print(f"[bold red]Error:[/bold red] {e}")
+        raise typer.Exit(1)
+
+
+@tools_app.command("reload")
+def tools_reload(
+    host: str | None = typer.Option(None, "--host", "-h", help="Server host"),
+    port: int | None = typer.Option(None, "--port", "-p", help="Server port"),
+):
+    """Trigger a reload of tools from the discovery path.
+
+    Sends a request to the server to reload all tools from .cognition/tools/.
+    Displays the count of tools loaded and any errors encountered.
+
+    Examples:
+        cognition tools reload
+        cognition tools reload --host localhost --port 8080
+    """
+    import httpx
+
+    settings = get_settings()
+    host = host or settings.host
+    port = port or settings.port
+
+    base_url = f"http://{host}:{port}"
+
+    try:
+        console.print("[bold blue]Reloading tools...[/bold blue]")
+        response = httpx.post(f"{base_url}/tools/reload", timeout=30.0)
+        response.raise_for_status()
+        result = response.json()
+
+        count = result.get("count", 0)
+        errors = result.get("errors", [])
+
+        console.print(f"[bold green]✓ Reloaded {count} tool(s)[/bold green]")
+
+        if errors:
+            console.print()
+            console.print("[bold red]Errors during reload:[/bold red]")
+            for error in errors:
+                console.print(f"  [red]✗[/red] {error.get('file', 'unknown')}")
+                console.print(f"    [dim]{error.get('error', 'unknown error')}[/dim]")
+            raise typer.Exit(1)
+
+    except httpx.ConnectError:
+        console.print("[bold red]Error:[/bold red] Cannot connect to server")
+        console.print(f"[dim]Is the server running at {base_url}?[/dim]")
+        raise typer.Exit(1)
+    except httpx.HTTPStatusError as e:
+        console.print(f"[bold red]Error:[/bold red] Server returned {e.response.status_code}")
+        raise typer.Exit(1)
+    except Exception as e:
+        console.print(f"[bold red]Error:[/bold red] {e}")
+        raise typer.Exit(1)
 
 
 def main():

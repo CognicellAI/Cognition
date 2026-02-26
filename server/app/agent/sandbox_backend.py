@@ -2,7 +2,7 @@
 
 This module provides sandbox backends that combine:
 1. Native filesystem operations via deepagents.backends.FilesystemBackend
-2. Command execution via LocalSandbox (local) or DockerExecutionBackend (Docker)
+2. Command execution via LocalShellBackend (local) or DockerExecutionBackend (Docker)
 
 The local backend is used for development; the Docker backend provides
 kernel-level isolation per session for production.
@@ -10,80 +10,179 @@ kernel-level isolation per session for production.
 
 from __future__ import annotations
 
+import shlex
+import subprocess
 from pathlib import Path
+from typing import Any
 
 import structlog
-from deepagents.backends import FilesystemBackend
+from deepagents.backends import FilesystemBackend, LocalShellBackend
 from deepagents.backends.protocol import (
     ExecuteResponse,
     SandboxBackendProtocol,
 )
 
-from server.app.execution.sandbox import LocalSandbox
-
 logger = structlog.get_logger(__name__)
 
 
-class CognitionLocalSandboxBackend(FilesystemBackend, SandboxBackendProtocol):
+class CognitionLocalSandboxBackend(LocalShellBackend, SandboxBackendProtocol):
     """Local sandbox backend combining native file ops with shell execution.
 
-    Inherits from FilesystemBackend for robust, OS-compatible file operations:
+    Inherits from LocalShellBackend for robust, OS-compatible file operations:
     - ls_info, read, write, edit, glob_info, grep_raw, upload/download
 
-    Implements SandboxBackendProtocol by adding execute():
-    - Uses LocalSandbox to run shell commands in the workspace root
-    - Captures stdout/stderr with truncation limits
+    Overrides execute() to use shlex.split() + shell=False for security:
+    - Uses shlex.split() to parse command arguments safely
+    - Uses shell=False to prevent shell injection attacks
+    - Inherits virtual_mode support from parent class
+
+    Security features:
+    - Protected paths (e.g., .cognition/) cannot be written to or executed in
+    - Path confinement via virtual_mode (inherited from parent)
     """
 
-    def __init__(self, root_dir: str | Path, sandbox_id: str | None = None):
+    def __init__(
+        self,
+        root_dir: str | Path,
+        sandbox_id: str | None = None,
+        protected_paths: list[str] | None = None,
+    ):
         """Initialize the local sandbox backend.
 
         Args:
             root_dir: The directory where all commands will be executed.
                       Must be an absolute path.
             sandbox_id: Optional unique identifier for this sandbox.
+            protected_paths: List of protected path prefixes (relative to workspace).
+                           Defaults to [".cognition"].
         """
-        # Initialize parent FilesystemBackend for file operations
-        super().__init__(root_dir=root_dir)
-
-        # Initialize LocalSandbox for command execution
-        self._sandbox = LocalSandbox(root_dir=root_dir)
+        # Initialize parent LocalShellBackend with virtual_mode=True for security
+        super().__init__(root_dir=root_dir, virtual_mode=True)
         self._id = sandbox_id or f"cognition-local-{id(self)}"
+        self._protected_paths = protected_paths or [".cognition"]
+
+    def _is_protected_path(self, path: str) -> bool:
+        """Check if a path is protected.
+
+        Args:
+            path: The path to check (relative or absolute).
+
+        Returns:
+            True if the path is protected, False otherwise.
+        """
+        # Resolve the path to check if it's under any protected prefix
+        try:
+            resolved = self._resolve_path(path)
+            resolved_str = str(resolved)
+            for protected in self._protected_paths:
+                # Check if the protected path is a prefix of the resolved path
+                protected_full = (self.cwd / protected).resolve()
+                if resolved_str.startswith(str(protected_full)):
+                    return True
+        except ValueError:
+            # If path resolution fails, be conservative and allow it
+            # (the parent class will handle the error)
+            pass
+        return False
 
     @property
     def id(self) -> str:
         """Return the unique identifier for this sandbox."""
         return self._id
 
-    def _resolve_path(self, path: str) -> Path:
-        """Resolve path relative to root_dir, handling leading slashes."""
-        # Strip leading slashes to treat absolute paths as relative to root_dir
-        clean_path = path.lstrip("/")
-        full_path = (self.cwd / clean_path).resolve()
+    def write(self, file_path: str, content: str) -> Any:
+        """Write content to file with protected path check.
 
-        # Security check: ensure path is within root_dir
-        if not str(full_path).startswith(str(self.cwd)):
-            raise ValueError(f"Path '{path}' escapes sandbox root")
+        Args:
+            file_path: File path to write to.
+            content: Content to write.
 
-        return full_path
+        Returns:
+            WriteResult from the parent class.
+
+        Raises:
+            PermissionError: If the path is protected.
+        """
+        if self._is_protected_path(file_path):
+            raise PermissionError(f"Writing to protected path is not allowed: {file_path}")
+        return super().write(file_path, content)
 
     def execute(self, command: str) -> ExecuteResponse:
-        """Execute a command in the sandbox using LocalSandbox.
+        """Execute a command in the sandbox using shell=False for security.
 
-        This overrides the protocol definition to provide actual shell execution.
+        This overrides the parent class to use shlex.split() + shell=False
+        instead of shell=True, preventing shell injection attacks.
+        Also checks for protected path access in the command.
         """
-        result = self._sandbox.execute(command)
+        if not command or not isinstance(command, str):
+            return ExecuteResponse(
+                output="Error: Command must be a non-empty string.",
+                exit_code=1,
+                truncated=False,
+            )
 
-        # Truncate output if too long (deepagents limit ~100KB)
-        max_output_size = 100000
-        truncated = len(result.output) > max_output_size
-        output = result.output[:max_output_size] if truncated else result.output
+        # Check for protected path access in the command
+        for protected in self._protected_paths:
+            if protected in command:
+                return ExecuteResponse(
+                    output=f"Error: Command attempts to access protected path: {protected}",
+                    exit_code=1,
+                    truncated=False,
+                )
 
-        return ExecuteResponse(
-            output=output,
-            exit_code=result.exit_code,
-            truncated=truncated,
-        )
+        try:
+            # Parse command using shlex for safe argument splitting
+            cmd_args = shlex.split(command)
+
+            result = subprocess.run(
+                cmd_args,
+                shell=False,  # Security: no shell execution, prevents injection
+                capture_output=True,
+                text=True,
+                cwd=str(self.cwd),
+                timeout=self._timeout,
+                env=self._env,
+            )
+
+            # Combine stdout and stderr
+            output_parts = []
+            if result.stdout:
+                output_parts.append(result.stdout)
+            if result.stderr:
+                stderr_lines = result.stderr.strip().split("\n")
+                output_parts.extend(f"[stderr] {line}" for line in stderr_lines)
+
+            output = "\n".join(output_parts) if output_parts else "<no output>"
+
+            # Check for truncation
+            truncated = False
+            if len(output) > self._max_output_bytes:
+                output = output[: self._max_output_bytes]
+                output += f"\n\n... Output truncated at {self._max_output_bytes} bytes."
+                truncated = True
+
+            # Add exit code info if non-zero
+            if result.returncode != 0:
+                output = f"{output.rstrip()}\n\nExit code: {result.returncode}"
+
+            return ExecuteResponse(
+                output=output,
+                exit_code=result.returncode,
+                truncated=truncated,
+            )
+
+        except subprocess.TimeoutExpired:
+            return ExecuteResponse(
+                output=f"Error: Command timed out after {self._timeout:.1f} seconds.",
+                exit_code=124,
+                truncated=False,
+            )
+        except Exception as e:
+            return ExecuteResponse(
+                output=f"Error executing command: {e}",
+                exit_code=1,
+                truncated=False,
+            )
 
 
 class CognitionDockerSandboxBackend(FilesystemBackend, SandboxBackendProtocol):
@@ -122,8 +221,8 @@ class CognitionDockerSandboxBackend(FilesystemBackend, SandboxBackendProtocol):
             host_workspace: Host filesystem path for Docker volume mount.
                 Required when Cognition runs inside Docker (sibling containers).
         """
-        # FilesystemBackend for file operations (direct host filesystem access)
-        super().__init__(root_dir=root_dir)
+        # FilesystemBackend for file operations with virtual_mode=True for security
+        super().__init__(root_dir=root_dir, virtual_mode=True)
 
         self._id = sandbox_id or f"cognition-docker-{id(self)}"
         self._image = image
@@ -168,16 +267,6 @@ class CognitionDockerSandboxBackend(FilesystemBackend, SandboxBackendProtocol):
                 network_mode=self._network_mode,
             )
         return self._docker_backend
-
-    def _resolve_path(self, path: str) -> Path:
-        """Resolve path relative to root_dir, handling leading slashes."""
-        clean_path = path.lstrip("/")
-        full_path = (self.cwd / clean_path).resolve()
-
-        if not str(full_path).startswith(str(self.cwd)):
-            raise ValueError(f"Path '{path}' escapes sandbox root")
-
-        return full_path
 
     def execute(self, command: str) -> ExecuteResponse:
         """Execute a command inside the Docker container.
