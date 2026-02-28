@@ -398,6 +398,24 @@ class EventBuilder:
         return {"event": "error", "data": data}
 
     @staticmethod
+    def delegation(from_agent: str, to_agent: str, task: str) -> dict:
+        """Create a delegation event.
+
+        Args:
+            from_agent: Name of the delegating agent
+            to_agent: Name of the target sub-agent
+            task: Task description passed to the sub-agent
+        """
+        return {
+            "event": "delegation",
+            "data": {
+                "from_agent": from_agent,
+                "to_agent": to_agent,
+                "task": task,
+            },
+        }
+
+    @staticmethod
     def done(assistant_data: dict[str, Any] | None = None, message_id: str | None = None) -> dict:
         """Create a done event.
 

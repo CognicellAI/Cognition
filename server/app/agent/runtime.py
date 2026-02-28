@@ -118,6 +118,15 @@ class StepCompleteEvent(AgentEvent):
     description: str
 
 
+@dataclass
+class DelegationEvent(AgentEvent):
+    """Agent is delegating to a sub-agent."""
+
+    from_agent: str
+    to_agent: str
+    task: str
+
+
 # Union type for all events
 StreamEvent = (
     TokenEvent
@@ -129,6 +138,7 @@ StreamEvent = (
     | UsageEvent
     | PlanningEvent
     | StepCompleteEvent
+    | DelegationEvent
 )
 
 

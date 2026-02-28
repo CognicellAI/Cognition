@@ -36,6 +36,7 @@ def _extract_text(content: str | list) -> str:
 
 from server.app.agent import create_cognition_agent
 from server.app.agent.runtime import (
+    DelegationEvent,
     DoneEvent,
     ErrorEvent,
     PlanningEvent,
@@ -190,6 +191,11 @@ class DeepAgentStreamingService:
             planning_mode = False
             streamed_via_model_stream = False  # Track if on_chat_model_stream fired
 
+            # ISSUE-011: Track plan steps for step_complete events
+            plan_todos: list[dict] = []
+            current_step_index = -1
+            completed_steps: set[int] = set()
+
             # Stream events from deepagents
             # The agent automatically handles the ReAct loop
             async for event in agent.astream_events(
@@ -252,7 +258,23 @@ class DeepAgentStreamingService:
                     if tool_name == "write_todos":
                         planning_mode = True
                         todos = tool_args.get("todos", [])
+                        plan_todos = todos  # ISSUE-011: Store todos for step tracking
+                        current_step_index = -1  # Reset step tracking
+                        completed_steps.clear()
                         yield PlanningEvent(todos=todos)
+
+                    # ISSUE-010: Check if this is a delegation tool
+                    if tool_name == "task":
+                        # Extract delegation info from task tool arguments
+                        to_agent = tool_args.get("agent", "unknown")
+                        task_desc = tool_args.get("prompt", tool_args.get("task", ""))
+                        # Get the current agent name from session if available
+                        from_agent = session.agent_name if session else "primary"
+                        yield DelegationEvent(
+                            from_agent=from_agent,
+                            to_agent=to_agent,
+                            task=task_desc,
+                        )
 
                     yield ToolCallEvent(
                         name=tool_name,
@@ -271,7 +293,19 @@ class DeepAgentStreamingService:
                         exit_code=0,
                     )
 
+                    # ISSUE-011: Emit step_complete for plan steps
+                    if planning_mode and plan_todos and current_step_index >= 0:
+                        completed_steps.add(current_step_index)
+                        if current_step_index < len(plan_todos):
+                            step_desc = plan_todos[current_step_index].get("description", "")
+                            yield StepCompleteEvent(
+                                step_number=current_step_index + 1,
+                                total_steps=len(plan_todos),
+                                description=step_desc,
+                            )
+
                     current_tool_call = None
+                    current_step_index += 1  # Move to next step
 
                 elif event_type == "on_custom_event":
                     # Custom events from middleware (e.g. status updates)

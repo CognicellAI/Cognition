@@ -180,6 +180,16 @@ class DoneEvent(BaseModel):
     data: dict = Field(default_factory=dict)
 
 
+class DelegationEvent(BaseModel):
+    """Server-sent event: Agent delegation to sub-agent.
+
+    Serializes: server.app.agent.runtime.DelegationEvent
+    """
+
+    event: Literal["delegation"] = "delegation"
+    data: dict = Field(..., description="Delegation info with 'from_agent', 'to_agent', 'task'")
+
+
 class UsageEvent(BaseModel):
     """Server-sent event: Token usage update.
 
@@ -190,6 +200,33 @@ class UsageEvent(BaseModel):
     data: dict = Field(
         ..., description="Usage with 'input_tokens', 'output_tokens', 'estimated_cost'"
     )
+
+
+class ReconnectedEvent(BaseModel):
+    """Server-sent event: Stream reconnection confirmation (ISSUE-012).
+
+    Emitted when a client reconnects with a Last-Event-ID header to resume
+    a stream. The event confirms the reconnection and provides the last
+    event ID that was received before the disconnect.
+
+    Contract:
+    - Server emits this as the first event after a successful reconnection
+    - Clients should wait for this before processing new events
+    - The 'last_event_id' matches the client's Last-Event-ID header value
+
+    Payload:
+    - last_event_id: The event ID the stream is resuming from
+    - resumed: Always true to indicate successful resumption
+
+    Example:
+        event: reconnected
+        data: {"last_event_id": "msg-123", "resumed": true}
+
+    Serializes: EventBuilder.reconnected()
+    """
+
+    event: Literal["reconnected"] = "reconnected"
+    data: dict = Field(..., description="Reconnection info with 'last_event_id' and 'resumed' flag")
 
 
 # ============================================================================

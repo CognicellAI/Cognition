@@ -24,6 +24,7 @@ from server.app.api.models import (
 from server.app.api.scoping import SessionScope, create_scope_dependency
 from server.app.api.sse import EventBuilder, SSEStream, get_last_event_id
 from server.app.llm.deep_agent_service import (
+    DelegationEvent,
     DoneEvent,
     ErrorEvent,
     PlanningEvent,
@@ -145,6 +146,14 @@ async def agent_event_stream(
                     step_number=event.step_number,
                     total_steps=event.total_steps,
                     description=event.description,
+                )
+
+            elif isinstance(event, DelegationEvent):
+                # ISSUE-010: Emit delegation event for UI visibility
+                yield EventBuilder.delegation(
+                    from_agent=event.from_agent,
+                    to_agent=event.to_agent,
+                    task=event.task,
                 )
 
             elif isinstance(event, StatusEvent):
