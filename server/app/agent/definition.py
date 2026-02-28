@@ -311,14 +311,16 @@ class AgentDefinition(BaseModel):
             else:
                 spec["model"] = self.config.model
 
-        if self.tools:
-            spec["tools"] = self.tools
+        # ISSUE-003: Omit tools and middleware from subagent spec
+        # The primary agent already has all tools available, and deepagents
+        # passes tools through the delegation context. Including raw path
+        # strings here causes AttributeError when deepagents tries to
+        # access .name on them.
+        # TODO: Implement per-subagent tool scoping by resolving paths to
+        # BaseTool instances before passing to create_cognition_agent.
 
         if self.skills:
             spec["skills"] = self.skills
-
-        if self.middleware:
-            spec["middleware"] = self.middleware
 
         if self.interrupt_on:
             spec["interrupt_on"] = self.interrupt_on

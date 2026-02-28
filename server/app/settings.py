@@ -129,9 +129,26 @@ class Settings(BaseSettings):
     @field_validator("cors_origins", "cors_methods", "cors_headers", "scope_keys", mode="before")
     @classmethod
     def parse_comma_separated_list(cls, v: Any) -> list[str] | Any:
-        """Parse comma-separated string into list."""
+        """Parse comma-separated string or JSON array into list.
+
+        Supports both formats:
+        - Comma-separated: "user,project"
+        - JSON array: '["user", "project"]'
+        """
         if isinstance(v, str):
-            return [item.strip() for item in v.split(",")]
+            stripped = v.strip()
+            # ISSUE-004: Accept JSON array syntax
+            if stripped.startswith("["):
+                import json
+
+                try:
+                    parsed = json.loads(stripped)
+                    if isinstance(parsed, list):
+                        return [str(x) for x in parsed]
+                except json.JSONDecodeError:
+                    pass  # Fall back to comma-separated parsing
+            # Fall back to comma-separated
+            return [item.strip() for item in stripped.split(",") if item.strip()]
         return v
 
     # Agent behavior
