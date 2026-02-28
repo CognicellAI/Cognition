@@ -27,9 +27,9 @@ async def list_models(settings: Settings = Depends(get_settings)) -> ModelList:
         ModelInfo(
             id=m.id,
             provider=m.provider_id,
-            display_name=m.display_name or m.id,
-            context_window=m.context_window,
-            capabilities=m.capabilities or [],
+            display_name=m.name or m.id,
+            context_window=None,
+            capabilities=[],
         )
         for m in discovered
     ]
@@ -55,9 +55,9 @@ async def list_models_by_provider(
         ModelInfo(
             id=m.id,
             provider=m.provider_id,
-            display_name=m.display_name or m.id,
-            context_window=m.context_window,
-            capabilities=m.capabilities or [],
+            display_name=m.name or m.id,
+            context_window=None,
+            capabilities=[],
         )
         for m in provider_models
     ]
