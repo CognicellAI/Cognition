@@ -36,6 +36,7 @@ def _extract_text(content: str | list) -> str:
 
 from server.app.agent import create_cognition_agent
 from server.app.agent.runtime import (
+    DeepAgentRuntime,
     DelegationEvent,
     DoneEvent,
     ErrorEvent,
@@ -83,8 +84,10 @@ class DeepAgentStreamingService:
         project_path: str,
         content: str,
         system_prompt: str | None = None,
+        manager: "SessionAgentManager | None" = None,
     ) -> AsyncGenerator[StreamEvent, None]:
         """Stream LLM response using DeepAgents with multi-step support."""
+        runtime: DeepAgentRuntime | None = None
         try:
             # Get session to get its specific LLM config
             from server.app.storage import get_storage_backend
@@ -178,6 +181,11 @@ class DeepAgentStreamingService:
                 subagents=subagents,
             )
 
+            # Create runtime and register for abort tracking
+            runtime = DeepAgentRuntime(agent=agent, checkpointer=checkpointer, thread_id=thread_id)
+            if manager:
+                manager.register_runtime(session_id, runtime)
+
             # Build the input with enhanced system prompt
             # Pass None for system_prompt here because we passed it to create_cognition_agent
             # The agent factory handles embedding it into the graph state
@@ -196,129 +204,51 @@ class DeepAgentStreamingService:
             current_step_index = -1
             completed_steps: set[int] = set()
 
-            # Stream events from deepagents
+            # Stream events from deepagents using runtime (enables abort)
             # The agent automatically handles the ReAct loop
-            async for event in agent.astream_events(
-                {"messages": messages},
-                config={
-                    "configurable": {"thread_id": thread_id},
-                    "recursion_limit": 75,  # ISSUE-015: Increased from default 25
-                },
-                version="v2",
-            ):
-                event_type = event.get("event")
-                data = event.get("data", {})
-                name = event.get("name", "")
+            try:
+                async for event in runtime.astream_events(
+                    {"messages": messages},
+                    thread_id=thread_id,
+                ):
+                    # Handle different event types from runtime
+                    if isinstance(event, TokenEvent):
+                        accumulated_content += event.content
+                        output_tokens += len(event.content.split())
+                        yield event
+                        streamed_via_model_stream = True  # ISSUE-013: Track primary path
 
-                # Handle different event types from deepagents
-                if event_type == "on_chat_model_stream":
-                    # Streaming tokens from the LLM
-                    chunk = data.get("chunk", {})
-                    if hasattr(chunk, "content") and chunk.content:
-                        token_text = _extract_text(chunk.content)
-                        if token_text:
-                            accumulated_content += token_text
-                            output_tokens += len(token_text.split())
-                            yield TokenEvent(content=token_text)
-                            streamed_via_model_stream = True  # ISSUE-013: Track primary path
+                    elif isinstance(event, ToolCallEvent):
+                        current_tool_call = event.tool_call_id
+                        yield event
 
-                elif event_type == "on_chain_stream" and name == "model":
-                    # ISSUE-013: Skip if primary streaming path already handled it
-                    if streamed_via_model_stream:
-                        continue
+                    elif isinstance(event, ToolResultEvent):
+                        current_tool_call = None
+                        yield event
 
-                    # Fallback: model streaming via chain events
-                    chunk = data.get("chunk", {})
-                    # Chunk might be a list, Command object, or message
-                    chunks = chunk if isinstance(chunk, list) else [chunk]
-                    for c in chunks:
-                        chunk_content: str = ""
-                        # Handle Command objects from LangGraph
-                        if hasattr(c, "update") and isinstance(c.update, dict):
-                            chunk_messages = c.update.get("messages", [])
-                            if chunk_messages and hasattr(chunk_messages[-1], "content"):
-                                chunk_content = chunk_messages[-1].content
-                        # Handle regular message objects
-                        elif hasattr(c, "content") and c.content:
-                            chunk_content = _extract_text(c.content)
-
-                        if chunk_content:
-                            accumulated_content += chunk_content
-                            output_tokens += len(chunk_content.split())
-                            yield TokenEvent(content=chunk_content)
-
-                elif event_type == "on_tool_start":
-                    # Tool execution starting
-                    tool_name = name
-                    tool_args = data.get("input", {})
-                    tool_call_id = str(uuid.uuid4())[:8]
-                    current_tool_call = tool_call_id
-
-                    # Check if this is a planning tool
-                    if tool_name == "write_todos":
+                    elif isinstance(event, PlanningEvent):
                         planning_mode = True
-                        todos = tool_args.get("todos", [])
-                        plan_todos = todos  # ISSUE-011: Store todos for step tracking
-                        current_step_index = -1  # Reset step tracking
-                        completed_steps.clear()
-                        yield PlanningEvent(todos=todos)
+                        plan_todos = event.todos
+                        yield event
 
-                    # ISSUE-010: Check if this is a delegation tool
-                    if tool_name == "task":
-                        # Extract delegation info from task tool arguments
-                        to_agent = tool_args.get("agent", "unknown")
-                        task_desc = tool_args.get("prompt", tool_args.get("task", ""))
-                        # Get the current agent name from session if available
-                        from_agent = session.agent_name if session else "primary"
-                        yield DelegationEvent(
-                            from_agent=from_agent,
-                            to_agent=to_agent,
-                            task=task_desc,
-                        )
+                    elif isinstance(event, DelegationEvent):
+                        yield event
 
-                    yield ToolCallEvent(
-                        name=tool_name,
-                        args=tool_args,
-                        tool_call_id=tool_call_id,
-                    )
+                    elif isinstance(event, StatusEvent):
+                        yield event
 
-                elif event_type == "on_tool_end":
-                    # Tool execution completed
-                    output = data.get("output", "")
-                    tool_call_id = current_tool_call or str(uuid.uuid4())[:8]
+                    elif isinstance(event, ErrorEvent):
+                        yield event
+                        if event.code == "ABORTED":
+                            return
 
-                    yield ToolResultEvent(
-                        tool_call_id=tool_call_id,
-                        output=str(output),
-                        exit_code=0,
-                    )
+                    elif isinstance(event, DoneEvent):
+                        yield event
 
-                    # ISSUE-011: Emit step_complete for plan steps
-                    if planning_mode and plan_todos and current_step_index >= 0:
-                        completed_steps.add(current_step_index)
-                        if current_step_index < len(plan_todos):
-                            step_desc = plan_todos[current_step_index].get("description", "")
-                            yield StepCompleteEvent(
-                                step_number=current_step_index + 1,
-                                total_steps=len(plan_todos),
-                                description=step_desc,
-                            )
-
-                    current_tool_call = None
-                    current_step_index += 1  # Move to next step
-
-                elif event_type == "on_custom_event":
-                    # Custom events from middleware (e.g. status updates)
-                    # The event name is in the 'name' field, data contains the payload
-                    event_name = event.get("name", "")
-                    if event_name == "status":
-                        if isinstance(data, dict) and "status" in data:
-                            yield StatusEvent(status=data["status"])
-
-                elif event_type == "on_chain_end":
-                    # The agent's turn is complete
-                    # This happens after the ReAct loop finishes
-                    pass
+            finally:
+                # Unregister runtime when streaming completes
+                if manager:
+                    manager.unregister_runtime(session_id)
 
             # Yield final usage info
             yield UsageEvent(
@@ -432,6 +362,7 @@ class SessionAgentManager:
     """Manages DeepAgent services per session.
 
     Creates and caches agent services for each session.
+    Tracks active streaming operations for abort functionality.
     """
 
     def __init__(self, settings: Settings):
@@ -443,6 +374,8 @@ class SessionAgentManager:
         self.settings = settings
         self._services: dict[str, DeepAgentStreamingService] = {}
         self._project_paths: dict[str, str] = {}
+        # Track active runtimes for abort functionality
+        self._active_runtimes: dict[str, Any] = {}
 
     def register_session(
         self,
@@ -493,6 +426,44 @@ class SessionAgentManager:
         """
         return self._project_paths.get(session_id)
 
+    def register_runtime(self, session_id: str, runtime: Any) -> None:
+        """Register an active runtime for abort tracking.
+
+        Args:
+            session_id: Session identifier.
+            runtime: The runtime instance to track.
+        """
+        self._active_runtimes[session_id] = runtime
+        logger.debug("Runtime registered for abort tracking", session_id=session_id)
+
+    def unregister_runtime(self, session_id: str) -> None:
+        """Unregister a runtime when streaming completes.
+
+        Args:
+            session_id: Session identifier.
+        """
+        self._active_runtimes.pop(session_id, None)
+        logger.debug("Runtime unregistered", session_id=session_id)
+
+    async def abort_session(self, session_id: str, thread_id: str | None = None) -> bool:
+        """Abort the current operation for a session.
+
+        Args:
+            session_id: Session identifier.
+            thread_id: Optional thread ID to abort.
+
+        Returns:
+            True if abort was signaled, False if no active runtime.
+        """
+        runtime = self._active_runtimes.get(session_id)
+        if runtime:
+            success = await runtime.abort(thread_id)
+            logger.info("Session abort signaled", session_id=session_id, success=success)
+            return success
+        else:
+            logger.warning("No active runtime to abort", session_id=session_id)
+            return False
+
     def unregister_session(self, session_id: str) -> None:
         """Unregister a session and clean up resources.
 
@@ -501,6 +472,7 @@ class SessionAgentManager:
         """
         self._services.pop(session_id, None)
         self._project_paths.pop(session_id, None)
+        self._active_runtimes.pop(session_id, None)
 
         logger.info("Session unregistered", session_id=session_id)
 

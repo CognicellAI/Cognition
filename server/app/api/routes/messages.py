@@ -105,12 +105,14 @@ async def agent_event_stream(
         metadata = {}
 
         # Stream response using DeepAgents with multi-step support
+        # Pass agent_manager to enable abort functionality
         async for event in service.stream_response(
             session_id=session_id,
             thread_id=thread_id,
             project_path=workspace_path,
             content=content,
             system_prompt=system_prompt,
+            manager=agent_manager,
         ):
             if isinstance(event, TokenEvent):
                 accumulated_content.append(event.content)

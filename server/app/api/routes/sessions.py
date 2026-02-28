@@ -332,6 +332,7 @@ async def abort_session(
     session_id: str,
     settings: Settings = Depends(get_settings_dependency),
     scope: SessionScope = Depends(get_scope_dependency),
+    agent_manager: SessionAgentManager = Depends(get_agent_manager),
 ) -> dict:
     """Abort the current operation in a session.
 
@@ -354,8 +355,9 @@ async def abort_session(
             detail=f"Session not found: {session_id}",
         )
 
-    # In a real implementation:
-    # 1. Signal the agent to cancel
-    # 2. Clean up any in-progress operations
+    # Signal the agent to cancel via the SessionAgentManager
+    # Returns True if aborted active operation, False if no active operation
+    # Both cases are considered successful (idempotent)
+    await agent_manager.abort_session(session_id, session.thread_id)
 
     return {"success": True, "message": "Operation aborted"}
