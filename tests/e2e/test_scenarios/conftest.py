@@ -13,6 +13,20 @@ import httpx
 import pytest
 import pytest_asyncio
 
+
+@pytest.fixture(autouse=True)
+async def setup_storage_backend():
+    """Override the parent conftest storage fixture to use live server.
+
+    The parent tests/conftest.py has an autouse fixture that sets up a test
+    SQLite database, which prevents e2e tests from hitting the real server.
+    This fixture overrides that behavior so e2e tests test against the
+    live docker-compose environment.
+    """
+    # Do nothing - let the tests use the real server
+    yield None
+
+
 # Default test configuration
 BASE_URL = "http://localhost:8000"
 TEST_TIMEOUT = httpx.Timeout(30.0, connect=10.0)

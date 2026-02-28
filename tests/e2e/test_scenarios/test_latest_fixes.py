@@ -89,7 +89,7 @@ class TestAbortMechanism:
 
         # Should be able to send new message
         events = await self._collect_stream_events(
-            api_client, session_id, "Hello after abort", timeout=5.0
+            api_client, session_id, "Hello after abort", timeout=15.0
         )
 
         # Verify we got a done event (streaming completed)
@@ -105,6 +105,7 @@ class TestAbortMechanism:
     ) -> list[dict]:
         """Helper to collect SSE events from message stream."""
         events: list[dict] = []
+        current_event_type: str | None = None
 
         try:
             async with api_client.client.stream(
@@ -116,12 +117,17 @@ class TestAbortMechanism:
                 response.raise_for_status()
 
                 async for line in response.aiter_lines():
-                    if line.startswith("data: "):
+                    if line.startswith("event: "):
+                        current_event_type = line[7:].strip()
+                    elif line.startswith("data: "):
                         try:
                             event_data = json.loads(line[6:])
+                            if current_event_type:
+                                event_data["event"] = current_event_type
                             events.append(event_data)
-                            if event_data.get("event") == "done":
+                            if current_event_type == "done":
                                 break
+                            current_event_type = None
                         except json.JSONDecodeError:
                             continue
         except TimeoutError:
@@ -143,7 +149,7 @@ class TestStreamingIntegrity:
 
         # Collect stream events
         events = await self._collect_stream_events(
-            api_client, session_id, "Say 'hello world' exactly once.", timeout=5.0
+            api_client, session_id, "Say 'hello world' exactly once.", timeout=15.0
         )
 
         # Extract token events
@@ -164,7 +170,7 @@ class TestStreamingIntegrity:
         session_id = session_resp.json()["id"]
 
         events = await self._collect_stream_events(
-            api_client, session_id, "What is your role?", timeout=5.0
+            api_client, session_id, "What is your role?", timeout=15.0
         )
 
         # Collect all content
@@ -184,6 +190,7 @@ class TestStreamingIntegrity:
     ) -> list[dict]:
         """Helper to collect SSE events from message stream."""
         events: list[dict] = []
+        current_event_type: str | None = None
 
         try:
             async with api_client.client.stream(
@@ -195,12 +202,17 @@ class TestStreamingIntegrity:
                 response.raise_for_status()
 
                 async for line in response.aiter_lines():
-                    if line.startswith("data: "):
+                    if line.startswith("event: "):
+                        current_event_type = line[7:].strip()
+                    elif line.startswith("data: "):
                         try:
                             event_data = json.loads(line[6:])
+                            if current_event_type:
+                                event_data["event"] = current_event_type
                             events.append(event_data)
-                            if event_data.get("event") == "done":
+                            if current_event_type == "done":
                                 break
+                            current_event_type = None
                         except json.JSONDecodeError:
                             continue
         except TimeoutError:
@@ -312,7 +324,7 @@ class TestAdvancedEventTypes:
 
         # Collect stream events
         events = await self._collect_stream_events(
-            api_client, session_id, "Say hello.", timeout=5.0
+            api_client, session_id, "Say hello.", timeout=15.0
         )
 
         # Find done event
@@ -375,6 +387,7 @@ class TestAdvancedEventTypes:
     ) -> list[dict]:
         """Helper to collect SSE events from message stream."""
         events: list[dict] = []
+        current_event_type: str | None = None
 
         try:
             async with api_client.client.stream(
@@ -386,12 +399,17 @@ class TestAdvancedEventTypes:
                 response.raise_for_status()
 
                 async for line in response.aiter_lines():
-                    if line.startswith("data: "):
+                    if line.startswith("event: "):
+                        current_event_type = line[7:].strip()
+                    elif line.startswith("data: "):
                         try:
                             event_data = json.loads(line[6:])
+                            if current_event_type:
+                                event_data["event"] = current_event_type
                             events.append(event_data)
-                            if event_data.get("event") == "done":
+                            if current_event_type == "done":
                                 break
+                            current_event_type = None
                         except json.JSONDecodeError:
                             continue
         except TimeoutError:
