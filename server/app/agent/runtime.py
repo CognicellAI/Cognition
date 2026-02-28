@@ -79,7 +79,8 @@ class StatusEvent(AgentEvent):
 class DoneEvent(AgentEvent):
     """Stream completion signal."""
 
-    pass
+    # ISSUE-019: Include message_id so clients can correlate with persisted message
+    message_id: str | None = None
 
 
 @dataclass

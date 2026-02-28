@@ -366,6 +366,16 @@ class AgentResponse(BaseModel):
     native: bool = Field(..., description="Whether agent is built-in")
     model: str | None = Field(None, description="Default model for this agent")
     temperature: float | None = Field(None, description="Default temperature for this agent")
+    # ISSUE-009: Added tools and skills for better agent introspection
+    tools: list[str] = Field(
+        default_factory=list, description="Tool paths this agent has access to"
+    )
+    skills: list[str] = Field(
+        default_factory=list, description="Skill directories this agent can use"
+    )
+    system_prompt: str | None = Field(
+        None, description="Agent's system prompt (truncated if very long)"
+    )
 
 
 class AgentList(BaseModel):
@@ -394,3 +404,26 @@ class ToolList(BaseModel):
 
     tools: list[ToolResponse] = Field(default_factory=list, description="List of registered tools")
     count: int = Field(0, description="Total number of tools")
+
+
+# ============================================================================
+# Model Models (ISSUE-008)
+# ============================================================================
+
+
+class ModelInfo(BaseModel):
+    """Information about an available LLM model."""
+
+    id: str = Field(..., description="Model identifier (value to pass in PATCH /sessions)")
+    provider: str = Field(..., description="Provider name (e.g., 'openai', 'bedrock')")
+    display_name: str | None = Field(None, description="Human-readable model name")
+    context_window: int | None = Field(None, description="Context window size in tokens")
+    capabilities: list[str] = Field(
+        default_factory=list, description="Model capabilities (e.g., 'vision', 'tools')"
+    )
+
+
+class ModelList(BaseModel):
+    """List of available models."""
+
+    models: list[ModelInfo] = Field(default_factory=list, description="List of available models")

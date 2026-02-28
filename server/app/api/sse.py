@@ -398,15 +398,18 @@ class EventBuilder:
         return {"event": "error", "data": data}
 
     @staticmethod
-    def done(assistant_data: dict[str, Any] | None = None) -> dict:
+    def done(assistant_data: dict[str, Any] | None = None, message_id: str | None = None) -> dict:
         """Create a done event.
 
         Args:
             assistant_data: Optional assistant message data for persistence
+            message_id: Optional ID of the persisted assistant message (ISSUE-019)
         """
         data = {}
         if assistant_data:
             data["assistant_data"] = assistant_data
+        if message_id:
+            data["message_id"] = message_id
         return {"event": "done", "data": data}
 
     @staticmethod

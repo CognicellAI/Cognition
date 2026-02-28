@@ -166,7 +166,9 @@ async def agent_event_stream(
                 )
 
             elif isinstance(event, DoneEvent):
-                # Include assistant message data in the done event for persistence
+                # ISSUE-019: Generate message_id upfront and include in done event
+                # This allows clients to correlate with persisted message without extra API call
+                message_id = event.message_id or str(uuid.uuid4())
                 assistant_data = {
                     "content": "".join(accumulated_content),
                     "tool_calls": tool_calls if tool_calls else None,
@@ -174,7 +176,7 @@ async def agent_event_stream(
                     "model_used": model_used,
                     "metadata": metadata if metadata else None,
                 }
-                yield EventBuilder.done(assistant_data=assistant_data)
+                yield EventBuilder.done(assistant_data=assistant_data, message_id=message_id)
 
             elif isinstance(event, ErrorEvent):
                 yield EventBuilder.error(event.message, code=event.code)
@@ -277,10 +279,14 @@ async def send_message(
     # Wrap the event stream to persist assistant message on completion
     async def wrapped_event_stream():
         assistant_data = None
+        message_id = None
         async for event in event_stream:
-            # Capture assistant data from done event
-            if event.get("event") == "done" and event.get("data", {}).get("assistant_data"):
-                assistant_data = event["data"]["assistant_data"]
+            # Capture assistant data and message_id from done event
+            if event.get("event") == "done":
+                if event.get("data", {}).get("assistant_data"):
+                    assistant_data = event["data"]["assistant_data"]
+                # ISSUE-019: Capture message_id from done event
+                message_id = event.get("data", {}).get("message_id")
             yield event
 
         # Persist assistant message after stream completes
@@ -296,8 +302,10 @@ async def send_message(
                         for tc in assistant_data["tool_calls"]
                     ]
 
+                # ISSUE-019: Use message_id from done event if available, else generate new one
+                persist_message_id = message_id or str(uuid.uuid4())
                 await message_store.create_message(
-                    message_id=str(uuid.uuid4()),
+                    message_id=persist_message_id,
                     session_id=session_id,
                     role="assistant",
                     content=assistant_data.get("content"),

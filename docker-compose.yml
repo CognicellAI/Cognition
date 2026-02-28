@@ -99,12 +99,18 @@ services:
       - OTEL_SERVICE_NAME=cognition
       - OTEL_TRACES_EXPORTER=otlp
       - OTEL_LOG_LEVEL=debug
+      
+      # ISSUE-007: AWS credentials for Bedrock - uid 1000 runs as cognition user
+      - HOME=/home/cognition
+      - AWS_PROFILE=${AWS_PROFILE:-default}
     volumes:
       - ./workspaces:/workspace
       - ./.cognition:/app/.cognition
       - ./.cognition:/workspace/.cognition
       - ./tests:/app/tests
       - mlflow-artifacts:/mlflow/artifacts
+      # ISSUE-007: Mount AWS creds at cognition user's home (uid 1000), NOT /root
+      - ~/.aws:/home/cognition/.aws:ro
     networks:
       - cognition-network
     depends_on:
