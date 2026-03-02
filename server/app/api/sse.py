@@ -398,15 +398,36 @@ class EventBuilder:
         return {"event": "error", "data": data}
 
     @staticmethod
-    def done(assistant_data: dict[str, Any] | None = None) -> dict:
+    def delegation(from_agent: str, to_agent: str, task: str) -> dict:
+        """Create a delegation event.
+
+        Args:
+            from_agent: Name of the delegating agent
+            to_agent: Name of the target sub-agent
+            task: Task description passed to the sub-agent
+        """
+        return {
+            "event": "delegation",
+            "data": {
+                "from_agent": from_agent,
+                "to_agent": to_agent,
+                "task": task,
+            },
+        }
+
+    @staticmethod
+    def done(assistant_data: dict[str, Any] | None = None, message_id: str | None = None) -> dict:
         """Create a done event.
 
         Args:
             assistant_data: Optional assistant message data for persistence
+            message_id: Optional ID of the persisted assistant message (ISSUE-019)
         """
         data = {}
         if assistant_data:
             data["assistant_data"] = assistant_data
+        if message_id:
+            data["message_id"] = message_id
         return {"event": "done", "data": data}
 
     @staticmethod

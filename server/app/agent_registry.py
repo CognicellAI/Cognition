@@ -49,7 +49,6 @@ T = TypeVar("T")
 # ============================================================================
 
 BANNED_IMPORTS = {
-    "os",
     "subprocess",
     "socket",
     "ctypes",
@@ -66,7 +65,49 @@ BANNED_IMPORTS = {
     "builtins",
 }
 
+# ISSUE-006: Removed "os" from BANNED_IMPORTS - instead ban dangerous os calls
+# This allows safe uses like os.environ while blocking dangerous ones
 BANNED_CALLS = {"exec", "eval", "compile", "__import__"}
+
+# Dangerous os module calls that should be banned
+BANNED_OS_CALLS = {
+    "system",
+    "popen",
+    "popen2",
+    "popen3",
+    "popen4",
+    "execv",
+    "execve",
+    "execvp",
+    "execvpe",
+    "execl",
+    "execle",
+    "execlp",
+    "execlpe",
+    "spawnl",
+    "spawnle",
+    "spawnlp",
+    "spawnlpe",
+    "spawnv",
+    "spawnve",
+    "spawnvp",
+    "spawnvpe",
+    "fork",
+    "forkpty",
+    "kill",
+    "killpg",
+    "remove",
+    "unlink",
+    "rmdir",
+    "removedirs",
+    "rename",
+    "renames",
+    "makedirs",
+    "mkdir",
+    "chmod",
+    "chown",
+    "chroot",
+}
 
 
 class SecurityASTVisitor(ast.NodeVisitor):
@@ -91,12 +132,25 @@ class SecurityASTVisitor(ast.NodeVisitor):
 
     def visit_Call(self, node: ast.Call) -> None:
         func_name = None
+        is_os_call = False
+
         if isinstance(node.func, ast.Name):
             func_name = node.func.id
         elif isinstance(node.func, ast.Attribute):
             func_name = node.func.attr
+            # ISSUE-006: Check for dangerous os module calls
+            # e.g., os.system, os.popen, os.remove, etc.
+            if isinstance(node.func.value, ast.Name) and node.func.value.id == "os":
+                is_os_call = True
+
+        # Check banned global calls
         if func_name in BANNED_CALLS:
             self.violations.append(f"Call to dangerous function: {func_name}")
+
+        # Check banned os calls
+        if is_os_call and func_name in BANNED_OS_CALLS:
+            self.violations.append(f"Call to dangerous os function: os.{func_name}")
+
         self.generic_visit(node)
 
 

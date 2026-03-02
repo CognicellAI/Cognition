@@ -62,6 +62,7 @@ def create_openai_compatible_model(config: Any, settings: Any) -> Any:
 def create_bedrock_model(config: Any, settings: Any) -> Any:
     """Factory for AWS Bedrock models."""
     from langchain_aws import ChatBedrock
+    from botocore.config import Config
 
     aws_access_key = None
     aws_secret_key = None
@@ -70,11 +71,18 @@ def create_bedrock_model(config: Any, settings: Any) -> Any:
     if settings.aws_secret_access_key:
         aws_secret_key = settings.aws_secret_access_key.get_secret_value()
 
+    # ISSUE-016: Add timeout configuration to prevent stream stalls
+    botocore_config = Config(
+        read_timeout=120,  # 2 minute read timeout
+        connect_timeout=10,  # 10 second connection timeout
+    )
+
     return ChatBedrock(
         model_id=config.model,
         region_name=getattr(config, "region", None) or settings.aws_region,
         aws_access_key_id=aws_access_key,
         aws_secret_access_key=aws_secret_key,
+        config=botocore_config,
     )
 
 

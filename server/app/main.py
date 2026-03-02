@@ -12,7 +12,7 @@ from fastapi.responses import JSONResponse
 
 from server.app.api.middleware import ObservabilityMiddleware, SecurityHeadersMiddleware
 from server.app.api.models import HealthStatus, ReadyStatus
-from server.app.api.routes import agents, config, messages, sessions, tools
+from server.app.api.routes import agents, config, messages, models, sessions, tools
 from server.app.exceptions import RateLimitError
 from server.app.observability import setup_metrics, setup_tracing
 from server.app.observability.mlflow_config import setup_mlflow_tracing
@@ -136,6 +136,7 @@ app.include_router(sessions.router)
 app.include_router(messages.router)
 app.include_router(config.router)
 app.include_router(agents.router)
+app.include_router(models.router)  # ISSUE-008: GET /models endpoint
 app.include_router(tools.router)
 
 

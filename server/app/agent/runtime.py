@@ -79,7 +79,8 @@ class StatusEvent(AgentEvent):
 class DoneEvent(AgentEvent):
     """Stream completion signal."""
 
-    pass
+    # ISSUE-019: Include message_id so clients can correlate with persisted message
+    message_id: str | None = None
 
 
 @dataclass
@@ -117,6 +118,15 @@ class StepCompleteEvent(AgentEvent):
     description: str
 
 
+@dataclass
+class DelegationEvent(AgentEvent):
+    """Agent is delegating to a sub-agent."""
+
+    from_agent: str
+    to_agent: str
+    task: str
+
+
 # Union type for all events
 StreamEvent = (
     TokenEvent
@@ -128,6 +138,7 @@ StreamEvent = (
     | UsageEvent
     | PlanningEvent
     | StepCompleteEvent
+    | DelegationEvent
 )
 
 
