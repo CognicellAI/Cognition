@@ -13,11 +13,15 @@ P3 Multi-Agent Registry:
 from __future__ import annotations
 
 import importlib.util
+import inspect
 import re
+import sys
 from pathlib import Path
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field, field_validator
+
+from langchain_core.tools import BaseTool
 
 try:
     import yaml  # type: ignore[import-untyped]
@@ -284,6 +288,84 @@ class AgentDefinition(BaseModel):
             "memory": self.validate_memory_paths(base_path),
         }
 
+    def _resolve_tools(self, base_path: str | Path | None = None) -> list[BaseTool]:
+        """Resolve tool paths to BaseTool instances.
+
+        Tool paths can be:
+        - Module paths (e.g., "server.app.tools.file_tools")
+        - File paths (e.g., ".cognition/tools/my_tool.py")
+
+        Args:
+            base_path: Optional base path for resolving relative file paths.
+
+        Returns:
+            List of BaseTool instances resolved from the tool paths.
+        """
+        resolved_tools: list[BaseTool] = []
+        base = Path(base_path) if base_path else Path.cwd()
+
+        for tool_path in self.tools:
+            try:
+                # Check if it's a file path (contains / or ends with .py)
+                if "/" in tool_path or tool_path.endswith(".py"):
+                    # Treat as file path
+                    tool_file = base / tool_path
+                    if not tool_file.exists():
+                        continue
+
+                    # Load module from file
+                    module_name = f"_cognition_tool_{tool_file.stem}"
+                    spec = importlib.util.spec_from_file_location(module_name, str(tool_file))
+                    if not spec or not spec.loader:
+                        continue
+
+                    module = importlib.util.module_from_spec(spec)
+                    # Remove existing module if already loaded (for hot reload)
+                    if module_name in sys.modules:
+                        del sys.modules[module_name]
+                    sys.modules[module_name] = module
+                    spec.loader.exec_module(module)
+
+                    # Find BaseTool instances
+                    for name, obj in inspect.getmembers(module):
+                        if isinstance(obj, BaseTool):
+                            resolved_tools.append(obj)
+
+                else:
+                    # Treat as module path
+                    try:
+                        module = importlib.import_module(tool_path)
+                        for name, obj in inspect.getmembers(module):
+                            if isinstance(obj, BaseTool):
+                                resolved_tools.append(obj)
+                    except ImportError:
+                        # Try to find as a file relative to base_path
+                        tool_file = base / tool_path.replace(".", "/")
+                        if tool_file.exists():
+                            # Add .py extension if not present
+                            if not tool_file.suffix:
+                                tool_file = tool_file.with_suffix(".py")
+                            if tool_file.exists():
+                                module_name = f"_cognition_tool_{tool_file.stem}"
+                                spec = importlib.util.spec_from_file_location(
+                                    module_name, str(tool_file)
+                                )
+                                if spec and spec.loader:
+                                    module = importlib.util.module_from_spec(spec)
+                                    if module_name in sys.modules:
+                                        del sys.modules[module_name]
+                                    sys.modules[module_name] = module
+                                    spec.loader.exec_module(module)
+
+                                    for name, obj in inspect.getmembers(module):
+                                        if isinstance(obj, BaseTool):
+                                            resolved_tools.append(obj)
+            except Exception:
+                # Skip tools that fail to load
+                continue
+
+        return resolved_tools
+
     def to_subagent(self) -> dict[str, Any]:
         """Translate AgentDefinition to Deep Agents SubAgent TypedDict.
 
@@ -311,13 +393,11 @@ class AgentDefinition(BaseModel):
             else:
                 spec["model"] = self.config.model
 
-        # ISSUE-003: Omit tools and middleware from subagent spec
-        # The primary agent already has all tools available, and deepagents
-        # passes tools through the delegation context. Including raw path
-        # strings here causes AttributeError when deepagents tries to
-        # access .name on them.
-        # TODO: Implement per-subagent tool scoping by resolving paths to
-        # BaseTool instances before passing to create_cognition_agent.
+        # Resolve tools from paths to BaseTool instances
+        # This prevents AttributeError when ToolNode tries to access .name on strings
+        resolved_tools = self._resolve_tools()
+        if resolved_tools:
+            spec["tools"] = resolved_tools
 
         if self.skills:
             spec["skills"] = self.skills
