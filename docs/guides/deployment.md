@@ -1,157 +1,355 @@
-# Operations Manual: Deployment
+# Deployment Guide
 
-> **Running the Engine in Production.**
+This guide covers running Cognition in production with PostgreSQL persistence, Docker sandbox execution, and the full observability stack.
 
-This guide covers configuration, security, and scaling for the Cognition Engine.
+---
 
-## Configuration
+## Overview
 
-Cognition is configured via Environment Variables.
+The production topology includes 8 services:
 
-### Core Settings
+| Service | Image | Purpose |
+|---|---|---|
+| `cognition` | `cognition:latest` | The API server |
+| `postgres` | `postgres:16` | Durable session and message storage |
+| `mlflow` | `ghcr.io/mlflow/mlflow:v3.10.0` | Experiment tracking |
+| `prometheus` | `prom/prometheus:latest` | Metrics collection |
+| `grafana` | `grafana/grafana:latest` | Dashboards |
+| `otel-collector` | `otel/opentelemetry-collector-contrib:latest` | Trace collection and routing |
+| `loki` | `grafana/loki:latest` | Log aggregation |
+| `promtail` | `grafana/promtail:latest` | Log shipping from containers |
 
-| Variable | Description | Default |
-| :--- | :--- | :--- |
-| `COGNITION_PORT` | HTTP Port for API | `8000` |
-| `COGNITION_LOG_LEVEL` | Logging verbosity | `INFO` |
-| `COGNITION_WORKSPACE_ROOT` | Root path for Sandbox files | `./workspaces` |
+All services communicate on a `cognition-network` bridge network.
 
-### LLM Provider
+---
 
-| Variable | Description | Example |
-| :--- | :--- | :--- |
-| `COGNITION_LLM_PROVIDER` | `openai`, `bedrock`, `openai_compatible` | `openai` |
-| `COGNITION_LLM_MODEL` | Model ID | `gpt-4o` |
-| `OPENAI_API_KEY` | Key for OpenAI | `sk-...` |
+## Prerequisites
 
-### Agent behavior
+- Docker Engine 24+ and Docker Compose v2
+- At least 4 GB free RAM for the full stack (2 GB minimum for Cognition + Postgres only)
+- An LLM provider API key
 
-| Variable | Description | Default |
-| :--- | :--- | :--- |
-| `COGNITION_AGENT_MEMORY` | JSON list of files to load as context | `["AGENTS.md"]` |
-| `COGNITION_AGENT_SKILLS` | JSON list of skill directory paths | `[".cognition/skills/"]` |
-| `COGNITION_AGENT_INTERRUPT_ON` | JSON dict of tools requiring approval | `{}` |
+---
 
-### Persistence (State)
+## Step 1 — Build the Sandbox Image
 
-| Variable | Description | Default |
-| :--- | :--- | :--- |
-| `COGNITION_PERSISTENCE_BACKEND` | `sqlite` or `postgres` | `sqlite` |
-| `COGNITION_PERSISTENCE_URI` | Path/URL to DB | `.cognition/state.db` |
+The sandbox image is required when `COGNITION_SANDBOX_BACKEND=docker`. It defines the execution environment for agent code.
 
-> **Postgres is fully implemented** via `server/app/storage/postgres.py` using `asyncpg`.
-> Set `COGNITION_PERSISTENCE_BACKEND=postgres` and provide a connection URI
-> (e.g., `postgresql://user:pass@localhost:5432/cognition`).
+```bash
+docker build -f Dockerfile.sandbox -t cognition-sandbox:latest .
+```
 
-### Sandbox Backend
+The sandbox image is minimal by design: a read-only root filesystem, no shell, no network tools, and only the packages needed to run Python code.
 
-| Variable | Description | Default |
-| :--- | :--- | :--- |
-| `COGNITION_SANDBOX_BACKEND` | `local` or `docker` | `local` |
+---
 
-The sandbox backend controls how agent commands are executed. The agent factory
-calls `create_sandbox_backend()` which dispatches based on this setting:
+## Step 2 — Build the Cognition Image
 
-- **`local`** — Runs commands directly on the host via `LocalExecutionBackend`.
-- **`docker`** — Runs commands in isolated containers via `DockerExecutionBackend`
-  (which wraps `CognitionDockerSandboxBackend`). Both classes are fully implemented.
+```bash
+docker build -t cognition:latest .
+```
 
-### Observability (Audit)
+The `Dockerfile` is a multi-stage build. The final image contains only the application and its runtime dependencies.
 
-| Variable | Description | Default |
-| :--- | :--- | :--- |
-| `COGNITION_OTEL_ENDPOINT` | OTLP Collector URL | `http://otel-collector:4317` |
+---
 
-## Security Hardening
+## Step 3 — Configure Environment
 
-### 0. Docker Sandbox Container Hardening
+Copy `.env.example` to `.env` and fill in your values:
 
-When `COGNITION_SANDBOX_BACKEND=docker`, every agent command runs inside a
-hardened container with the following defaults:
+```bash
+cp .env.example .env
+```
 
-- **`cap_drop=ALL`** — All Linux capabilities are dropped.
-- **`security_opt=no-new-privileges`** — Prevents privilege escalation.
-- **`read_only=True`** — Root filesystem is read-only.
-- **tmpfs mounts** for `/tmp` and `/home` — Writable scratch space that never
-  persists to disk.
+Minimum required settings:
 
-These settings are applied automatically by `DockerExecutionBackend` and require
-no additional configuration.
+```bash
+# LLM provider
+COGNITION_LLM_PROVIDER=openai
+OPENAI_API_KEY=sk-...
 
-### 1. File System Isolation (Volumes)
-In Docker, always mount the workspace volume with the least privilege required.
+# Database (matches docker-compose.yml service)
+COGNITION_PERSISTENCE_BACKEND=postgres
+COGNITION_PERSISTENCE_URI=postgresql://cognition:cognition@postgres:5432/cognition
+POSTGRES_USER=cognition
+POSTGRES_PASSWORD=cognition
+POSTGRES_DB=cognition
 
-**Read-Only Evidence (Forensic Use Case):**
+# Sandbox
+COGNITION_SANDBOX_BACKEND=docker
+
+# Observability (optional but recommended)
+COGNITION_OTEL_ENABLED=true
+COGNITION_OTEL_ENDPOINT=http://otel-collector:4317
+COGNITION_MLFLOW_ENABLED=true
+COGNITION_MLFLOW_TRACKING_URI=http://mlflow:5000
+```
+
+---
+
+## Step 4 — Start the Stack
+
+### Full Stack (all 8 services)
+
+```bash
+docker-compose up -d
+```
+
+### Minimal Stack (Cognition + Postgres only)
+
+```bash
+docker-compose up -d cognition postgres
+```
+
+### Verify Health
+
+```bash
+# Cognition API
+curl -s http://localhost:8000/health | jq .
+
+# PostgreSQL
+docker-compose exec postgres pg_isready -U cognition
+
+# MLflow
+curl -s http://localhost:5000/health
+
+# Prometheus
+curl -s http://localhost:9090/-/ready
+
+# Grafana
+curl -s http://localhost:3000/api/health
+```
+
+---
+
+## Step 5 — Database Migrations
+
+Cognition uses Alembic for schema management. Migrations run automatically at startup — the `SqliteStorageBackend` and `PostgresStorageBackend` both call `metadata.create_all()` during `initialize()`.
+
+For explicit migration management:
+
+```bash
+# Apply latest schema
+docker-compose exec cognition cognition db upgrade
+
+# Check current revision
+docker-compose exec cognition cognition db current
+
+# Create a new migration (after changing schema.py)
+docker-compose exec cognition cognition db migrate "description"
+```
+
+---
+
+## Service Configuration Details
+
+### Cognition Server
+
+The `cognition` service in `docker-compose.yml` mounts:
+- `/var/run/docker.sock` — Required for the Docker sandbox backend to create containers
+- `./workspace` — Host workspace directory mapped into the container
+
+The Docker-in-Docker socket mount requires that the host's Docker daemon is accessible and that the `cognition` user has permission to use it.
+
+### PostgreSQL
+
 ```yaml
-volumes:
-  - /mnt/evidence:/workspace/evidence:ro
-  - /mnt/scratch:/workspace/scratch:rw
+postgres:
+  image: postgres:16
+  environment:
+    POSTGRES_USER: cognition
+    POSTGRES_PASSWORD: cognition
+    POSTGRES_DB: cognition
+  volumes:
+    - pgdata:/var/lib/postgresql/data
+  healthcheck:
+    test: ["CMD-SHELL", "pg_isready -U cognition"]
+    interval: 10s
+    retries: 5
 ```
-This ensures the agent can read the evidence but only write to the scratchpad.
 
-### 2. User Permissions
-The container runs as user `cognition` (UID 1000). Ensure your host volumes are owned by UID 1000.
+Data is persisted in the named `pgdata` volume. Back up this volume before upgrades.
+
+### OTel Collector
+
+The collector receives OTLP gRPC on port 4317, processes traces, and exports them to:
+- MLflow (via OTLP HTTP)
+- Loki (logs via the `loki` exporter)
+
+Configuration: `docker/otel-collector-config.yml`.
+
+### Grafana
+
+Pre-built dashboards are provisioned automatically from `docker/grafana/dashboards/`. The Grafana admin UI is available at `http://localhost:3000` (default credentials: `admin`/`admin`).
+
+---
+
+## Production Hardening
+
+### Network Isolation
+
+Sandbox containers run with `--network none` by default, preventing agents from accessing the internet or internal services:
+
+```env
+COGNITION_DOCKER_NETWORK=none
+```
+
+If agents need internet access (e.g. for web search), create a dedicated restricted network instead of using `bridge`:
 
 ```bash
-chown -R 1000:1000 /mnt/evidence
+docker network create --driver bridge --opt com.docker.network.bridge.name=agent-net \
+  --subnet 172.20.0.0/24 agent-restricted
 ```
 
-### 3. Network Egress
-For maximum security (e.g., Malware Analysis), disable outbound network access for the container.
+```env
+COGNITION_DOCKER_NETWORK=agent-restricted
+```
+
+### Resource Limits
+
+Prevent runaway agent workloads from starving other services:
+
+```env
+COGNITION_DOCKER_MEMORY_LIMIT=1g
+COGNITION_DOCKER_CPU_LIMIT=2.0
+COGNITION_DOCKER_TIMEOUT=300
+```
+
+### Session Scoping
+
+Enable multi-tenant isolation:
+
+```env
+COGNITION_SCOPING_ENABLED=true
+COGNITION_SCOPE_KEYS=["user", "project"]
+```
+
+Your upstream API gateway or reverse proxy must inject the `X-Cognition-Scope-User` and `X-Cognition-Scope-Project` headers based on your authentication layer.
+
+### TLS / Reverse Proxy
+
+Cognition does not terminate TLS. Run it behind a reverse proxy (Nginx, Caddy, AWS ALB) that handles TLS termination.
+
+Nginx example:
+
+```nginx
+location / {
+    proxy_pass http://cognition:8000;
+    proxy_http_version 1.1;
+    proxy_set_header Connection "";     # Required for SSE
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_buffering off;                # Required for SSE
+    proxy_cache off;                    # Required for SSE
+    proxy_read_timeout 300s;            # Long timeout for SSE streams
+}
+```
+
+**SSE requires `proxy_buffering off`.** Without this, tokens will not stream to clients.
+
+### CORS
+
+Set specific origins in production:
+
+```env
+COGNITION_CORS_ORIGINS=["https://app.example.com"]
+COGNITION_CORS_ALLOW_CREDENTIALS=true
+```
+
+### Secret Management
+
+Never put API keys in YAML config files. Use:
+- `.env` files (for Docker Compose; excluded from version control via `.gitignore`)
+- Docker secrets for Swarm deployments
+- AWS Secrets Manager / HashiCorp Vault for Kubernetes
+
+---
+
+## Kubernetes
+
+### Deployment
+
+The Cognition container is stateless (all state in PostgreSQL). Use a standard `Deployment` with horizontal scaling:
 
 ```yaml
-services:
-  cognition:
-    # ...
-    networks:
-      - internal_only
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cognition
+spec:
+  replicas: 3
+  template:
+    spec:
+      containers:
+        - name: cognition
+          image: cognition:latest
+          ports:
+            - containerPort: 8000
+            - containerPort: 9090   # Prometheus metrics
+          env:
+            - name: COGNITION_PERSISTENCE_BACKEND
+              value: postgres
+            - name: COGNITION_PERSISTENCE_URI
+              valueFrom:
+                secretKeyRef:
+                  name: cognition-secrets
+                  key: database-url
 ```
 
-## Deployment Modes
+### Docker Sandbox in Kubernetes
 
-### Local Development (Recommended for Security)
+The Docker sandbox backend requires Docker socket access, which is a security concern in shared clusters. Options:
+- Use `COGNITION_SANDBOX_BACKEND=local` for process-level isolation only
+- Use Docker-in-Docker (DinD) as a sidecar (not recommended for multi-tenant)
+- Implement a custom `ExecutionBackend` that creates Kubernetes `Job` resources
 
-Cognition runs directly on the host while supporting services run in Docker Compose:
+### Health Probes
 
-```bash
-# Start supporting services
-docker compose up -d postgres mlflow otel-collector
+```yaml
+livenessProbe:
+  httpGet:
+    path: /health
+    port: 8000
+  initialDelaySeconds: 10
+  periodSeconds: 30
 
-# Run Cognition on the host
-COGNITION_SANDBOX_BACKEND=docker uv run uvicorn server.app.main:app --reload --port 8000
+readinessProbe:
+  httpGet:
+    path: /ready
+    port: 8000
+  initialDelaySeconds: 5
+  periodSeconds: 10
 ```
 
-With `COGNITION_SANDBOX_BACKEND=docker`, every agent command executes inside an
-isolated, hardened container (cap_drop=ALL, no-new-privileges, read-only root
-filesystem). This is the recommended mode for any environment where the agent
-processes untrusted input.
+---
 
-### Docker Compose (Testing / CI)
+## Monitoring
 
-All services — including Cognition itself — run inside Docker Compose:
+### Prometheus Scrape Config
 
-```bash
-docker compose --profile full up -d
+```yaml
+scrape_configs:
+  - job_name: cognition
+    static_configs:
+      - targets: ["cognition:9090"]
+    scrape_interval: 15s
 ```
 
-In this mode Cognition typically uses `COGNITION_SANDBOX_BACKEND=local`, meaning
-agent commands run directly inside the Cognition container with **no additional
-isolation**. This is suitable for rapid testing and CI pipelines only; do not use
-it for untrusted workloads.
+### Key Metrics to Alert On
 
-## Scaling
+| Metric | Alert Condition | Description |
+|---|---|---|
+| `cognition_requests_total{status=~"5.."}` | Rate > 0 sustained | Server-side errors |
+| `cognition_llm_call_duration_seconds` | p99 > 30s | LLM latency degradation |
+| `cognition_tool_calls_total{status="error"}` | Rate spike | Tool execution failures |
+| `cognition_active_sessions` | Near `COGNITION_MAX_SESSIONS` | Session limit approaching |
 
-### Stateless Architecture
-The Cognition API container is **stateless**. State lives in the Persistence Backend (SQLite/Postgres).
+---
 
-To scale horizontally:
-1.  Switch `COGNITION_PERSISTENCE_BACKEND` to `postgres`.
-2.  Deploy multiple replicas of the `cognition` container behind a Load Balancer (Nginx/ALB).
-3.  Ensure all replicas mount the same Workspace Volume (via NFS/EFS) OR use `DockerExecutionBackend` (`COGNITION_SANDBOX_BACKEND=docker`) which manages its own per-session volumes.
+## Upgrading
 
-## Health Checks
+1. Pull the new image: `docker pull cognition:latest`
+2. Run migrations: `docker-compose exec cognition cognition db upgrade`
+3. Rolling restart: `docker-compose up -d --no-deps cognition`
 
-The engine exposes standard probes for Kubernetes.
-
-*   **Liveness:** `GET /health` (Is the process running?)
-*   **Readiness:** `GET /ready` (Can I connect to the LLM and DB?)
+The `StorageBackend.initialize()` call at startup is idempotent — it is safe to run against an existing database.

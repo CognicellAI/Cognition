@@ -1,185 +1,398 @@
-# Guide: Extending the Agent
+# Extending Agents
 
-> **Customize your Agent's behavior without editing core code.**
+Cognition uses a convention-over-configuration model. Most extensions require zero code changes — drop a file in the right directory and the server picks it up automatically (via the file watcher). More powerful extensions require Python.
 
-Cognition follows a "Convention-over-Configuration" model. For most customizations, you don't need to write Python code—you just need to add files or update your configuration.
+| Level | Mechanism | Code Required | Hot-Reload |
+|---|---|---|---|
+| Memory | `AGENTS.md` | No | Yes |
+| Skills | `.cognition/skills/` SKILL.md files | No | Yes |
+| Agents | `.cognition/agents/` YAML or Markdown | No | Yes |
+| Tools | Python functions | Yes | Yes |
+| Middleware | Python classes | Yes | No |
+| Custom LLM providers | Python factories | Yes | No |
 
-## 1. Add Memory (Project Rules)
+---
 
-The fastest way to customize an agent is to provide it with **Memory**. Cognition automatically looks for a file named `AGENTS.md` in the root of your workspace.
+## 1. Memory (AGENTS.md)
 
-1.  Create `AGENTS.md` in your project root.
-2.  Add rules, naming conventions, or project context.
+Place an `AGENTS.md` file in your project root. It is automatically injected into the agent's system prompt for every session in that project.
+
+Use memory for:
+- Project-specific rules and conventions
+- Architecture decisions
+- Code style guidelines
+- Workflow instructions
 
 ```markdown
-# AGENTS.md - Project Conventions
+# My Project
 
-- We use 'snake_case' for all variable names.
-- Always add unit tests for new utility functions.
-- The production database is located at /mnt/data/prod.db.
+This is a Django REST API. All models live in `myapp/models/`.
+Use Python 3.11 type hints everywhere. Tests run with pytest.
+The database is PostgreSQL — never use SQLite in tests.
+
+## Conventions
+- Prefer `select_related` over multiple queries
+- All API views inherit from `BaseAPIView`
+- Migrations must be reviewed before merging
 ```
 
-**Result:** The Agent will load this file into its system prompt automatically at the start of every session.
-
----
-
-## 2. Add Skills (Reusable Workflows)
-
-Skills are reusable "Action Templates" stored in `.cognition/skills/`. They use **Progressive Disclosure**, meaning they don't consume tokens until the agent needs them.
-
-1.  Create a directory: `.cognition/skills/my-skill/`
-2.  Create a file named `SKILL.md` inside it.
-3.  Add YAML frontmatter and instructions.
-
-```markdown
----
-name: security-audit
-description: Run a comprehensive security audit on the codebase.
----
-
-To run a security audit:
-1. Run 'bandit -r .' to find common security issues.
-2. Check for hardcoded secrets using 'trufflehog'.
-3. Summarize the high-risk findings.
-```
-
-**Result:** The Agent will see "security-audit" in its tool list. When invoked, it will read the full instructions.
-
----
-
-## 3. Define Custom Agents
-
-Cognition supports a **Multi-Agent Registry** that allows you to define both primary agents (for session creation) and specialized subagents (for delegation via the `task` tool).
-
-### Built-in Agents
-
-Cognition ships with built-in agents available out of the box:
-
-| Agent | Mode | Description |
-|-------|------|-------------|
-| `default` | primary | Full-access coding agent with all tools enabled |
-| `readonly` | primary | Analysis-only agent with write/execute tools disabled |
-
-### Creating Custom Agents
-
-Create agent definition files in `.cognition/agents/`:
-
-**Markdown format** (`.cognition/agents/researcher.md`):
-```markdown
----
-name: researcher
-description: A specialized research agent for gathering information
-mode: subagent
----
-
-You are a specialized research agent focused on gathering and synthesizing information.
-You should search for relevant information, analyze sources, and provide comprehensive summaries.
-```
-
-**YAML format** (`.cognition/agents/security-auditor.yaml`):
-```yaml
-name: security-auditor
-description: Security-focused code reviewer
-mode: subagent
-system_prompt: |
-  You are a security auditor. Focus on identifying vulnerabilities,
-  unsafe patterns, and compliance issues in the code.
-```
-
-**Agent Modes:**
-- `primary` — Can be used to create sessions (e.g., `POST /sessions` with `agent_name`)
-- `subagent` — Can only be invoked by other agents via the `task` tool
-- `all` — Can function as both primary and subagent
-
-### Using Custom Agents
-
-**For sessions:** Create a session with a specific primary agent:
-```bash
-curl -X POST http://localhost:8000/sessions \
-  -H "Content-Type: application/json" \
-  -d '{"agent_name": "readonly", "title": "Code Review"}'
-```
-
-**Switching agents mid-session:** You can change the active agent for an existing session:
-```bash
-curl -X PATCH http://localhost:8000/sessions/{session_id} \
-  -H "Content-Type: application/json" \
-  -d '{"agent_name": "researcher"}'
-```
-
-The session will now use the new agent's configuration (system prompt, tools, skills) for subsequent messages. Previous conversation history is preserved.
-
-**For subagent delegation:** All `subagent` and `all` mode agents are automatically available to primary agents via Deep Agents' native `task` tool. Your primary agent can say: *"I'll use the researcher subagent to gather more information."*
-
-### Agent API
-
-Query available agents via the API:
-
-```bash
-# List all non-hidden agents
-curl http://localhost:8000/agents
-
-# Get specific agent details
-curl http://localhost:8000/agents/readonly
-```
-
----
-
-## 4. Enable Human-in-the-Loop (Guardrails)
-
-You can require human approval for dangerous tools like `execute` or `write_file`.
-
-Edit `.cognition/config.yaml`:
+Configure which memory files to load in `.cognition/config.yaml`:
 
 ```yaml
 agent:
-  interrupt_on:
-    execute: true  # Pause and ask before running any shell command
+  memory:
+    - "AGENTS.md"
+    - "docs/architecture.md"    # additional files
 ```
 
 ---
 
-## 5. Custom Middleware (Advanced Hooks)
+## 2. Skills (SKILL.md)
 
-If you need to add custom logging, metrics, or complex logic hooks, you can write a **Custom Middleware**.
+Skills are modular instruction sets for domain-specific tasks. The agent sees a skill's name and description and loads the full content only when it is relevant to the current task (progressive disclosure).
 
-1.  Create `server/app/agent/my_middleware.py`:
+### Directory Structure
+
+```
+.cognition/skills/
+  deploy-app/
+    SKILL.md           # instructions for deploying the application
+    references/        # optional supporting files
+      checklist.md
+  run-migrations/
+    SKILL.md
+```
+
+### SKILL.md Format
+
+```markdown
+# Deploy App
+
+Use this skill when the user asks to deploy the application or push changes to production.
+
+## Prerequisites
+- Docker must be running
+- AWS credentials must be configured
+
+## Steps
+1. Run the test suite: `uv run pytest`
+2. Build the Docker image: `docker build -t myapp:latest .`
+3. Push to ECR: `docker push <account>.dkr.ecr.us-east-1.amazonaws.com/myapp:latest`
+4. Update the ECS service: `aws ecs update-service --cluster prod --service myapp --force-new-deployment`
+```
+
+Configure skill directories:
+
+```yaml
+agent:
+  skills:
+    - ".cognition/skills/"
+```
+
+---
+
+## 3. Custom Agents
+
+Place agent definitions in `.cognition/agents/` as Markdown or YAML files. The file watcher reloads them automatically on change.
+
+### Markdown Format
+
+The filename (without extension) becomes the agent name. The YAML frontmatter provides fields; the Markdown body becomes the system prompt.
+
+```markdown
+---
+# .cognition/agents/security-auditor.md
+mode: subagent
+description: Audits code for security vulnerabilities and reports findings with severity ratings
+tools:
+  - "myapp.tools.security.run_semgrep"
+config:
+  model: gpt-4o
+  temperature: 0.1
+---
+
+You are a security expert specialising in Python web applications.
+
+When asked to audit code:
+1. Check for SQL injection, XSS, CSRF, and path traversal vulnerabilities
+2. Review dependency versions for known CVEs
+3. Report findings with severity (Critical/High/Medium/Low) and remediation steps
+```
+
+### YAML Format
+
+```yaml
+# .cognition/agents/data-analyst.yaml
+name: data-analyst
+mode: primary
+description: Analyses datasets and generates statistical reports
+system_prompt: |
+  You are a data analyst. Use pandas and matplotlib for analysis.
+  Always validate data quality before drawing conclusions.
+tools:
+  - "myapp.tools.data.load_csv"
+  - "myapp.tools.data.plot_chart"
+config:
+  model: gpt-4o
+  temperature: 0.2
+```
+
+### Agent Modes
+
+| Mode | Can own a session | Can be delegated to |
+|---|---|---|
+| `primary` | Yes | No |
+| `subagent` | No | Yes |
+| `all` | Yes | Yes |
+
+Sessions are created with `agent_name`:
+```bash
+curl -X POST http://localhost:8000/sessions \
+  -H "Content-Type: application/json" \
+  -d '{"agent_name": "data-analyst"}'
+```
+
+Primary agents can delegate to subagents via the `task` tool. The delegation appears as a `delegation` SSE event.
+
+---
+
+## 4. Custom Tools
+
+Tools are Python callables that the agent can invoke. Cognition converts them to LangChain tools automatically.
+
+### Simple Function Tool
 
 ```python
-from langchain.agents.middleware.types import AgentMiddleware, wrap_tool_call
+# myapp/tools/analysis.py
+import subprocess
+
+def run_linter(file_path: str) -> str:
+    """Run ruff linter on a Python file and return the findings.
+
+    Args:
+        file_path: Path to the Python file to lint.
+
+    Returns:
+        Linter output as a string.
+    """
+    result = subprocess.run(
+        ["ruff", "check", file_path],
+        capture_output=True,
+        text=True,
+    )
+    return result.stdout or "No issues found."
+```
+
+The docstring becomes the tool description shown to the agent. Type annotations become the argument schema.
+
+### Register via Config
+
+```yaml
+# .cognition/config.yaml
+agent:
+  tools:
+    - "myapp.tools.analysis.run_linter"
+    - "myapp.tools.data.query_database"
+```
+
+### Auto-Discovery
+
+Drop Python files into `.cognition/tools/` and they are discovered automatically. Each public function in the file becomes a tool. The file watcher reloads them on change.
+
+```python
+# .cognition/tools/my_tools.py
+
+def fetch_ticket(ticket_id: str) -> str:
+    """Fetch a Jira ticket by ID and return its summary and status."""
+    ...
+
+def post_comment(ticket_id: str, comment: str) -> str:
+    """Post a comment to a Jira ticket."""
+    ...
+```
+
+### Async Tools
+
+Async functions are supported natively:
+
+```python
+async def call_api(endpoint: str, payload: dict) -> str:
+    """Call an internal API endpoint with a JSON payload."""
+    async with httpx.AsyncClient() as client:
+        response = await client.post(endpoint, json=payload)
+        return response.text
+```
+
+### Programmatic Registration
+
+```python
+from server.app.agent.cognition_agent import create_cognition_agent
+from server.app.agent.definition import AgentDefinition
+
+definition = AgentDefinition(
+    name="my-agent",
+    system_prompt="You are a helpful assistant.",
+    tools=["myapp.tools.analysis.run_linter"],
+)
+
+agent = await create_cognition_agent(definition, settings)
+```
+
+### Testing Tools
+
+```python
+# tests/unit/test_my_tools.py
+from myapp.tools.analysis import run_linter
+from unittest.mock import patch, MagicMock
+
+def test_run_linter_clean_file():
+    with patch("subprocess.run") as mock_run:
+        mock_run.return_value = MagicMock(stdout="", returncode=0)
+        result = run_linter("clean.py")
+    assert result == "No issues found."
+
+def test_run_linter_with_issues():
+    with patch("subprocess.run") as mock_run:
+        mock_run.return_value = MagicMock(
+            stdout="clean.py:1:1: E501 Line too long", returncode=1
+        )
+        result = run_linter("messy.py")
+    assert "E501" in result
+```
+
+---
+
+## 5. Middleware
+
+Middleware intercepts the agent's processing loop. Use middleware for cross-cutting concerns: approval gates, custom telemetry, PII detection, retry logic.
+
+### Upstream Middleware (No Code)
+
+Four upstream middleware components are available by name in `agent.middleware`:
+
+```yaml
+agent:
+  middleware:
+    # Retry failed tool calls with exponential backoff
+    - name: tool_retry
+      max_retries: 3
+      backoff_factor: 2.0
+
+    # Hard cap on total tool invocations
+    - name: tool_call_limit
+      run_limit: 50
+      per_tool_limits:
+        execute_bash: 10
+
+    # Detect and redact PII before sending to the LLM
+    - name: pii
+      pii_types:
+        - email
+        - phone
+        - credit_card
+        - ip
+        - ssn
+      strategy: redact   # or "mask"
+
+    # Require human approval before specific tools execute
+    - name: human_in_the_loop
+      approve_tools:
+        - execute_bash
+        - file_write
+```
+
+### Custom Middleware
+
+Implement `deepagents.middleware.AgentMiddleware` and register it in `.cognition/config.yaml` as a dotted import path.
+
+```python
+# myapp/middleware/audit.py
+from deepagents.middleware import AgentMiddleware
+from myapp.audit_log import write_audit_event
 
 class AuditMiddleware(AgentMiddleware):
-    name = "audit_logger"
+    """Writes every tool call to an immutable audit log."""
 
-    @wrap_tool_call()
-    async def awrap_tool_call(self, request, handler):
-        # Log the tool call before it happens
-        print(f"Agent is calling: {request.tool_call['name']}")
-        return await handler(request)
+    async def awrap_tool_call(self, tool_call, handler):
+        # Called before the tool executes
+        write_audit_event(
+            event_type="tool_call",
+            tool=tool_call.name,
+            args=tool_call.args,
+        )
+        result = await handler(tool_call)
+        # Called after the tool executes
+        write_audit_event(
+            event_type="tool_result",
+            tool=tool_call.name,
+            exit_code=result.exit_code,
+        )
+        return result
 ```
 
-2.  Register it in `server/app/agent/cognition_agent.py`.
+Register in config:
+
+```yaml
+agent:
+  middleware:
+    - "myapp.middleware.audit.AuditMiddleware"
+    - name: tool_retry
+      max_retries: 2
+```
+
+String entries are imported directly; dict entries with a `name` key are treated as upstream middleware.
 
 ---
 
-## 6. Register a Custom LLM Provider
+## 6. MCP Tool Servers
 
-Cognition uses a **Provider Registry** to instantiate LLM models.
+Connect to any remote Model Context Protocol (MCP) server. MCP servers expose tools over HTTP SSE.
 
-1.  Create your factory function:
-
-```python
-def create_my_custom_llm(config, settings):
-    # Return a LangChain ChatModel instance
-    from my_provider import MyChatModel
-    return MyChatModel(api_key=config.api_key)
+```yaml
+# .cognition/config.yaml
+mcp:
+  servers:
+    - name: github-tools
+      url: https://mcp.github.example.com/sse
+    - name: internal-db
+      url: http://db-tools.internal:8080/sse
 ```
 
-2.  Register it in `server/app/llm/registry.py`:
+All tools exposed by the MCP server become available to the agent under the server name as a namespace prefix (e.g. `github-tools/create_pr`).
+
+Only HTTP/HTTPS URLs are accepted — stdio-based MCP servers are not supported for security reasons.
+
+---
+
+## 7. Custom LLM Providers
+
+Register additional LLM providers if the built-ins (OpenAI, Bedrock, Ollama, OpenAI-compatible) are insufficient.
 
 ```python
+# myapp/providers/custom.py
 from server.app.llm.registry import register_provider
-register_provider("my-custom-provider", create_my_custom_llm)
+from langchain_core.language_models import BaseChatModel
+
+def create_custom_llm(config: dict, settings) -> BaseChatModel:
+    return MyCustomLLM(
+        api_key=settings.openai_api_key.get_secret_value(),
+        model=config.get("model", "my-model"),
+    )
+
+# Register before server startup
+register_provider("custom", create_custom_llm)
 ```
 
-3.  Use it in config: `COGNITION_LLM_PROVIDER=my-custom-provider`
+After registration, use `COGNITION_LLM_PROVIDER=custom` in your environment.
+
+---
+
+## Hot-Reload
+
+The file watcher (`server/app/file_watcher.py`) monitors `.cognition/tools/`, `.cognition/middleware/`, and `.cognition/agents/` using `watchdog`. When any file in these directories changes:
+
+1. Tool registry is reloaded (new tools available, removed tools gone)
+2. Agent definition registry is reloaded (new/updated agents loaded)
+3. Agent cache is invalidated so the next session uses the updated definition
+
+No server restart required. Changes typically take effect within 1 second.

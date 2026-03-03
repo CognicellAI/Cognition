@@ -1,175 +1,256 @@
-# Technical Architecture
+# Architecture
 
-> **Inside the Engine: Component Interaction, Data Flow, and State Management.**
+Cognition is a **headless agent orchestration backend** built on a strict 7-layer architecture. Each layer has a single responsibility, dependencies only flow downward, and no layer imports from a layer above it.
 
-Cognition is built as a modular, asynchronous engine. It separates the concerns of API orchestration, agent reasoning, and isolated execution to ensure that the platform remains stable, auditable, and extensible.
-
-## System Overview
-
-The engine follows a layered architecture where each layer communicates through well-defined protocols.
-
-```mermaid
-graph TD
-    subgraph "External Layer"
-        CLI[CLI Client]
-        WEB[Third-Party Web UI]
-    end
-
-    subgraph "Interface Layer (FastAPI)"
-        REST[REST API]
-        SSE[SSE Stream Generator]
-    end
-
-    subgraph "Service Layer"
-        Manager[Session Agent Manager]
-        Streaming[DeepAgent Streaming Service]
-    end
-
-    subgraph "Core Engine (DeepAgents)"
-        Runtime[LangGraph Runtime]
-        Planner[Todo List Middleware]
-        Middleware[Agent Middleware Layer]
-    end
-
-    subgraph "Execution Layer"
-        Factory[create_sandbox_backend Factory]
-        Backend[CognitionLocalSandboxBackend / CognitionDockerSandboxBackend]
-        Sandbox[LocalSandbox or DockerSandbox]
-    end
-
-    subgraph "Persistence Layer"
-        StoreFactory[StorageBackend Factory]
-        Store[SQLite / PostgreSQL / Memory]
-        Saver[Checkpointer - LangGraph State]
-    end
-
-    CLI --> REST
-    WEB --> REST
-    REST --> Manager
-    Manager --> Streaming
-    Streaming --> Runtime
-    Runtime --> Middleware
-    Middleware --> Backend
-    Backend --> Sandbox
-    Runtime -.-> Saver
-    Manager -.-> Store
-    Factory --> Backend
-```
-
-## 1. The Interface Layer (REST + SSE)
-
-Cognition exposes its functionality through a standard REST API. Unlike traditional WebSocket-based agents, Cognition uses **Server-Sent Events (SSE)** for response streaming.
-
-- **Request:** `POST /sessions/{id}/messages`
-- **Response:** `text/event-stream`
-- **Event Types:**
-    - `token`: Incremental LLM tokens for UI rendering.
-    - `tool_call`: Metadata about a tool the agent is about to execute.
-    - `tool_result`: The raw output from the sandbox.
-    - `usage`: Final token counts and cost estimation.
-    - `done`: Signal that the ReAct loop has finished.
-
-## 2. The Service Layer (DeepAgent Service)
-
-The `DeepAgentStreamingService` is the heartbeat of the engine. It transforms the linear request-response of HTTP into the iterative, multi-step lifecycle of an autonomous agent.
-
-### The ReAct Loop
-When a message is received, the service enters an automatic **ReAct (Reason + Act)** loop:
-1.  **Reason:** The LLM analyzes the conversation history and the new message.
-2.  **Act:** If a tool call is required, the loop pauses reasoning and dispatches to the **Execution Layer**.
-3.  **Observe:** The tool output is fed back into the LLM context.
-4.  **Repeat:** The loop continues until the LLM provides a final textual response or reaches the iteration limit.
-
-## 3. The Execution Layer (Hybrid Sandbox)
-
-Execution safety is provided by a settings-driven sandbox factory (`create_sandbox_backend` in `server/app/sandbox/factory.py`). Based on the `settings.sandbox_backend` value, the factory dispatches to one of two backends:
-
-*   **`CognitionLocalSandboxBackend`** (default, `sandbox_backend="local"`): A hybrid model designed for local development.
-    *   **Native File I/O:** Inherits from `FilesystemBackend`. Uses native Python `os` and `pathlib` calls for reading and writing files, providing maximum OS compatibility and performance.
-    *   **Isolated Shell:** Uses a `LocalSandbox` wrapper around `subprocess`. Executes shell commands (e.g., `pytest`, `git`) with the `cwd` strictly locked to the workspace root.
-*   **`CognitionDockerSandboxBackend`** (`sandbox_backend="docker"`): Runs tool execution inside Docker containers for full process and filesystem isolation, suitable for production and multi-user deployments.
-
-## 4. Unified StorageBackend Protocol
-
-Cognition implements a unified storage protocol (`StorageBackend`) that abstracts sessions, messages, and checkpoints behind a single interface. This enables pluggable persistence with multiple backend implementations:
-
-*   **SQLite** (default) — lightweight, zero-config via `aiosqlite`.
-*   **PostgreSQL** — production-grade via `asyncpg`.
-*   **Memory** — ephemeral, useful for testing.
-
-The factory in `server/app/storage/factory.py` dispatches based on the `COGNITION_PERSISTENCE_BACKEND` setting.
-
-### Storage Architecture
-```
-StorageBackend (Protocol)
-├── SessionStore - Session metadata and scoping
-├── MessageStore - Message history with pagination
-└── Checkpointer - LangGraph checkpoint persistence
-```
-
-### A. Session Metadata with Scoping
-Managed by `SessionStore` implementations (SQLite or Postgres). Sessions now support multi-dimensional scoping via `X-Cognition-Scope-*` headers.
-*   **Fields:** `id`, `title`, `thread_id`, `status`, `message_count`, `scopes`.
-*   **Scoping:** Filter sessions by user, project, team, or custom dimensions.
-
-### B. Message Persistence
-Managed by `MessageStore`. All messages are persisted with pagination support.
-*   **Features:** CRUD operations, pagination, session-scoped queries.
-*   **Schema:** `id`, `session_id`, `role`, `content`, `parent_id`, `created_at`.
-
-### C. Agent Checkpoints (The Brain)
-Managed by `AsyncSqliteSaver` (from LangGraph) or database-specific checkpointer.
-*   **Purpose:** If the server process is killed mid-turn, the agent loads the latest checkpoint and resumes its exact internal state.
-*   **Durability:** PostgreSQL backend for production deployments.
-
-## 5. Multi-Agent Registry
-
-Cognition supports a **Multi-Agent Registry** that enables multiple specialized agents within a single workspace. The registry manages built-in agents (shipped with the server) and user-defined agents (loaded from `.cognition/agents/`).
-
-### Agent Modes
-
-| Mode | Description | Session Creation | Subagent Delegation |
-|------|-------------|------------------|---------------------|
-| `primary` | Full session agents | ✅ Yes | Via `task` tool |
-| `subagent` | Specialized experts | ❌ No | Via `task` tool |
-| `all` | Dual-purpose agents | ✅ Yes | Via `task` tool |
-
-### Registry Components
-
-- **`AgentDefinitionRegistry`** (`server/app/agent/agent_definition_registry.py`): Central catalog managing both built-in and user-defined agents
-- **Built-in Agents**: `default` (full access) and `readonly` (analysis-only) — always present
-- **User-Defined Agents**: Loaded from `.cognition/agents/*.md` and `.cognition/agents/*.yaml`
-- **`to_subagent()`**: Translates `AgentDefinition` to Deep Agents' `SubAgent` TypedDict
-
-### Session-Agent Binding
-
-Each session is bound to a primary agent at creation time (`agent_name` field). The selected agent is compiled with all available subagents from the registry passed to Deep Agents' `create_deep_agent(subagents=[...])`.
-
-## 6. Middleware Layer (The Hooks)
-
-Between the Agent Runtime and the Execution Backend lies the **Middleware Layer**. This is where Cognition-specific logic is injected without modifying the core ReAct loop.
-
-Cognition includes several built-in middlewares:
-- **`MemoryMiddleware`:** Loads `AGENTS.md` and injects it into the system prompt.
-- **`SkillsMiddleware`:** Discovers and manages on-demand agent skills.
-- **`CognitionObservabilityMiddleware`:** Records LLM and tool metrics.
-- **`CognitionStreamingMiddleware`:** Pushes "Thinking" status events to the client.
-
-## 6. Trust & Observability
-
-Every internal component is instrumented with **OpenTelemetry**.
-
-1.  **Trace Context Propagation:** The Trace ID is passed from the FastAPI request down into the LangGraph execution.
-2.  **Granular Spans:** Every tool execution and LLM call is recorded as a nested span.
-3.  **Audit Trail:** The result is a complete, auditable waterfall in MLflow (via OpenTelemetry Collector) showing exactly how the engine arrived at a conclusion.
+The core promise: define your agent with tools, skills, and a system prompt — Cognition provides the REST API, SSE streaming, durable persistence, sandboxed execution, multi-tenant isolation, and full observability automatically.
 
 ---
 
-## Technical Specs
+## The 7-Layer Model
 
-- **Language:** Python 3.11+
-- **Framework:** FastAPI, LangGraph, DeepAgents
-- **Database:** SQLite (via aiosqlite) for development; PostgreSQL (via asyncpg) for production
-- **Observability:** OpenTelemetry (OTLP Protocol) → MLflow via OpenTelemetry Collector
-- **Multi-Agent:** Deep Agents native `SubAgent` TypedDict for subagent compilation and routing
-- **Networking:** HTTP/1.1 (REST) + EventSource (SSE)
+```
+┌─────────────────────────────────────────────────────────┐
+│  Layer 7: OBSERVABILITY                                   │
+│  OTel traces · Prometheus metrics · MLflow experiments    │
+│  server/app/observability/                                │
+├─────────────────────────────────────────────────────────┤
+│  Layer 6: API & STREAMING                                 │
+│  FastAPI routes · SSE streams · Session scoping           │
+│  server/app/api/                                          │
+├─────────────────────────────────────────────────────────┤
+│  Layer 5: LLM PROVIDER                                    │
+│  Provider registry · Fallback chain · Circuit breakers    │
+│  server/app/llm/                                          │
+├─────────────────────────────────────────────────────────┤
+│  Layer 4: AGENT RUNTIME                                   │
+│  AgentRuntime protocol · AgentDefinition · Agent registry │
+│  server/app/agent/                                        │
+├─────────────────────────────────────────────────────────┤
+│  Layer 3: EXECUTION                                       │
+│  Sandbox protocol · Local · Docker                        │
+│  server/app/execution/  server/app/agent/sandbox_backend  │
+├─────────────────────────────────────────────────────────┤
+│  Layer 2: PERSISTENCE                                     │
+│  StorageBackend protocol · SQLite · PostgreSQL · Memory   │
+│  server/app/storage/                                      │
+├─────────────────────────────────────────────────────────┤
+│  Layer 1: FOUNDATION                                      │
+│  Pydantic Settings · Exception hierarchy · Config system  │
+│  server/app/settings.py · exceptions.py · config_loader  │
+└─────────────────────────────────────────────────────────┘
+```
+
+The dependency rule is absolute: a layer may only import from layers below it. Layer 6 (API) calls Layer 4 (Agent Runtime), which calls Layer 3 (Execution) and Layer 2 (Persistence). No upward imports.
+
+---
+
+## Layer Breakdown
+
+### Layer 1 — Foundation
+
+The bedrock of the system. Everything else builds on these three components.
+
+**`server/app/settings.py`** — A single `Settings` class (Pydantic v2 `BaseSettings`) holding all configuration. Loaded via a 4-level hierarchy: built-in defaults → `~/.cognition/config.yaml` → `.cognition/config.yaml` → environment variables. The highest-precedence source wins. See the [Configuration guide](../guides/configuration.md) for all fields.
+
+**`server/app/exceptions.py`** — A typed exception hierarchy rooted at `CognitionError`. Every subsystem raises a domain-specific subclass (`SessionNotFoundError`, `LLMUnavailableError`, `ToolExecutionError`, etc.) rather than bare exceptions. All exceptions carry an `ErrorCode` enum value and an optional `details` dict for structured error reporting.
+
+**`server/app/config_loader.py`** — Merges YAML config files and resolves them into settings. Searches for `.cognition/config.yaml` by walking up from the current working directory, enabling project-local configuration without explicit paths.
+
+---
+
+### Layer 2 — Persistence
+
+All durable state lives in this layer behind the `StorageBackend` protocol.
+
+**`server/app/storage/backend.py`** — Three composable `Protocol` classes:
+
+- `SessionStore` — CRUD for sessions (create, get, list with scope filtering, update, delete)
+- `MessageStore` — CRUD for messages (create, get, list with pagination, delete by session)
+- `CheckpointerStore` — LangGraph checkpoint persistence (`get_checkpointer`, `close_checkpointer`)
+
+The unified `StorageBackend` protocol combines all three plus lifecycle methods (`initialize`, `close`, `health_check`). Swapping backends requires no changes to any code above Layer 2.
+
+**Implementations** (`server/app/storage/`):
+
+| Backend | Module | Use Case |
+|---|---|---|
+| `SqliteStorageBackend` | `sqlite.py` | Development, single-node |
+| `PostgresStorageBackend` | `postgres.py` | Production, multi-node |
+| `MemoryStorageBackend` | `memory.py` | Testing, ephemeral |
+
+**`server/app/storage/factory.py`** — `create_storage_backend(settings)` reads `settings.persistence_backend` and returns the correct implementation. Unknown backend values raise `StorageBackendError` — there is no silent fallback to SQLite.
+
+---
+
+### Layer 3 — Execution
+
+Code execution is isolated from the server process using pluggable backends.
+
+**`server/app/execution/backend.py`** — `DockerExecutionBackend` runs commands in a Docker container with:
+- Kernel-level namespace isolation
+- All Linux capabilities dropped (`cap_drop=ALL`)
+- `no-new-privileges` security option
+- Read-only root filesystem
+- `tmpfs` mounts for `/tmp` and `/home`
+- Configurable memory and CPU limits
+- Network isolation (`network_mode=none` by default)
+
+**`server/app/agent/sandbox_backend.py`** — Two Cognition-specific backends that wrap the execution layer:
+
+- `CognitionLocalSandboxBackend` — Commands executed in the local process using `shlex.split()` + `shell=False`. Protected paths (`.cognition/` by default) block write operations. No `shell=True` anywhere.
+- `CognitionDockerSandboxBackend` — File operations run directly on the host filesystem; command execution is routed through `DockerExecutionBackend`. Container is created lazily and reused within a session.
+
+`create_sandbox_backend(settings)` selects between them based on `settings.sandbox_backend`.
+
+---
+
+### Layer 4 — Agent Runtime
+
+The agent runtime is the brain of the system. It translates high-level `AgentDefinition` objects into running agents and normalizes all events into a single canonical stream.
+
+**`server/app/agent/runtime.py`** — The `AgentRuntime` protocol:
+
+```python
+class AgentRuntime(Protocol):
+    async def astream_events(self, message: str, ...) -> AsyncIterator[AgentEvent]: ...
+    async def ainvoke(self, message: str, ...) -> AgentEvent: ...
+    async def get_state(self) -> dict[str, Any]: ...
+    async def abort(self) -> None: ...
+    def get_checkpointer(self) -> BaseCheckpointSaver: ...
+```
+
+`DeepAgentRuntime` is the concrete implementation. It wraps Deep Agents, transforms its event stream into the 11 canonical `AgentEvent` subtypes, and handles abort via a thread-ID-based cancellation set.
+
+**Canonical event types** emitted by every runtime:
+
+| Event | Key Fields | Description |
+|---|---|---|
+| `TokenEvent` | `content` | A single streaming LLM token |
+| `ToolCallEvent` | `name`, `args`, `id` | Agent invoking a tool |
+| `ToolResultEvent` | `tool_call_id`, `output`, `exit_code` | Tool execution result |
+| `PlanningEvent` | `todos` | Agent creating a task plan |
+| `StepCompleteEvent` | `step_number`, `total_steps`, `description` | Plan step finished |
+| `DelegationEvent` | `target_agent`, `task` | Primary agent delegating to subagent |
+| `StatusEvent` | `status` | `thinking` or `idle` |
+| `UsageEvent` | `input_tokens`, `output_tokens`, `estimated_cost` | Token accounting |
+| `DoneEvent` | `assistant_data` | Stream complete |
+| `ErrorEvent` | `message`, `code` | Recoverable error |
+
+**`server/app/agent/definition.py`** — `AgentDefinition` is a Pydantic model that fully describes an agent:
+
+```python
+class AgentDefinition(BaseModel):
+    name: str
+    system_prompt: str | PromptConfig | None
+    tools: list[str]          # dotted import paths
+    skills: list[str]         # paths to SKILL.md files or directories
+    memory: list[str]         # paths to AGENTS.md-style files
+    subagents: list[SubagentDefinition]
+    middleware: list[str | dict]
+    config: AgentConfig       # provider, model, temperature, max_tokens
+    mode: Literal["primary", "subagent", "all"]
+    description: str | None
+    hidden: bool
+    native: bool
+```
+
+Definitions can be loaded from YAML files (`load_agent_definition`) or Markdown with YAML frontmatter (`load_agent_definition_from_markdown`). In the Markdown format, the frontmatter provides fields and the body becomes the `system_prompt`.
+
+**`server/app/agent/agent_definition_registry.py`** — `AgentDefinitionRegistry` holds all known agents. It initializes with two built-in agents:
+
+- `default` — Full-access coding agent, all tools enabled, mode `primary`
+- `readonly` — Analysis-only agent, write and execute tools disabled, mode `primary`
+
+User-defined agents are loaded from `.cognition/agents/*.md` and `.cognition/agents/*.yaml`. The registry exposes `list()`, `get(name)`, `primaries()` (agents that can own a session), `subagents()` (agents that can only be invoked by other agents), and `reload()`.
+
+**`server/app/agent/cognition_agent.py`** — `create_cognition_agent()` is the async factory that instantiates a Deep Agent from an `AgentDefinition`. It attaches the sandbox backend, built-in tools (`BrowserTool`, `SearchTool`, `InspectPackageTool`), MCP tools, and the middleware stack (`CognitionObservabilityMiddleware`, `CognitionStreamingMiddleware`, `ToolSecurityMiddleware`). Agent instances are cached by an MD5 key of the definition for efficient reuse across sessions.
+
+---
+
+### Layer 5 — LLM Provider
+
+**`server/app/llm/registry.py`** — A simple dictionary registry mapping provider names to factory functions:
+
+| Provider | Factory | Requirements |
+|---|---|---|
+| `openai` | `ChatOpenAI` | `OPENAI_API_KEY` |
+| `openai_compatible` | `ChatOpenAI` + custom base URL | `COGNITION_OPENAI_COMPATIBLE_*` |
+| `bedrock` | `ChatBedrock` | AWS credentials |
+| `mock` | `MockLLM` | None |
+
+Custom providers can be registered with `register_provider(name, factory)`.
+
+**`server/app/llm/provider_fallback.py`** — `ProviderFallbackChain` tries providers in priority order. Each provider has its own circuit breaker (from the global registry). Open breakers are skipped; the chain raises `LLMUnavailableError` only when every provider fails. Retries use exponential backoff (1 s, 2 s, 4 s).
+
+**`server/app/llm/deep_agent_service.py`** — `DeepAgentStreamingService` is the per-session streaming coordinator. It resolves the correct `AgentDefinition` from the registry, merges session-level LLM overrides (a session can be created with a specific `model` or `temperature`), injects subagents into primary agents, and drives the event stream.
+
+`SessionAgentManager` is the server-level singleton that manages one `DeepAgentStreamingService` per active session and routes abort signals to the right session.
+
+---
+
+### Layer 6 — API & Streaming
+
+**`server/app/api/routes/`** — FastAPI route handlers for all resources. The routes do not contain business logic; they validate inputs, call into Layer 4 or Layer 2, and serialize outputs.
+
+**`server/app/api/sse.py`** — `SSEStream` implements the SSE protocol with:
+- Automatic reconnection support via `Last-Event-ID` header and `EventBuffer` replay
+- Heartbeat comments (`:heartbeat`) sent every 15 seconds to keep proxies alive
+- Sequential event IDs for ordering and gap detection
+- `EventBuilder` static factory for every event type
+
+**`server/app/api/scoping.py`** — `create_scope_dependency()` builds a FastAPI dependency that reads `x-cognition-scope-{key}` headers for each key in `settings.scope_keys`. When `scoping_enabled=true`, missing headers return `403 Forbidden` (fail-closed). Scope values are matched against session scopes to enforce tenant isolation.
+
+**`server/app/api/middleware.py`** — `SecurityHeadersMiddleware` adds `X-Content-Type-Options`, `X-Frame-Options`, and `X-XSS-Protection` to every response. `ObservabilityMiddleware` records request count and duration into Prometheus.
+
+---
+
+### Layer 7 — Observability
+
+**`server/app/observability/__init__.py`** — Three independent subsystems, all with graceful degradation:
+
+- `setup_tracing()` — OpenTelemetry with OTLP exporter, FastAPI auto-instrumentation, LangChain auto-instrumentation. Uses gRPC or HTTP transport depending on the endpoint URL.
+- `setup_metrics()` — Prometheus metrics server on a separate port. Defines `REQUEST_COUNT`, `REQUEST_DURATION`, `LLM_CALL_DURATION`, `TOOL_CALL_COUNT`, `SESSION_COUNT` counters and histograms. Falls back to `DummyMetric` when `prometheus_client` is not installed.
+- `setup_logging()` — structlog with JSON rendering in production and console rendering in development.
+
+**`server/app/observability/mlflow_config.py`** — `setup_mlflow_tracing(settings)` sets the tracking URI and creates or sets the experiment. MLflow receives traces via the OTel Collector — there is no direct MLflow SDK call in the hot path.
+
+---
+
+## Startup Sequence
+
+`server/app/main.py` wires all layers together in its lifespan context manager, in strict dependency order:
+
+```
+1. Layer 2: Initialize storage backend
+2. Layer 2: Initialize session manager
+3. Layer 4: Initialize agent definition registry
+4. Layer 4: Initialize agent registry (tool/middleware auto-discovery)
+5. Layer 4: Start file watcher for .cognition/tools/ hot-reload
+6. Layer 7: Setup OTel tracing
+7. Layer 7: Setup Prometheus metrics
+8. Layer 7: Setup MLflow
+9. Layer 6: Start rate limiter
+```
+
+Shutdown happens in reverse: stop watcher → stop rate limiter → close storage.
+
+---
+
+## The North Star
+
+The architectural goal is a single declarative entry point:
+
+```python
+from cognition import AgentDefinition, Cognition
+
+agent = AgentDefinition(
+    tools=[my_tool, another_tool],
+    skills=[".cognition/skills/deploy-app/"],
+    system_prompt="You are a deployment expert.",
+)
+
+app = Cognition(agent)
+app.run()
+```
+
+This one call should provision the full 7-layer stack: REST API, SSE streaming, SQLite/Postgres persistence, local/Docker sandbox, OTel tracing, Prometheus metrics, multi-tenant scoping, rate limiting, and an evaluation pipeline. All layers, all infrastructure, from a single agent definition.
