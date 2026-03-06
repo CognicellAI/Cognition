@@ -16,10 +16,8 @@ Usage:
 
 from __future__ import annotations
 
-import json
 from typing import Any
 
-import httpx
 import structlog
 from mcp import ClientSession
 from mcp.client.sse import sse_client

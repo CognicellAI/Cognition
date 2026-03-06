@@ -264,7 +264,7 @@ def db_upgrade(
     except subprocess.CalledProcessError as e:
         console.print("[bold red]✗ Database upgrade failed[/bold red]")
         console.print(f"Error: {e.stderr}")
-        raise typer.Exit(1)
+        raise typer.Exit(1) from None
 
 
 @db_app.command("downgrade")
@@ -313,7 +313,7 @@ def db_downgrade(
     except subprocess.CalledProcessError as e:
         console.print("[bold red]✗ Database downgrade failed[/bold red]")
         console.print(f"Error: {e.stderr}")
-        raise typer.Exit(1)
+        raise typer.Exit(1) from None
 
 
 @db_app.command("migrate")
@@ -359,7 +359,7 @@ def db_migrate(
     except subprocess.CalledProcessError as e:
         console.print("[bold red]✗ Migration creation failed[/bold red]")
         console.print(f"Error: {e.stderr}")
-        raise typer.Exit(1)
+        raise typer.Exit(1) from None
 
 
 @db_app.command("current")
@@ -392,7 +392,7 @@ def db_current(
     except subprocess.CalledProcessError as e:
         console.print("[bold red]✗ Failed to get current revision[/bold red]")
         console.print(f"Error: {e.stderr}")
-        raise typer.Exit(1)
+        raise typer.Exit(1) from None
 
 
 @db_app.command("history")
@@ -431,7 +431,7 @@ def db_history(
     except subprocess.CalledProcessError as e:
         console.print("[bold red]✗ Failed to get migration history[/bold red]")
         console.print(f"Error: {e.stderr}")
-        raise typer.Exit(1)
+        raise typer.Exit(1) from None
 
 
 @db_app.command("init")
@@ -469,7 +469,7 @@ def db_init() -> None:
     except subprocess.CalledProcessError as e:
         console.print("[bold red]✗ Database initialization failed[/bold red]")
         console.print(f"Error: {e.stderr}")
-        raise typer.Exit(1)
+        raise typer.Exit(1) from None
 
 
 @create_app.command("tool")
@@ -800,13 +800,13 @@ def tools_list(
     except httpx.ConnectError:
         console.print("[bold red]Error:[/bold red] Cannot connect to server")
         console.print(f"[dim]Is the server running at {base_url}?[/dim]")
-        raise typer.Exit(1)
+        raise typer.Exit(1) from None
     except httpx.HTTPStatusError as e:
         console.print(f"[bold red]Error:[/bold red] Server returned {e.response.status_code}")
-        raise typer.Exit(1)
+        raise typer.Exit(1) from None
     except Exception as e:
         console.print(f"[bold red]Error:[/bold red] {e}")
-        raise typer.Exit(1)
+        raise typer.Exit(1) from None
 
 
 @tools_app.command("reload")
@@ -853,13 +853,13 @@ def tools_reload(
     except httpx.ConnectError:
         console.print("[bold red]Error:[/bold red] Cannot connect to server")
         console.print(f"[dim]Is the server running at {base_url}?[/dim]")
-        raise typer.Exit(1)
+        raise typer.Exit(1) from None
     except httpx.HTTPStatusError as e:
         console.print(f"[bold red]Error:[/bold red] Server returned {e.response.status_code}")
-        raise typer.Exit(1)
+        raise typer.Exit(1) from None
     except Exception as e:
         console.print(f"[bold red]Error:[/bold red] {e}")
-        raise typer.Exit(1)
+        raise typer.Exit(1) from None
 
 
 def main() -> None:

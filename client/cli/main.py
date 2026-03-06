@@ -114,7 +114,7 @@ def ensure_engine() -> None:
             )
     except Exception as e:
         console.print(f"[bold red]✗ Failed to spawn engine:[/bold red] {e}")
-        raise typer.Exit(1)
+        raise typer.Exit(1) from None
 
     # Wait for engine to become ready
     with Live(Text("Waiting for engine to initialize..."), refresh_per_second=4) as live:
@@ -214,7 +214,7 @@ def create_session(
             console.print(f"Title: {title}")
     except Exception as e:
         console.print(f"[bold red]✗ Failed to create session:[/bold red] {e}")
-        raise typer.Exit(1)
+        raise typer.Exit(1) from None
 
 
 @session_app.command("list")
@@ -254,7 +254,7 @@ def list_sessions() -> None:
         console.print("\n* = Current session")
     except Exception as e:
         console.print(f"[bold red]✗ Failed to list sessions:[/bold red] {e}")
-        raise typer.Exit(1)
+        raise typer.Exit(1) from None
 
 
 async def stream_chat(
@@ -397,7 +397,7 @@ def chat(
             console.print(f"[bold green]✓ Session created:[/bold green] {active_session_id}")
         except Exception as e:
             console.print(f"[bold red]✗ Failed to auto-create session:[/bold red] {e}")
-            raise typer.Exit(1)
+            raise typer.Exit(1) from None
 
     if message or piped_data:
         # Construct message from argument + piped data

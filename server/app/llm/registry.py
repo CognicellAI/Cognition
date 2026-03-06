@@ -73,8 +73,8 @@ def create_openai_compatible_model(config: Any, settings: Any) -> Any:
 
 def create_bedrock_model(config: Any, settings: Any) -> Any:
     """Factory for AWS Bedrock models."""
-    from langchain_aws import ChatBedrock
     from botocore.config import Config
+    from langchain_aws import ChatBedrock
 
     aws_access_key = None
     aws_secret_key = None

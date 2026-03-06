@@ -168,7 +168,7 @@ Usage notes:
                     return
 
                 if tag in {"h1", "h2", "h3"}:
-                    self.output.append(f"\n\n# ")
+                    self.output.append("\n\n# ")
                 elif tag == "p":
                     self.output.append("\n\n")
                 elif tag == "li":
@@ -347,9 +347,8 @@ class InspectPackageTool(BaseTool):
                 if inspect.isclass(obj):
                     if obj.__module__ == module.__name__:
                         classes.append(name)
-                elif inspect.isfunction(obj):
-                    if obj.__module__ == module.__name__:
-                        functions.append(name)
+                elif inspect.isfunction(obj) and obj.__module__ == module.__name__:
+                    functions.append(name)
 
             if classes:
                 output.append("## Classes:")

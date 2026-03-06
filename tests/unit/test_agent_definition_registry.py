@@ -8,8 +8,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import pytest
-
 from server.app.agent.agent_definition_registry import (
     AgentDefinitionRegistry,
     get_agent_definition_registry,

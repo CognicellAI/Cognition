@@ -44,13 +44,13 @@ def get_settings_dependency() -> Settings:
     return get_settings()
 
 
-def get_agent_manager(settings: Settings = Depends(get_settings_dependency)) -> SessionAgentManager:
+def get_agent_manager(settings: Settings = Depends(get_settings_dependency)) -> SessionAgentManager:  # noqa: B008
     """Get the session agent manager."""
     return get_session_agent_manager(settings)
 
 
 async def get_scope_dependency(
-    settings: Settings = Depends(get_settings_dependency),
+    settings: Settings = Depends(get_settings_dependency),  # noqa: B008
     user: str | None = Header(None, alias="x-cognition-scope-user"),
     project: str | None = Header(None, alias="x-cognition-scope-project"),
 ) -> SessionScope:
@@ -88,9 +88,9 @@ async def get_scope_dependency(
 )
 async def create_session(
     request: SessionCreate,
-    settings: Settings = Depends(get_settings_dependency),
-    agent_manager: SessionAgentManager = Depends(get_agent_manager),
-    scope: SessionScope = Depends(get_scope_dependency),
+    settings: Settings = Depends(get_settings_dependency),  # noqa: B008
+    agent_manager: SessionAgentManager = Depends(get_agent_manager),  # noqa: B008
+    scope: SessionScope = Depends(get_scope_dependency),  # noqa: B008
 ) -> SessionResponse:
     """Create a new session.
 
@@ -151,8 +151,8 @@ async def create_session(
     response_model=SessionList,
 )
 async def list_sessions(
-    settings: Settings = Depends(get_settings_dependency),
-    scope: SessionScope = Depends(get_scope_dependency),
+    settings: Settings = Depends(get_settings_dependency),  # noqa: B008
+    scope: SessionScope = Depends(get_scope_dependency),  # noqa: B008
 ) -> SessionList:
     """List all sessions for the workspace.
 
@@ -160,7 +160,7 @@ async def list_sessions(
     Sessions are isolated per workspace - they don't appear in other workspaces.
     If scoping is enabled, only returns sessions matching the current scope.
     """
-    workspace_path = str(settings.workspace_path)
+    _ = str(settings.workspace_path)
     store = get_storage_backend()
 
     # Filter by scope if provided
@@ -189,7 +189,7 @@ async def get_session(
     Returns detailed information about a specific session.
     Only returns sessions from the server's current workspace.
     """
-    workspace_path = str(settings.workspace_path)
+    _workspace_path = str(settings.workspace_path)
     store = get_storage_backend()
     session = await store.get_session(session_id)
 
@@ -226,7 +226,7 @@ async def update_session(
 
     Updates session metadata (title) or configuration (model, temperature, etc.).
     """
-    workspace_path = str(settings.workspace_path)
+    _workspace_path = str(settings.workspace_path)
     store = get_storage_backend()
 
     # Check session exists and scope matches
@@ -296,7 +296,7 @@ async def delete_session(
 
     Deletes a session and all associated messages.
     """
-    workspace_path = str(settings.workspace_path)
+    _workspace_path = str(settings.workspace_path)
     store = get_storage_backend()
 
     # Check if session exists
@@ -338,7 +338,7 @@ async def abort_session(
 
     Cancels any in-progress agent operation.
     """
-    workspace_path = str(settings.workspace_path)
+    _workspace_path = str(settings.workspace_path)
     store = get_storage_backend()
 
     session = await store.get_session(session_id)

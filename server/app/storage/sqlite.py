@@ -69,8 +69,6 @@ class SqliteStorageBackend:
         from server.app.storage.schema import metadata
 
         # Generate DDL statements from centralized schema for SQLite dialect
-        engine = create_engine("sqlite:///:memory:")
-
         def generate_schema(connection: Any) -> None:
             # Create all tables
             metadata.create_all(connection)

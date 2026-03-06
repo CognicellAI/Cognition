@@ -12,8 +12,6 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Protocol
 
-from server.app.execution.sandbox import LocalSandbox
-
 
 class SandboxBackend(Protocol):
     """Protocol for sandbox backends that support execute and root_dir."""
@@ -111,10 +109,7 @@ class FileRelevanceScorer:
 
     def should_exclude(self, path: str) -> bool:
         """Check if a file should be excluded from indexing."""
-        for pattern in self.exclude_regex:
-            if pattern.search(path):
-                return True
-        return False
+        return any(pattern.search(path) for pattern in self.exclude_regex)
 
     def score_importance(self, path: str, content: str | None = None) -> float:
         """Score how important a file is (0.0 to 1.0)."""

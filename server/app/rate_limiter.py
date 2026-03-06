@@ -111,7 +111,7 @@ class RateLimiter:
         bucket = self.buckets[key]
 
         if not await bucket.acquire():
-            wait_time = await bucket.wait_time()
+            _wait_time = await bucket.wait_time()
             raise RateLimitError(
                 resource=key,
                 limit=self.config.requests_per_minute,

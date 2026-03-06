@@ -114,19 +114,44 @@ packages = ["server", "client", "shared"]
 [tool.ruff]
 target-version = "py311"
 line-length = 100
+
+[tool.ruff.lint]
 select = [
     "E",  # pycodestyle errors
     "W",  # pycodestyle warnings
     "F",  # Pyflakes
     "I",  # isort
     "N",  # pep8-naming
-    "W",  # pycodestyle warnings
     "UP", # pyupgrade
     "B",  # flake8-bugbear
     "C4", # flake8-comprehensions
     "SIM",# flake8-simplify
 ]
-ignore = ["E501"]  # Line too long (handled by formatter)
+ignore = [
+    "E501",   # Line too long (handled by formatter)
+    # --- Noisy / framework false-positives ---
+    "B008",   # Depends()/typer.Option() in default args — required by FastAPI/Typer
+    "E402",   # Module-level import not at top — intentional lazy/conditional imports
+    "W291",   # Trailing whitespace — cosmetic
+    # --- Style preferences, not bugs ---
+    "SIM102", # Collapsible if — readability preference
+    "SIM101", # Duplicate isinstance — readability preference
+    "SIM105", # Use contextlib.suppress — readability preference
+    "SIM108", # Ternary operator — readability preference
+    "SIM110", # Use any()/all() — readability preference
+    "SIM117", # Merge with statements — readability preference
+    "SIM118", # Use `key in dict` — readability preference
+    "N806",   # Non-lowercase variable in function — UPPER_CASE constants in functions
+    "UP042",  # Use StrEnum — functionally equivalent, avoid forced upgrade
+    "B007",   # Unused loop control variable — often intentional
+    "B017",   # Blind exception in pytest.raises — test pattern
+    "B023",   # Function uses loop variable — closure pattern
+    "C401",   # Unnecessary generator set — readability preference
+    "F811",   # Redefinition of unused — common in test fixtures
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["F841"]  # Unused variables common in test assertions / exploratory code
 
 [tool.ruff.format]
 quote-style = "double"

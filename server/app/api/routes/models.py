@@ -1,6 +1,6 @@
 """Model management API routes."""
 
-from fastapi import APIRouter, HTTPException, Depends
+from fastapi import APIRouter, Depends, HTTPException
 
 from server.app.api.models import ModelInfo, ModelList
 from server.app.llm.discovery import DiscoveryEngine
@@ -10,7 +10,7 @@ router = APIRouter(prefix="/models", tags=["models"])
 
 
 @router.get("", response_model=ModelList)
-async def list_models(settings: Settings = Depends(get_settings)) -> ModelList:
+async def list_models(settings: Settings = Depends(get_settings)) -> ModelList:  # noqa: B008
     """List all available LLM models.
 
     Returns a flat list of models from all providers, including:
@@ -40,7 +40,7 @@ async def list_models(settings: Settings = Depends(get_settings)) -> ModelList:
 @router.get("/providers/{provider_id}", response_model=ModelList)
 async def list_models_by_provider(
     provider_id: str,
-    settings: Settings = Depends(get_settings),
+    settings: Settings = Depends(get_settings),  # noqa: B008
 ) -> ModelList:
     """List models for a specific provider."""
     discovery = DiscoveryEngine(settings)

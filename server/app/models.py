@@ -8,13 +8,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime
-from enum import Enum
+from enum import StrEnum
 from typing import Any, Literal
 
 from pydantic import BaseModel
 
 
-class SessionStatus(str, Enum):
+class SessionStatus(StrEnum):
     """Session status enumeration."""
 
     ACTIVE = "active"
@@ -69,14 +69,16 @@ class PromptConfig(BaseModel):
         elif self.type == "mlflow":
             # Lazy import to avoid dependency when MLflow not used
             try:
-                import mlflow
+                import mlflow  # noqa: F401
                 from mlflow.genai import load_prompt
 
                 return load_prompt(self.value)  # type: ignore[no-any-return]
             except ImportError:
-                raise RuntimeError("MLflow not installed. Install with: pip install mlflow[genai]")
+                raise RuntimeError(
+                    "MLflow not installed. Install with: pip install mlflow[genai]"
+                ) from None
             except Exception as e:
-                raise RuntimeError(f"Failed to load MLflow prompt '{self.value}': {e}")
+                raise RuntimeError(f"Failed to load MLflow prompt '{self.value}': {e}") from e
 
         else:
             raise ValueError(f"Unknown prompt type: {self.type}")
