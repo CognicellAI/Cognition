@@ -7,6 +7,22 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [0.1.1] — 2026-03-06
+
+### Performance
+
+- Replaced QEMU-based multi-arch Docker builds with native parallel runners:
+  `build-amd64` (`ubuntu-latest`) and `build-arm64` (`ubuntu-24.04-arm`) run
+  simultaneously, then are merged into a single multi-arch manifest. Reduces
+  release image build time from ~13 minutes to ~3–4 minutes.
+- Switched Dockerfile builder stage from `pip install` to `uv sync --frozen`
+  for deterministic, lockfile-driven dependency installation.
+- Removed `test` extras (`pytest`, `pytest-cov`) from the production image.
+- Added `warm-cache` CI job that pre-warms the GHA layer cache on every push
+  to `main` so release builds always hit a warm cache.
+
+---
+
 ## [0.1.0] — 2026-03-06
 
 Initial public release of Cognition — a batteries-included AI backend built on
@@ -88,4 +104,5 @@ Initial public release of Cognition — a batteries-included AI backend built on
 - Fixed `DiscoveredModel` attribute access in models route
 - Fixed stale `# type: ignore` comments after adding `types-PyYAML` stubs
 
+[0.1.1]: https://github.com/CognicellAI/Cognition/releases/tag/v0.1.1
 [0.1.0]: https://github.com/CognicellAI/Cognition/releases/tag/v0.1.0
