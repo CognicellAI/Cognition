@@ -91,7 +91,9 @@ class TestPromptConfigIntegration:
         """Test settings with custom inline prompt."""
         from server.app.settings import Settings
 
-        # Create settings with inline prompt
-        settings = Settings(system_prompt=PromptConfig(type="inline", value="Custom system prompt"))
+        # Create settings with inline prompt using model_validate (populate_by_name=True)
+        settings = Settings.model_validate(
+            {"system_prompt": PromptConfig(type="inline", value="Custom system prompt")}
+        )
 
         assert settings.system_prompt.get_prompt_text() == "Custom system prompt"

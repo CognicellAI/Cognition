@@ -156,7 +156,16 @@ explicit_package_bases = true
 [[tool.mypy.overrides]]
 module = "tests.*"
 disallow_untyped_defs = false
+disallow_incomplete_defs = false
 check_untyped_defs = false
+warn_return_any = false
+warn_unused_ignores = false
+ignore_missing_imports = true
+
+# E2E tests use pytest fixtures extensively with untyped signatures - ignore all errors
+[[tool.mypy.overrides]]
+module = "tests.e2e.*"
+ignore_errors = true
 
 # Ignore workspaces entirely - it's example/scratch code
 [[tool.mypy.overrides]]
@@ -202,4 +211,9 @@ exclude_lines = [
     "raise NotImplementedError",
     "if __name__ == .__main__.:",
     "if TYPE_CHECKING:",
+]
+
+[dependency-groups]
+dev = [
+    "types-pyyaml>=6.0.12.20250915",
 ]

@@ -166,8 +166,9 @@ You are a markdown test agent. Your job is to test things.
 
         registry = AgentDefinitionRegistry(tmp_path)
 
-        assert registry.get("my-custom-agent") is not None
-        assert registry.get("my-custom-agent").name == "my-custom-agent"
+        agent = registry.get("my-custom-agent")
+        assert agent is not None
+        assert agent.name == "my-custom-agent"
 
     def test_markdown_agent_body_becomes_system_prompt(self, tmp_path: Path):
         """Markdown body content becomes system prompt."""
@@ -179,6 +180,7 @@ You are a markdown test agent. Your job is to test things.
 
         registry = AgentDefinitionRegistry(tmp_path)
         agent = registry.get("body-test")
+        assert agent is not None
 
         assert agent.system_prompt == body
 
@@ -195,6 +197,7 @@ You are a markdown test agent. Your job is to test things.
 
         registry = AgentDefinitionRegistry(tmp_path)
         default = registry.get("default")
+        assert default is not None
 
         assert default.system_prompt == custom_prompt
         assert default.native is False  # Now user-defined
@@ -478,8 +481,9 @@ class TestAgentDefinitionRegistryReload:
         registry.reload()
 
         # New agent should now be present
-        assert registry.get("new-agent") is not None
-        assert registry.get("new-agent").system_prompt == "New!"
+        new_agent = registry.get("new-agent")
+        assert new_agent is not None
+        assert new_agent.system_prompt == "New!"
 
     def test_reload_removes_deleted_file(self, tmp_path: Path):
         """Reload removes agents from deleted files."""

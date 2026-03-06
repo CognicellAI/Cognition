@@ -24,7 +24,7 @@ from pydantic import BaseModel, Field, field_validator
 from langchain_core.tools import BaseTool
 
 try:
-    import yaml  # type: ignore[import-untyped]
+    import yaml
 
     HAS_YAML = True
 except ImportError:

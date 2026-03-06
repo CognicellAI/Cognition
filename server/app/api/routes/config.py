@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any
 
 import structlog
-import yaml  # type: ignore[import-untyped]
+import yaml
 from fastapi import APIRouter, Depends, HTTPException
 
 from server.app.api.models import (

@@ -246,11 +246,11 @@ def get_agent_definition_registry() -> AgentDefinitionRegistry | None:
     return _registry
 
 
-def set_agent_definition_registry(registry: AgentDefinitionRegistry) -> None:
+def set_agent_definition_registry(registry: AgentDefinitionRegistry | None) -> None:
     """Set the global agent definition registry instance.
 
     Args:
-        registry: The registry instance to set as global.
+        registry: The registry instance to set as global, or None to clear it.
     """
     global _registry
     _registry = registry
