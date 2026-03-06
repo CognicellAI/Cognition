@@ -68,7 +68,7 @@ class TestASTSecurityScanning:
             data = response.json()
             # Check if tool_security setting is exposed
             if "tool_security" in str(data):
-                print(f"\n  Tool security setting available")
+                print("\n  Tool security setting available")
 
     async def test_warn_mode_allows_with_logging(self, api_client) -> None:
         """In warn mode, dangerous imports are logged but allowed."""

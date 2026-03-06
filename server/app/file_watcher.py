@@ -136,19 +136,19 @@ class WorkspaceFileHandler(FileSystemEventHandler):
 
     def on_created(self, event: FileCreatedEvent | DirCreatedEvent) -> None:
         """Handle file/directory creation."""
-        self._notify_change("created", event.src_path)
+        self._notify_change("created", str(event.src_path))
 
     def on_modified(self, event: FileModifiedEvent | DirModifiedEvent) -> None:
         """Handle file/directory modification."""
-        self._notify_change("modified", event.src_path)
+        self._notify_change("modified", str(event.src_path))
 
     def on_deleted(self, event: FileDeletedEvent | DirDeletedEvent) -> None:
         """Handle file/directory deletion."""
-        self._notify_change("deleted", event.src_path)
+        self._notify_change("deleted", str(event.src_path))
 
     def on_moved(self, event: FileMovedEvent | DirMovedEvent) -> None:
         """Handle file/directory move."""
-        self._notify_change("moved", event.src_path, event.dest_path)
+        self._notify_change("moved", str(event.src_path), str(event.dest_path))
 
 
 class WorkspaceWatcher:
@@ -196,7 +196,7 @@ class WorkspaceWatcher:
         self.agent_registry = agent_registry
         self.config = config or FileWatcherConfig()
 
-        self._observer: Observer | None = None
+        self._observer: Any | None = None
         self._event_loop: asyncio.AbstractEventLoop | None = None
         self._handlers: dict[str, WorkspaceFileHandler] = {}
         self._debounce_timers: dict[str, asyncio.TimerHandle] = {}
@@ -401,7 +401,7 @@ class WorkspaceWatcher:
                 return
 
         # Use call_soon_threadsafe to safely schedule from watchdog thread
-        def delayed_process():
+        def delayed_process() -> None:
             if loop.is_closed():
                 return
             asyncio.run_coroutine_threadsafe(self._process_change(event, watch_type), loop)
@@ -454,7 +454,7 @@ class WorkspaceWatcher:
             elif watch_type == "middleware" and self.agent_registry:
                 # Mark middleware pending (session-based reload)
                 # Set the _middleware_pending flag directly
-                self.agent_registry._middleware_pending = True  # type: ignore[attr-defined]
+                self.agent_registry._middleware_pending = True  # noqa: SLF001
                 logger.info("Middleware marked pending")
 
                 # Notify GUI callbacks
@@ -493,7 +493,7 @@ class WorkspaceWatcher:
         self.start()
         return self
 
-    def __exit__(self, exc_type, exc_val, exc_tb) -> None:
+    def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
         """Context manager exit."""
         self.stop()
 
@@ -535,7 +535,7 @@ class SimpleFileWatcher:
         self.path = Path(path).resolve()
         self.callback = callback
         self.recursive = recursive
-        self._observer: Observer | None = None
+        self._observer: Any | None = None
         self._handler: _SimpleFileHandler | None = None
 
     def start(self) -> None:
@@ -567,7 +567,7 @@ class SimpleFileWatcher:
         self.start()
         return self
 
-    def __exit__(self, exc_type, exc_val, exc_tb) -> None:
+    def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
         """Context manager exit."""
         self.stop()
 
@@ -578,12 +578,13 @@ class _SimpleFileHandler(FileSystemEventHandler):
     def __init__(self, callback: Callable[[FileWatcherChangeEvent], None]):
         self.callback = callback
 
-    def on_any_event(self, event) -> None:
+    def on_any_event(self, event: Any) -> None:
         """Handle any file system event."""
+        dest = getattr(event, "dest_path", None)
         change_event = FileWatcherChangeEvent(
             event_type=event.event_type,
-            src_path=event.src_path,
-            dest_path=getattr(event, "dest_path", None),
+            src_path=str(event.src_path),
+            dest_path=str(dest) if dest is not None else None,
             is_directory=event.is_directory,
         )
         self.callback(change_event)

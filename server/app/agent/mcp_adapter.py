@@ -85,7 +85,7 @@ class McpAdapterTool(BaseTool):
             fields[prop_name] = (field_type | None, field_info)
 
         # Create dynamic model
-        return create_model("McpToolArgs", **fields)
+        return create_model("McpToolArgs", **fields)  # type: ignore[call-overload, no-any-return]
 
     @staticmethod
     def _json_schema_to_python_type(prop_schema: dict[str, Any]) -> type:

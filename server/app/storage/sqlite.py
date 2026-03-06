@@ -69,9 +69,7 @@ class SqliteStorageBackend:
         from server.app.storage.schema import metadata
 
         # Generate DDL statements from centralized schema for SQLite dialect
-        engine = create_engine("sqlite:///:memory:")
-
-        def generate_schema(connection):
+        def generate_schema(connection: Any) -> None:
             # Create all tables
             metadata.create_all(connection)
 
@@ -523,7 +521,7 @@ class SqliteStorageBackend:
         return Message(
             id=row["id"],
             session_id=row["session_id"],
-            role=row["role"],  # type: ignore
+            role=row["role"],
             content=row["content"],
             parent_id=row["parent_id"],
             created_at=datetime.fromisoformat(row["created_at"]),

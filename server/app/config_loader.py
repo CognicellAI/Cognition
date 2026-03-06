@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Any
 
 try:
-    import yaml
+    import yaml  # noqa: F401
 
     HAS_YAML = True
 except ImportError:
@@ -126,7 +126,6 @@ def _get_settings_schema() -> list[dict[str, Any]]:
     Returns list of field schemas.
     """
     # Import here to avoid circular imports
-    from pydantic.fields import FieldInfo
 
     # Create a temporary settings instance to inspect fields
     # We don't use get_settings() because that triggers the full loading
@@ -134,8 +133,6 @@ def _get_settings_schema() -> list[dict[str, Any]]:
 
     schema = []
     for field_name, field_info in Settings.model_fields.items():
-        field_info: FieldInfo
-
         # Get env var from alias
         env_var = field_info.alias
         if not env_var:
@@ -224,7 +221,6 @@ def _get_settings_schema() -> list[dict[str, Any]]:
             # Get default from factory if available
             default_factory = getattr(field_info, "default_factory", None)
             if default_factory is not None:
-                # type: ignore
                 default = default_factory() if callable(default_factory) else default_factory
 
         # Skip SecretStr fields from config generation (security)
@@ -408,7 +404,7 @@ class ConfigLoader:
 
         Returns dict of COGNITION_* env vars for use with Settings.
         """
-        config = self.load()
+        _ = self.load()
         env_vars: dict[str, str] = {}
 
         # Get auto-generated mapping

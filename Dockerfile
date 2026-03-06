@@ -1,6 +1,10 @@
 # Multi-stage Dockerfile for Cognition server
 # Production-ready with security hardening
 
+ARG VERSION=dev
+ARG BUILD_DATE
+ARG VCS_REF
+
 FROM python:3.11-slim AS builder
 
 # Install build dependencies
@@ -21,6 +25,16 @@ RUN pip install --no-cache-dir -e ".[all]"
 
 # Production stage
 FROM python:3.11-slim AS production
+
+# OCI Annotations / Labels
+LABEL org.opencontainers.image.title="Cognition"
+LABEL org.opencontainers.image.description="Batteries-included AI backend for coding agents"
+LABEL org.opencontainers.image.url="https://github.com/CognicellAI/Cognition"
+LABEL org.opencontainers.image.source="https://github.com/CognicellAI/Cognition"
+LABEL org.opencontainers.image.version="${VERSION}"
+LABEL org.opencontainers.image.created="${BUILD_DATE}"
+LABEL org.opencontainers.image.revision="${VCS_REF}"
+LABEL org.opencontainers.image.licenses="MIT"
 
 # Security: Run as non-root user with home directory
 RUN groupadd -r cognition && useradd -r -g cognition -u 1000 -m cognition

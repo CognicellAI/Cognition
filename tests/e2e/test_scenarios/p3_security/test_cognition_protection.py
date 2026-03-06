@@ -63,7 +63,7 @@ class TestCognitionDirectoryProtection:
             data = response.json()
             # Check if protected_paths setting exists
             if "protected_paths" in str(data) or "sandbox" in data:
-                print(f"\n  Protected paths configuration available")
+                print("\n  Protected paths configuration available")
 
     async def test_write_to_normal_workspace_allowed(self, api_client, session) -> None:
         """Agent can still write to normal workspace directories."""

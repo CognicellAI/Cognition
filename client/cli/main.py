@@ -12,6 +12,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+from typing import Any
 
 import httpx
 import typer
@@ -44,9 +45,9 @@ class SSEParser:
     Correctly handles multi-line data and paired event/data lines.
     """
 
-    def __init__(self):
-        self._current_event = None
-        self._current_data = []
+    def __init__(self) -> None:
+        self._current_event: str | None = None
+        self._current_data: list[str] = []
 
     def parse_line(self, line: str) -> tuple[str, dict] | None:
         """Parse a single line of SSE stream.
@@ -113,7 +114,7 @@ def ensure_engine() -> None:
             )
     except Exception as e:
         console.print(f"[bold red]✗ Failed to spawn engine:[/bold red] {e}")
-        raise typer.Exit(1)
+        raise typer.Exit(1) from None
 
     # Wait for engine to become ready
     with Live(Text("Waiting for engine to initialize..."), refresh_per_second=4) as live:
@@ -140,7 +141,7 @@ def ensure_engine() -> None:
 
 
 @app.command("stop")
-def stop_engine():
+def stop_engine() -> None:
     """Stop the background Cognition engine."""
     try:
         if sys.platform == "win32":
@@ -153,7 +154,7 @@ def stop_engine():
 
 
 @app.command("status")
-def engine_status():
+def engine_status() -> None:
     """Check the status of the Cognition engine."""
     url = get_server_url()
     try:
@@ -182,11 +183,11 @@ def save_state(session_id: str) -> None:
     STATE_FILE.write_text(json.dumps(state))
 
 
-def load_state() -> dict:
+def load_state() -> dict[str, Any]:
     """Load state from file."""
     if STATE_FILE.exists():
         try:
-            return json.loads(STATE_FILE.read_text())
+            return json.loads(STATE_FILE.read_text())  # type: ignore[no-any-return]
         except Exception:
             pass
     return {}
@@ -195,7 +196,7 @@ def load_state() -> dict:
 @session_app.command("create")
 def create_session(
     title: str | None = typer.Option(None, "--title", "-t", help="Session title"),
-):
+) -> None:
     """Create a new agent session."""
     ensure_engine()
     url = f"{get_server_url()}/sessions"
@@ -213,11 +214,11 @@ def create_session(
             console.print(f"Title: {title}")
     except Exception as e:
         console.print(f"[bold red]✗ Failed to create session:[/bold red] {e}")
-        raise typer.Exit(1)
+        raise typer.Exit(1) from None
 
 
 @session_app.command("list")
-def list_sessions():
+def list_sessions() -> None:
     """List all sessions in the current workspace."""
     ensure_engine()
     url = f"{get_server_url()}/sessions"
@@ -253,12 +254,12 @@ def list_sessions():
         console.print("\n* = Current session")
     except Exception as e:
         console.print(f"[bold red]✗ Failed to list sessions:[/bold red] {e}")
-        raise typer.Exit(1)
+        raise typer.Exit(1) from None
 
 
 async def stream_chat(
-    session_id: str, message: str, stats_callback: Callable[[dict], None] | None = None
-):
+    session_id: str, message: str, stats_callback: Callable[[dict[str, Any]], None] | None = None
+) -> None:
     """Stream a chat message and display tokens with high-fidelity word-by-word printing."""
     url = f"{get_server_url()}/sessions/{session_id}/messages"
 
@@ -373,7 +374,7 @@ def chat(
     message: str | None = typer.Argument(None, help="Message to send"),
     session_id: str | None = typer.Option(None, "--session", "-s", help="Session ID"),
     interactive: bool = typer.Option(True, "--interactive/--single", help="Interactive mode"),
-):
+) -> None:
     """Enter interactive chat mode or send a single message."""
     ensure_engine()
 
@@ -396,7 +397,7 @@ def chat(
             console.print(f"[bold green]✓ Session created:[/bold green] {active_session_id}")
         except Exception as e:
             console.print(f"[bold red]✗ Failed to auto-create session:[/bold red] {e}")
-            raise typer.Exit(1)
+            raise typer.Exit(1) from None
 
     if message or piped_data:
         # Construct message from argument + piped data
@@ -417,7 +418,7 @@ def chat(
         asyncio.run(shell.run())
 
 
-def main():
+def main() -> None:
     """Entry point for CLI."""
     app()
 

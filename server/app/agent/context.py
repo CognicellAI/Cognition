@@ -10,8 +10,20 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any, Protocol
 
-from server.app.execution.sandbox import LocalSandbox
+
+class SandboxBackend(Protocol):
+    """Protocol for sandbox backends that support execute and root_dir."""
+
+    def execute(self, command: str, **kwargs: object) -> Any:
+        """Execute a command in the sandbox."""
+        ...
+
+    @property
+    def root_dir(self) -> Path:
+        """Root directory of the sandbox."""
+        ...
 
 
 @dataclass
@@ -91,16 +103,13 @@ class FileRelevanceScorer:
         r"\.log$",
     ]
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.important_regex = [re.compile(p) for p in self.IMPORTANT_PATTERNS]
         self.exclude_regex = [re.compile(p) for p in self.EXCLUDE_PATTERNS]
 
     def should_exclude(self, path: str) -> bool:
         """Check if a file should be excluded from indexing."""
-        for pattern in self.exclude_regex:
-            if pattern.search(path):
-                return True
-        return False
+        return any(pattern.search(path) for pattern in self.exclude_regex)
 
     def score_importance(self, path: str, content: str | None = None) -> float:
         """Score how important a file is (0.0 to 1.0)."""
@@ -150,7 +159,7 @@ class ContextManager:
     - Long-term memory storage
     """
 
-    def __init__(self, sandbox: LocalSandbox | object, max_context_files: int = 20):
+    def __init__(self, sandbox: SandboxBackend, max_context_files: int = 20):
         """Initialize context manager with a sandbox backend.
 
         Args:
@@ -292,5 +301,5 @@ class ContextManager:
         """Get content of a specific file."""
         result = self.sandbox.execute(f'head -n {max_lines} "{path}"')
         if result.exit_code == 0:
-            return result.output
+            return str(result.output)
         return None

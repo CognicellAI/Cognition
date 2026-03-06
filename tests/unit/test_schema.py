@@ -2,13 +2,9 @@
 
 from __future__ import annotations
 
-import pytest
 from sqlalchemy import create_engine
-from sqlalchemy.ext.asyncio import create_async_engine
 
 from server.app.storage.schema import (
-    create_all_tables,
-    drop_all_tables,
     get_column_names,
     get_table_names,
     messages_table,

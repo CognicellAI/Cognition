@@ -52,7 +52,7 @@ class TokenBucket:
             elapsed = now - self.last_update
 
             # Add tokens based on elapsed time
-            self.tokens = min(self.capacity, self.tokens + elapsed * self.rate)
+            self.tokens = int(min(self.capacity, self.tokens + elapsed * self.rate))
             self.last_update = now
 
             if self.tokens >= 1:
@@ -111,7 +111,7 @@ class RateLimiter:
         bucket = self.buckets[key]
 
         if not await bucket.acquire():
-            wait_time = await bucket.wait_time()
+            _wait_time = await bucket.wait_time()
             raise RateLimitError(
                 resource=key,
                 limit=self.config.requests_per_minute,

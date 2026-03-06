@@ -28,7 +28,7 @@ class TestToolNamespaceAllowlist:
             # Check if trusted_tool_namespaces is exposed in config
             config_str = str(data)
             if "trusted" in config_str.lower() and "namespace" in config_str.lower():
-                print(f"\n  Trusted namespaces configured")
+                print("\n  Trusted namespaces configured")
 
     async def test_builtin_tools_load_from_trusted_namespace(self, api_client) -> None:
         """Built-in tools load from trusted namespace (server.app.tools)."""
@@ -73,7 +73,7 @@ class TestToolNamespaceAllowlist:
         if response.status_code == 200:
             data = response.json()
             # Document that allowlist should be extensible
-            print(f"\n  Allowlist configuration available for customization")
+            print("\n  Allowlist configuration available for customization")
 
 
 @pytest.mark.asyncio

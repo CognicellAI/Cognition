@@ -26,17 +26,17 @@ from deepagents import create_deep_agent
 
 logger = structlog.get_logger(__name__)
 
-from server.app.agent.context import ContextManager
-from server.app.agent.middleware import (
+from server.app.agent.context import ContextManager  # noqa: E402
+from server.app.agent.mcp_adapter import create_mcp_tools  # noqa: E402
+from server.app.agent.mcp_client import McpManager, McpServerConfig  # noqa: E402
+from server.app.agent.middleware import (  # noqa: E402
     CognitionObservabilityMiddleware,
     CognitionStreamingMiddleware,
     ToolSecurityMiddleware,
 )
-from server.app.agent.mcp_adapter import create_mcp_tools
-from server.app.agent.mcp_client import McpManager, McpServerConfig
-from server.app.agent.tools import BrowserTool, InspectPackageTool, SearchTool
-from server.app.agent.sandbox_backend import create_sandbox_backend
-from server.app.settings import Settings, get_settings
+from server.app.agent.sandbox_backend import create_sandbox_backend  # noqa: E402
+from server.app.agent.tools import BrowserTool, InspectPackageTool, SearchTool  # noqa: E402
+from server.app.settings import Settings, get_settings  # noqa: E402
 
 # Global agent cache: cache_key -> compiled_agent
 _agent_cache: dict[str, Any] = {}
@@ -245,7 +245,7 @@ async def create_cognition_agent(
     # The backend can be either CognitionLocalSandboxBackend or CognitionDockerSandboxBackend
     # Both provide execute() method and cwd property that ContextManager supports
     try:
-        context_manager = ContextManager(backend)
+        context_manager = ContextManager(backend)  # type: ignore[arg-type]
         context_manager.build_index()
 
         # Get relevant context for system prompt
@@ -253,12 +253,12 @@ async def create_cognition_agent(
 
         # Base system prompt with context
         if context_info:
-            SYSTEM_PROMPT_WITH_CONTEXT = SYSTEM_PROMPT + f"\n\nProject Context:\n{context_info}"
+            system_prompt_with_context = SYSTEM_PROMPT + f"\n\nProject Context:\n{context_info}"
         else:
-            SYSTEM_PROMPT_WITH_CONTEXT = SYSTEM_PROMPT
+            system_prompt_with_context = SYSTEM_PROMPT
     except Exception:
         # Fallback if context manager fails
-        SYSTEM_PROMPT_WITH_CONTEXT = SYSTEM_PROMPT
+        system_prompt_with_context = SYSTEM_PROMPT
 
     # Use provided values or defaults from settings
     if system_prompt:
@@ -269,7 +269,7 @@ async def create_cognition_agent(
             prompt = settings.system_prompt.get_prompt_text()
         except (FileNotFoundError, RuntimeError):
             # Fall back to default if prompt file not found or MLflow unavailable
-            prompt = SYSTEM_PROMPT_WITH_CONTEXT
+            prompt = system_prompt_with_context
     agent_memory = list(memory) if memory is not None else settings.agent_memory
     agent_skills = list(skills) if skills is not None else settings.agent_skills
     raw_subagents = list(subagents) if subagents is not None else settings.agent_subagents

@@ -163,7 +163,7 @@ You can only read files, search, and provide analysis.""",
 
         logger.info(f"Loaded {loaded_count} user-defined agents from {agents_dir}")
 
-    def list(self, include_hidden: bool = False) -> list[AgentDefinition]:
+    def get_all(self, include_hidden: bool = False) -> list[AgentDefinition]:
         """List all registered agents.
 
         Args:
@@ -246,11 +246,11 @@ def get_agent_definition_registry() -> AgentDefinitionRegistry | None:
     return _registry
 
 
-def set_agent_definition_registry(registry: AgentDefinitionRegistry) -> None:
+def set_agent_definition_registry(registry: AgentDefinitionRegistry | None) -> None:
     """Set the global agent definition registry instance.
 
     Args:
-        registry: The registry instance to set as global.
+        registry: The registry instance to set as global, or None to clear it.
     """
     global _registry
     _registry = registry

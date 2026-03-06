@@ -46,11 +46,11 @@ Usage notes:
   - Format options: "markdown" (default), "text", or "html"
   - This tool is read-only and does not modify any files
   - Results may be summarized if the content is very large"""
-    args_schema: ClassVar[type[BaseModel]] = BrowserToolInput
+    args_schema: ClassVar[type[BaseModel]] = BrowserToolInput  # type: ignore[misc]
 
-    def _run(self, *args: Any, **kwargs: Any) -> Any:
-        """Run the tool synchronously."""
-        return asyncio.run(self._arun(*args, **kwargs))
+    def _run(self, *args: Any, **kwargs: Any) -> str:
+        """Synchronous run is not supported; use async."""
+        raise NotImplementedError("BrowserTool only supports async execution via _arun")
 
     async def _arun(self, url: str, format: str = "markdown", timeout: float = 30.0) -> str:
         """Run the tool asynchronously.
@@ -168,7 +168,7 @@ Usage notes:
                     return
 
                 if tag in {"h1", "h2", "h3"}:
-                    self.output.append(f"\n\n# ")
+                    self.output.append("\n\n# ")
                 elif tag == "p":
                     self.output.append("\n\n")
                 elif tag == "li":
@@ -240,7 +240,7 @@ Usage notes:
   - Searches are performed automatically
   - Returns up to 'limit' results (default 10)
 """
-    args_schema: ClassVar[type[BaseModel]] = SearchToolInput
+    args_schema: ClassVar[type[BaseModel]] = SearchToolInput  # type: ignore[misc]
 
     def _run(self, *args: Any, **kwargs: Any) -> Any:
         return asyncio.run(self._arun(*args, **kwargs))
@@ -315,7 +315,7 @@ class InspectPackageTool(BaseTool):
 
     name: str = "inspect_package"
     description: str = "Inspects a Python package or module to list its classes and functions. Useful for exploring available functionality."
-    args_schema: ClassVar[type[BaseModel]] = InspectPackageToolInput
+    args_schema: ClassVar[type[BaseModel]] = InspectPackageToolInput  # type: ignore[misc]
 
     def _run(self, *args: Any, **kwargs: Any) -> Any:
         return self._run_sync(*args, **kwargs)
@@ -347,9 +347,8 @@ class InspectPackageTool(BaseTool):
                 if inspect.isclass(obj):
                     if obj.__module__ == module.__name__:
                         classes.append(name)
-                elif inspect.isfunction(obj):
-                    if obj.__module__ == module.__name__:
-                        functions.append(name)
+                elif inspect.isfunction(obj) and obj.__module__ == module.__name__:
+                    functions.append(name)
 
             if classes:
                 output.append("## Classes:")

@@ -47,9 +47,7 @@ class TestMLflowTracingIntegration:
 
     async def test_trace_metadata_includes_session(self, api_client) -> None:
         """Test that traces include session metadata for filtering."""
-        try:
-            import mlflow
-        except ImportError:
+        if not __import__("importlib").util.find_spec("mlflow"):
             pytest.skip("MLflow not installed")
 
         session_id = await api_client.create_session("Trace Metadata Test")
@@ -67,9 +65,7 @@ class TestMLflowTracingIntegration:
 
     async def test_nested_spans_in_trace(self, api_client) -> None:
         """Test that complex operations create nested spans."""
-        try:
-            import mlflow
-        except ImportError:
+        if not __import__("importlib").util.find_spec("mlflow"):
             pytest.skip("MLflow not installed")
 
         session_id = await api_client.create_session("Nested Spans Test")
@@ -90,9 +86,7 @@ class TestMLflowTracingIntegration:
 
     async def test_trace_latency_capture(self, api_client) -> None:
         """Test that trace captures operation latency."""
-        try:
-            import mlflow
-        except ImportError:
+        if not __import__("importlib").util.find_spec("mlflow"):
             pytest.skip("MLflow not installed")
 
         import time
@@ -113,9 +107,7 @@ class TestMLflowTracingIntegration:
 
     async def test_error_tracing(self, api_client) -> None:
         """Test that errors are captured in traces."""
-        try:
-            import mlflow
-        except ImportError:
+        if not __import__("importlib").util.find_spec("mlflow"):
             pytest.skip("MLflow not installed")
 
         session_id = await api_client.create_session("Error Trace Test")
@@ -130,9 +122,7 @@ class TestMLflowTracingIntegration:
 
     async def test_multiple_session_traces(self, api_client) -> None:
         """Test that multiple sessions create separate traces."""
-        try:
-            import mlflow
-        except ImportError:
+        if not __import__("importlib").util.find_spec("mlflow"):
             pytest.skip("MLflow not installed")
 
         # Create multiple sessions

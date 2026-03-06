@@ -7,8 +7,6 @@ and checkpoint persistence.
 
 from __future__ import annotations
 
-from typing import Optional
-
 from server.app.storage.backend import (
     CheckpointerStore,
     MessageStore,

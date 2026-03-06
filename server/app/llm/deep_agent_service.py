@@ -9,7 +9,6 @@ This service leverages deepagents' built-in capabilities:
 
 from __future__ import annotations
 
-import uuid
 from collections.abc import AsyncGenerator
 from typing import Any
 
@@ -42,7 +41,7 @@ from server.app.agent.runtime import (
     ErrorEvent,
     PlanningEvent,
     StatusEvent,
-    StepCompleteEvent,
+    StepCompleteEvent,  # noqa: F401 — re-exported for consumers of this module
     StreamEvent,
     TokenEvent,
     ToolCallEvent,
@@ -84,7 +83,7 @@ class DeepAgentStreamingService:
         project_path: str,
         content: str,
         system_prompt: str | None = None,
-        manager: "SessionAgentManager | None" = None,
+        manager: SessionAgentManager | None = None,
     ) -> AsyncGenerator[StreamEvent, None]:
         """Stream LLM response using DeepAgents with multi-step support."""
         runtime: DeepAgentRuntime | None = None
@@ -200,14 +199,14 @@ class DeepAgentStreamingService:
             input_tokens = len(content.split())
             output_tokens = 0
             accumulated_content = ""
-            current_tool_call = None
-            planning_mode = False
-            streamed_via_model_stream = False  # Track if on_chat_model_stream fired
+            _current_tool_call = None
+            _planning_mode = False
+            _streamed_via_model_stream = False  # Track if on_chat_model_stream fired
 
             # ISSUE-011: Track plan steps for step_complete events
-            plan_todos: list[dict] = []
-            current_step_index = -1
-            completed_steps: set[int] = set()
+            _plan_todos: list[dict] = []
+            _current_step_index = -1
+            _completed_steps: set[int] = set()
 
             # Stream events from deepagents using runtime (enables abort)
             # The agent automatically handles the ReAct loop
@@ -221,25 +220,22 @@ class DeepAgentStreamingService:
                         accumulated_content += event.content
                         output_tokens += len(event.content.split())
                         yield event
-                        streamed_via_model_stream = True  # ISSUE-013: Track primary path
+                        _streamed_via_model_stream = True  # ISSUE-013: Track primary path
 
                     elif isinstance(event, ToolCallEvent):
-                        current_tool_call = event.tool_call_id
+                        _current_tool_call = event.tool_call_id
                         yield event
 
                     elif isinstance(event, ToolResultEvent):
-                        current_tool_call = None
+                        _current_tool_call = None
                         yield event
 
                     elif isinstance(event, PlanningEvent):
-                        planning_mode = True
-                        plan_todos = event.todos
+                        _planning_mode = True
+                        _plan_todos = event.todos
                         yield event
 
-                    elif isinstance(event, DelegationEvent):
-                        yield event
-
-                    elif isinstance(event, StatusEvent):
+                    elif isinstance(event, DelegationEvent) or isinstance(event, StatusEvent):
                         yield event
 
                     elif isinstance(event, ErrorEvent):
@@ -462,7 +458,7 @@ class SessionAgentManager:
         """
         runtime = self._active_runtimes.get(session_id)
         if runtime:
-            success = await runtime.abort(thread_id)
+            success = bool(await runtime.abort(thread_id))
             logger.info("Session abort signaled", session_id=session_id, success=success)
             return success
         else:

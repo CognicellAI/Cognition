@@ -65,7 +65,7 @@ def serve(
     log_level: str | None = typer.Option(None, "--log-level", "-l", help="Log level"),
     reload: bool = typer.Option(False, "--reload", help="Enable auto-reload (development)"),
     config_file: Path | None = typer.Option(None, "--config", "-c", help="Path to config file"),
-):
+) -> None:
     """Start the Cognition API server.
 
     Starts the REST API server with SSE streaming support.
@@ -101,7 +101,7 @@ def init(
     global_config: bool = typer.Option(False, "--global", "-g", help="Initialize global config"),
     project: bool = typer.Option(False, "--project", "-p", help="Initialize project config"),
     path: Path | None = typer.Option(None, "--path", help="Path for project config"),
-):
+) -> None:
     """Initialize configuration files.
 
     Creates default configuration files.
@@ -122,7 +122,7 @@ def config(
     show_global: bool = typer.Option(False, "--global", "-g", help="Show global config path"),
     show_project: bool = typer.Option(False, "--project", "-p", help="Show project config path"),
     show_values: bool = typer.Option(True, "--values", "-v", help="Show config values"),
-):
+) -> None:
     """Show configuration.
 
     Displays current configuration from all sources.
@@ -137,9 +137,9 @@ def config(
         return
 
     if show_project:
-        path = get_project_config_path()
-        if path:
-            console.print(f"Project config: {path}")
+        project_path = get_project_config_path()
+        if project_path:
+            console.print(f"Project config: {project_path}")
             console.print("[green]Exists[/green]")
         else:
             console.print("Project config: [yellow]Not found[/yellow]")
@@ -154,7 +154,7 @@ def config(
         table.add_column("Key", style="cyan")
         table.add_column("Value", style="green")
 
-        def add_config(prefix: str, data: dict):
+        def add_config(prefix: str, data: dict) -> None:
             for key, value in data.items():
                 full_key = f"{prefix}.{key}" if prefix else key
                 if isinstance(value, dict):
@@ -186,7 +186,7 @@ def config(
 def health(
     host: str | None = typer.Option(None, "--host", "-h", help="Server host"),
     port: int | None = typer.Option(None, "--port", "-p", help="Server port"),
-):
+) -> None:
     """Check server health.
 
     Makes a request to the server's health endpoint.
@@ -221,7 +221,7 @@ def db_upgrade(
         "head", "--revision", "-r", help="Target revision (default: head)"
     ),
     sql: bool = typer.Option(False, "--sql", help="Print SQL instead of executing"),
-):
+) -> None:
     """Upgrade database to the specified revision.
 
     Applies all pending migrations to bring the database schema
@@ -264,14 +264,14 @@ def db_upgrade(
     except subprocess.CalledProcessError as e:
         console.print("[bold red]✗ Database upgrade failed[/bold red]")
         console.print(f"Error: {e.stderr}")
-        raise typer.Exit(1)
+        raise typer.Exit(1) from None
 
 
 @db_app.command("downgrade")
 def db_downgrade(
     revision: str = typer.Argument(..., help="Target revision (e.g., -1, base, or revision ID)"),
     sql: bool = typer.Option(False, "--sql", help="Print SQL instead of executing"),
-):
+) -> None:
     """Downgrade database to the specified revision.
 
     Reverts migrations to bring the database schema back
@@ -313,7 +313,7 @@ def db_downgrade(
     except subprocess.CalledProcessError as e:
         console.print("[bold red]✗ Database downgrade failed[/bold red]")
         console.print(f"Error: {e.stderr}")
-        raise typer.Exit(1)
+        raise typer.Exit(1) from None
 
 
 @db_app.command("migrate")
@@ -322,7 +322,7 @@ def db_migrate(
     autogenerate: bool = typer.Option(
         False, "--autogenerate", "-a", help="Auto-generate migration from models"
     ),
-):
+) -> None:
     """Create a new database migration.
 
     Creates a new migration script with the given message.
@@ -359,13 +359,13 @@ def db_migrate(
     except subprocess.CalledProcessError as e:
         console.print("[bold red]✗ Migration creation failed[/bold red]")
         console.print(f"Error: {e.stderr}")
-        raise typer.Exit(1)
+        raise typer.Exit(1) from None
 
 
 @db_app.command("current")
 def db_current(
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Show verbose output"),
-):
+) -> None:
     """Show current database revision."""
     alembic_ini = Path(__file__).parent.parent / "alembic.ini"
 
@@ -392,7 +392,7 @@ def db_current(
     except subprocess.CalledProcessError as e:
         console.print("[bold red]✗ Failed to get current revision[/bold red]")
         console.print(f"Error: {e.stderr}")
-        raise typer.Exit(1)
+        raise typer.Exit(1) from None
 
 
 @db_app.command("history")
@@ -401,7 +401,7 @@ def db_history(
     indicate_current: bool = typer.Option(
         False, "--current", "-c", help="Indicate current revision"
     ),
-):
+) -> None:
     """Show migration history."""
     alembic_ini = Path(__file__).parent.parent / "alembic.ini"
 
@@ -431,11 +431,11 @@ def db_history(
     except subprocess.CalledProcessError as e:
         console.print("[bold red]✗ Failed to get migration history[/bold red]")
         console.print(f"Error: {e.stderr}")
-        raise typer.Exit(1)
+        raise typer.Exit(1) from None
 
 
 @db_app.command("init")
-def db_init():
+def db_init() -> None:
     """Initialize database (run all migrations).
 
     This is an alias for 'db upgrade head' that creates
@@ -469,7 +469,7 @@ def db_init():
     except subprocess.CalledProcessError as e:
         console.print("[bold red]✗ Database initialization failed[/bold red]")
         console.print(f"Error: {e.stderr}")
-        raise typer.Exit(1)
+        raise typer.Exit(1) from None
 
 
 @create_app.command("tool")
@@ -479,7 +479,7 @@ def create_tool(
         None, "--path", "-p", help="Target directory (default: .cognition/tools/)"
     ),
     description: str | None = typer.Option(None, "--description", "-d", help="Tool description"),
-):
+) -> None:
     """Create a new tool template.
 
     Generates a Python file with a properly structured @tool decorator
@@ -590,7 +590,7 @@ def create_middleware(
     description: str | None = typer.Option(
         None, "--description", "-d", help="Middleware description"
     ),
-):
+) -> None:
     """Create a new middleware template.
 
     Generates a Python file with a properly structured AgentMiddleware
@@ -741,7 +741,7 @@ class {class_name}(AgentMiddleware):
 def tools_list(
     host: str | None = typer.Option(None, "--host", "-h", help="Server host"),
     port: int | None = typer.Option(None, "--port", "-p", help="Server port"),
-):
+) -> None:
     """List all registered tools.
 
     Queries the server for registered tools and displays them in a table.
@@ -800,20 +800,20 @@ def tools_list(
     except httpx.ConnectError:
         console.print("[bold red]Error:[/bold red] Cannot connect to server")
         console.print(f"[dim]Is the server running at {base_url}?[/dim]")
-        raise typer.Exit(1)
+        raise typer.Exit(1) from None
     except httpx.HTTPStatusError as e:
         console.print(f"[bold red]Error:[/bold red] Server returned {e.response.status_code}")
-        raise typer.Exit(1)
+        raise typer.Exit(1) from None
     except Exception as e:
         console.print(f"[bold red]Error:[/bold red] {e}")
-        raise typer.Exit(1)
+        raise typer.Exit(1) from None
 
 
 @tools_app.command("reload")
 def tools_reload(
     host: str | None = typer.Option(None, "--host", "-h", help="Server host"),
     port: int | None = typer.Option(None, "--port", "-p", help="Server port"),
-):
+) -> None:
     """Trigger a reload of tools from the discovery path.
 
     Sends a request to the server to reload all tools from .cognition/tools/.
@@ -853,16 +853,16 @@ def tools_reload(
     except httpx.ConnectError:
         console.print("[bold red]Error:[/bold red] Cannot connect to server")
         console.print(f"[dim]Is the server running at {base_url}?[/dim]")
-        raise typer.Exit(1)
+        raise typer.Exit(1) from None
     except httpx.HTTPStatusError as e:
         console.print(f"[bold red]Error:[/bold red] Server returned {e.response.status_code}")
-        raise typer.Exit(1)
+        raise typer.Exit(1) from None
     except Exception as e:
         console.print(f"[bold red]Error:[/bold red] {e}")
-        raise typer.Exit(1)
+        raise typer.Exit(1) from None
 
 
-def main():
+def main() -> None:
     """Entry point for CLI."""
     app()
 

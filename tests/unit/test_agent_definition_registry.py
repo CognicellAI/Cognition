@@ -8,8 +8,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import pytest
-
 from server.app.agent.agent_definition_registry import (
     AgentDefinitionRegistry,
     get_agent_definition_registry,
@@ -91,7 +89,7 @@ class TestAgentDefinitionRegistryBuiltins:
         """List returns both built-in agents."""
         registry = AgentDefinitionRegistry()
 
-        agents = registry.list()
+        agents = registry.get_all()
         names = [a.name for a in agents]
 
         assert "default" in names
@@ -166,8 +164,9 @@ You are a markdown test agent. Your job is to test things.
 
         registry = AgentDefinitionRegistry(tmp_path)
 
-        assert registry.get("my-custom-agent") is not None
-        assert registry.get("my-custom-agent").name == "my-custom-agent"
+        agent = registry.get("my-custom-agent")
+        assert agent is not None
+        assert agent.name == "my-custom-agent"
 
     def test_markdown_agent_body_becomes_system_prompt(self, tmp_path: Path):
         """Markdown body content becomes system prompt."""
@@ -179,6 +178,7 @@ You are a markdown test agent. Your job is to test things.
 
         registry = AgentDefinitionRegistry(tmp_path)
         agent = registry.get("body-test")
+        assert agent is not None
 
         assert agent.system_prompt == body
 
@@ -195,6 +195,7 @@ You are a markdown test agent. Your job is to test things.
 
         registry = AgentDefinitionRegistry(tmp_path)
         default = registry.get("default")
+        assert default is not None
 
         assert default.system_prompt == custom_prompt
         assert default.native is False  # Now user-defined
@@ -223,7 +224,7 @@ You are a markdown test agent. Your job is to test things.
         registry = AgentDefinitionRegistry(tmp_path)
 
         # Built-ins should be present
-        assert len(registry.list()) == 2
+        assert len(registry.get_all()) == 2
         assert registry.get("default") is not None
         assert registry.get("readonly") is not None
 
@@ -241,7 +242,7 @@ You are a markdown test agent. Your job is to test things.
         registry = AgentDefinitionRegistry(tmp_path)
 
         # Should have 2 built-ins + 3 user agents
-        assert len(registry.list()) == 5
+        assert len(registry.get_all()) == 5
         for i in range(3):
             assert registry.get(f"agent-{i}") is not None
 
@@ -276,8 +277,8 @@ class TestAgentDefinitionRegistryLookup:
 
         registry = AgentDefinitionRegistry(tmp_path)
 
-        visible_list = registry.list(include_hidden=False)
-        full_list = registry.list(include_hidden=True)
+        visible_list = registry.get_all(include_hidden=False)
+        full_list = registry.get_all(include_hidden=True)
 
         assert len(visible_list) == 3  # 2 built-ins + visible
         assert len(full_list) == 4  # 2 built-ins + visible + hidden
@@ -295,7 +296,7 @@ class TestAgentDefinitionRegistryLookup:
 
         registry = AgentDefinitionRegistry(tmp_path)
 
-        full_list = registry.list(include_hidden=True)
+        full_list = registry.get_all(include_hidden=True)
         names = [a.name for a in full_list]
 
         assert "hidden" in names
@@ -466,7 +467,7 @@ class TestAgentDefinitionRegistryReload:
         registry = AgentDefinitionRegistry(tmp_path)
 
         # Initially no user agents
-        assert len(registry.list()) == 2
+        assert len(registry.get_all()) == 2
         assert registry.get("new-agent") is None
 
         # Add new file
@@ -478,8 +479,9 @@ class TestAgentDefinitionRegistryReload:
         registry.reload()
 
         # New agent should now be present
-        assert registry.get("new-agent") is not None
-        assert registry.get("new-agent").system_prompt == "New!"
+        new_agent = registry.get("new-agent")
+        assert new_agent is not None
+        assert new_agent.system_prompt == "New!"
 
     def test_reload_removes_deleted_file(self, tmp_path: Path):
         """Reload removes agents from deleted files."""

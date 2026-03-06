@@ -19,12 +19,11 @@ import sys
 from pathlib import Path
 from typing import Any, Literal
 
+from langchain_core.tools import BaseTool
 from pydantic import BaseModel, Field, field_validator
 
-from langchain_core.tools import BaseTool
-
 try:
-    import yaml  # type: ignore[import-untyped]
+    import yaml
 
     HAS_YAML = True
 except ImportError:
@@ -328,7 +327,7 @@ class AgentDefinition(BaseModel):
                     spec.loader.exec_module(module)
 
                     # Find BaseTool instances
-                    for name, obj in inspect.getmembers(module):
+                    for _, obj in inspect.getmembers(module):
                         if isinstance(obj, BaseTool):
                             resolved_tools.append(obj)
 
@@ -336,7 +335,7 @@ class AgentDefinition(BaseModel):
                     # Treat as module path
                     try:
                         module = importlib.import_module(tool_path)
-                        for name, obj in inspect.getmembers(module):
+                        for _, obj in inspect.getmembers(module):
                             if isinstance(obj, BaseTool):
                                 resolved_tools.append(obj)
                     except ImportError:
@@ -358,7 +357,7 @@ class AgentDefinition(BaseModel):
                                     sys.modules[module_name] = module
                                     spec.loader.exec_module(module)
 
-                                    for name, obj in inspect.getmembers(module):
+                                    for _, obj in inspect.getmembers(module):
                                         if isinstance(obj, BaseTool):
                                             resolved_tools.append(obj)
             except Exception:

@@ -423,7 +423,7 @@ class EventBuilder:
             assistant_data: Optional assistant message data for persistence
             message_id: Optional ID of the persisted assistant message (ISSUE-019)
         """
-        data = {}
+        data: dict[str, Any] = {}
         if assistant_data:
             data["assistant_data"] = assistant_data
         if message_id:

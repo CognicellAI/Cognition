@@ -9,11 +9,11 @@ These tests verify the end-to-end MCP functionality:
 
 from __future__ import annotations
 
-import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from server.app.agent.mcp_client import McpServerConfig, McpSseClient, McpManager
-from server.app.agent.mcp_adapter import McpAdapterTool, create_mcp_tools
+import pytest
+
+from server.app.agent.mcp_client import McpServerConfig, McpSseClient
 
 
 @pytest.mark.asyncio
@@ -217,9 +217,8 @@ class TestMcpErrorHandling:
 
         # Simulate timeout
         with patch("server.app.agent.mcp_client.sse_client") as mock_sse:
-            import asyncio
 
-            mock_sse.side_effect = asyncio.TimeoutError("Connection timed out")
+            mock_sse.side_effect = TimeoutError("Connection timed out")
 
             with pytest.raises(ConnectionError) as exc_info:
                 await client.connect()

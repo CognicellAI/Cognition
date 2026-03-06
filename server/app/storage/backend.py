@@ -262,9 +262,14 @@ class StorageBackend(Protocol):
         self,
         message_id: str,
         session_id: str,
-        role: Literal["user", "assistant", "system"],
+        role: Literal["user", "assistant", "system", "tool"],
         content: str | None,
         parent_id: str | None = None,
+        tool_calls: list | None = None,
+        tool_call_id: str | None = None,
+        token_count: int | None = None,
+        model_used: str | None = None,
+        metadata: dict[str, Any] | None = None,
     ) -> Message:
         """Create a new message."""
         ...

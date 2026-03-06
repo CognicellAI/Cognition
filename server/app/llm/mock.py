@@ -26,11 +26,7 @@ class MockLLM(BaseChatModel):
     def _llm_type(self) -> str:
         return "mock"
 
-    @property
-    def profile(self) -> Any:
-        return {"max_input_tokens": 100000}
-
-    def _generate(self, *args, **kwargs):
+    def _generate(self, *args: Any, **kwargs: Any) -> Any:
         raise NotImplementedError("Use ainvoke instead")
 
     def bind_tools(self, tools: Sequence[Any], **kwargs: Any) -> Any:
@@ -47,7 +43,7 @@ class MockLLM(BaseChatModel):
 
     async def ainvoke(
         self,
-        input: list[BaseMessage] | str,
+        input: Any,
         config: Any | None = None,
         **kwargs: Any,
     ) -> AIMessage:
@@ -56,7 +52,9 @@ class MockLLM(BaseChatModel):
         Analyzes the last message and returns appropriate tool calls
         or responses based on simple pattern matching.
         """
-        messages = input if isinstance(input, list) else [HumanMessage(content=input)]
+        messages: list[BaseMessage] = (
+            input if isinstance(input, list) else [HumanMessage(content=input)]
+        )
         last_message = str(messages[-1].content).lower()
 
         # Generic tool trigger for testing
@@ -147,7 +145,7 @@ class MockLLM(BaseChatModel):
 
     async def astream(
         self,
-        input: list[BaseMessage] | str,
+        input: Any,
         config: Any | None = None,
         **kwargs: Any,
     ) -> AsyncGenerator[AIMessageChunk, None]:
@@ -155,17 +153,19 @@ class MockLLM(BaseChatModel):
 
         Yields chunks of the response for streaming with proper callback support.
         """
-        from langchain_core.callbacks.manager import AsyncCallbackManager
-
-        messages = input if isinstance(input, list) else [HumanMessage(content=input)]
+        messages: list[BaseMessage] = (
+            input if isinstance(input, list) else [HumanMessage(content=input)]
+        )
         last_message = str(messages[-1].content).lower()
         response_text = "I understand. Let me help you with that."
 
         # Get callback manager from config
-        callback_manager = None
+        callback_manager: Any = None
         if config and hasattr(config, "get"):
             callbacks = config.get("callbacks")
             if callbacks:
+                from langchain_core.callbacks.manager import AsyncCallbackManager
+
                 callback_manager = AsyncCallbackManager.configure(
                     callbacks,
                     self.callbacks,
@@ -191,7 +191,7 @@ class MockLLM(BaseChatModel):
                     ],
                 )
                 # Emit callback event if manager available
-                if callback_manager:
+                if callback_manager and hasattr(callback_manager, "on_llm_new_token"):
                     await callback_manager.on_llm_new_token(
                         "",
                         chunk=chunk,
@@ -219,7 +219,7 @@ class MockLLM(BaseChatModel):
             chunk = AIMessageChunk(content=chunk_text)
 
             # Emit callback event for each token
-            if callback_manager:
+            if callback_manager and hasattr(callback_manager, "on_llm_new_token"):
                 await callback_manager.on_llm_new_token(
                     chunk_text,
                     chunk=chunk,

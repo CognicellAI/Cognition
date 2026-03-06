@@ -137,7 +137,7 @@ def save_config(config: dict, config_path: Path) -> None:
 
 @router.get("", response_model=ConfigResponse)
 async def get_config(
-    settings: Settings = Depends(get_settings),
+    settings: Settings = Depends(get_settings),  # noqa: B008
 ) -> ConfigResponse:
     """Get server configuration."""
     yaml_config = load_config()
@@ -168,7 +168,7 @@ async def get_config(
                     "name": p_id.replace("_", " ").title(),
                     "models": [m.id for m in discovered if m.provider_id == p_id],
                 }
-                for p_id in set(m.provider_id for m in discovered)
+                for p_id in {m.provider_id for m in discovered}
             ],
         },
         rate_limit={
@@ -183,7 +183,7 @@ async def get_config(
 @router.patch("", response_model=ConfigUpdateResponse)
 async def patch_config(
     updates: ConfigUpdateRequest,
-    settings: Settings = Depends(get_settings),
+    settings: Settings = Depends(get_settings),  # noqa: B008
 ) -> ConfigUpdateResponse:
     """Update server configuration. Apps handle auth via middleware."""
     changes = validate_and_extract_changes(updates)
@@ -216,7 +216,7 @@ async def patch_config(
 
 @router.post("/rollback", response_model=ConfigRollbackResponse)
 async def rollback_config(
-    settings: Settings = Depends(get_settings),
+    settings: Settings = Depends(get_settings),  # noqa: B008
 ) -> ConfigRollbackResponse:
     """Rollback configuration to last backup. Apps handle auth via middleware."""
     backup_path = Path(".cognition/config.yaml.backup")

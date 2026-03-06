@@ -2,26 +2,27 @@
 
 from __future__ import annotations
 
+from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 
 import structlog
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
+from server.app.agent.agent_definition_registry import (
+    initialize_agent_definition_registry,
+)
+from server.app.agent_registry import initialize_agent_registry
 from server.app.api.middleware import ObservabilityMiddleware, SecurityHeadersMiddleware
 from server.app.api.models import HealthStatus, ReadyStatus
 from server.app.api.routes import agents, config, messages, models, sessions, tools
 from server.app.exceptions import RateLimitError
+from server.app.file_watcher import WorkspaceWatcher
 from server.app.observability import setup_metrics, setup_tracing
 from server.app.observability.mlflow_config import setup_mlflow_tracing
 from server.app.rate_limiter import get_rate_limiter
-from server.app.agent.agent_definition_registry import (
-    initialize_agent_definition_registry,
-)
-from server.app.agent_registry import AgentRegistry, initialize_agent_registry
-from server.app.file_watcher import WorkspaceWatcher
 from server.app.session_manager import initialize_session_manager
 from server.app.settings import get_settings
 from server.app.storage import create_storage_backend, get_storage_backend, set_storage_backend
@@ -33,7 +34,7 @@ file_watcher: WorkspaceWatcher | None = None
 
 
 @asynccontextmanager
-async def lifespan(app: FastAPI):
+async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     """Application lifespan context manager."""
     global file_watcher
 
@@ -185,7 +186,7 @@ async def ready_check() -> ReadyStatus:
 
 
 @app.exception_handler(RateLimitError)
-async def rate_limit_exception_handler(request, exc):
+async def rate_limit_exception_handler(request: Request, exc: RateLimitError) -> JSONResponse:
     """Handle rate limit exceeded errors."""
     logger.warning(
         "Rate limit exceeded",
@@ -199,7 +200,7 @@ async def rate_limit_exception_handler(request, exc):
 
 
 @app.exception_handler(Exception)
-async def general_exception_handler(request, exc):
+async def general_exception_handler(request: Request, exc: Exception) -> JSONResponse:
     """Handle unhandled exceptions."""
     logger.error(
         "Unhandled exception",

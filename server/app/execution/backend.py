@@ -72,15 +72,15 @@ class DockerExecutionBackend:
         self.memory_limit = memory_limit
         self.cpu_limit = cpu_limit
         self.host_workspace = host_workspace or str(self.root_dir)
-        self._container = None
+        self._container: Any = None
 
-    def _ensure_container(self):
+    def _ensure_container(self) -> None:
         """Ensure container is running."""
 
         import docker
 
         if self._container is None:
-            client = docker.from_env()
+            client = docker.from_env()  # type: ignore[attr-defined]
             container_name = f"cognition-{self.sandbox_id}"
 
             # Check if container already exists
@@ -117,7 +117,7 @@ class DockerExecutionBackend:
                 labels={"cognition.sandbox.id": self.sandbox_id, "cognition.managed": "true"},
             )
 
-    def execute(self, command: str, timeout: float | None = 300.0):
+    def execute(self, command: str, timeout: float | None = 300.0) -> ExecutionResult:
         """Execute command in Docker container."""
         import structlog
 

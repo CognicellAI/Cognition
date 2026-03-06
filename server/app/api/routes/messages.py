@@ -11,8 +11,10 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import AsyncGenerator
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi.responses import StreamingResponse
 
 from server.app.api.models import (
     ErrorResponse,
@@ -49,7 +51,7 @@ def get_settings_dependency() -> Settings:
     return get_settings()
 
 
-def get_agent_manager(settings: Settings = Depends(get_settings_dependency)) -> SessionAgentManager:
+def get_agent_manager(settings: Settings = Depends(get_settings_dependency)) -> SessionAgentManager:  # noqa: B008
     """Get the session agent manager."""
     return get_session_agent_manager(settings)
 
@@ -99,10 +101,10 @@ async def agent_event_stream(
         # Accumulate assistant message data for persistence
         accumulated_content = []
         tool_calls = []
-        current_tool_call = None
-        token_count = 0
-        model_used = None
-        metadata = {}
+        _current_tool_call = None
+        token_count: int | float = 0
+        model_used: str | None = None
+        metadata: dict[str, Any] = {}
 
         # Stream response using DeepAgents with multi-step support
         # Pass agent_manager to enable abort functionality
@@ -126,7 +128,7 @@ async def agent_event_stream(
                     "id": event.tool_call_id,
                 }
                 tool_calls.append(tool_call)
-                current_tool_call = event.tool_call_id
+                _current_tool_call = event.tool_call_id
                 yield EventBuilder.tool_call(
                     name=event.name,
                     args=event.args,
@@ -210,11 +212,11 @@ async def send_message(
     session_id: str,
     request: MessageCreate,
     http_request: Request,
-    settings: Settings = Depends(get_settings_dependency),
-    agent_manager: SessionAgentManager = Depends(get_agent_manager),
-    rate_limiter: RateLimiter = Depends(lambda: get_rate_limiter()),
-    scope: SessionScope = Depends(create_scope_dependency(get_settings())),
-):
+    settings: Settings = Depends(get_settings_dependency),  # noqa: B008
+    agent_manager: SessionAgentManager = Depends(get_agent_manager),  # noqa: B008
+    rate_limiter: RateLimiter = Depends(lambda: get_rate_limiter()),  # noqa: B008
+    scope: SessionScope = Depends(create_scope_dependency(get_settings())),  # noqa: B008
+) -> StreamingResponse:
     """Send a message to the agent.
 
     Sends a message to the agent and streams back the response as Server-Sent Events.
@@ -288,7 +290,7 @@ async def send_message(
     )
 
     # Wrap the event stream to persist assistant message on completion
-    async def wrapped_event_stream():
+    async def wrapped_event_stream() -> AsyncGenerator[dict[str, Any], None]:
         assistant_data = None
         message_id = None
         async for event in event_stream:
@@ -352,8 +354,8 @@ async def send_message(
 )
 async def list_messages(
     session_id: str,
-    settings: Settings = Depends(get_settings_dependency),
-    scope: SessionScope = Depends(create_scope_dependency(get_settings())),
+    settings: Settings = Depends(get_settings_dependency),  # noqa: B008
+    scope: SessionScope = Depends(create_scope_dependency(get_settings())),  # noqa: B008
     limit: int = 50,
     offset: int = 0,
 ) -> MessageList:
@@ -361,7 +363,7 @@ async def list_messages(
 
     Returns a paginated list of messages for the specified session.
     """
-    workspace_path = str(settings.workspace_path)
+    _ = str(settings.workspace_path)
 
     # Check if session exists and scope matches
     store = get_storage_backend()
@@ -424,14 +426,14 @@ async def list_messages(
 async def get_message(
     session_id: str,
     message_id: str,
-    settings: Settings = Depends(get_settings_dependency),
-    scope: SessionScope = Depends(create_scope_dependency(get_settings())),
+    settings: Settings = Depends(get_settings_dependency),  # noqa: B008
+    scope: SessionScope = Depends(create_scope_dependency(get_settings())),  # noqa: B008
 ) -> MessageResponse:
     """Get a specific message.
 
     Returns detailed information about a specific message.
     """
-    workspace_path = str(settings.workspace_path)
+    _ = str(settings.workspace_path)
 
     # Check if session exists and scope matches
     store = get_storage_backend()

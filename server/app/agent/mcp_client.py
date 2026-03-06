@@ -16,10 +16,8 @@ Usage:
 
 from __future__ import annotations
 
-import json
 from typing import Any
 
-import httpx
 import structlog
 from mcp import ClientSession
 from mcp.client.sse import sse_client
@@ -40,7 +38,7 @@ class McpServerConfig(BaseModel):
 
     @field_validator("url")
     @classmethod
-    def validate_url(cls, v: str, info) -> str:
+    def validate_url(cls, v: str, info: Any) -> str:
         """Validate that the URL is HTTP/HTTPS."""
         if not v.startswith(("http://", "https://")):
             raise ValueError(
@@ -90,7 +88,7 @@ class McpSseClient:
         """
         self.config = config
         self.session: ClientSession | None = None
-        self._client_ctx = None
+        self._client_ctx: Any = None
         self._connected = False
 
     async def connect(self) -> None:
@@ -226,7 +224,7 @@ class McpSseClient:
         await self.connect()
         return self
 
-    async def __aexit__(self, exc_type, exc_val, exc_tb) -> None:
+    async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
         """Async context manager exit."""
         await self.close()
 
@@ -234,7 +232,7 @@ class McpSseClient:
 class McpManager:
     """Manager for multiple MCP server connections."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         """Initialize the MCP manager."""
         self.clients: dict[str, McpSseClient] = {}
 
@@ -296,6 +294,6 @@ class McpManager:
         await self.connect_all()
         return self
 
-    async def __aexit__(self, exc_type, exc_val, exc_tb) -> None:
+    async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
         """Async context manager exit."""
         await self.close_all()

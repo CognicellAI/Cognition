@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import time
 from collections.abc import Callable
+from typing import cast
 
 from fastapi import Request, Response
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -31,7 +32,7 @@ class ObservabilityMiddleware(BaseHTTPMiddleware):
         endpoint = request.url.path
 
         try:
-            response = await call_next(request)
+            response = cast(Response, await call_next(request))
             status_code = response.status_code
 
             # Record metrics
@@ -89,7 +90,7 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
 
     async def dispatch(self, request: Request, call_next: Callable) -> Response:
         """Add security headers."""
-        response = await call_next(request)
+        response = cast(Response, await call_next(request))
 
         # Security headers
         response.headers["X-Content-Type-Options"] = "nosniff"
