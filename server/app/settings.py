@@ -42,8 +42,8 @@ class Settings(BaseSettings):
     llm_temperature: float | None = Field(default=None, alias="COGNITION_LLM_TEMPERATURE")
     llm_max_tokens: int | None = Field(default=20000, alias="COGNITION_LLM_MAX_TOKENS")
     # System prompt configuration with explicit type/value
-    # type: "file" | "inline" | "mlflow"
-    # value: prompt text, file name, or mlflow reference
+    # Config type: "file" | "inline" | "mlflow"
+    # Config value: prompt text, file name, or mlflow reference
     system_prompt: PromptConfig = Field(
         default_factory=lambda: PromptConfig(type="file", value="system"),
         alias="COGNITION_SYSTEM_PROMPT",
