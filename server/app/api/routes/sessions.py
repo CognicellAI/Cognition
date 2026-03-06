@@ -120,7 +120,7 @@ async def create_session(
         system_prompt_text = None
 
     config = SessionConfig(
-        provider=settings.llm_provider,
+        provider=settings.llm_provider,  # type: ignore[arg-type]
         model=settings.llm_model,
         temperature=getattr(settings, "llm_temperature", None),
         max_tokens=getattr(settings, "llm_max_tokens", None),
@@ -249,7 +249,7 @@ async def update_session(
         discovery = DiscoveryEngine(settings)
         provider = await discovery.get_provider_for_model(request.config.model)
         if provider:
-            request.config.provider = provider
+            request.config.provider = provider  # type: ignore[assignment]
 
     # Validate agent_name if provided
     if request.agent_name:

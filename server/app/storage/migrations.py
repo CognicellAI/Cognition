@@ -151,7 +151,7 @@ def get_migration_status(database_url: str) -> dict[str, Any]:
         if current_rev is None:
             pending = len(list(script.walk_revisions()))
         else:
-            pending = sum(1 for _ in script.walk_revisions(current_rev, latest_rev))
+            pending = len(list(script.walk_revisions(current_rev, latest_rev or "head")))
 
         return {
             "current_revision": current_rev,

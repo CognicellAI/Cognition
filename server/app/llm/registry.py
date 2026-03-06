@@ -73,8 +73,8 @@ def create_openai_compatible_model(config: Any, settings: Any) -> Any:
 
 def create_bedrock_model(config: Any, settings: Any) -> Any:
     """Factory for AWS Bedrock models."""
-    from langchain_aws import ChatBedrock
-    from botocore.config import Config
+    from langchain_aws import ChatBedrock  # type: ignore[import-not-found]
+    from botocore.config import Config  # type: ignore[import-untyped]
 
     aws_access_key = None
     aws_secret_key = None
@@ -88,20 +88,6 @@ def create_bedrock_model(config: Any, settings: Any) -> Any:
         read_timeout=120,  # 2 minute read timeout
         connect_timeout=10,  # 10 second connection timeout
     )
-
-    # Build kwargs for ChatBedrock
-    kwargs: dict[str, Any] = {
-        "model_id": config.model,
-        "region_name": getattr(config, "region", None) or settings.aws_region,
-        "aws_access_key_id": aws_access_key,
-        "aws_secret_access_key": aws_secret_key,
-        "config": botocore_config,
-    }
-    # Add max_tokens if configured
-    if hasattr(settings, "llm_max_tokens") and settings.llm_max_tokens is not None:
-        kwargs["max_tokens"] = settings.llm_max_tokens
-
-    return ChatBedrock(**kwargs)
 
     # Build kwargs for ChatBedrock
     kwargs: dict[str, Any] = {

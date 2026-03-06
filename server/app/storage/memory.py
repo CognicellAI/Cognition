@@ -65,6 +65,7 @@ class MemoryStorageBackend:
         config: SessionConfig,
         title: str | None = None,
         scopes: dict[str, str] | None = None,
+        agent_name: str = "default",
     ) -> Session:
         """Create a new session."""
         now = datetime.now(UTC).isoformat()
@@ -116,7 +117,9 @@ class MemoryStorageBackend:
         self,
         session_id: str,
         title: str | None = None,
+        status: str | None = None,
         config: SessionConfig | None = None,
+        agent_name: str | None = None,
     ) -> Session | None:
         """Update a session."""
         session = self._sessions.get(session_id)

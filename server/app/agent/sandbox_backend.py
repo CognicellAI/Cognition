@@ -232,14 +232,14 @@ class CognitionDockerSandboxBackend(FilesystemBackend, SandboxBackendProtocol):
         self._host_workspace = host_workspace
 
         # Lazy-init the Docker execution backend
-        self._docker_backend: object | None = None
+        self._docker_backend: Any | None = None
 
     @property
     def id(self) -> str:
         """Return the unique identifier for this sandbox."""
         return self._id
 
-    def _get_docker_backend(self) -> object:
+    def _get_docker_backend(self) -> Any:
         """Lazily initialize the DockerExecutionBackend.
 
         Returns:
@@ -275,7 +275,7 @@ class CognitionDockerSandboxBackend(FilesystemBackend, SandboxBackendProtocol):
         The workspace directory is volume-mounted so file changes are visible.
         """
         docker_backend = self._get_docker_backend()
-        result = docker_backend.execute(command)  # type: ignore[union-attr]
+        result = docker_backend.execute(command)
 
         return ExecuteResponse(
             output=result.output,

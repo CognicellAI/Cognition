@@ -462,7 +462,7 @@ class SessionAgentManager:
         """
         runtime = self._active_runtimes.get(session_id)
         if runtime:
-            success = await runtime.abort(thread_id)
+            success = bool(await runtime.abort(thread_id))
             logger.info("Session abort signaled", session_id=session_id, success=success)
             return success
         else:

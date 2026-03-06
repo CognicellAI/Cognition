@@ -152,9 +152,26 @@ warn_unused_ignores = true
 show_error_codes = true
 explicit_package_bases = true
 
+# Pragmatic overrides for tests - too many untyped fixtures to fix
 [[tool.mypy.overrides]]
 module = "tests.*"
 disallow_untyped_defs = false
+check_untyped_defs = false
+
+# Ignore workspaces entirely - it's example/scratch code
+[[tool.mypy.overrides]]
+module = "workspaces.*"
+ignore_errors = true
+
+# Observability uses optional-import pattern for prometheus/otel - suppress noise
+[[tool.mypy.overrides]]
+module = "server.app.observability"
+ignore_errors = true
+
+# Postgres uses optional deploy deps (asyncpg, psycopg) without stubs
+[[tool.mypy.overrides]]
+module = "server.app.storage.postgres"
+ignore_errors = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

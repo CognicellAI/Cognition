@@ -11,8 +11,10 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import AsyncGenerator
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi.responses import StreamingResponse
 
 from server.app.api.models import (
     ErrorResponse,
@@ -100,9 +102,9 @@ async def agent_event_stream(
         accumulated_content = []
         tool_calls = []
         current_tool_call = None
-        token_count = 0
-        model_used = None
-        metadata = {}
+        token_count: int | float = 0
+        model_used: str | None = None
+        metadata: dict[str, Any] = {}
 
         # Stream response using DeepAgents with multi-step support
         # Pass agent_manager to enable abort functionality
@@ -214,7 +216,7 @@ async def send_message(
     agent_manager: SessionAgentManager = Depends(get_agent_manager),
     rate_limiter: RateLimiter = Depends(lambda: get_rate_limiter()),
     scope: SessionScope = Depends(create_scope_dependency(get_settings())),
-):
+) -> StreamingResponse:
     """Send a message to the agent.
 
     Sends a message to the agent and streams back the response as Server-Sent Events.
@@ -288,7 +290,7 @@ async def send_message(
     )
 
     # Wrap the event stream to persist assistant message on completion
-    async def wrapped_event_stream():
+    async def wrapped_event_stream() -> AsyncGenerator[dict[str, Any], None]:
         assistant_data = None
         message_id = None
         async for event in event_stream:

@@ -245,7 +245,7 @@ async def create_cognition_agent(
     # The backend can be either CognitionLocalSandboxBackend or CognitionDockerSandboxBackend
     # Both provide execute() method and cwd property that ContextManager supports
     try:
-        context_manager = ContextManager(backend)
+        context_manager = ContextManager(backend)  # type: ignore[arg-type]
         context_manager.build_index()
 
         # Get relevant context for system prompt

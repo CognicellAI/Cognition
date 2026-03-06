@@ -12,7 +12,6 @@ from contextlib import contextmanager
 from typing import Any, TypeVar
 
 import structlog
-from prometheus_client import Counter, Histogram, start_http_server
 
 # Optional imports with fallbacks
 try:
@@ -21,9 +20,9 @@ try:
     PROMETHEUS_AVAILABLE = True
 except ImportError:
     PROMETHEUS_AVAILABLE = False
-    Counter = None
-    Histogram = None
-    start_http_server = None
+    Counter = None  # type: ignore[assignment,misc]
+    Histogram = None  # type: ignore[assignment,misc]
+    start_http_server = None  # type: ignore[assignment]
 
 try:
     from opentelemetry import trace
@@ -38,29 +37,29 @@ try:
         try:
             from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
         except ImportError:
-            OTLPSpanExporter = None
+            OTLPSpanExporter = None  # type: ignore[assignment,misc]
 
     # Instrumentation imports
     try:
         from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
     except ImportError:
-        FastAPIInstrumentor = None
+        FastAPIInstrumentor = None  # type: ignore[assignment,misc]
 
     try:
         from opentelemetry.instrumentation.langchain import LangchainInstrumentor
     except ImportError:
-        LangchainInstrumentor = None
+        LangchainInstrumentor = None  # type: ignore[assignment,misc]
 
     OPENTELEMETRY_AVAILABLE = True
 except ImportError:
     OPENTELEMETRY_AVAILABLE = False
-    trace = None
-    OTLPSpanExporter = None
-    Resource = None
-    TracerProvider = None
-    BatchSpanProcessor = None
-    FastAPIInstrumentor = None
-    LangchainInstrumentor = None
+    trace = None  # type: ignore[assignment]
+    OTLPSpanExporter = None  # type: ignore[assignment,misc]
+    Resource = None  # type: ignore[assignment,misc]
+    TracerProvider = None  # type: ignore[assignment,misc]
+    BatchSpanProcessor = None  # type: ignore[assignment,misc]
+    FastAPIInstrumentor = None  # type: ignore[assignment,misc]
+    LangchainInstrumentor = None  # type: ignore[assignment,misc]
 
 # Type variable for generic function decorator
 F = TypeVar("F", bound=Callable[..., Any])
@@ -91,20 +90,21 @@ if PROMETHEUS_AVAILABLE:
 else:
     # Dummy metrics that do nothing
     class DummyMetric:
-        def labels(self, **kwargs):
+        def labels(self, **kwargs: Any) -> DummyMetric:
+            """Return self for chaining."""
             return self
 
-        def inc(self, *args, **kwargs):
-            pass
+        def inc(self, *args: Any, **kwargs: Any) -> None:
+            """No-op."""
 
-        def observe(self, *args, **kwargs):
-            pass
+        def observe(self, *args: Any, **kwargs: Any) -> None:
+            """No-op."""
 
-    REQUEST_COUNT = DummyMetric()
-    REQUEST_DURATION = DummyMetric()
-    LLM_CALL_DURATION = DummyMetric()
-    TOOL_CALL_COUNT = DummyMetric()
-    SESSION_COUNT = DummyMetric()
+    REQUEST_COUNT = DummyMetric()  # type: ignore[assignment]
+    REQUEST_DURATION = DummyMetric()  # type: ignore[assignment]
+    LLM_CALL_DURATION = DummyMetric()  # type: ignore[assignment]
+    TOOL_CALL_COUNT = DummyMetric()  # type: ignore[assignment]
+    SESSION_COUNT = DummyMetric()  # type: ignore[assignment]
 
 
 def setup_tracing(
@@ -203,7 +203,7 @@ def setup_metrics(port: int = 9090, enabled: bool = True) -> None:
     start_http_server(port)
 
 
-def get_logger(name: str | None = None) -> structlog.stdlib.BoundLogger:
+def get_logger(name: str | None = None) -> structlog.BoundLogger:
     """Get a structured logger instance.
 
     Args:
@@ -212,7 +212,7 @@ def get_logger(name: str | None = None) -> structlog.stdlib.BoundLogger:
     Returns:
         Structured logger instance
     """
-    return structlog.get_logger(name)
+    return structlog.get_logger(name)  # type: ignore[return-value]
 
 
 def get_tracer(name: str) -> Any:
@@ -262,12 +262,12 @@ def traced(name: str | None = None) -> Callable[[F], F]:
             with tracer.start_as_current_span(span_name):
                 return func(*args, **kwargs)
 
-        return async_wrapper if asyncio.iscoroutinefunction(func) else sync_wrapper  # type: ignore
+        return async_wrapper if asyncio.iscoroutinefunction(func) else sync_wrapper  # type: ignore[return-value]
 
     return decorator
 
 
-def timed(metric: Histogram, labels: dict[str, str] | None = None) -> Callable[[F], F]:
+def timed(metric: Any, labels: dict[str, str] | None = None) -> Callable[[F], F]:
     """Decorator to measure function execution time.
 
     Args:
@@ -299,13 +299,13 @@ def timed(metric: Histogram, labels: dict[str, str] | None = None) -> Callable[[
                 duration = time.time() - start
                 metric.labels(**(labels or {})).observe(duration)
 
-        return async_wrapper if asyncio.iscoroutinefunction(func) else sync_wrapper  # type: ignore
+        return async_wrapper if asyncio.iscoroutinefunction(func) else sync_wrapper  # type: ignore[return-value]
 
     return decorator
 
 
 @contextmanager
-def span(name: str, attributes: dict[str, Any] | None = None):
+def span(name: str, attributes: dict[str, Any] | None = None) -> Any:
     """Context manager for creating a trace span.
 
     Args:

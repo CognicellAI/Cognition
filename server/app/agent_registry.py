@@ -674,7 +674,7 @@ class AgentRegistry:
                 # Already a tool instance (from @tool decorator)
                 self.register_tool(
                     name=name,
-                    factory=lambda obj=obj: obj,
+                    factory=lambda obj=obj: obj,  # type: ignore[misc]
                     source=str(py_file),
                 )
                 count += 1
@@ -719,7 +719,7 @@ class AgentRegistry:
                 # Register the middleware
                 self.register_middleware(
                     name=name,
-                    factory=lambda obj=obj: obj(),  # Instantiate
+                    factory=lambda obj=obj: obj(),  # type: ignore[misc]  # Instantiate
                     source=str(py_file),
                 )
                 count += 1

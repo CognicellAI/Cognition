@@ -72,7 +72,7 @@ class PromptConfig(BaseModel):
                 import mlflow
                 from mlflow.genai import load_prompt
 
-                return load_prompt(self.value)
+                return load_prompt(self.value)  # type: ignore[no-any-return]
             except ImportError:
                 raise RuntimeError("MLflow not installed. Install with: pip install mlflow[genai]")
             except Exception as e:

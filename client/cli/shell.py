@@ -39,14 +39,14 @@ HISTORY_FILE = Path.home() / ".cognition" / "history"
 class SessionStats:
     """Tracks real-time session telemetry."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.input_tokens = 0
         self.output_tokens = 0
         self.cost = 0.0
         self.model = "UNKNOWN"
         self.provider = "UNKNOWN"
 
-    def update(self, data: dict):
+    def update(self, data: dict[str, Any]) -> None:
         self.input_tokens += data.get("input_tokens", 0)
         self.output_tokens += data.get("output_tokens", 0)
         self.cost += data.get("estimated_cost", 0.0)
@@ -64,10 +64,10 @@ class CognitionShell:
         self.stats = SessionStats()
 
         # Cache for model completions
-        self.available_models = []
+        self.available_models: list[str] = []
 
         HISTORY_FILE.parent.mkdir(parents=True, exist_ok=True)
-        self.session = PromptSession(
+        self.session: PromptSession[str] = PromptSession(
             history=FileHistory(str(HISTORY_FILE)),
         )
 
@@ -120,7 +120,7 @@ class CognitionShell:
         )
         return Panel(grid, style="white", border_style="dim")
 
-    async def fetch_models(self):
+    async def fetch_models(self) -> None:
         """Fetch available models from the engine."""
         try:
             async with httpx.AsyncClient() as client:
@@ -137,7 +137,7 @@ class CognitionShell:
         except Exception:
             pass
 
-    async def switch_model(self, model_id: str):
+    async def switch_model(self, model_id: str) -> None:
         """Update the current session to use a different model."""
         url = f"{self.server_url}/sessions/{self.session_id}"
 
@@ -151,7 +151,7 @@ class CognitionShell:
         except Exception as e:
             console.print(f"[bold red]✗ BRAIN_LINK FAILURE:[/bold red] {e}")
 
-    async def run(self):
+    async def run(self) -> None:
         """Run the interactive shell loop."""
         await self.fetch_models()
 
@@ -278,7 +278,7 @@ class CognitionShell:
 
         return True
 
-    def show_help(self):
+    def show_help(self) -> None:
         table = Table(title="COGNITION_COMMAND_INDEX", border_style=NEON_PURPLE)
         table.add_column("COMMAND", style=NEON_CYAN)
         table.add_column("DESCRIPTION", style="white")

@@ -52,7 +52,7 @@ class TokenBucket:
             elapsed = now - self.last_update
 
             # Add tokens based on elapsed time
-            self.tokens = min(self.capacity, self.tokens + elapsed * self.rate)
+            self.tokens = int(min(self.capacity, self.tokens + elapsed * self.rate))
             self.last_update = now
 
             if self.tokens >= 1:

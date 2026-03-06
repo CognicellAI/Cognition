@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Any
 
 try:
-    import yaml
+    import yaml  # type: ignore[import-untyped]
 
     HAS_YAML = True
 except ImportError:
@@ -134,8 +134,6 @@ def _get_settings_schema() -> list[dict[str, Any]]:
 
     schema = []
     for field_name, field_info in Settings.model_fields.items():
-        field_info: FieldInfo
-
         # Get env var from alias
         env_var = field_info.alias
         if not env_var:
@@ -224,7 +222,6 @@ def _get_settings_schema() -> list[dict[str, Any]]:
             # Get default from factory if available
             default_factory = getattr(field_info, "default_factory", None)
             if default_factory is not None:
-                # type: ignore
                 default = default_factory() if callable(default_factory) else default_factory
 
         # Skip SecretStr fields from config generation (security)

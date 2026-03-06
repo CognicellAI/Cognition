@@ -327,5 +327,5 @@ class ProviderFallbackChain:
 def _get_model_id(settings: Any) -> str:
     """Extract the model ID from settings based on provider."""
     if settings.llm_provider == "bedrock":
-        return settings.bedrock_model_id
-    return settings.llm_model
+        return str(settings.bedrock_model_id)
+    return str(settings.llm_model)

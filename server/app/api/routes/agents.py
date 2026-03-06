@@ -15,7 +15,7 @@ async def list_agents() -> AgentList:
     if registry is None:
         raise HTTPException(status_code=503, detail="Agent registry not initialized")
 
-    agents = registry.list(include_hidden=False)
+    agents = registry.get_all(include_hidden=False)
     return AgentList(
         agents=[
             AgentResponse(
