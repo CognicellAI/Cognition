@@ -13,15 +13,19 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libpq-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# Create virtual environment
-RUN python -m venv /opt/venv
-ENV PATH="/opt/venv/bin:$PATH"
+# Install uv for fast, deterministic dependency installation
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 
-# Copy and install dependencies
-COPY pyproject.toml README.md .
-RUN pip install --no-cache-dir -e ".[all]"
+WORKDIR /app
 
-# Note: [all] now includes [deploy] which brings mlflow, docker SDK, asyncpg
+# Copy lockfile and project metadata first for layer caching
+COPY pyproject.toml uv.lock README.md ./
+
+# Install production deps only using the frozen lockfile (no test extras)
+# --no-dev: skip dev-only deps (ruff, mypy, pre-commit)
+# --no-install-project: deps only — source code is copied in the next stage
+# --extra openai,bedrock,deploy: include all production extras
+RUN uv sync --frozen --no-dev --no-install-project --extra openai --extra bedrock --extra deploy
 
 # Production stage
 FROM python:3.11-slim AS production
@@ -47,8 +51,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && apt-get clean
 
 # Copy virtual environment from builder
-COPY --from=builder /opt/venv /opt/venv
-ENV PATH="/opt/venv/bin:$PATH"
+COPY --from=builder /app/.venv /app/.venv
+ENV PATH="/app/.venv/bin:$PATH"
+# Add app root to PYTHONPATH so server/client/shared packages are importable
+ENV PYTHONPATH="/app"
 
 # Set working directory
 WORKDIR /app
@@ -67,8 +73,6 @@ RUN mkdir -p /workspace /home/cognition/.cache && \
 USER cognition
 
 # Set cache directories to avoid permission issues
-ENV UV_CACHE_DIR=/tmp/uv-cache
-ENV PIP_CACHE_DIR=/tmp/pip-cache
 ENV PYTHONDONTWRITEBYTECODE=1
 
 # Expose ports
