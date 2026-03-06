@@ -1,0 +1,1 @@
+"""Cognition CLI package."""
