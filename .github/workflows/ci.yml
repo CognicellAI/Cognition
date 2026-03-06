@@ -13,6 +13,7 @@ env:
   IMAGE_NAME: ${{ github.repository }}
 
 jobs:
+  # ─── Tests ────────────────────────────────────────────────────────────────
   test:
     runs-on: ubuntu-latest
     strategy:
@@ -44,12 +45,13 @@ jobs:
       - name: Run linting
         run: uv run ruff check .
 
+  # ─── PyPI publish ─────────────────────────────────────────────────────────
   publish-pypi:
     needs: test
     if: github.event_name == 'release'
     runs-on: ubuntu-latest
     permissions:
-      id-token: write # Mandatory for trusted publishing
+      id-token: write
       contents: read
 
     steps:
@@ -71,30 +73,56 @@ jobs:
         with:
           skip-existing: true
 
-  build-images:
+  # ─── Cache warm-up (every push to main) ───────────────────────────────────
+  # Builds without pushing on every push to main so that layer caches are
+  # warm when a release fires. Scoped per-image to avoid eviction conflicts.
+  warm-cache:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - dockerfile: ./Dockerfile
+            scope: cognition-amd64
+          - dockerfile: ./Dockerfile.sandbox
+            scope: cognition-sandbox-amd64
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Warm layer cache for ${{ matrix.scope }}
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ${{ matrix.dockerfile }}
+          platforms: linux/amd64
+          push: false
+          cache-from: type=gha,scope=${{ matrix.scope }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.scope }}
+
+  # ─── Build amd64 images (native x86 runner) ───────────────────────────────
+  build-amd64:
     needs: test
     if: github.event_name == 'release'
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      packages: write # Required to push to GHCR
+      packages: write
 
     strategy:
       matrix:
         include:
           - dockerfile: ./Dockerfile
             image-suffix: ""
-            platform: linux/amd64,linux/arm64
+            scope: cognition-amd64
           - dockerfile: ./Dockerfile.sandbox
             image-suffix: "-sandbox"
-            platform: linux/amd64,linux/arm64
+            scope: cognition-sandbox-amd64
 
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
+      - uses: actions/checkout@v4
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -105,6 +133,97 @@ jobs:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push amd64 image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ${{ matrix.dockerfile }}
+          platforms: linux/amd64
+          push: true
+          # Push with an arch-specific tag; merged into the multi-arch manifest later
+          tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}${{ matrix.image-suffix }}:${{ github.sha }}-amd64
+          cache-from: type=gha,scope=${{ matrix.scope }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.scope }}
+          build-args: |
+            BUILD_DATE=${{ github.event.release.created_at }}
+            VCS_REF=${{ github.sha }}
+            VERSION=${{ github.event.release.tag_name }}
+
+  # ─── Build arm64 images (native ARM runner — no QEMU) ─────────────────────
+  build-arm64:
+    needs: test
+    if: github.event_name == 'release'
+    runs-on: ubuntu-24.04-arm  # Native ARM64 — eliminates QEMU emulation overhead
+    permissions:
+      contents: read
+      packages: write
+
+    strategy:
+      matrix:
+        include:
+          - dockerfile: ./Dockerfile
+            image-suffix: ""
+            scope: cognition-arm64
+          - dockerfile: ./Dockerfile.sandbox
+            image-suffix: "-sandbox"
+            scope: cognition-sandbox-arm64
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push arm64 image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ${{ matrix.dockerfile }}
+          platforms: linux/arm64
+          push: true
+          tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}${{ matrix.image-suffix }}:${{ github.sha }}-arm64
+          cache-from: type=gha,scope=${{ matrix.scope }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.scope }}
+          build-args: |
+            BUILD_DATE=${{ github.event.release.created_at }}
+            VCS_REF=${{ github.sha }}
+            VERSION=${{ github.event.release.tag_name }}
+
+  # ─── Merge amd64 + arm64 into final multi-arch manifests ──────────────────
+  # Combines the two per-arch images into a single manifest list with all
+  # release tags (semver, major.minor, latest).
+  merge-manifests:
+    needs: [build-amd64, build-arm64]
+    if: github.event_name == 'release'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    strategy:
+      matrix:
+        include:
+          - image-suffix: ""
+          - image-suffix: "-sandbox"
+
+    steps:
+      - name: Log in to Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
 
       - name: Extract metadata
         id: meta
@@ -117,18 +236,15 @@ jobs:
             type=semver,pattern={{major}}
             type=raw,value=latest,enable=${{ github.event.release.prerelease == false }}
 
-      - name: Build and push Docker image
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: ${{ matrix.dockerfile }}
-          platforms: ${{ matrix.platform }}
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-          build-args: |
-            BUILD_DATE=${{ github.event.release.created_at }}
-            VCS_REF=${{ github.sha }}
-            VERSION=${{ github.event.release.tag_name }}
+      - name: Create multi-arch manifest
+        # Combine the per-arch images into a single manifest list.
+        # Each tag from metadata-action is applied to the merged manifest.
+        run: |
+          IMAGE="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}${{ matrix.image-suffix }}"
+          AMD64="${IMAGE}:${{ github.sha }}-amd64"
+          ARM64="${IMAGE}:${{ github.sha }}-arm64"
+
+          # Build -t flag list from metadata tags
+          TAGS=$(echo "${{ steps.meta.outputs.tags }}" | awk '{print "-t " $0}' | tr '\n' ' ')
+
+          docker buildx imagetools create $TAGS "$AMD64" "$ARM64"
