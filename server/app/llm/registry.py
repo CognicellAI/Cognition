@@ -35,11 +35,17 @@ def create_openai_model(config: Any, settings: Any) -> Any:
     if not api_key and hasattr(settings, "openai_api_key") and settings.openai_api_key:
         api_key = settings.openai_api_key.get_secret_value()
 
-    return ChatOpenAI(
-        model=config.model,
-        api_key=api_key,
-        base_url=getattr(config, "base_url", None) or settings.openai_api_base,
-    )
+    # Build kwargs for ChatOpenAI
+    kwargs: dict[str, Any] = {
+        "model": config.model,
+        "api_key": api_key,
+        "base_url": getattr(config, "base_url", None) or settings.openai_api_base,
+    }
+    # Add max_tokens if configured
+    if hasattr(settings, "llm_max_tokens") and settings.llm_max_tokens is not None:
+        kwargs["max_tokens"] = settings.llm_max_tokens
+
+    return ChatOpenAI(**kwargs)
 
 
 def create_openai_compatible_model(config: Any, settings: Any) -> Any:
@@ -52,11 +58,17 @@ def create_openai_compatible_model(config: Any, settings: Any) -> Any:
 
     base_url = getattr(config, "base_url", None) or settings.openai_compatible_base_url
 
-    return ChatOpenAI(
-        model=config.model,
-        api_key=api_key,
-        base_url=base_url,
-    )
+    # Build kwargs for ChatOpenAI
+    kwargs: dict[str, Any] = {
+        "model": config.model,
+        "api_key": api_key,
+        "base_url": base_url,
+    }
+    # Add max_tokens if configured
+    if hasattr(settings, "llm_max_tokens") and settings.llm_max_tokens is not None:
+        kwargs["max_tokens"] = settings.llm_max_tokens
+
+    return ChatOpenAI(**kwargs)
 
 
 def create_bedrock_model(config: Any, settings: Any) -> Any:
@@ -77,13 +89,33 @@ def create_bedrock_model(config: Any, settings: Any) -> Any:
         connect_timeout=10,  # 10 second connection timeout
     )
 
-    return ChatBedrock(
-        model_id=config.model,
-        region_name=getattr(config, "region", None) or settings.aws_region,
-        aws_access_key_id=aws_access_key,
-        aws_secret_access_key=aws_secret_key,
-        config=botocore_config,
-    )
+    # Build kwargs for ChatBedrock
+    kwargs: dict[str, Any] = {
+        "model_id": config.model,
+        "region_name": getattr(config, "region", None) or settings.aws_region,
+        "aws_access_key_id": aws_access_key,
+        "aws_secret_access_key": aws_secret_key,
+        "config": botocore_config,
+    }
+    # Add max_tokens if configured
+    if hasattr(settings, "llm_max_tokens") and settings.llm_max_tokens is not None:
+        kwargs["max_tokens"] = settings.llm_max_tokens
+
+    return ChatBedrock(**kwargs)
+
+    # Build kwargs for ChatBedrock
+    kwargs: dict[str, Any] = {
+        "model_id": config.model,
+        "region_name": getattr(config, "region", None) or settings.aws_region,
+        "aws_access_key_id": aws_access_key,
+        "aws_secret_access_key": aws_secret_key,
+        "config": botocore_config,
+    }
+    # Add max_tokens if configured
+    if hasattr(settings, "llm_max_tokens") and settings.llm_max_tokens is not None:
+        kwargs["max_tokens"] = settings.llm_max_tokens
+
+    return ChatBedrock(**kwargs)
 
 
 def create_mock_model(config: Any, settings: Any) -> Any:

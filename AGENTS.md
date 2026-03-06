@@ -149,9 +149,6 @@ An agent definition (tools, prompt, skills, middleware) must be sufficient to ge
 * Multi-user scoping
 * Evaluation
 
-The FIRST-PRINCIPLE-EVALUTION.md document  is the architectural source of truth.
-
-All development must move the system toward that architecture.
 
 ---
 
@@ -259,51 +256,7 @@ A feature is not complete unless:
 
 ---
 
-# 3. Roadmap Priority Enforcement
-
-## P0 – Table Stakes (Must Complete First)
-
-* Message persistence
-* Remove `shell=True`
-* Multi-user harness
-* Wire rate limiter
-* Functional abort
-* Enable MLflow autolog
-
-No new features beyond bug fixes are allowed until P0 is complete.
-
----
-
-## P1 – Production Ready
-
-* Unified StorageBackend
-* Postgres support
-* Docker sandbox backend
-* Declarative AgentDefinition
-* AgentRuntime protocol
-* Alembic migrations
-
----
-
-## P2 – Robustness
-
-* SSE reconnection
-* Circuit breaker + retries
-* Evaluation pipeline foundation
-* Proper token accounting
-
----
-
-## P3 – Full Vision
-
-* MLflow evaluation workflows - see MLFLOW-INTEROPERABILITY.md
-* Prompt registry
-* Cloud execution backends
-* Human feedback loop
-
----
-
-# 4. Enforcement Protocol
+# 3. Enforcement Protocol
 
 Before merging any PR, agents must verify:
 

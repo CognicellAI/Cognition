@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import ast
 import importlib
+import importlib.util
 import inspect
 import sys
 from collections.abc import Callable

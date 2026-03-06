@@ -40,7 +40,7 @@ class Settings(BaseSettings):
     )
     llm_model: str = Field(default="gpt-4o", alias="COGNITION_LLM_MODEL")
     llm_temperature: float | None = Field(default=None, alias="COGNITION_LLM_TEMPERATURE")
-    llm_max_tokens: int | None = Field(default=None, alias="COGNITION_LLM_MAX_TOKENS")
+    llm_max_tokens: int | None = Field(default=20000, alias="COGNITION_LLM_MAX_TOKENS")
     # System prompt configuration with explicit type/value
     # type: "file" | "inline" | "mlflow"
     # value: prompt text, file name, or mlflow reference
@@ -156,6 +156,12 @@ class Settings(BaseSettings):
     agent_skills: list[str] = Field(default=[".cognition/skills/"], alias="COGNITION_AGENT_SKILLS")
     agent_subagents: list[dict[str, Any]] = Field(default=[], alias="COGNITION_AGENT_SUBAGENTS")
     agent_interrupt_on: dict[str, bool] = Field(default={}, alias="COGNITION_AGENT_INTERRUPT_ON")
+    agent_recursion_limit: int = Field(
+        default=1000,
+        alias="COGNITION_AGENT_RECURSION_LIMIT",
+        gt=0,
+        description="Maximum recursion depth for agent ReACT loops. Default 1000 allows ~500 tool call cycles.",
+    )
 
     # Persistence settings
     persistence_backend: Literal["sqlite", "memory", "postgres"] = Field(
