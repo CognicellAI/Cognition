@@ -12,7 +12,21 @@
 #   - /workspace mount point for project files
 #   - Minimal footprint (~150MB)
 
+ARG VERSION=dev
+ARG BUILD_DATE
+ARG VCS_REF
+
 FROM python:3.11-slim
+
+# OCI Annotations / Labels
+LABEL org.opencontainers.image.title="Cognition Sandbox"
+LABEL org.opencontainers.image.description="Isolated execution environment for Cognition agent sessions"
+LABEL org.opencontainers.image.url="https://github.com/CognicellAI/Cognition"
+LABEL org.opencontainers.image.source="https://github.com/CognicellAI/Cognition"
+LABEL org.opencontainers.image.version="${VERSION}"
+LABEL org.opencontainers.image.created="${BUILD_DATE}"
+LABEL org.opencontainers.image.revision="${VCS_REF}"
+LABEL org.opencontainers.image.licenses="MIT"
 
 # Install common development tools agents may need
 RUN apt-get update && apt-get install -y --no-install-recommends \

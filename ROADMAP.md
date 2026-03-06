@@ -40,7 +40,23 @@ See AGENTS.md for category definitions, DoD requirements, and precedence rules.
 
 | Package | From | To | Breaking Changes | Status |
 |---------|------|-----|------------------|--------|
-| | | | | |
+| CI/CD Docker Images | N/A | N/A | None | Completed |
+
+### CI/CD Docker Image Builds
+
+**Description**: Automated Docker image builds on GitHub releases
+
+**Changes**:
+- Build `ghcr.io/cognicellai/cognition` and `ghcr.io/cognicellai/cognition-sandbox` images
+- Multi-arch support: linux/amd64 + linux/arm64
+- Tagged with: semver (v1.2.3), major.minor (v1.2), major (v1), and latest
+- OCI labels for version, build date, and commit SHA
+- GitHub Container Registry (ghcr.io) integration
+
+**Files Modified**:
+- `.github/workflows/ci.yml` - Added build-images job
+- `Dockerfile` - Added OCI labels and build args
+- `Dockerfile.sandbox` - Added OCI labels and build args
 
 ---
 
