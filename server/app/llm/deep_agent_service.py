@@ -182,7 +182,12 @@ class DeepAgentStreamingService:
             )
 
             # Create runtime and register for abort tracking
-            runtime = DeepAgentRuntime(agent=agent, checkpointer=checkpointer, thread_id=thread_id)
+            runtime = DeepAgentRuntime(
+                agent=agent,
+                checkpointer=checkpointer,
+                thread_id=thread_id,
+                recursion_limit=llm_settings.agent_recursion_limit,
+            )
             if manager:
                 manager.register_runtime(session_id, runtime)
 

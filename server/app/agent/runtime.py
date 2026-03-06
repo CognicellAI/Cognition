@@ -242,6 +242,7 @@ class DeepAgentRuntime:
         agent: Any,
         checkpointer: BaseCheckpointSaver,
         thread_id: str | None = None,
+        recursion_limit: int = 1000,
     ):
         """Initialize the DeepAgentRuntime.
 
@@ -249,10 +250,12 @@ class DeepAgentRuntime:
             agent: The Deep Agent instance from create_cognition_agent
             checkpointer: Checkpoint saver for state persistence
             thread_id: Optional default thread ID
+            recursion_limit: Maximum recursion depth for agent ReACT loops
         """
         self._agent = agent
         self._checkpointer = checkpointer
         self._thread_id = thread_id
+        self._recursion_limit = recursion_limit
         self._aborted: set[str] = set()
 
     async def astream_events(
@@ -289,7 +292,7 @@ class DeepAgentRuntime:
             else:
                 agent_input = input_data
 
-            config = {"configurable": {"thread_id": tid}}
+            config = {"configurable": {"thread_id": tid}, "recursion_limit": self._recursion_limit}
 
             # Stream events from Deep Agents
             async for event in self._agent.astream_events(
@@ -393,7 +396,7 @@ class DeepAgentRuntime:
             else:
                 agent_input = input_data
 
-            config = {"configurable": {"thread_id": tid}}
+            config = {"configurable": {"thread_id": tid}, "recursion_limit": self._recursion_limit}
 
             # Invoke the agent
             result = await self._agent.ainvoke(agent_input, config=config)
@@ -634,6 +637,7 @@ async def create_agent_runtime(
         agent=agent,
         checkpointer=checkpointer,
         thread_id=thread_id,
+        recursion_limit=settings.agent_recursion_limit,
     )
 
 

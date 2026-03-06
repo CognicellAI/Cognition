@@ -44,6 +44,7 @@ class AgentConfig(BaseModel):
 
     temperature: float | None = Field(default=None, ge=0.0, le=2.0)
     max_tokens: int | None = Field(default=None, gt=0)
+    recursion_limit: int | None = Field(default=None, gt=0)
     provider: str | None = Field(default=None)
     model: str | None = Field(default=None)
     timeout_seconds: float | None = Field(default=None, gt=0)

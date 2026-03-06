@@ -315,27 +315,6 @@ async def create_cognition_agent(
             logger.error("Failed to initialize MCP tools", error=str(e))
             # Continue without MCP tools rather than failing entirely
 
-    # Initialize MCP tools if configurations provided
-    if mcp_configs:
-        mcp_manager = McpManager()
-        for config in mcp_configs:
-            if config.enabled:
-                try:
-                    mcp_manager.add_server(config)
-                except ValueError as e:
-                    logger.warning("Failed to add MCP server", server=config.name, error=str(e))
-
-        try:
-            await mcp_manager.connect_all()
-            all_mcp_tools = await mcp_manager.get_all_tools()
-            for server_name, tool_infos in all_mcp_tools.items():
-                mcp_tools = create_mcp_tools(mcp_manager.clients[server_name], tool_infos)
-                agent_tools.extend(mcp_tools)
-                logger.info("Added MCP tools", server=server_name, count=len(mcp_tools))
-        except Exception as e:
-            logger.error("Failed to initialize MCP tools", error=str(e))
-            # Continue without MCP tools rather than failing entirely
-
     agent_middleware.extend(
         [
             CognitionObservabilityMiddleware(),
