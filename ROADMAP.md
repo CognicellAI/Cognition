@@ -2,16 +2,56 @@
 
 This roadmap tracks the path toward Cognition's "batteries-included AI backend" vision.
 
+All work is categorized by type: Security Fixes, Bug Fixes, Performance Improvements, Dependency Updates, and Features (P0-P3 tiers).
+
+---
+
+## Work Categories
+
+See AGENTS.md for category definitions, DoD requirements, and precedence rules.
+
+---
+
+## Security Fixes
+
+| Date | Description | Severity | Layer | Status |
+|------|-------------|----------|-------|--------|
+| | | | | |
+
+---
+
+## Bug Fixes
+
+| Date | Description | Issue | Layer | Status |
+|------|-------------|-------|-------|--------|
+| | | | | |
+
+---
+
+## Performance Improvements
+
+| Description | Target Metric | Before | After | Layer | Status |
+|-------------|---------------|--------|-------|-------|--------|
+| | | | | | |
+
+---
+
+## Dependency Updates
+
+| Package | From | To | Breaking Changes | Status |
+|---------|------|-----|------------------|--------|
+| | | | | |
+
+---
+
+# Features (P0-P3 Tiers)
+
 ## Priority Definitions
 
-- **P0 (Table Stakes)**: Must-have for basic functionality. Blocks all other work.
+- **P0 (Table Stakes)**: Must-have for basic functionality. Blocks other feature work.
 - **P1 (Production-Ready)**: Required for safe, reliable production use.
 - **P2 (Robustness)**: Edge cases, resilience, scalability improvements.
 - **P3 (Full Vision)**: Advanced features and complete architectural vision.
-
-## Current Status
-
-See the sections below for each priority tier.
 
 ---
 
@@ -94,9 +134,11 @@ See the sections below for each priority tier.
 
 Per AGENTS.md requirements:
 
-1. **ROADMAP.md Is Required**: This file must exist and reflect current priorities.
-2. **Agents Must Adhere**: No implementing features not listed here; no skipping priorities.
-3. **Roadmap Precedence**: P0 blocks P1; P1 blocks P2; P2 blocks P3. Security fixes override all.
-4. **Update Required Before**: Major work, architectural changes, priority shifts.
+1. **ROADMAP.md Structure**: Organized by work category (Security, Bug, Performance, Dependency, Features).
+2. **Work Categories**: All six categories tracked here with appropriate detail levels.
+3. **Precedence**: Security fixes override all. Bug fixes > Features. Performance/Dependency can proceed alongside Features. Feature tiers: P0 > P1 > P2 > P3.
+4. **When to Update**:
+   - Features/Architectural: Before starting work
+   - Security/Bug/Performance/Dependency: As part of PR
 
 **Last Updated**: 2026-03-05

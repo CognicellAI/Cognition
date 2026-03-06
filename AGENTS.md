@@ -152,73 +152,120 @@ An agent definition (tools, prompt, skills, middleware) must be sufficient to ge
 
 ---
 
-# 0. Mandatory Roadmap Governance
+# 0. Work Categories & Roadmap Governance
 
-## ROADMAP.md Is Required
+Cognition is past MVP. The project now operates on a **category-based** model that supports continual improvement: security patches, bug fixes, performance work, dependency updates, and features all flow through ROADMAP.md with appropriate rigor for each type.
 
-A `ROADMAP.md` file must exist at the repository root.
+## Work Categories
 
-It must:
+All work falls into one of six categories. Each has different ROADMAP.md requirements and Definition of Done criteria.
 
-1. Reflect the priority structure defined in the First Principles Evaluation:
+| Category | ROADMAP Entry | Priority | Can Proceed Without Full Planning? |
+|----------|--------------|----------|-----------------------------------|
+| **Security Fix** | Line item (severity + layer) | **Immediate** — overrides all | Yes, always |
+| **Bug Fix** | Line item (description + layer) | **High** — next available cycle | Yes, always |
+| **Performance Improvement** | Standard entry (description + benchmarks) | **Medium-High** | Yes, unless requires architectural change |
+| **Dependency / Library Update** | Line item (package + versions) | **Medium** — batch when practical | Yes, unless breaking changes require planning |
+| **Feature / Enhancement** | Full entry (criteria + layer + effort + deps) | Per roadmap tier (P0-P3) | **No** — must have roadmap entry first |
+| **Architectural Change** | Full entry + migration plan | Per roadmap tier (P0-P3) | **No** — must have roadmap entry first |
 
-   * P0 (Table Stakes)
-   * P1 (Production-Ready)
-   * P2 (Robustness)
-   * P3 (Full Vision)
+### Category Details
 
-2. Break each priority into:
+**Security Fix**
+- Address vulnerabilities, exposure of secrets, or attack vectors
+- Severity: Critical, High, Medium, Low
+- ROADMAP.md entry: brief description + severity + affected layer
+- Can be merged immediately after review, bypassing feature roadmap
 
-   * Concrete tasks
-   * Layer assignment (1–7)
-   * Acceptance criteria
-   * Estimated effort
-   * Dependencies
+**Bug Fix**
+- Correct incorrect behavior, crashes, or regressions
+- ROADMAP.md entry: brief description + link to issue/reproduction + affected layer
+- Should include test that reproduces the bug and verifies the fix
 
-3. Be updated before:
+**Performance Improvement**
+- Optimize latency, throughput, memory usage, or resource consumption
+- Must include benchmark or measurement (before/after)
+- ROADMAP.md entry: description + target metric + affected layer + effort estimate
+- Should not degrade code readability without strong justification
 
-   * Starting major work
-   * Merging architectural changes
-   * Changing priority direction
+**Dependency / Library Update**
+- Upgrade external packages, frameworks, or tools
+- ROADMAP.md entry: package name + old version → new version + breaking changes (if any)
+- Breaking changes that require code modifications bump this to "Feature" category
+- Lock file (`uv.lock`) must be updated
+
+**Feature / Enhancement**
+- New capabilities, user-facing improvements, or API additions
+- Must have full ROADMAP.md entry before work begins:
+  - Concrete task description
+  - Layer assignment (1–7)
+  - Acceptance criteria
+  - Estimated effort
+  - Dependencies
+
+**Architectural Change**
+- Refactoring that changes layer boundaries, data flow, or major abstractions
+- Must have full ROADMAP.md entry plus migration plan if breaking
+- Follows feature roadmap tier ordering (P0-P3)
 
 ---
 
-## Agents Must Adhere to ROADMAP.md
+## ROADMAP.md Structure
 
-Agents are not permitted to:
+ROADMAP.md must exist at the repository root. It is organized by work category:
 
-* Implement large features not listed in ROADMAP.md
-* Skip P0 work to build P2/P3 features
-* Add architectural scope creep without roadmap update
-* Introduce new subsystems without a roadmap entry
+```markdown
+# Cognition Roadmap
 
-If a change is not in ROADMAP.md:
+## Security Fixes
+| Date | Description | Severity | Layer | Status |
+|------|-------------|----------|-------|--------|
+| ...
 
-* The agent must first update ROADMAP.md
-* Justify priority placement
-* Then proceed
+## Bug Fixes
+| Date | Description | Issue | Layer | Status |
+|------|-------------|-------|-------|--------|
+| ...
 
-Roadmap discipline is mandatory.
+## Performance Improvements
+| Description | Target Metric | Before | After | Layer | Status |
+|-------------|---------------|--------|-------|-------|--------|
+| ...
+
+## Dependency Updates
+| Package | From | To | Breaking Changes | Status |
+|---------|------|-----|------------------|--------|
+| ...
+
+## Features (P0-P3 Tiers)
+### P0: Table Stakes (Blocking)
+...
+
+### P1: Production-Ready
+...
+
+### P2: Robustness
+...
+
+### P3: Full Vision
+...
+```
+
+### When to Update ROADMAP.md
+
+- **Before starting work**: Features and architectural changes
+- **As part of PR**: Security fixes, bug fixes, performance improvements, dependency updates
+- **Before merging architectural changes**: Ensure migration plan is documented
 
 ---
 
-## Roadmap Precedence Rules
+## Precedence Rules
 
-1. P0 blocks P1
-2. P1 blocks P2
-3. P2 blocks P3
-4. Security fixes override all priorities
-5. Architecture corrections override feature work
-
-No “cool feature” work is allowed while:
-
-* Messages are in-memory
-* `shell=True` exists
-* Multi-user isolation is missing
-* Abort is a stub
-* Postgres silently falls back to SQLite
-
-These are roadmap violations.
+1. **Security fixes override all other work**
+2. **Bug fixes take priority over new features**
+3. **Architectural corrections take priority over feature work**
+4. **Performance improvements and dependency updates can proceed alongside feature work**
+5. **Features and architectural changes follow roadmap tier ordering (P0 > P1 > P2 > P3)**
 
 ---
 
@@ -242,17 +289,45 @@ No lateral or upward imports.
 
 ---
 
-# 2. Definition of Done (DoD)
+# 2. Definition of Done (Tiered by Category)
 
-A feature is not complete unless:
+A PR is not complete until its category-specific DoD is met:
 
-* It is listed in ROADMAP.md
-* It has a clear layer assignment
-* It has observability
-* It respects persistence boundaries
-* It respects multi-user isolation
-* It has tests
-* It does not introduce architectural drift
+### Security Fixes
+- [ ] Tests verifying the vulnerability is addressed
+- [ ] No regressions (existing tests pass)
+- [ ] Respects layer boundaries
+
+### Bug Fixes
+- [ ] Tests reproducing and verifying the fix
+- [ ] No regressions (existing tests pass)
+- [ ] Respects layer boundaries
+
+### Performance Improvements
+- [ ] Tests verifying no regressions
+- [ ] Benchmark or measurement demonstrating improvement (before/after)
+- [ ] Respects layer boundaries
+- [ ] Does not degrade readability without justification
+
+### Dependency / Library Updates
+- [ ] Full test suite passes
+- [ ] No regressions
+- [ ] Breaking changes documented and handled (if any)
+- [ ] Lock file (`uv.lock`) updated
+
+### Features / Enhancements
+- [ ] Listed in ROADMAP.md with acceptance criteria
+- [ ] Clear layer assignment
+- [ ] Has observability hooks (where applicable)
+- [ ] Respects persistence boundaries
+- [ ] Respects multi-user isolation boundaries
+- [ ] Has tests
+- [ ] Does not introduce architectural drift
+
+### Architectural Changes
+- [ ] Meets full Feature DoD, plus:
+- [ ] Migration path documented (if breaking)
+- [ ] Layer dependency direction preserved
 
 ---
 
@@ -260,16 +335,17 @@ A feature is not complete unless:
 
 Before merging any PR, agents must verify:
 
-* Is this task in ROADMAP.md?
-* Is it the correct priority tier?
-* Does it respect layer boundaries?
-* Does it move us toward the architecture in ?
+- [ ] Work category is identified (security / bug / performance / dependency / feature / architectural)
+- [ ] ROADMAP.md is updated appropriately for the category
+- [ ] Layer boundaries are respected
+- [ ] Tests pass for the category
+- [ ] Category-specific Definition of Done is met
 
-If any answer is “no,” the PR must be revised.
+If any answer is "no," the PR must be revised.
 
 ---
 
-# 5. Architectural North Star
+# 4. Architectural North Star
 
 Cognition must eventually allow:
 
