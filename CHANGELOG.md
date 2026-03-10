@@ -7,6 +7,53 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [0.2.0] — 2026-03-10
+
+### Features
+
+- **MCP server wiring**: `COGNITION_MCP_SERVERS` env var / `mcp_servers` YAML key
+  configures remote MCP servers. Entries are validated (HTTP/HTTPS only) at startup.
+  Tools from MCP servers are now available to the agent in all execution paths.
+- **Bedrock IAM role support**: Ambient credentials (instance profile, ECS task role,
+  Lambda, IRSA) work without any key configuration. `COGNITION_BEDROCK_ROLE_ARN`
+  enables cross-account role assumption. `AWS_SESSION_TOKEN` supported for STS
+  temporary credentials.
+- **Configurable `recursion_limit` and `max_tokens` fully wired**: Both settings are
+  now enforced end-to-end — globally via `COGNITION_AGENT_RECURSION_LIMIT` /
+  `COGNITION_LLM_MAX_TOKENS`, per-agent via `AgentDefinition.config`, and
+  per-session via `SessionConfig` (including storage round-trip in all backends).
+- **`agent.recursion_limit`** added to `config.example.yaml`.
+
+### Bug Fixes
+
+- **Dead settings removed**: 11 unenforced fields (`ollama_model`, `ollama_base_url`,
+  `max_sessions`, `session_timeout_seconds`, `llm_temperature`, `docker_timeout`,
+  `protected_paths`, `prompt_source`, `prompt_fallback_to_local`, `prompts_dir`,
+  `test_llm_mode`) removed from `Settings` to eliminate silent no-ops.
+- **`.env` stale variables removed**: `LLM_PROVIDER`, `BEDROCK_MODEL_ID`,
+  `USE_BEDROCK_IAM_ROLE`, `AGENT_BACKEND_ROUTES` were silently ignored due to wrong
+  prefixes/names; removed from `.env.example`.
+- **Missing `await` on `create_cognition_agent`**: Fixed in `runtime.py` and
+  `session_manager.py` — coroutine was stored unresolved, silently breaking MCP and
+  any execution path through those callers.
+- **Rate limiter now enforced**: `COGNITION_RATE_LIMIT_PER_MINUTE` and
+  `COGNITION_RATE_LIMIT_BURST` were reported in `/config` but ignored by the
+  `RateLimiter`; now wired correctly in `main.py`.
+- **Streaming content normalisation**: `DeepAgent streaming error: can only
+  concatenate str (not "list") to str` — root cause was Bedrock Converse streaming
+  deltas returning `list[dict]` without a `"type"` key. Fixed with a custom
+  `_content_to_str()` in `runtime.py` that handles all three content formats (str,
+  typed list, typeless Bedrock delta). `TokenEvent.__post_init__` added as a
+  last-resort coercion barrier so the bug cannot recur from any future call site.
+- **Bedrock partial-key validation**: Supplying only one of `AWS_ACCESS_KEY_ID` /
+  `AWS_SECRET_ACCESS_KEY` now raises a clear `ValueError` at startup instead of
+  silently producing a broken `ChatBedrock` instance.
+- **`SessionConfig.recursion_limit` missing from storage backends**: All three
+  backends (SQLite, Postgres, Memory) now serialize, merge, and deserialize
+  `recursion_limit` correctly.
+
+---
+
 ## [0.1.1] — 2026-03-06
 
 ### Performance

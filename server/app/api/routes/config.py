@@ -149,12 +149,6 @@ async def get_config(
             "host": yaml_config.get("server", {}).get("host", settings.host),
             "port": yaml_config.get("server", {}).get("port", settings.port),
             "log_level": yaml_config.get("server", {}).get("log_level", settings.log_level),
-            "max_sessions": yaml_config.get("server", {}).get(
-                "max_sessions", settings.max_sessions
-            ),
-            "session_timeout_seconds": yaml_config.get("server", {}).get(
-                "session_timeout_seconds", settings.session_timeout_seconds
-            ),
             "scoping_enabled": settings.scoping_enabled,
         },
         llm={

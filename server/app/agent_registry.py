@@ -761,6 +761,7 @@ class AgentRegistry:
         middleware = self.create_middleware()
 
         # Create the agent
+        effective_settings = settings or self._settings
         agent = create_cognition_agent(
             project_path=project_path,
             model=model,
@@ -768,7 +769,8 @@ class AgentRegistry:
             system_prompt=system_prompt,
             tools=tools if tools else None,
             middleware=middleware if middleware else None,
-            settings=settings or self._settings,
+            settings=effective_settings,
+            mcp_configs=effective_settings.mcp_server_configs if effective_settings else None,
         )
 
         # If session_id provided, associate agent with session

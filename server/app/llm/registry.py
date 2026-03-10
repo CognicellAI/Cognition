@@ -72,16 +72,23 @@ def create_openai_compatible_model(config: Any, settings: Any) -> Any:
 
 
 def create_bedrock_model(config: Any, settings: Any) -> Any:
-    """Factory for AWS Bedrock models."""
+    """Factory for AWS Bedrock models.
+
+    Credential resolution order:
+    1. Role assumption: if ``settings.bedrock_role_arn`` is set, Cognition calls
+       ``sts:AssumeRole`` and uses the resulting temporary credentials.
+    2. Explicit static keys: if both ``AWS_ACCESS_KEY_ID`` and
+       ``AWS_SECRET_ACCESS_KEY`` are set (optionally with ``AWS_SESSION_TOKEN``),
+       those credentials are passed directly to ChatBedrock.
+    3. Ambient credential chain: if no explicit keys are set, ChatBedrock calls
+       ``boto3.client()`` directly, which walks the standard boto3 chain:
+       environment variables → ~/.aws/credentials → EC2 instance profile →
+       ECS task role → Lambda execution role → IRSA / WebIdentity token.
+    """
     from botocore.config import Config
     from langchain_aws import ChatBedrock
 
-    aws_access_key = None
-    aws_secret_key = None
-    if settings.aws_access_key_id:
-        aws_access_key = settings.aws_access_key_id.get_secret_value()
-    if settings.aws_secret_access_key:
-        aws_secret_key = settings.aws_secret_access_key.get_secret_value()
+    region = getattr(config, "region", None) or settings.aws_region
 
     # ISSUE-016: Add timeout configuration to prevent stream stalls
     botocore_config = Config(
@@ -89,14 +96,56 @@ def create_bedrock_model(config: Any, settings: Any) -> Any:
         connect_timeout=10,  # 10 second connection timeout
     )
 
-    # Build kwargs for ChatBedrock
+    # Build base kwargs — credentials added below based on which path is taken
     kwargs: dict[str, Any] = {
         "model_id": config.model,
-        "region_name": getattr(config, "region", None) or settings.aws_region,
-        "aws_access_key_id": aws_access_key,
-        "aws_secret_access_key": aws_secret_key,
+        "region_name": region,
         "config": botocore_config,
     }
+
+    # Path 1: Role assumption via sts:AssumeRole
+    role_arn = getattr(settings, "bedrock_role_arn", None)
+    if role_arn:
+        import boto3
+
+        sts = boto3.client("sts", region_name=region)
+        assumed = sts.assume_role(
+            RoleArn=role_arn,
+            RoleSessionName="cognition-bedrock-session",
+        )
+        creds = assumed["Credentials"]
+        kwargs["aws_access_key_id"] = creds["AccessKeyId"]
+        kwargs["aws_secret_access_key"] = creds["SecretAccessKey"]
+        kwargs["aws_session_token"] = creds["SessionToken"]
+
+    else:
+        # Path 2: Explicit static/temporary keys
+        aws_access_key = None
+        aws_secret_key = None
+        aws_session_token = None
+        if settings.aws_access_key_id:
+            aws_access_key = settings.aws_access_key_id.get_secret_value()
+        if settings.aws_secret_access_key:
+            aws_secret_key = settings.aws_secret_access_key.get_secret_value()
+        if getattr(settings, "aws_session_token", None):
+            aws_session_token = settings.aws_session_token.get_secret_value()
+
+        if aws_access_key and aws_secret_key:
+            # Both key + secret present — inject explicitly (with optional session token)
+            kwargs["aws_access_key_id"] = aws_access_key
+            kwargs["aws_secret_access_key"] = aws_secret_key
+            if aws_session_token:
+                kwargs["aws_session_token"] = aws_session_token
+        elif aws_access_key or aws_secret_key:
+            # Partial credentials — fail fast with a clear message
+            raise ValueError(
+                "Both AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY must be set together, "
+                "or both must be absent to use IAM role / ambient credentials. "
+                "Only one key was provided."
+            )
+        # Path 3: Neither key set — omit all credential kwargs so ChatBedrock falls
+        # through to boto3.client() and the full ambient credential chain.
+
     # Add max_tokens if configured
     if hasattr(settings, "llm_max_tokens") and settings.llm_max_tokens is not None:
         kwargs["max_tokens"] = settings.llm_max_tokens

@@ -16,23 +16,6 @@ import structlog
 from langchain_core.messages import HumanMessage, SystemMessage
 
 
-def _extract_text(content: str | list) -> str:
-    """Normalise LangChain content to plain string.
-
-    Bedrock (and potentially other providers) return content as a list of
-    content-block dicts: [{"type": "text", "text": "..."}].
-    """
-    if isinstance(content, str):
-        return content
-    if isinstance(content, list):
-        return "".join(
-            block.get("text", "") if isinstance(block, dict) else str(block)
-            for block in content
-            if isinstance(block, str) or (isinstance(block, dict) and block.get("type") == "text")
-        )
-    return ""
-
-
 from server.app.agent import create_cognition_agent
 from server.app.agent.runtime import (
     DeepAgentRuntime,
@@ -105,8 +88,10 @@ class DeepAgentStreamingService:
                     llm_settings.llm_provider = session.config.provider
                 if session.config.model:
                     llm_settings.llm_model = session.config.model
-                if session.config.temperature is not None:
-                    llm_settings.llm_temperature = session.config.temperature
+                if session.config.max_tokens is not None:
+                    llm_settings.llm_max_tokens = session.config.max_tokens
+                if session.config.recursion_limit is not None:
+                    llm_settings.agent_recursion_limit = session.config.recursion_limit
 
             # Get the model with specific settings
             model = await self._get_model(llm_settings)
@@ -178,6 +163,7 @@ class DeepAgentStreamingService:
                 system_prompt=system_prompt,
                 skills=agent_skills,
                 subagents=subagents,
+                mcp_configs=llm_settings.mcp_server_configs or None,
             )
 
             # Create runtime and register for abort tracking

@@ -55,7 +55,7 @@ class MockLLM(BaseChatModel):
         messages: list[BaseMessage] = (
             input if isinstance(input, list) else [HumanMessage(content=input)]
         )
-        last_message = str(messages[-1].content).lower()
+        last_message = messages[-1].text.lower()
 
         # Generic tool trigger for testing
         if "trigger tool" in last_message:
@@ -77,9 +77,7 @@ class MockLLM(BaseChatModel):
 
         # Echo system prompt if requested
         if "what is in my system prompt" in last_message:
-            system_msg = next(
-                (str(m.content) for m in messages if isinstance(m, SystemMessage)), "None"
-            )
+            system_msg = next((m.text for m in messages if isinstance(m, SystemMessage)), "None")
             return AIMessage(content=f"System prompt contains: {system_msg}")
 
         # Simulate file creation
@@ -156,7 +154,7 @@ class MockLLM(BaseChatModel):
         messages: list[BaseMessage] = (
             input if isinstance(input, list) else [HumanMessage(content=input)]
         )
-        last_message = str(messages[-1].content).lower()
+        last_message = messages[-1].text.lower()
         response_text = "I understand. Let me help you with that."
 
         # Get callback manager from config
@@ -201,9 +199,7 @@ class MockLLM(BaseChatModel):
 
         # Echo system prompt if requested
         if "what is in my system prompt" in last_message:
-            system_msg = next(
-                (str(m.content) for m in messages if isinstance(m, SystemMessage)), "None"
-            )
+            system_msg = next((m.text for m in messages if isinstance(m, SystemMessage)), "None")
             response_text = f"System prompt contains: {system_msg}"
 
         # Simple pattern matching for different responses

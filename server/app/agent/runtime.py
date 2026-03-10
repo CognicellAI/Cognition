@@ -27,6 +27,50 @@ from server.app.settings import Settings, get_settings
 from server.app.storage.factory import create_storage_backend
 
 # ============================================================================
+# Content normalisation
+# ============================================================================
+
+
+def _content_to_str(content: str | list | None) -> str:
+    """Normalise LangChain message content to a plain string.
+
+    LangChain's ``BaseMessage.content`` is typed ``str | list[str | dict]``.
+    Different providers (and different events within the same provider) use
+    different formats:
+
+    * OpenAI / OpenAI-compatible: plain ``str`` for every delta.
+    * Bedrock Converse — *first* delta in a block:
+        ``[{"type": "text", "text": "J", "index": 0}]``  (has "type")
+    * Bedrock Converse — *subsequent* deltas in the same block:
+        ``[{"text": "ello", "index": 0}]``               (no "type" key!)
+    * Bedrock Converse — stop / metadata events:
+        ``""`` or ``[]``
+
+    ``BaseMessage.text`` only extracts blocks where ``block["type"] == "text"``,
+    so it silently drops every Bedrock delta after the first one in each block.
+    This function handles all cases, including blocks that carry ``"text"``
+    without a ``"type"`` key.
+    """
+    if content is None:
+        return ""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts: list[str] = []
+        for block in content:
+            if isinstance(block, str):
+                parts.append(block)
+            elif isinstance(block, dict):
+                text = block.get("text")
+                if isinstance(text, str):
+                    # Accept blocks with OR without a "type" key — both appear
+                    # in real Bedrock streaming output.
+                    parts.append(text)
+        return "".join(parts)
+    return str(content)
+
+
+# ============================================================================
 # Canonical Event Types
 # ============================================================================
 # These event types are the single source of truth for agent runtime events.
@@ -45,9 +89,24 @@ class AgentEvent:
 
 @dataclass
 class TokenEvent(AgentEvent):
-    """Streaming token from the LLM."""
+    """Streaming token from the LLM.
+
+    ``content`` is always a plain ``str``. The ``__post_init__`` coerces any
+    ``str | list[str | dict]`` value (the raw LangChain content type) to str
+    at construction time, so every downstream consumer is guaranteed a string
+    regardless of which provider emitted the chunk.
+    """
 
     content: str
+
+    def __post_init__(self) -> None:
+        # LangChain's BaseMessage.content is typed `str | list[str | dict]`.
+        # Providers such as Bedrock return list[dict] deltas during streaming,
+        # often WITHOUT a "type" key (e.g. [{"text": "J", "index": 0}]).
+        # BaseMessage.text only matches {"type": "text"} blocks, so it silently
+        # drops most Bedrock deltas. _content_to_str handles all known formats.
+        if not isinstance(self.content, str):
+            self.content = _content_to_str(self.content)
 
 
 @dataclass
@@ -314,7 +373,7 @@ class DeepAgentRuntime:
                 if event_type == "on_chat_model_stream":
                     chunk = data.get("chunk", {})
                     if hasattr(chunk, "content") and chunk.content:
-                        yield TokenEvent(content=chunk.content)
+                        yield TokenEvent(content=_content_to_str(chunk.content))
 
                 elif event_type == "on_chain_stream" and name == "model":
                     chunk = data.get("chunk", {})
@@ -324,9 +383,9 @@ class DeepAgentRuntime:
                         if hasattr(c, "update") and isinstance(c.update, dict):
                             messages = c.update.get("messages", [])
                             if messages and hasattr(messages[-1], "content"):
-                                content = messages[-1].content
+                                content = _content_to_str(messages[-1].content)
                         elif hasattr(c, "content") and c.content:
-                            content = c.content
+                            content = _content_to_str(c.content)
 
                         if content:
                             yield TokenEvent(content=content)
@@ -621,7 +680,7 @@ async def create_agent_runtime(
             resolved_middleware.append(mw_instance)
 
     # Create the Deep Agent
-    agent = create_cognition_agent(
+    agent = await create_cognition_agent(
         project_path=workspace_path,
         system_prompt=definition.system_prompt,
         tools=tools if tools else None,
@@ -633,11 +692,17 @@ async def create_agent_runtime(
     )
 
     # Create and return the runtime
+    # Per-agent recursion_limit overrides the global settings value when set
+    effective_recursion_limit = (
+        definition.config.recursion_limit
+        if definition.config.recursion_limit is not None
+        else settings.agent_recursion_limit
+    )
     return DeepAgentRuntime(
         agent=agent,
         checkpointer=checkpointer,
         thread_id=thread_id,
-        recursion_limit=settings.agent_recursion_limit,
+        recursion_limit=effective_recursion_limit,
     )
 
 

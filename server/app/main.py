@@ -22,7 +22,7 @@ from server.app.exceptions import RateLimitError
 from server.app.file_watcher import WorkspaceWatcher
 from server.app.observability import setup_metrics, setup_tracing
 from server.app.observability.mlflow_config import setup_mlflow_tracing
-from server.app.rate_limiter import get_rate_limiter
+from server.app.rate_limiter import RateLimitConfig, get_rate_limiter
 from server.app.session_manager import initialize_session_manager
 from server.app.settings import get_settings
 from server.app.storage import create_storage_backend, get_storage_backend, set_storage_backend
@@ -91,7 +91,12 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         enabled=settings.otel_enabled,
     )
     setup_mlflow_tracing(settings)
-    rate_limiter = get_rate_limiter()
+    rate_limiter = get_rate_limiter(
+        RateLimitConfig(
+            requests_per_minute=settings.rate_limit_per_minute,
+            burst_size=settings.rate_limit_burst,
+        )
+    )
     await rate_limiter.start()
     logger.info(
         "Server configuration",

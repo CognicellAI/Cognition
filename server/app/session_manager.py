@@ -412,7 +412,7 @@ class SessionManager:
         storage = get_storage_backend()
         checkpointer = await storage.get_checkpointer()
 
-        agent = create_cognition_agent(
+        agent = await create_cognition_agent(
             project_path=managed.session.workspace_path,
             model=model,
             checkpointer=checkpointer,

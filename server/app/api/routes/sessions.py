@@ -122,7 +122,6 @@ async def create_session(
     config = SessionConfig(
         provider=settings.llm_provider,  # type: ignore[arg-type]
         model=settings.llm_model,
-        temperature=getattr(settings, "llm_temperature", None),
         max_tokens=getattr(settings, "llm_max_tokens", None),
         system_prompt=system_prompt_text,
     )
