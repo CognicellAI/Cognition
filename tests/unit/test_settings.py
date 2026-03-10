@@ -46,12 +46,6 @@ class TestSettingsDefaults:
         assert settings.llm_provider == "mock"
         assert settings.llm_model == "gpt-4o"
 
-    def test_default_session_settings(self):
-        """Test default session settings."""
-        settings = TestSettings()
-        assert settings.max_sessions == 100
-        assert settings.session_timeout_seconds == 3600.0
-
     def test_default_rate_limiting(self):
         """Test default rate limiting settings."""
         settings = TestSettings()
@@ -130,46 +124,6 @@ class TestSettingsValidation:
 
         with pytest.raises(PydanticValidationError):
             TestSettings(metrics_port=0)
-
-    def test_max_sessions_validation_positive(self):
-        """Test that max_sessions must be positive."""
-        settings = TestSettings(max_sessions=10)
-        assert settings.max_sessions == 10
-
-    def test_max_sessions_validation_zero(self):
-        """Test that max_sessions=0 raises validation error."""
-        from pydantic import ValidationError as PydanticValidationError
-
-        with pytest.raises(PydanticValidationError) as exc_info:
-            TestSettings(max_sessions=0)
-        assert "max_sessions must be at least 1" in str(exc_info.value)
-
-    def test_max_sessions_validation_negative(self):
-        """Test that negative max_sessions raises validation error."""
-        from pydantic import ValidationError as PydanticValidationError
-
-        with pytest.raises(PydanticValidationError):
-            TestSettings(max_sessions=-1)
-
-    def test_timeout_validation_positive(self):
-        """Test that timeout must be positive."""
-        settings = TestSettings(session_timeout_seconds=1800.0)
-        assert settings.session_timeout_seconds == 1800.0
-
-    def test_timeout_validation_zero(self):
-        """Test that timeout=0 raises validation error."""
-        from pydantic import ValidationError as PydanticValidationError
-
-        with pytest.raises(PydanticValidationError) as exc_info:
-            TestSettings(session_timeout_seconds=0.0)
-        assert "session_timeout_seconds must be positive" in str(exc_info.value)
-
-    def test_timeout_validation_negative(self):
-        """Test that negative timeout raises validation error."""
-        from pydantic import ValidationError as PydanticValidationError
-
-        with pytest.raises(PydanticValidationError):
-            TestSettings(session_timeout_seconds=-1.0)
 
 
 class TestLLMProviderSettings:

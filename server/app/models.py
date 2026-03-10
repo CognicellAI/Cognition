@@ -91,6 +91,7 @@ class SessionConfig(BaseModel):
     model: str | None = None
     temperature: float | None = None
     max_tokens: int | None = None
+    recursion_limit: int | None = None
     system_prompt: str | None = None  # Kept for backward compatibility
 
 
@@ -123,6 +124,7 @@ class Session:
                 "model": self.config.model,
                 "temperature": self.config.temperature,
                 "max_tokens": self.config.max_tokens,
+                "recursion_limit": self.config.recursion_limit,
                 "system_prompt": self.config.system_prompt,
             },
             "created_at": self.created_at,
@@ -147,6 +149,7 @@ class Session:
                 model=config_data.get("model"),
                 temperature=config_data.get("temperature"),
                 max_tokens=config_data.get("max_tokens"),
+                recursion_limit=config_data.get("recursion_limit"),
                 system_prompt=config_data.get("system_prompt"),
             ),
             created_at=data["created_at"],

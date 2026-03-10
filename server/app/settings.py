@@ -39,7 +39,6 @@ class Settings(BaseSettings):
         alias="COGNITION_LLM_PROVIDER",
     )
     llm_model: str = Field(default="gpt-4o", alias="COGNITION_LLM_MODEL")
-    llm_temperature: float | None = Field(default=None, alias="COGNITION_LLM_TEMPERATURE")
     llm_max_tokens: int | None = Field(default=20000, alias="COGNITION_LLM_MAX_TOKENS")
     # System prompt configuration with explicit type/value
     # Config type: "file" | "inline" | "mlflow"
@@ -66,22 +65,30 @@ class Settings(BaseSettings):
     aws_region: str = Field(default="us-east-1", alias="AWS_REGION")
     aws_access_key_id: SecretStr | None = Field(default=None, alias="AWS_ACCESS_KEY_ID")
     aws_secret_access_key: SecretStr | None = Field(default=None, alias="AWS_SECRET_ACCESS_KEY")
+    aws_session_token: SecretStr | None = Field(
+        default=None,
+        alias="AWS_SESSION_TOKEN",
+        description=(
+            "AWS session token for STS temporary credentials. "
+            "Required when using short-lived credentials from sts:AssumeRole, "
+            "AWS SSO, or CI/CD OIDC providers. Leave unset for static keys or "
+            "ambient credentials (instance profile, ECS task role, etc.)."
+        ),
+    )
     bedrock_model_id: str = Field(
         default="anthropic.claude-3-sonnet-20240229-v1:0",
         alias="COGNITION_BEDROCK_MODEL_ID",
     )
-
-    # Ollama settings (for local testing)
-    ollama_model: str = Field(default="llama3.2", alias="COGNITION_OLLAMA_MODEL")
-    ollama_base_url: str = Field(
-        default="http://localhost:11434", alias="COGNITION_OLLAMA_BASE_URL"
-    )
-
-    # Session settings
-    max_sessions: int = Field(default=100, alias="COGNITION_MAX_SESSIONS")
-    session_timeout_seconds: float = Field(
-        default=3600.0,
-        alias="COGNITION_SESSION_TIMEOUT_SECONDS",
+    bedrock_role_arn: str | None = Field(
+        default=None,
+        alias="COGNITION_BEDROCK_ROLE_ARN",
+        description=(
+            "Optional IAM role ARN for Cognition to assume via sts:AssumeRole before "
+            "calling Bedrock. Useful for cross-account access or pinning exact permissions "
+            "when running under docker-compose or any identity that already has "
+            "sts:AssumeRole permission. Leave unset to use the ambient credential chain "
+            "(instance profile, ECS task role, Lambda execution role, IRSA, etc.) directly."
+        ),
     )
 
     # Rate limiting settings
@@ -99,13 +106,6 @@ class Settings(BaseSettings):
     mlflow_experiment_name: str | None = Field(
         default="cognition", alias="COGNITION_MLFLOW_EXPERIMENT_NAME"
     )
-
-    # Prompt Registry settings
-    prompt_source: Literal["local", "mlflow"] = Field(
-        default="local", alias="COGNITION_PROMPT_SOURCE"
-    )
-    prompt_fallback_to_local: bool = Field(default=True, alias="COGNITION_PROMPT_FALLBACK_TO_LOCAL")
-    prompts_dir: str | None = Field(default=".cognition/prompts", alias="COGNITION_PROMPTS_DIR")
 
     # CORS settings
     cors_origins: list[str] = Field(
@@ -196,10 +196,6 @@ class Settings(BaseSettings):
             "not the container-internal path. Leave empty for local execution."
         ),
     )
-    docker_timeout: float = Field(
-        default=300.0,
-        alias="COGNITION_DOCKER_TIMEOUT",
-    )
     docker_memory_limit: str = Field(
         default="512m",
         alias="COGNITION_DOCKER_MEMORY_LIMIT",
@@ -216,14 +212,6 @@ class Settings(BaseSettings):
         description=(
             "Security level for loading tools from .cognition/tools/. "
             "'warn' logs violations but continues loading; 'strict' blocks loading."
-        ),
-    )
-    protected_paths: list[str] = Field(
-        default=[".cognition"],
-        alias="COGNITION_PROTECTED_PATHS",
-        description=(
-            "List of paths that agents cannot write to or execute commands in. "
-            "Paths are relative to the workspace root."
         ),
     )
     trusted_tool_namespaces: list[str] = Field(
@@ -267,19 +255,53 @@ class Settings(BaseSettings):
         alias="COGNITION_SSE_BUFFER_SIZE",
     )
 
-    # Test settings
-    test_llm_mode: Literal["mock", "openai", "ollama"] = Field(
-        default="mock",
-        alias="COGNITION_TEST_LLM_MODE",
-    )
-
     # MCP (Model Context Protocol) settings
-    # Remote-only: Only HTTP/SSE connections supported
+    # Remote-only: Only HTTP/SSE connections supported.
+    # Each entry is keyed by a server name; the key is injected as McpServerConfig.name.
+    # Example (YAML):
+    #   mcp_servers:
+    #     github:
+    #       url: https://api.glama.ai/mcp/github
+    #       headers:
+    #         Authorization: "Bearer sk-..."
     mcp_servers: dict[str, Any] = Field(
         default_factory=dict,
         alias="COGNITION_MCP_SERVERS",
-        description="Remote MCP server configurations. Only HTTP/SSE URLs allowed.",
+        description="Remote MCP server configurations keyed by name. Only HTTP/HTTPS URLs allowed.",
     )
+
+    @field_validator("mcp_servers", mode="before")
+    @classmethod
+    def validate_mcp_servers(cls, v: Any) -> Any:
+        """Validate each MCP server entry has a valid HTTP/HTTPS URL."""
+        if not isinstance(v, dict):
+            return v
+        for name, entry in v.items():
+            if not isinstance(entry, dict):
+                raise ValueError(
+                    f"MCP server '{name}': expected a dict with at least a 'url' key, "
+                    f"got {type(entry).__name__}"
+                )
+            url = entry.get("url", "")
+            if not isinstance(url, str) or not url.startswith(("http://", "https://")):
+                raise ValueError(
+                    f"MCP server '{name}': url must start with http:// or https://, got {url!r}. "
+                    "Only remote HTTP/SSE connections are supported."
+                )
+        return v
+
+    @property
+    def mcp_server_configs(self) -> list[Any]:
+        """Return mcp_servers as a list of McpServerConfig objects.
+
+        Injects the dict key as McpServerConfig.name so callers get typed objects.
+        Returns an empty list when no servers are configured.
+        """
+        if not self.mcp_servers:
+            return []
+        from server.app.agent.mcp_client import McpServerConfig
+
+        return [McpServerConfig(name=name, **entry) for name, entry in self.mcp_servers.items()]
 
     @property
     def workspace_path(self) -> Path:
@@ -306,22 +328,6 @@ class Settings(BaseSettings):
         """Validate port number is in valid range."""
         if not 1 <= v <= 65535:
             raise ValueError(f"Port must be between 1 and 65535, got {v}")
-        return v
-
-    @field_validator("max_sessions")
-    @classmethod
-    def validate_max_sessions(cls, v: int) -> int:
-        """Validate max_sessions is positive."""
-        if v < 1:
-            raise ValueError(f"max_sessions must be at least 1, got {v}")
-        return v
-
-    @field_validator("session_timeout_seconds")
-    @classmethod
-    def validate_timeout(cls, v: float) -> float:
-        """Validate timeout is positive."""
-        if v <= 0:
-            raise ValueError(f"session_timeout_seconds must be positive, got {v}")
         return v
 
     def get_llm_model(self) -> Any:

@@ -77,7 +77,7 @@ async def test_middleware_execution_integration():
     from server.app.llm.mock import MockLLM
 
     # Create agent with mock LLM instance
-    agent = create_cognition_agent(project_path=".", model=MockLLM())
+    agent = await create_cognition_agent(project_path=".", model=MockLLM())
 
     # The agent returned is a CompiledStateGraph.
     # We can check its middleware stack if deepagents exposes it,

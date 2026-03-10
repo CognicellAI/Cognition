@@ -85,6 +85,10 @@ agent:
     - ".cognition/skills/"
   subagents: []
   interrupt_on: {}
+  # Maximum recursion depth for the agent ReAct loop.
+  # Each tool call + response counts as one cycle; 1000 allows ~500 tool call cycles.
+  # Increase for very long-running tasks; decrease to enforce a hard cap.
+  recursion_limit: null  # null = use COGNITION_AGENT_RECURSION_LIMIT (default: 1000)
   # Middleware configuration
   # Supports well-known upstream middleware names with parameters:
   #   - tool_retry: Exponential backoff on tool failure

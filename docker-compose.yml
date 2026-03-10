@@ -103,6 +103,11 @@ services:
       # ISSUE-007: AWS credentials for Bedrock - uid 1000 runs as cognition user
       - HOME=/home/cognition
       - AWS_PROFILE=${AWS_PROFILE:-default}
+      # AWS_SESSION_TOKEN: pass through STS temporary credentials from CI/CD OIDC, aws sso, etc.
+      - AWS_SESSION_TOKEN=${AWS_SESSION_TOKEN:-}
+      # COGNITION_BEDROCK_ROLE_ARN: if set, Cognition assumes this role via sts:AssumeRole.
+      # Recommended for docker-compose: avoids mounting ~/.aws when using cross-account roles.
+      - COGNITION_BEDROCK_ROLE_ARN=${COGNITION_BEDROCK_ROLE_ARN:-}
     volumes:
       - ./workspaces:/workspace
       - ./.cognition:/app/.cognition
