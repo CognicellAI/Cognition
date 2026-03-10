@@ -21,7 +21,6 @@ import pytest
 from server.app.agent.definition import AgentConfig, AgentDefinition
 from server.app.models import Session, SessionConfig, SessionStatus
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------

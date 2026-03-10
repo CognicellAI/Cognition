@@ -15,7 +15,6 @@ from typing import Any
 import structlog
 from langchain_core.messages import HumanMessage, SystemMessage
 
-
 from server.app.agent import create_cognition_agent
 from server.app.agent.runtime import (
     DeepAgentRuntime,
