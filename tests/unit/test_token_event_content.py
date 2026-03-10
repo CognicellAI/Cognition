@@ -16,11 +16,9 @@ counting) always receives a string.
 
 from __future__ import annotations
 
-import pytest
 from langchain_core.messages import AIMessageChunk
 
 from server.app.agent.runtime import TokenEvent
-
 
 # ---------------------------------------------------------------------------
 # Helpers — build chunks the way each provider does
