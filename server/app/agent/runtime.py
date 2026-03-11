@@ -375,21 +375,6 @@ class DeepAgentRuntime:
                     if hasattr(chunk, "content") and chunk.content:
                         yield TokenEvent(content=_content_to_str(chunk.content))
 
-                elif event_type == "on_chain_stream" and name == "model":
-                    chunk = data.get("chunk", {})
-                    chunks = chunk if isinstance(chunk, list) else [chunk]
-                    for c in chunks:
-                        content = None
-                        if hasattr(c, "update") and isinstance(c.update, dict):
-                            messages = c.update.get("messages", [])
-                            if messages and hasattr(messages[-1], "content"):
-                                content = _content_to_str(messages[-1].content)
-                        elif hasattr(c, "content") and c.content:
-                            content = _content_to_str(c.content)
-
-                        if content:
-                            yield TokenEvent(content=content)
-
                 elif event_type == "on_tool_start":
                     tool_name = name
                     tool_args = data.get("input", {})

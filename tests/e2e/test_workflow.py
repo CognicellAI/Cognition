@@ -142,12 +142,15 @@ class TestMessageWorkflow:
 
     async def test_send_message_sse_stream(self, server, session):
         """Test sending a message and receiving SSE stream."""
-        async with httpx.AsyncClient(timeout=30.0) as client, client.stream(
-            "POST",
-            f"{server}/sessions/{session}/messages",
-            json={"content": "Hello, world!"},
-            headers={"Accept": "text/event-stream"},
-        ) as response:
+        async with (
+            httpx.AsyncClient(timeout=30.0) as client,
+            client.stream(
+                "POST",
+                f"{server}/sessions/{session}/messages",
+                json={"content": "Hello, world!"},
+                headers={"Accept": "text/event-stream"},
+            ) as response,
+        ):
             assert response.status_code == 200
             assert "text/event-stream" in response.headers.get("content-type", "")
 
