@@ -30,6 +30,7 @@ from server.app.agent.runtime import (
     ToolResultEvent,
     UsageEvent,
 )
+from server.app.llm.provider_fallback import _get_model_id
 from server.app.settings import Settings
 from server.app.storage.factory import create_storage_backend
 
@@ -186,7 +187,6 @@ class DeepAgentStreamingService:
             accumulated_content = ""
             _current_tool_call = None
             _planning_mode = False
-            _streamed_via_model_stream = False  # Track if on_chat_model_stream fired
 
             # ISSUE-011: Track plan steps for step_complete events
             _plan_todos: list[dict] = []
@@ -205,7 +205,6 @@ class DeepAgentStreamingService:
                         accumulated_content += event.content
                         output_tokens += len(event.content.split())
                         yield event
-                        _streamed_via_model_stream = True  # ISSUE-013: Track primary path
 
                     elif isinstance(event, ToolCallEvent):
                         _current_tool_call = event.tool_call_id
@@ -228,8 +227,9 @@ class DeepAgentStreamingService:
                         if event.code == "ABORTED":
                             return
 
-                    elif isinstance(event, DoneEvent):
-                        yield event
+                    # DoneEvent from the runtime is intentionally absorbed here.
+                    # The service emits its own authoritative DoneEvent below, after
+                    # UsageEvent, so the caller always receives exactly one done signal.
 
             finally:
                 # Unregister runtime when streaming completes
@@ -244,7 +244,7 @@ class DeepAgentStreamingService:
                     input_tokens, output_tokens, llm_settings.llm_provider
                 ),
                 provider=llm_settings.llm_provider,
-                model=llm_settings.llm_model,
+                model=_get_model_id(llm_settings),
             )
 
             # Signal completion
