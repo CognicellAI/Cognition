@@ -5,6 +5,10 @@ This service leverages deepagents' built-in capabilities:
 - State persistence via thread_id checkpointing
 - Built-in planning with write_todos tool
 - Context management and conversation summarization
+
+LLM provider/model configuration is now read from the ConfigRegistry rather
+than directly from Settings. Settings still controls infrastructure concerns
+(sandbox, persistence, observability, etc.).
 """
 
 from __future__ import annotations
@@ -30,11 +34,18 @@ from server.app.agent.runtime import (
     ToolResultEvent,
     UsageEvent,
 )
-from server.app.llm.provider_fallback import _get_model_id
 from server.app.settings import Settings
+from server.app.storage import get_storage_backend
 from server.app.storage.factory import create_storage_backend
 
 logger = structlog.get_logger(__name__)
+
+
+def _get_model_id_from_provider_config(provider: str, model: str, bedrock_model: str | None) -> str:
+    """Extract the effective model ID string given provider/model values."""
+    if provider == "bedrock" and bedrock_model:
+        return bedrock_model
+    return model
 
 
 class DeepAgentStreamingService:
@@ -54,7 +65,7 @@ class DeepAgentStreamingService:
         """Initialize the deep agent streaming service.
 
         Args:
-            settings: Application settings for LLM configuration.
+            settings: Application settings for infrastructure configuration.
         """
         self.settings = settings
         self.storage_backend = create_storage_backend(settings)
@@ -67,31 +78,31 @@ class DeepAgentStreamingService:
         content: str,
         system_prompt: str | None = None,
         manager: SessionAgentManager | None = None,
+        scope: dict[str, str] | None = None,
     ) -> AsyncGenerator[StreamEvent, None]:
         """Stream LLM response using DeepAgents with multi-step support."""
         runtime: DeepAgentRuntime | None = None
         try:
             # Get session to get its specific LLM config
-            from server.app.storage import get_storage_backend
-
             storage = get_storage_backend()
             session = await storage.get_session(session_id)
 
-            # Use session settings if available, else fallback to global
-            llm_settings = self.settings
-            if session and session.config:
-                # Merge session config into a temp settings object
-                from copy import copy
+            # Resolve provider/model from ConfigRegistry (scope-aware)
+            # Session-level overrides take highest priority.
+            provider, model_id, max_tokens, recursion_limit = await self._resolve_llm_config(
+                session=session,
+                scope=scope,
+            )
 
-                llm_settings = copy(self.settings)
-                if session.config.provider:
-                    llm_settings.llm_provider = session.config.provider
-                if session.config.model:
-                    llm_settings.llm_model = session.config.model
-                if session.config.max_tokens is not None:
-                    llm_settings.llm_max_tokens = session.config.max_tokens
-                if session.config.recursion_limit is not None:
-                    llm_settings.agent_recursion_limit = session.config.recursion_limit
+            # Build a minimal settings-like object for the model factory
+            # (only the fields that provider_fallback actually reads)
+            llm_settings = _LlmSettings(
+                provider=provider,
+                model=model_id,
+                max_tokens=max_tokens,
+                recursion_limit=recursion_limit,
+                settings=self.settings,
+            )
 
             # Get the model with specific settings
             model = await self._get_model(llm_settings)
@@ -152,18 +163,22 @@ class DeepAgentStreamingService:
                             s.to_subagent() for s in all_subagents if s.name != agent_def.name
                         ]
 
+            # Resolve MCP servers from ConfigRegistry
+            mcp_configs = await self._resolve_mcp_configs(scope=scope)
+
             # Create the deep agent for this session with the model
             agent = await create_cognition_agent(
                 project_path=project_path,
                 model=model,
                 store=None,
                 checkpointer=checkpointer,
-                settings=llm_settings,
+                settings=self.settings,
                 tools=custom_tools if custom_tools else None,
                 system_prompt=system_prompt,
                 skills=agent_skills,
                 subagents=subagents,
-                mcp_configs=llm_settings.mcp_server_configs or None,
+                mcp_configs=mcp_configs or None,
+                scope=scope,
             )
 
             # Create runtime and register for abort tracking
@@ -171,7 +186,7 @@ class DeepAgentStreamingService:
                 agent=agent,
                 checkpointer=checkpointer,
                 thread_id=thread_id,
-                recursion_limit=llm_settings.agent_recursion_limit,
+                recursion_limit=recursion_limit,
             )
             if manager:
                 manager.register_runtime(session_id, runtime)
@@ -240,11 +255,9 @@ class DeepAgentStreamingService:
             yield UsageEvent(
                 input_tokens=input_tokens,
                 output_tokens=output_tokens,
-                estimated_cost=self._estimate_cost(
-                    input_tokens, output_tokens, llm_settings.llm_provider
-                ),
-                provider=llm_settings.llm_provider,
-                model=_get_model_id(llm_settings),
+                estimated_cost=self._estimate_cost(input_tokens, output_tokens, provider),
+                provider=provider,
+                model=model_id,
             )
 
             # Signal completion
@@ -253,6 +266,77 @@ class DeepAgentStreamingService:
         except Exception as e:
             logger.error("DeepAgents streaming error", error=str(e), session_id=session_id)
             yield ErrorEvent(message=str(e), code="STREAMING_ERROR")
+
+    async def _resolve_llm_config(
+        self,
+        session: Any,
+        scope: dict[str, str] | None,
+    ) -> tuple[str, str, int | None, int]:
+        """Resolve provider, model, max_tokens, and recursion_limit.
+
+        Priority (highest to lowest):
+        1. session.config overrides
+        2. ConfigRegistry (scope-aware)
+        3. Hardcoded defaults
+
+        Returns:
+            (provider, model_id, max_tokens, recursion_limit)
+        """
+        # Start with ConfigRegistry defaults
+        provider = "mock"
+        model_id = "gpt-4o"
+        max_tokens: int | None = 20000
+        recursion_limit = 1000
+
+        try:
+            from server.app.storage.config_registry import get_config_registry
+
+            reg = get_config_registry()
+            prov_defaults = await reg.get_global_provider_defaults(scope)
+            provider = prov_defaults.provider
+            model_id = prov_defaults.model
+            if prov_defaults.max_tokens is not None:
+                max_tokens = prov_defaults.max_tokens
+        except RuntimeError:
+            pass  # Registry not initialized (tests)
+
+        # Apply session-level overrides
+        if session and session.config:
+            if session.config.provider:
+                provider = session.config.provider
+            if session.config.model:
+                model_id = session.config.model
+            if session.config.max_tokens is not None:
+                max_tokens = session.config.max_tokens
+            if session.config.recursion_limit is not None:
+                recursion_limit = session.config.recursion_limit
+
+        return provider, model_id, max_tokens, recursion_limit
+
+    async def _resolve_mcp_configs(self, scope: dict[str, str] | None) -> list[Any]:
+        """Load MCP server registrations from ConfigRegistry.
+
+        Returns:
+            List of McpServerConfig instances ready for McpManager.
+        """
+        try:
+            from server.app.agent.mcp_client import McpServerConfig
+            from server.app.storage.config_registry import get_config_registry
+
+            reg = get_config_registry()
+            servers = await reg.list_mcp_servers(scope)
+            return [
+                McpServerConfig(
+                    name=s.name,
+                    url=s.url,
+                    headers=s.headers,
+                    enabled=s.enabled,
+                )
+                for s in servers
+                if s.enabled
+            ]
+        except RuntimeError:
+            return []
 
     def _build_messages(self, user_content: str, custom_system_prompt: str | None = None) -> list:
         """Build message list with system prompt.
@@ -290,39 +374,12 @@ For simple tasks (single file edits, quick checks), execute directly."""
         messages.append(HumanMessage(content=user_content))
         return messages
 
-    def _get_default_system_prompt(self) -> str:
-        """Get the default system prompt with planning support."""
-        return """You are Cognition, an expert AI coding assistant.
-
-Your goal is to help users write, edit, and understand code. You have access to a filesystem and can execute commands.
-
-Key capabilities:
-- Read and write files in the workspace
-- List directory contents
-- Search files using glob patterns and grep
-- Execute shell commands (tests, git, etc.)
-- Break down complex tasks using write_todos
-
-Best practices:
-1. Always check what files exist before making changes
-2. Read relevant files before editing
-3. Use edit_file for precise changes rather than rewriting entire files
-4. Run tests after making changes
-5. Explain your reasoning before taking actions
-
-For complex tasks (refactoring, implementing features, debugging):
-1. First call write_todos to create a step-by-step plan
-2. Execute each step systematically
-3. Mark completion when all todos are done
-
-For simple tasks (single file edits, quick checks), execute directly."""
-
-    async def _get_model(self, settings: Settings) -> Any:
+    async def _get_model(self, llm_settings: Any) -> Any:
         """Get LLM model from specific settings."""
         from server.app.llm.provider_fallback import ProviderFallbackChain
 
-        fallback_chain = ProviderFallbackChain.from_settings(settings)
-        result = await fallback_chain.get_model(settings)
+        fallback_chain = ProviderFallbackChain.from_settings(llm_settings)
+        result = await fallback_chain.get_model(llm_settings)
         return result.model
 
     def _estimate_cost(
@@ -342,6 +399,45 @@ For simple tasks (single file edits, quick checks), execute directly."""
         input_cost = (input_tokens / 1000) * rates["input"]
         output_cost = (output_tokens / 1000) * rates["output"]
         return round(input_cost + output_cost, 6)
+
+
+class _LlmSettings:
+    """Minimal settings-like object for ProviderFallbackChain.from_settings().
+
+    ProviderFallbackChain.from_settings() reads:
+    - settings.llm_provider
+    - settings.llm_model / settings.bedrock_model_id
+    - settings.llm_max_tokens (for the factory)
+    - Credential env vars are read by the factory, not this object.
+
+    This shim avoids modifying provider_fallback.py's public interface while
+    still providing the ConfigRegistry-resolved values.
+    """
+
+    def __init__(
+        self,
+        provider: str,
+        model: str,
+        max_tokens: int | None,
+        recursion_limit: int,
+        settings: Settings,
+    ) -> None:
+        self.llm_provider = provider
+        self.llm_model = model
+        self.bedrock_model_id = model  # used when provider == "bedrock"
+        self.llm_max_tokens = max_tokens
+        self.agent_recursion_limit = recursion_limit
+        # Pass through infrastructure fields that factories need
+        self.openai_api_key = getattr(settings, "openai_api_key", None)
+        self.openai_api_base = getattr(settings, "openai_api_base", None)
+        self.openai_compatible_base_url = getattr(settings, "openai_compatible_base_url", None)
+        self.openai_compatible_api_key = getattr(settings, "openai_compatible_api_key", None)
+        self.aws_region = getattr(settings, "aws_region", "us-east-1")
+        self.aws_access_key_id = getattr(settings, "aws_access_key_id", None)
+        self.aws_secret_access_key = getattr(settings, "aws_secret_access_key", None)
+        self.aws_session_token = getattr(settings, "aws_session_token", None)
+        self.bedrock_role_arn = getattr(settings, "bedrock_role_arn", None)
+        self.fallback_providers: list = []
 
 
 class SessionAgentManager:

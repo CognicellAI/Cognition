@@ -43,16 +43,17 @@ def _make_settings(
     model: str = "mock-model",
     bedrock_model_id: str = "anthropic.claude-3-5-sonnet-20241022-v2:0",
 ) -> MagicMock:
-    """Build a minimal mock Settings object."""
+    """Build a minimal mock Settings object.
+
+    provider/model/bedrock_model_id are now in ConfigRegistry (not Settings).
+    The streaming service resolves LLM config from ConfigRegistry + session config,
+    so Settings only needs to carry infrastructure fields (persistence, sandbox, etc.)
+    that create_storage_backend reads.
+    """
     from server.app.settings import Settings
 
     s = MagicMock(spec=Settings)
-    s.llm_provider = provider
-    s.llm_model = model
-    s.bedrock_model_id = bedrock_model_id
-    s.llm_max_tokens = None
-    s.mcp_server_configs = []
-    s.agent_recursion_limit = 100
+    # These remain in Settings (infrastructure config)
     s.trusted_tool_namespaces = ["server.app.tools"]
     return s
 
@@ -86,8 +87,33 @@ def _make_mock_runtime(*events: Any) -> MagicMock:
     return mock_runtime
 
 
-def _stream_patches(mock_runtime: MagicMock) -> tuple:
-    """Return the standard set of patches needed to drive stream_response in isolation."""
+def _stream_patches(mock_runtime: MagicMock, session: Any = None) -> tuple:
+    """Return the standard set of patches needed to drive stream_response in isolation.
+
+    Args:
+        mock_runtime: The mock DeepAgentRuntime to use.
+        session: Optional Session whose config values should be returned by _resolve_llm_config.
+                 If None, uses safe defaults (mock/mock-model).
+    """
+    provider = "mock"
+    model_id = "mock-model"
+    max_tokens = None
+    recursion_limit = 100
+
+    if session is not None and session.config is not None:
+        if session.config.provider:
+            provider = session.config.provider
+        if session.config.model:
+            model_id = session.config.model
+        if session.config.max_tokens is not None:
+            max_tokens = session.config.max_tokens
+        if session.config.recursion_limit is not None:
+            recursion_limit = session.config.recursion_limit
+
+    mock_storage = MagicMock()
+    mock_storage.get_session = AsyncMock(return_value=session)
+    mock_storage.get_checkpointer = AsyncMock(return_value=MagicMock())
+
     return (
         patch(
             "server.app.llm.deep_agent_service.DeepAgentRuntime",
@@ -104,10 +130,8 @@ def _stream_patches(mock_runtime: MagicMock) -> tuple:
             return_value=MagicMock(),
         ),
         patch(
-            "server.app.llm.deep_agent_service.create_storage_backend",
-            return_value=MagicMock(
-                get_checkpointer=AsyncMock(return_value=MagicMock()),
-            ),
+            "server.app.llm.deep_agent_service.get_storage_backend",
+            return_value=mock_storage,
         ),
     )
 
@@ -138,12 +162,13 @@ class TestExactlyOneDoneEvent:
         """Runtime yields DoneEvent → service absorbs it, emits its own → caller gets one."""
         from server.app.llm.deep_agent_service import DeepAgentStreamingService
 
+        session = _make_session()
         mock_runtime = _make_mock_runtime(TokenEvent(content="hello"), DoneEvent())
         service = DeepAgentStreamingService(_make_settings())
 
-        p1, p2, p3, p4 = _stream_patches(mock_runtime)
+        p1, p2, p3, p4 = _stream_patches(mock_runtime, session)
         with p1, p2, p3, p4:
-            collected = await _collect(service, _make_session())
+            collected = await _collect(service, session)
 
         done_events = [e for e in collected if isinstance(e, DoneEvent)]
         assert len(done_events) == 1, (
@@ -156,12 +181,13 @@ class TestExactlyOneDoneEvent:
         """Even if the runtime emits no DoneEvent, the service still emits exactly one."""
         from server.app.llm.deep_agent_service import DeepAgentStreamingService
 
+        session = _make_session()
         mock_runtime = _make_mock_runtime(TokenEvent(content="world"))
         service = DeepAgentStreamingService(_make_settings())
 
-        p1, p2, p3, p4 = _stream_patches(mock_runtime)
+        p1, p2, p3, p4 = _stream_patches(mock_runtime, session)
         with p1, p2, p3, p4:
-            collected = await _collect(service, _make_session())
+            collected = await _collect(service, session)
 
         done_events = [e for e in collected if isinstance(e, DoneEvent)]
         assert len(done_events) == 1
@@ -171,12 +197,13 @@ class TestExactlyOneDoneEvent:
         """DoneEvent must be the final event in the stream (after UsageEvent)."""
         from server.app.llm.deep_agent_service import DeepAgentStreamingService
 
+        session = _make_session()
         mock_runtime = _make_mock_runtime(TokenEvent(content="hi"), DoneEvent())
         service = DeepAgentStreamingService(_make_settings())
 
-        p1, p2, p3, p4 = _stream_patches(mock_runtime)
+        p1, p2, p3, p4 = _stream_patches(mock_runtime, session)
         with p1, p2, p3, p4:
-            collected = await _collect(service, _make_session())
+            collected = await _collect(service, session)
 
         assert isinstance(collected[-1], DoneEvent), (
             f"Last event should be DoneEvent, got {type(collected[-1]).__name__}"
@@ -197,15 +224,16 @@ class TestContentNotDoubled:
         from server.app.llm.deep_agent_service import DeepAgentStreamingService
 
         tokens = ["Hello", ", ", "world", "!"]
+        session = _make_session()
         mock_runtime = _make_mock_runtime(
             *[TokenEvent(content=t) for t in tokens],
             DoneEvent(),
         )
         service = DeepAgentStreamingService(_make_settings())
 
-        p1, p2, p3, p4 = _stream_patches(mock_runtime)
+        p1, p2, p3, p4 = _stream_patches(mock_runtime, session)
         with p1, p2, p3, p4:
-            collected = await _collect(service, _make_session())
+            collected = await _collect(service, session)
 
         token_events = [e for e in collected if isinstance(e, TokenEvent)]
         assert len(token_events) == len(tokens), (
@@ -222,6 +250,7 @@ class TestContentNotDoubled:
         from server.app.llm.deep_agent_service import DeepAgentStreamingService
 
         # Two single-word tokens → output_tokens should be 2, not 4
+        session = _make_session()
         mock_runtime = _make_mock_runtime(
             TokenEvent(content="Hello"),
             TokenEvent(content="World"),
@@ -229,9 +258,9 @@ class TestContentNotDoubled:
         )
         service = DeepAgentStreamingService(_make_settings())
 
-        p1, p2, p3, p4 = _stream_patches(mock_runtime)
+        p1, p2, p3, p4 = _stream_patches(mock_runtime, session)
         with p1, p2, p3, p4:
-            collected = await _collect(service, _make_session())
+            collected = await _collect(service, session)
 
         usage_events = [e for e in collected if isinstance(e, UsageEvent)]
         assert len(usage_events) == 1
@@ -259,14 +288,13 @@ class TestUsageEventModelField:
             model="gpt-4o",  # the wrong default — must NOT appear in UsageEvent
             bedrock_model_id=bedrock_model,
         )
+        session = _make_session(provider="bedrock", model=bedrock_model)
         mock_runtime = _make_mock_runtime(TokenEvent(content="hi"), DoneEvent())
         service = DeepAgentStreamingService(settings)
 
-        p1, p2, p3, p4 = _stream_patches(mock_runtime)
+        p1, p2, p3, p4 = _stream_patches(mock_runtime, session)
         with p1, p2, p3, p4:
-            collected = await _collect(
-                service, _make_session(provider="bedrock", model=bedrock_model)
-            )
+            collected = await _collect(service, session)
 
         usage_events = [e for e in collected if isinstance(e, UsageEvent)]
         assert len(usage_events) == 1
@@ -281,14 +309,13 @@ class TestUsageEventModelField:
         from server.app.llm.deep_agent_service import DeepAgentStreamingService
 
         settings = _make_settings(provider="openai", model="gpt-4o-mini")
+        session = _make_session(provider="openai", model="gpt-4o-mini")
         mock_runtime = _make_mock_runtime(TokenEvent(content="hi"), DoneEvent())
         service = DeepAgentStreamingService(settings)
 
-        p1, p2, p3, p4 = _stream_patches(mock_runtime)
+        p1, p2, p3, p4 = _stream_patches(mock_runtime, session)
         with p1, p2, p3, p4:
-            collected = await _collect(
-                service, _make_session(provider="openai", model="gpt-4o-mini")
-            )
+            collected = await _collect(service, session)
 
         usage_events = [e for e in collected if isinstance(e, UsageEvent)]
         assert len(usage_events) == 1
@@ -296,25 +323,36 @@ class TestUsageEventModelField:
 
     def test_get_model_id_bedrock(self):
         """_get_model_id() returns bedrock_model_id for bedrock provider."""
+        # _get_model_id reads llm_provider and bedrock_model_id/llm_model from a settings-like
+        # object. Use a SimpleNamespace since these are no longer real Settings fields.
+        import types
+
         from server.app.llm.provider_fallback import _get_model_id
 
-        settings = _make_settings(
-            provider="bedrock",
-            model="gpt-4o",
+        settings = types.SimpleNamespace(
+            llm_provider="bedrock",
+            llm_model="gpt-4o",
             bedrock_model_id="anthropic.claude-3-5-sonnet-20241022-v2:0",
         )
         assert _get_model_id(settings) == "anthropic.claude-3-5-sonnet-20241022-v2:0"
 
     def test_get_model_id_openai(self):
         """_get_model_id() returns llm_model for non-bedrock providers."""
+        import types
+
         from server.app.llm.provider_fallback import _get_model_id
 
-        settings = _make_settings(provider="openai", model="gpt-4o-mini")
+        settings = types.SimpleNamespace(llm_provider="openai", llm_model="gpt-4o-mini")
         assert _get_model_id(settings) == "gpt-4o-mini"
 
     def test_get_model_id_openai_compatible(self):
         """_get_model_id() returns llm_model for openai_compatible provider."""
+        import types
+
         from server.app.llm.provider_fallback import _get_model_id
 
-        settings = _make_settings(provider="openai_compatible", model="meta-llama/llama-3.3-70b")
+        settings = types.SimpleNamespace(
+            llm_provider="openai_compatible",
+            llm_model="meta-llama/llama-3.3-70b",
+        )
         assert _get_model_id(settings) == "meta-llama/llama-3.3-70b"

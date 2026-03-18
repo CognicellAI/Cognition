@@ -1,5 +1,5 @@
 """API routes package."""
 
-from server.app.api.routes import agents, config, messages, sessions
+from server.app.api.routes import agents, config, messages, models, sessions, skills, tools
 
-__all__ = ["sessions", "messages", "config", "agents"]
+__all__ = ["agents", "config", "messages", "models", "sessions", "skills", "tools"]

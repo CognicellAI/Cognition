@@ -146,18 +146,21 @@ class TestSSEStream:
 
     @patch("server.app.api.sse.get_settings")
     def test_from_settings(self, mock_get_settings: MagicMock) -> None:
-        """Test creating SSEStream from settings."""
+        """Test creating SSEStream from settings.
+
+        sse_retry_interval_ms and sse_buffer_size were removed from Settings as dead config.
+        from_settings() now only wires heartbeat_interval; retry_ms and buffer_size use
+        SSEStream class defaults.
+        """
         mock_settings = MagicMock(spec=Settings)
-        mock_settings.sse_retry_interval_ms = 5000
         mock_settings.sse_heartbeat_interval_seconds = 45.0
-        mock_settings.sse_buffer_size = 200
         mock_get_settings.return_value = mock_settings
 
         stream = SSEStream.from_settings()
 
-        assert stream.retry_ms == 5000
+        assert stream.retry_ms == 3000  # class default
         assert stream.heartbeat_interval == 45.0
-        assert stream._event_buffer._max_size == 200
+        assert stream._event_buffer._max_size == 100  # class default
 
     @pytest.mark.asyncio
     async def test_generate_event_id(self) -> None:

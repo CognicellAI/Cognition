@@ -75,8 +75,8 @@ class DiscoveryEngine:
         # Fallback to the configured model if discovery fails but URL is present
         return [
             DiscoveredModel(
-                id=self.settings.llm_model,
-                name=self.settings.llm_model,
+                id="unknown",
+                name="unknown",
                 provider_id="openai_compatible",
             )
         ]

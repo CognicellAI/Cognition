@@ -151,14 +151,12 @@ def _get_settings_schema() -> list[dict[str, Any]]:
             "log_level": "server",
             "max_sessions": "server",
             "session_timeout_seconds": "server",
-            # LLM settings
-            "llm": "llm",
-            # Provider-specific settings
-            "openai": "openai",
-            "aws": "aws",
-            "bedrock": "bedrock",
-            "ollama": "ollama",
-            "openai_compatible": "openai_compatible",
+            # Credential env-var pass-through fields
+            "openai": "credentials",
+            "aws": "credentials",
+            "bedrock": "credentials",
+            # OpenAI-compatible endpoint
+            "openai_compatible": "credentials",
             # Workspace settings
             "workspace": "workspace",
             # Rate limiting
@@ -166,8 +164,6 @@ def _get_settings_schema() -> list[dict[str, Any]]:
             # Observability
             "otel": "observability",
             "metrics": "observability",
-            # Agent settings
-            "agent": "agent",
             # Persistence
             "persistence": "persistence",
             # Test settings
@@ -332,12 +328,7 @@ def init_project_config(project_path: Path) -> Path:
         return config_path
 
     # Create minimal project config (only overrides)
-    project_config = {
-        "llm": {
-            # Project-specific defaults
-            "system_prompt": "You are a helpful AI coding assistant.",
-        },
-    }
+    project_config: dict[str, Any] = {}
 
     save_config(project_config, config_path)
 
@@ -454,29 +445,12 @@ def generate_config_example() -> str:
             "# Server settings",
             "# Configure the HTTP server that serves the Cognition API.",
         ],
-        "llm": [
-            "# LLM (Language Model) settings",
-            "# Configure which AI model provider to use and model-specific options.",
+        "credentials": [
+            "# Credential pass-through fields",
+            "# These map env var names for provider factories.",
             "#",
-            "# Supported providers: mock, openai, bedrock, openai_compatible, ollama",
-            "#",
-            "# Note: API keys should be set via environment variables:",
-            "#   OPENAI_API_KEY, AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, etc.",
-        ],
-        "openai": [
-            "# OpenAI-specific settings",
-        ],
-        "aws": [
-            "# AWS/Bedrock-specific settings",
-        ],
-        "bedrock": [
-            "# Bedrock model settings",
-        ],
-        "ollama": [
-            "# Ollama (local LLM) settings",
-        ],
-        "openai_compatible": [
-            "# OpenAI-compatible API settings (for self-hosted models)",
+            "# IMPORTANT: Never put actual credentials here.",
+            "# Set OPENAI_API_KEY, AWS_ACCESS_KEY_ID, etc. as environment variables.",
         ],
         "workspace": [
             "# Workspace settings",
@@ -489,10 +463,6 @@ def generate_config_example() -> str:
         "observability": [
             "# Observability settings",
             "# Configure metrics, tracing, and monitoring.",
-        ],
-        "agent": [
-            "# Agent behavior settings",
-            "# Configure how the AI agent behaves and what capabilities it has.",
         ],
         "persistence": [
             "# Persistence settings",

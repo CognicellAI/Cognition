@@ -162,10 +162,10 @@ class SSEStream:
         """
         if settings is None:
             settings = get_settings()
+        # sse_retry_interval_ms and sse_buffer_size were dead config (removed from Settings).
+        # Use class defaults for those; only heartbeat_interval is still infrastructure config.
         return cls(
-            retry_ms=settings.sse_retry_interval_ms,
             heartbeat_interval=settings.sse_heartbeat_interval_seconds,
-            buffer_size=settings.sse_buffer_size,
         )
 
     async def _generate_event_id(self) -> str:

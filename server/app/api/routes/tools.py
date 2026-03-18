@@ -5,7 +5,7 @@ from typing import Any
 from fastapi import APIRouter, HTTPException
 
 from server.app.agent_registry import get_agent_registry
-from server.app.api.models import ToolList, ToolResponse
+from server.app.api.models import ToolCreate, ToolList, ToolResponse
 
 router = APIRouter(prefix="/tools", tags=["tools"])
 
@@ -62,6 +62,52 @@ async def reload_tools() -> dict[str, Any]:
 
     result = registry.reload_tools()
     return result
+
+
+@router.post("", response_model=ToolResponse, status_code=201)
+async def register_tool(body: ToolCreate) -> ToolResponse:
+    """Register a tool in the ConfigRegistry.
+
+    The tool is persisted in the DB and will be available across restarts.
+    """
+    try:
+        from server.app.storage.config_models import ToolRegistration
+        from server.app.storage.config_registry import get_config_registry
+
+        reg = get_config_registry()
+        tool = ToolRegistration(
+            name=body.name,
+            path=body.path,
+            enabled=body.enabled,
+            description=body.description,
+            scope=body.scope,
+            source="api",
+        )
+        await reg.upsert_tool(tool)
+
+        return ToolResponse(
+            name=tool.name,
+            source="api",
+            module=tool.path,
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e)) from e
+
+
+@router.delete("/{name}", status_code=204)
+async def unregister_tool(name: str) -> None:
+    """Remove a tool from the ConfigRegistry."""
+    try:
+        from server.app.storage.config_registry import get_config_registry
+
+        reg = get_config_registry()
+        deleted = await reg.delete_tool(name)
+        if not deleted:
+            raise HTTPException(status_code=404, detail=f"Tool '{name}' not found in registry")
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 
 @router.get("/{name}", response_model=ToolResponse)

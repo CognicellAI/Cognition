@@ -112,19 +112,9 @@ async def create_session(
     thread_id = str(uuid.uuid4())  # For LangGraph checkpointing
     workspace_path = str(settings.workspace_path)
 
-    # Use server settings exclusively (no client-provided config)
-    # Resolve system prompt from configuration
-    try:
-        system_prompt_text = settings.system_prompt.get_prompt_text()
-    except (FileNotFoundError, RuntimeError):
-        system_prompt_text = None
-
-    config = SessionConfig(
-        provider=settings.llm_provider,  # type: ignore[arg-type]
-        model=settings.llm_model,
-        max_tokens=getattr(settings, "llm_max_tokens", None),
-        system_prompt=system_prompt_text,
-    )
+    # Provider/model/system_prompt are resolved from ConfigRegistry at message-send
+    # time (scope-aware). SessionConfig is intentionally sparse at creation.
+    config = SessionConfig()
 
     # Get session store for this workspace
     store = get_storage_backend()

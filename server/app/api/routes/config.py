@@ -30,17 +30,8 @@ router = APIRouter(prefix="/config", tags=["config"])
 logger = structlog.get_logger(__name__)
 
 # Allowed config fields for PATCH
+# Agent/LLM config has moved to ConfigRegistry — only infrastructure fields remain here.
 ALLOWED_CONFIG_PATHS = {
-    # LLM settings
-    "llm.temperature",
-    "llm.max_tokens",
-    "llm.model",
-    "llm.provider",
-    # Agent settings
-    "agent.memory",
-    "agent.skills",
-    "agent.interrupt_on",
-    "agent.subagents",
     # Rate limiting
     "rate_limit.per_minute",
     "rate_limit.burst",
@@ -48,37 +39,19 @@ ALLOWED_CONFIG_PATHS = {
     "observability.otel_enabled",
     "observability.metrics_port",
     "observability.otel_endpoint",
-    # MLflow
-    "mlflow.enabled",
-    "mlflow.experiment_name",
 }
 
 
 def validate_and_extract_changes(
     updates: ConfigUpdateRequest,
 ) -> dict[str, Any]:
-    """Validate request and extract allowed changes."""
+    """Validate request and extract allowed changes.
+
+    Only rate_limit and observability fields are accepted here.
+    Agent/LLM configuration has moved to the ConfigRegistry API
+    (PATCH /agents, POST /models/providers, etc.).
+    """
     changes = {}
-
-    if updates.llm:
-        for key, value in updates.llm.items():
-            path = f"llm.{key}"
-            if path not in ALLOWED_CONFIG_PATHS:
-                raise HTTPException(
-                    status_code=422,
-                    detail=f"Field '{path}' is not allowed to be updated",
-                )
-            changes[path] = value
-
-    if updates.agent:
-        for key, value in updates.agent.items():
-            path = f"agent.{key}"
-            if path not in ALLOWED_CONFIG_PATHS:
-                raise HTTPException(
-                    status_code=422,
-                    detail=f"Field '{path}' is not allowed to be updated",
-                )
-            changes[path] = value
 
     if updates.rate_limit:
         for key, value in updates.rate_limit.items():
@@ -93,16 +66,6 @@ def validate_and_extract_changes(
     if updates.observability:
         for key, value in updates.observability.items():
             path = f"observability.{key}"
-            if path not in ALLOWED_CONFIG_PATHS:
-                raise HTTPException(
-                    status_code=422,
-                    detail=f"Field '{path}' is not allowed to be updated",
-                )
-            changes[path] = value
-
-    if updates.mlflow:
-        for key, value in updates.mlflow.items():
-            path = f"mlflow.{key}"
             if path not in ALLOWED_CONFIG_PATHS:
                 raise HTTPException(
                     status_code=422,
@@ -144,6 +107,8 @@ async def get_config(
     discovery = DiscoveryEngine(settings)
     discovered = await discovery.discover_models()
 
+    # LLM/provider defaults are now in the ConfigRegistry.
+    # GET /config returns infrastructure settings only.
     return ConfigResponse(
         server={
             "host": yaml_config.get("server", {}).get("host", settings.host),
@@ -152,10 +117,6 @@ async def get_config(
             "scoping_enabled": settings.scoping_enabled,
         },
         llm={
-            "provider": yaml_config.get("llm", {}).get("provider", settings.llm_provider),
-            "model": yaml_config.get("llm", {}).get("model", settings.llm_model),
-            "temperature": yaml_config.get("llm", {}).get("temperature"),
-            "max_tokens": yaml_config.get("llm", {}).get("max_tokens"),
             "available_providers": [
                 {
                     "id": p_id,

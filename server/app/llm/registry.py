@@ -106,7 +106,7 @@ def create_bedrock_model(config: Any, settings: Any) -> Any:
     # Path 1: Role assumption via sts:AssumeRole
     role_arn = getattr(settings, "bedrock_role_arn", None)
     if role_arn:
-        import boto3  # type: ignore[import-untyped]
+        import boto3
 
         sts = boto3.client("sts", region_name=region)
         assumed = sts.assume_role(

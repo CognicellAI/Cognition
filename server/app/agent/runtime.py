@@ -677,11 +677,9 @@ async def create_agent_runtime(
     )
 
     # Create and return the runtime
-    # Per-agent recursion_limit overrides the global settings value when set
+    # Per-agent recursion_limit overrides the global default (1000) when set
     effective_recursion_limit = (
-        definition.config.recursion_limit
-        if definition.config.recursion_limit is not None
-        else settings.agent_recursion_limit
+        definition.config.recursion_limit if definition.config.recursion_limit is not None else 1000
     )
     return DeepAgentRuntime(
         agent=agent,

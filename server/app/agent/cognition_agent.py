@@ -12,6 +12,8 @@ Both backends provide:
 Agent Caching:
 Compiled agents are cached per configuration to avoid recompilation overhead.
 Use invalidate_agent_cache() or clear_agent_cache() to force recompilation.
+Cache keys are scope-aware so per-user/per-project config overrides each get
+their own compiled graph.
 """
 
 from __future__ import annotations
@@ -54,14 +56,17 @@ def _generate_cache_key(
     middleware: Sequence[Any] | None,
     tools: Sequence[Any] | None,
     settings: Settings | None,
+    scope: dict[str, str] | None = None,
 ) -> str:
     """Generate a cache key for agent configuration.
 
     The cache key is a hash of all configuration parameters that affect
-    the compiled agent structure.
+    the compiled agent structure. Includes scope so per-user overrides
+    each get their own entry.
 
     Args:
         All parameters passed to create_cognition_agent
+        scope: Optional scope dict for multi-tenant cache isolation.
 
     Returns:
         MD5 hash string representing the configuration
@@ -78,9 +83,9 @@ def _generate_cache_key(
         str(sorted(interrupt_on.keys())) if interrupt_on else "None",
         str(len(middleware)) if middleware else "0",
         str(len(tools)) if tools else "0",
-        str(settings.llm_provider) if settings else "default",
-        str(settings.llm_model) if settings else "default",
         str(settings.sandbox_backend) if settings else "default",
+        # Scope isolation: sort keys so dict order doesn't affect hash
+        str(sorted((scope or {}).items())),
     ]
 
     config_str = "|".join(config_parts)
@@ -116,6 +121,25 @@ def invalidate_agent_cache(cache_key: str) -> None:
         cache_key: The configuration hash key to invalidate
     """
     _agent_cache.pop(cache_key, None)
+
+
+def invalidate_agent_cache_for_scope(scope: dict[str, str]) -> int:
+    """Invalidate all cached agents whose key encodes the given scope.
+
+    Because cache keys are MD5 hashes we cannot reverse them; instead we
+    clear *all* cache entries. This is conservative but safe — agents will
+    be recompiled on next request. Call this from on_config_change handlers.
+
+    Args:
+        scope: Scope that changed (used for logging only).
+
+    Returns:
+        Number of cache entries cleared.
+    """
+    count = len(_agent_cache)
+    _agent_cache.clear()
+    logger.info("Agent cache cleared on config change", scope=scope, cleared=count)
+    return count
 
 
 def clear_agent_cache() -> None:
@@ -174,6 +198,7 @@ async def create_cognition_agent(
     tools: Sequence[Any] | None = None,
     settings: Settings | None = None,
     mcp_configs: Sequence[McpServerConfig] | None = None,
+    scope: dict[str, str] | None = None,
 ) -> Any:
     """Create a Deep Agent for the Cognition system.
 
@@ -189,10 +214,10 @@ async def create_cognition_agent(
 
     Args:
         project_path: Path to the project workspace directory.
-        model: LLM model to use. If None, uses default from settings.
+        model: LLM model to use. If None, uses default from ConfigRegistry.
         store: Optional LangGraph store.
         checkpointer: Optional LangGraph checkpoint saver for state persistence.
-        system_prompt: Optional custom system prompt. Uses default if not provided.
+        system_prompt: Optional custom system prompt. Uses ConfigRegistry default if not provided.
         memory: Optional list of memory files (e.g. AGENTS.md).
         skills: Optional list of skill directory paths.
         subagents: Optional list of subagent definitions.
@@ -200,6 +225,8 @@ async def create_cognition_agent(
         middleware: Optional additional middleware to apply.
         tools: Optional additional tools to register.
         settings: Optional settings override.
+        mcp_configs: Optional MCP server configurations.
+        scope: Optional scope dict for cache isolation and config resolution.
 
     Returns:
         Configured Deep Agent ready to handle coding tasks with multi-step support.
@@ -220,6 +247,7 @@ async def create_cognition_agent(
         middleware=middleware,
         tools=tools,
         settings=settings,
+        scope=scope,
     )
 
     # Check if we have a cached agent for this configuration
@@ -237,7 +265,7 @@ async def create_cognition_agent(
         docker_network=settings.docker_network,
         docker_memory_limit=settings.docker_memory_limit,
         docker_cpu_limit=settings.docker_cpu_limit,
-        docker_host_workspace=settings.docker_host_workspace,
+        docker_host_workspace="",  # docker_host_workspace removed from Settings (niche Docker-in-Docker only)
     )
 
     # Initialize context manager (P2-7)
@@ -260,28 +288,85 @@ async def create_cognition_agent(
         # Fallback if context manager fails
         system_prompt_with_context = SYSTEM_PROMPT
 
-    # Use provided values or defaults from settings
-    if system_prompt:
-        prompt = system_prompt
+    # Resolve agent defaults from ConfigRegistry (falls back to hardcoded defaults)
+    agent_memory: list[str]
+    agent_skills: list[str]
+    agent_subagents: list[Any]
+    agent_interrupt_on: dict[str, Any]
+
+    if memory is not None:
+        agent_memory = list(memory)
     else:
-        # Resolve prompt from settings.system_prompt configuration
         try:
-            prompt = settings.system_prompt.get_prompt_text()
-        except (FileNotFoundError, RuntimeError):
-            # Fall back to default if prompt file not found or MLflow unavailable
-            prompt = system_prompt_with_context
-    agent_memory = list(memory) if memory is not None else settings.agent_memory
-    agent_skills = list(skills) if skills is not None else settings.agent_skills
-    raw_subagents = list(subagents) if subagents is not None else settings.agent_subagents
+            from server.app.storage.config_registry import get_config_registry
+
+            reg = get_config_registry()
+            defaults = await reg.get_global_agent_defaults(scope)
+            agent_memory = defaults.memory
+        except RuntimeError:
+            agent_memory = ["AGENTS.md"]
+
+    if skills is not None:
+        agent_skills = list(skills)
+    else:
+        try:
+            from server.app.storage.config_registry import get_config_registry
+
+            reg = get_config_registry()
+            defaults = await reg.get_global_agent_defaults(scope)
+            agent_skills = defaults.skills
+        except RuntimeError:
+            agent_skills = [".cognition/skills/"]
+
+    if subagents is not None:
+        raw_subagents = list(subagents)
+    else:
+        try:
+            from server.app.storage.config_registry import get_config_registry
+
+            reg = get_config_registry()
+            defaults = await reg.get_global_agent_defaults(scope)
+            raw_subagents = list(defaults.subagents)
+        except RuntimeError:
+            raw_subagents = []
+
     # Normalize subagent specs: ensure required 'description' key is present
-    # (config.yaml subagents may omit it; deepagents requires it)
     agent_subagents = [
         {**s, "description": s.get("description", "")} if isinstance(s, dict) else s
         for s in raw_subagents
     ]
-    agent_interrupt_on = (
-        dict(interrupt_on) if interrupt_on is not None else settings.agent_interrupt_on
-    )
+
+    if interrupt_on is not None:
+        agent_interrupt_on = dict(interrupt_on)
+    else:
+        try:
+            from server.app.storage.config_registry import get_config_registry
+
+            reg = get_config_registry()
+            defaults = await reg.get_global_agent_defaults(scope)
+            agent_interrupt_on = dict(defaults.interrupt_on)
+        except RuntimeError:
+            agent_interrupt_on = {}
+
+    # Resolve system prompt from ConfigRegistry
+    if system_prompt:
+        prompt = system_prompt
+    else:
+        try:
+            from server.app.storage.config_registry import get_config_registry
+
+            reg = get_config_registry()
+            prov_defaults = await reg.get_global_provider_defaults(scope)
+            prompt_type = prov_defaults.system_prompt_type
+            prompt_value = prov_defaults.system_prompt_value
+            from server.app.models import PromptConfig
+
+            try:
+                prompt = PromptConfig(type=prompt_type, value=prompt_value).get_prompt_text()
+            except (FileNotFoundError, RuntimeError):
+                prompt = system_prompt_with_context
+        except RuntimeError:
+            prompt = system_prompt_with_context
 
     # Initialize middleware stack
     agent_middleware = list(middleware) if middleware else []

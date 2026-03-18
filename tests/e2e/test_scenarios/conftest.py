@@ -75,6 +75,13 @@ class ScenarioTestClient:
             headers["Content-Type"] = "application/json"
         return await self.client.patch(f"{self.base_url}{path}", headers=headers, **kwargs)
 
+    async def put(self, path: str, **kwargs) -> httpx.Response:
+        """Make PUT request with optional scoping."""
+        headers = {**self.scope_header, **kwargs.pop("headers", {})}
+        if "json" in kwargs:
+            headers["Content-Type"] = "application/json"
+        return await self.client.put(f"{self.base_url}{path}", headers=headers, **kwargs)
+
     async def delete(self, path: str, **kwargs) -> httpx.Response:
         """Make DELETE request with optional scoping."""
         headers = {**self.scope_header, **kwargs.pop("headers", {})}

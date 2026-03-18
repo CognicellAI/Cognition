@@ -323,6 +323,50 @@ class ProviderFallbackChain:
 
         return cls(providers)
 
+    @classmethod
+    def from_registry_defaults(
+        cls,
+        provider: str,
+        model: str,
+        fallback_providers: list[dict] | None = None,
+    ) -> ProviderFallbackChain:
+        """Create a fallback chain from ConfigRegistry-resolved values.
+
+        Used by DeepAgentStreamingService after it resolves provider/model
+        from the ConfigRegistry (scope-aware). Credentials are never passed
+        here — the provider factories read them from environment variables.
+
+        Args:
+            provider: Primary provider type (e.g. "openai", "bedrock").
+            model: Primary model ID (e.g. "gpt-4o").
+            fallback_providers: Optional list of fallback provider dicts,
+                each with keys "provider", "model", and optionally
+                "api_key", "base_url", "region".
+
+        Returns:
+            Configured ProviderFallbackChain.
+        """
+        providers = [
+            ProviderConfig(
+                provider=provider,
+                model=model,
+                priority=0,
+            )
+        ]
+        for i, fb in enumerate(fallback_providers or []):
+            if isinstance(fb, dict):
+                providers.append(
+                    ProviderConfig(
+                        provider=fb.get("provider", ""),
+                        model=fb.get("model", ""),
+                        priority=i + 1,
+                        api_key=fb.get("api_key"),
+                        base_url=fb.get("base_url"),
+                        region=fb.get("region"),
+                    )
+                )
+        return cls(providers)
+
 
 def _get_model_id(settings: Any) -> str:
     """Extract the model ID from settings based on provider."""
