@@ -8,11 +8,17 @@ from typing import Any, Literal
 from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-from server.app.models import PromptConfig
-
 
 class Settings(BaseSettings):
-    """Application settings loaded from environment variables."""
+    """Application settings loaded from environment variables.
+
+    This class covers *infrastructure* concerns only.  Agent/LLM/provider
+    configuration has moved to the DB-backed ConfigRegistry (see
+    server/app/storage/config_registry.py).
+
+    Credentials (OPENAI_API_KEY, AWS_*) are read from environment variables
+    at provider-factory time and are never stored here or in the DB.
+    """
 
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -33,22 +39,7 @@ class Settings(BaseSettings):
         alias="COGNITION_WORKSPACE_ROOT",
     )
 
-    # LLM settings
-    llm_provider: str = Field(
-        default="mock",
-        alias="COGNITION_LLM_PROVIDER",
-    )
-    llm_model: str = Field(default="gpt-4o", alias="COGNITION_LLM_MODEL")
-    llm_max_tokens: int | None = Field(default=20000, alias="COGNITION_LLM_MAX_TOKENS")
-    # System prompt configuration with explicit type/value
-    # Config type: "file" | "inline" | "mlflow"
-    # Config value: prompt text, file name, or mlflow reference
-    system_prompt: PromptConfig = Field(
-        default_factory=lambda: PromptConfig(type="file", value="system"),
-        alias="COGNITION_SYSTEM_PROMPT",
-    )
-
-    # OpenAI settings - use SecretStr to prevent accidental logging
+    # OpenAI credentials — read by provider factories, not used directly by Settings
     openai_api_key: SecretStr | None = Field(default=None, alias="OPENAI_API_KEY")
     openai_api_base: str | None = Field(default=None, alias="OPENAI_API_BASE")
 
@@ -61,7 +52,7 @@ class Settings(BaseSettings):
         alias="COGNITION_OPENAI_COMPATIBLE_API_KEY",
     )
 
-    # Bedrock settings - use SecretStr for credentials
+    # AWS/Bedrock credentials — read by provider factories
     aws_region: str = Field(default="us-east-1", alias="AWS_REGION")
     aws_access_key_id: SecretStr | None = Field(default=None, alias="AWS_ACCESS_KEY_ID")
     aws_secret_access_key: SecretStr | None = Field(default=None, alias="AWS_SECRET_ACCESS_KEY")
@@ -74,10 +65,6 @@ class Settings(BaseSettings):
             "AWS SSO, or CI/CD OIDC providers. Leave unset for static keys or "
             "ambient credentials (instance profile, ECS task role, etc.)."
         ),
-    )
-    bedrock_model_id: str = Field(
-        default="anthropic.claude-3-sonnet-20240229-v1:0",
-        alias="COGNITION_BEDROCK_MODEL_ID",
     )
     bedrock_role_arn: str | None = Field(
         default=None,
@@ -100,33 +87,18 @@ class Settings(BaseSettings):
     otel_endpoint: str | None = Field(default=None, alias="COGNITION_OTEL_ENDPOINT")
     metrics_port: int = Field(default=9090, alias="COGNITION_METRICS_PORT")
 
-    # MLflow settings
-    mlflow_enabled: bool = Field(default=False, alias="COGNITION_MLFLOW_ENABLED")
-    mlflow_tracking_uri: str | None = Field(default=None, alias="COGNITION_MLFLOW_TRACKING_URI")
-    mlflow_experiment_name: str | None = Field(
-        default="cognition", alias="COGNITION_MLFLOW_EXPERIMENT_NAME"
-    )
-
     # CORS settings
     cors_origins: list[str] = Field(
         default=["http://localhost:3000", "http://localhost:8080"],
         alias="COGNITION_CORS_ORIGINS",
         description="Allowed CORS origins. Defaults to common dev ports.",
     )
-    cors_methods: list[str] = Field(
-        default=["GET", "POST", "PUT", "DELETE", "PATCH"],
-        alias="COGNITION_CORS_METHODS",
-    )
-    cors_headers: list[str] = Field(
-        default=["Content-Type", "Authorization"],
-        alias="COGNITION_CORS_HEADERS",
-    )
     cors_credentials: bool = Field(
         default=True,
         alias="COGNITION_CORS_CREDENTIALS",
     )
 
-    @field_validator("cors_origins", "cors_methods", "cors_headers", "scope_keys", mode="before")
+    @field_validator("cors_origins", "scope_keys", mode="before")
     @classmethod
     def parse_comma_separated_list(cls, v: Any) -> list[str] | Any:
         """Parse comma-separated string or JSON array into list.
@@ -151,18 +123,6 @@ class Settings(BaseSettings):
             return [item.strip() for item in stripped.split(",") if item.strip()]
         return v
 
-    # Agent behavior
-    agent_memory: list[str] = Field(default=["AGENTS.md"], alias="COGNITION_AGENT_MEMORY")
-    agent_skills: list[str] = Field(default=[".cognition/skills/"], alias="COGNITION_AGENT_SKILLS")
-    agent_subagents: list[dict[str, Any]] = Field(default=[], alias="COGNITION_AGENT_SUBAGENTS")
-    agent_interrupt_on: dict[str, bool] = Field(default={}, alias="COGNITION_AGENT_INTERRUPT_ON")
-    agent_recursion_limit: int = Field(
-        default=1000,
-        alias="COGNITION_AGENT_RECURSION_LIMIT",
-        gt=0,
-        description="Maximum recursion depth for agent ReACT loops. Default 1000 allows ~500 tool call cycles.",
-    )
-
     # Persistence settings
     persistence_backend: Literal["sqlite", "memory", "postgres"] = Field(
         default="sqlite",
@@ -186,16 +146,6 @@ class Settings(BaseSettings):
         default="none",
         alias="COGNITION_DOCKER_NETWORK",
     )
-    docker_host_workspace: str = Field(
-        default="",
-        alias="COGNITION_DOCKER_HOST_WORKSPACE",
-        description=(
-            "Host filesystem path that maps to the container workspace. "
-            "Required when Cognition runs inside Docker and spawns sibling "
-            "sandbox containers — the sandbox mount must use the host path, "
-            "not the container-internal path. Leave empty for local execution."
-        ),
-    )
     docker_memory_limit: str = Field(
         default="512m",
         alias="COGNITION_DOCKER_MEMORY_LIMIT",
@@ -212,14 +162,6 @@ class Settings(BaseSettings):
         description=(
             "Security level for loading tools from .cognition/tools/. "
             "'warn' logs violations but continues loading; 'strict' blocks loading."
-        ),
-    )
-    trusted_tool_namespaces: list[str] = Field(
-        default=["server.app.tools"],
-        alias="COGNITION_TRUSTED_TOOL_NAMESPACES",
-        description=(
-            "List of trusted namespaces for tool imports. "
-            "Tools outside these namespaces will be blocked."
         ),
     )
     blocked_tools: list[str] = Field(
@@ -242,66 +184,10 @@ class Settings(BaseSettings):
     )
 
     # SSE (Server-Sent Events) settings
-    sse_retry_interval_ms: int = Field(
-        default=3000,
-        alias="COGNITION_SSE_RETRY_INTERVAL_MS",
-    )
     sse_heartbeat_interval_seconds: float = Field(
         default=15.0,
         alias="COGNITION_SSE_HEARTBEAT_INTERVAL_SECONDS",
     )
-    sse_buffer_size: int = Field(
-        default=100,
-        alias="COGNITION_SSE_BUFFER_SIZE",
-    )
-
-    # MCP (Model Context Protocol) settings
-    # Remote-only: Only HTTP/SSE connections supported.
-    # Each entry is keyed by a server name; the key is injected as McpServerConfig.name.
-    # Example (YAML):
-    #   mcp_servers:
-    #     github:
-    #       url: https://api.glama.ai/mcp/github
-    #       headers:
-    #         Authorization: "Bearer sk-..."
-    mcp_servers: dict[str, Any] = Field(
-        default_factory=dict,
-        alias="COGNITION_MCP_SERVERS",
-        description="Remote MCP server configurations keyed by name. Only HTTP/HTTPS URLs allowed.",
-    )
-
-    @field_validator("mcp_servers", mode="before")
-    @classmethod
-    def validate_mcp_servers(cls, v: Any) -> Any:
-        """Validate each MCP server entry has a valid HTTP/HTTPS URL."""
-        if not isinstance(v, dict):
-            return v
-        for name, entry in v.items():
-            if not isinstance(entry, dict):
-                raise ValueError(
-                    f"MCP server '{name}': expected a dict with at least a 'url' key, "
-                    f"got {type(entry).__name__}"
-                )
-            url = entry.get("url", "")
-            if not isinstance(url, str) or not url.startswith(("http://", "https://")):
-                raise ValueError(
-                    f"MCP server '{name}': url must start with http:// or https://, got {url!r}. "
-                    "Only remote HTTP/SSE connections are supported."
-                )
-        return v
-
-    @property
-    def mcp_server_configs(self) -> list[Any]:
-        """Return mcp_servers as a list of McpServerConfig objects.
-
-        Injects the dict key as McpServerConfig.name so callers get typed objects.
-        Returns an empty list when no servers are configured.
-        """
-        if not self.mcp_servers:
-            return []
-        from server.app.agent.mcp_client import McpServerConfig
-
-        return [McpServerConfig(name=name, **entry) for name, entry in self.mcp_servers.items()]
 
     @property
     def workspace_path(self) -> Path:
@@ -329,23 +215,6 @@ class Settings(BaseSettings):
         if not 1 <= v <= 65535:
             raise ValueError(f"Port must be between 1 and 65535, got {v}")
         return v
-
-    def get_llm_model(self) -> Any:
-        """Get the LLM model instance based on provider."""
-        from dataclasses import dataclass
-
-        from server.app.llm.registry import get_provider_factory
-
-        @dataclass
-        class SimpleConfig:
-            model: str
-            api_key: str | None = None
-            base_url: str | None = None
-            region: str | None = None
-
-        factory = get_provider_factory(self.llm_provider)
-        config = SimpleConfig(model=self.llm_model)
-        return factory(config, self)
 
 
 # Global settings instance

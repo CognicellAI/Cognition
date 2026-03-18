@@ -6,7 +6,7 @@ with graceful degradation when packages are not installed.
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 
 class TestOTelConfiguration:
@@ -35,35 +35,30 @@ class TestOTelConfiguration:
 
 
 class TestMLflowConfiguration:
-    """Test MLflow configuration respects settings."""
+    """Test MLflow configuration respects environment variables."""
 
-    def test_setup_mlflow_skipped_when_mlflow_disabled(self):
-        """Test that MLflow setup is skipped when mlflow_enabled=False."""
+    def test_setup_mlflow_skipped_when_mlflow_disabled(self, monkeypatch):
+        """Test that MLflow setup is skipped when MLFLOW_ENABLED is not set."""
         from server.app.observability.mlflow_config import setup_mlflow_tracing
 
-        # Create mock settings with mlflow_enabled=False
-        mock_settings = MagicMock()
-        mock_settings.mlflow_enabled = False
-        mock_settings.mlflow_tracking_uri = None
-        mock_settings.mlflow_experiment_name = "test"
+        monkeypatch.delenv("MLFLOW_ENABLED", raising=False)
 
         # Call setup - should not raise
-        result = setup_mlflow_tracing(mock_settings)
+        result = setup_mlflow_tracing()
 
         # If we get here without exception, the test passes
         assert result is None
 
-    def test_setup_mlflow_called_when_mlflow_enabled(self):
-        """Test that MLflow setup is called when mlflow_enabled=True.
+    def test_setup_mlflow_called_when_mlflow_enabled(self, monkeypatch):
+        """Test that MLflow setup is called when MLFLOW_ENABLED=true.
 
         Mocks the MLflow imports so setup completes without network calls.
         Note: Tracing is handled via OpenTelemetry Collector, not direct autolog.
         """
 
-        mock_settings = MagicMock()
-        mock_settings.mlflow_enabled = True
-        mock_settings.mlflow_tracking_uri = "http://localhost:5000"
-        mock_settings.mlflow_experiment_name = "cognition-test"
+        monkeypatch.setenv("MLFLOW_ENABLED", "true")
+        monkeypatch.setenv("MLFLOW_TRACKING_URI", "http://localhost:5000")
+        monkeypatch.setenv("MLFLOW_EXPERIMENT_NAME", "cognition-test")
 
         with patch("server.app.observability.mlflow_config.mlflow", create=True) as mock_mlflow:
             with patch.dict(
@@ -76,19 +71,18 @@ class TestMLflowConfiguration:
                 import server.app.observability.mlflow_config as mod
 
                 importlib.reload(mod)
-                result = mod.setup_mlflow_tracing(mock_settings)
+                result = mod.setup_mlflow_tracing()
 
                 assert result is None
                 mock_mlflow.set_tracking_uri.assert_called_once_with("http://localhost:5000")
                 mock_mlflow.set_experiment.assert_called_once_with("cognition-test")
 
-    def test_setup_mlflow_graceful_degradation_when_package_missing(self):
+    def test_setup_mlflow_graceful_degradation_when_package_missing(self, monkeypatch):
         """Test graceful degradation when MLflow package is not installed."""
 
-        mock_settings = MagicMock()
-        mock_settings.mlflow_enabled = True
-        mock_settings.mlflow_tracking_uri = None
-        mock_settings.mlflow_experiment_name = "test"
+        monkeypatch.setenv("MLFLOW_ENABLED", "true")
+        monkeypatch.delenv("MLFLOW_TRACKING_URI", raising=False)
+        monkeypatch.setenv("MLFLOW_EXPERIMENT_NAME", "test")
 
         # Force ImportError by removing mlflow from sys.modules
         with patch.dict("sys.modules", {"mlflow": None, "mlflow.langchain": None}):
@@ -97,7 +91,7 @@ class TestMLflowConfiguration:
             import server.app.observability.mlflow_config as mod
 
             importlib.reload(mod)
-            result = mod.setup_mlflow_tracing(mock_settings)
+            result = mod.setup_mlflow_tracing()
 
             assert result is None
 
@@ -114,24 +108,6 @@ class TestSettingsValidation:
 
         assert settings.otel_enabled is False
 
-    def test_mlflow_enabled_defaults_to_false(self):
-        """Test that mlflow_enabled defaults to False."""
-        from server.app.settings import Settings
-
-        # Create settings with no explicit mlflow_enabled
-        settings = Settings()
-
-        assert settings.mlflow_enabled is False
-
-    def test_mlflow_experiment_name_defaults_to_cognition(self):
-        """Test that mlflow_experiment_name defaults to 'cognition'."""
-        from server.app.settings import Settings
-
-        # Create settings with no explicit mlflow_experiment_name
-        settings = Settings()
-
-        assert settings.mlflow_experiment_name == "cognition"
-
     def test_otel_enabled_from_env_var(self, monkeypatch):
         """Test that otel_enabled can be set from environment variable."""
         from server.app.settings import Settings
@@ -141,33 +117,3 @@ class TestSettingsValidation:
         settings = Settings()
 
         assert settings.otel_enabled is False
-
-    def test_mlflow_enabled_from_env_var(self, monkeypatch):
-        """Test that mlflow_enabled can be set from environment variable."""
-        from server.app.settings import Settings
-
-        monkeypatch.setenv("COGNITION_MLFLOW_ENABLED", "true")
-
-        settings = Settings()
-
-        assert settings.mlflow_enabled is True
-
-    def test_mlflow_tracking_uri_from_env_var(self, monkeypatch):
-        """Test that mlflow_tracking_uri can be set from environment variable."""
-        from server.app.settings import Settings
-
-        monkeypatch.setenv("COGNITION_MLFLOW_TRACKING_URI", "http://mlflow-server:5000")
-
-        settings = Settings()
-
-        assert settings.mlflow_tracking_uri == "http://mlflow-server:5000"
-
-    def test_mlflow_experiment_name_from_env_var(self, monkeypatch):
-        """Test that mlflow_experiment_name can be set from environment variable."""
-        from server.app.settings import Settings
-
-        monkeypatch.setenv("COGNITION_MLFLOW_EXPERIMENT_NAME", "my-experiment")
-
-        settings = Settings()
-
-        assert settings.mlflow_experiment_name == "my-experiment"

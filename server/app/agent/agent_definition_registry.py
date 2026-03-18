@@ -6,6 +6,7 @@ built-in agents (hardcoded) and user-defined agents (loaded from .cognition/agen
 The registry supports:
 - Built-in agents: default, readonly (shipped with the server)
 - User-defined agents: YAML files (.cognition/agents/*.yaml) or Markdown files (.cognition/agents/*.md)
+- ConfigRegistry-seeded agents: loaded from the DB via seed_from_registry()
 
 Agents can be in three modes:
 - primary: user-selectable at session creation
@@ -17,6 +18,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from server.app.agent.cognition_agent import SYSTEM_PROMPT
 from server.app.agent.definition import (
@@ -25,6 +27,10 @@ from server.app.agent.definition import (
     load_agent_definition,
     load_agent_definition_from_markdown,
 )
+
+if TYPE_CHECKING:
+    from server.app.storage.config_models import ConfigChangeEvent
+    from server.app.storage.config_registry import ConfigRegistry
 
 logger = logging.getLogger(__name__)
 
@@ -162,6 +168,85 @@ You can only read files, search, and provide analysis.""",
                 logger.warning(f"Failed to load agent from {md_path}: {e}")
 
         logger.info(f"Loaded {loaded_count} user-defined agents from {agents_dir}")
+
+    async def seed_from_registry(
+        self, config_registry: ConfigRegistry, scope: dict[str, str] | None = None
+    ) -> None:
+        """Load non-native agent definitions from the ConfigRegistry.
+
+        Called during startup (after file-based agents are loaded) and on
+        config change events. Built-in (native=True) agents are never
+        overwritten by registry rows.
+
+        Args:
+            config_registry: The ConfigRegistry instance to query.
+            scope: Optional scope for config resolution (default: global).
+        """
+        try:
+            rows = await config_registry._list_entities("agent", scope)  # type: ignore[attr-defined]
+        except Exception as e:
+            logger.warning(f"Failed to seed agents from ConfigRegistry: {e}")
+            return
+
+        loaded = 0
+        for data in rows:
+            name = data.get("name")
+            if not name:
+                continue
+            # Skip the global defaults sentinel
+            if name.startswith("__"):
+                continue
+            # Never overwrite built-in agents from DB
+            existing = self._agents.get(name)
+            if existing and existing.native:
+                continue
+            try:
+                definition = AgentDefinition.model_validate(data)
+                definition.native = False
+                self._agents[name] = definition
+                loaded += 1
+            except Exception as e:
+                logger.warning(f"Failed to load agent '{name}' from registry: {e}")
+
+        logger.info(f"Seeded {loaded} agents from ConfigRegistry")
+
+    async def on_config_change(self, event: ConfigChangeEvent) -> None:
+        """Invalidate cached agent definitions when config changes.
+
+        Subscribes to the ConfigChangeDispatcher. When an "agent" entity
+        changes, the registry reloads from the ConfigRegistry.
+
+        Args:
+            event: The config change event describing what changed.
+        """
+        if event.entity_type != "agent":
+            return
+
+        name = event.name
+        # Skip sentinel rows
+        if name.startswith("__"):
+            return
+
+        if event.operation == "delete":
+            # Remove from registry unless it's a built-in
+            existing = self._agents.get(name)
+            if existing and not existing.native:
+                del self._agents[name]
+                logger.info(f"Removed agent '{name}' from registry (config delete)")
+        else:
+            # Reload this specific agent from ConfigRegistry
+            try:
+                from server.app.storage.config_registry import get_config_registry
+
+                reg = get_config_registry()
+                data = await reg._get_entity("agent", name, event.scope)  # type: ignore[attr-defined]
+                if data:
+                    definition = AgentDefinition.model_validate(data)
+                    definition.native = False
+                    self._agents[name] = definition
+                    logger.info(f"Reloaded agent '{name}' from ConfigRegistry")
+            except Exception as e:
+                logger.warning(f"Failed to reload agent '{name}' on config change: {e}")
 
     def get_all(self, include_hidden: bool = False) -> list[AgentDefinition]:
         """List all registered agents.

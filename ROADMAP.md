@@ -34,6 +34,10 @@ See AGENTS.md for category definitions, DoD requirements, and precedence rules.
 | 2026-03-10 | Fix `DoneEvent` fired twice: remove pass-through `elif isinstance(event, DoneEvent): yield event` in `deep_agent_service.py`; service already emits its own authoritative `DoneEvent` after `UsageEvent` | - | 6 | Completed |
 | 2026-03-10 | Fix streaming content doubled: remove redundant `on_chain_stream`/`model` branch and unused `_streamed_via_model_stream` flag from `runtime.py`; `on_chat_model_stream` is the canonical token event in LangGraph v2 | - | 4 | Completed |
 | 2026-03-10 | Fix `UsageEvent.model` always reporting `gpt-4o` default: use `_get_model_id(llm_settings)` (already in `provider_fallback.py`) instead of `llm_settings.llm_model` so Bedrock users see their actual `bedrock_model_id` | - | 6 | Completed |
+| 2026-03-18 | Fix `asyncpg` JSONB columns returning raw strings in `PostgresConfigRegistry` and `PostgresListenDispatcher` — added `_scope_from_json()` / `_def_from_json()` safe-parse helpers | - | 2 | Completed |
+| 2026-03-18 | Fix SQLAlchemy DSN format mismatch: strip `+asyncpg` driver prefix before passing to raw `asyncpg` in `factory.py` | - | 2 | Completed |
+| 2026-03-18 | Fix scope header not applied to list/get endpoints in `skills.py`, `models.py`, `agents.py` routes — added optional `extract_scope` dependency to all read and write endpoints | - | 6 | Completed |
+| 2026-03-18 | Fix `schema.py` `scope` columns as plain `JSON` preventing B-tree UNIQUE index on Postgres — replaced with `_JsonbOrJson` TypeDecorator (JSONB on Postgres, JSON on SQLite) | - | 2 | Completed |
 
 ---
 
@@ -42,6 +46,7 @@ See AGENTS.md for category definitions, DoD requirements, and precedence rules.
 | Description | Target Metric | Before | After | Layer | Status |
 |-------------|---------------|--------|-------|-------|--------|
 | Strict mypy type checking for all production code (`server/`, `client/`) | Production mypy errors | ~341 errors | 0 errors | 1–6 | Completed |
+| Ruff lint cleanup for `feature/config-registry` — unused imports, unsorted import blocks, unused `type: ignore` comments (12 auto-fixed; 10 mypy suppressions removed as stubs are now available) | Lint/mypy errors | 12 ruff + 10 mypy | 0 | 1–6 | Completed |
 
 ---
 
@@ -50,6 +55,7 @@ See AGENTS.md for category definitions, DoD requirements, and precedence rules.
 | Package | From | To | Breaking Changes | Status |
 |---------|------|-----|------------------|--------|
 | CI/CD Docker Images | N/A | N/A | None | Completed |
+| `psycopg2-binary` → `psycopg[binary,pool]` | psycopg2-binary (any) | psycopg 3.x | API surface change (psycopg3 vs psycopg2); only affects import paths, not used directly | Completed |
 
 ### CI/CD Docker Image Builds
 
@@ -141,10 +147,69 @@ See AGENTS.md for category definitions, DoD requirements, and precedence rules.
 
 | Task | Layer | Status | Acceptance Criteria | Effort | Dependencies |
 |------|-------|--------|---------------------|--------|--------------|
+| **Dynamic ConfigRegistry (hot-reloadable agent config)** | Layers 1–6 | Completed | Agent/model/provider config changeable via API without restart; scoped per user/project; DB-backed with file bootstrap | 5–7 days | P0: Persistence, P1: Scoping |
 | LLM provider fallback | Layer 5 | In Progress | If primary provider fails, fallback to secondary | 2 days | None |
 | Connection pooling | Layer 2 | Pending | Database connections pooled; no connection leaks | 1 day | None |
 | Health check endpoint | Layer 6 | Pending | `/health` returns 200 when all deps ready | 0.5 days | None |
 | Metrics and telemetry | Layer 7 | Pending | Prometheus metrics; OpenTelemetry traces | 2 days | None |
+
+---
+
+## P2-1: Dynamic ConfigRegistry (Hot-Reloadable Agent Configuration)
+
+**Layer**: Layers 1–6 (Foundation → API)
+
+**Problem**: All agent, model, and provider configuration is locked into `Settings` (environment variables / YAML at startup). There is no way to change agent definitions, LLM providers, skills, tools, or system prompts without a server restart. Multi-tenant deployments have no way to scope config per user or project.
+
+**Solution**: Replace the agent/model/provider fields in `Settings` with a `ConfigRegistry` — a DB-backed, hot-reloadable, scoped configuration store. File-based bootstrapping (`.cognition/config.yaml`, agent YAML/MD files) seeds the registry on first startup with merge semantics (DB wins on restart). Built-in agents (`default`, `readonly`) are always overwritten by built-ins at startup. A `ConfigChangeDispatcher` invalidates in-process caches on every write — zero latency on SQLite (same process), near-real-time on Postgres via `LISTEN/NOTIFY`.
+
+**Settings Split**:
+- Keep in `config.yaml` / `Settings`: server, persistence, sandbox, cors, scoping, observability, rate_limit, security, workspace_root
+- Move to `ConfigRegistry`: llm_provider, llm_model, llm_max_tokens, openai_*, bedrock_*, mcp_servers, agent_memory, agent_skills, agent_subagents, agent_interrupt_on, agent_recursion_limit, system_prompt
+
+**New DB Tables**:
+- `config_entities`: `(id, entity_type, name, scope JSON, definition JSON, source "file"|"api", created_at, updated_at)` — indexed on `(entity_type, name, scope)`
+- `config_changes`: `(id, entity_type, name, scope JSON, operation "upsert"|"delete", changed_at)` — drives invalidation
+
+**Hot-Reload Strategy**:
+- SQLite (single instance): `InProcessDispatcher` — pub/sub in same process, change is live before API response returns
+- Postgres (multi-instance): `PostgresListenDispatcher` with persistent `LISTEN cognition_config_changes` connection — no external broker needed
+
+**API Surface Added**:
+```
+POST/PUT/PATCH/DELETE /agents/{name}
+POST/DELETE           /tools/{name}
+GET/POST/PUT/DELETE   /skills, /skills/{name}
+POST/PATCH/DELETE     /models/providers, /models/providers/{id}
+```
+All write endpoints respect `X-Cognition-Scope-{key}` headers for multi-tenant scoping.
+
+**Acceptance Criteria**:
+- [x] Agent definition, LLM provider, skills, MCP servers, and system prompt can be changed via API without server restart
+- [x] Changes are reflected in the next request (< 100ms propagation on SQLite, < 1s on Postgres)
+- [x] Scope resolution: scope-level config → global defaults (walk up hierarchy)
+- [x] File bootstrap: `.cognition/config.yaml` + agent YAML/MD files seed registry on first startup; DB wins on subsequent restarts
+- [x] Built-in agents (`default`, `readonly`) are always re-seeded from code on startup
+- [x] Credentials (`OPENAI_API_KEY`, `AWS_*`) remain env vars only — never stored in DB or config.yaml
+- [x] `PATCH /config` restricted to infrastructure fields only (server, persistence, sandbox, cors, etc.)
+- [x] All existing tests pass; new tests cover CRUD, scope resolution, hot-reload invalidation, and dispatcher
+- [x] `Settings` fields being removed (`llm_*`, `openai_*`, `bedrock_*`, `mcp_servers`, `agent_*`, `system_prompt`) are deleted (not deprecated)
+- [x] ROADMAP.md updated as part of PR
+
+**Effort**: 5–7 days
+
+**Dependencies**: P0: Message persistence, P1: Multi-user session isolation (scope infrastructure)
+
+**Files**:
+- New: `server/app/storage/config_models.py`, `config_registry.py`, `config_dispatcher.py`
+- Modified: `server/app/storage/schema.py`, `factory.py`, `migrations.py`
+- Modified: `server/app/agent/agent_definition_registry.py`, `cognition_agent.py`
+- Modified: `server/app/llm/deep_agent_service.py`, `provider_fallback.py`
+- Modified: `server/app/api/routes/agents.py`, `tools.py`, `config.py`, `models.py`
+- New: `server/app/api/routes/skills.py`
+- Modified: `server/app/settings.py`, `config_loader.py`, `main.py`
+- New: `tests/unit/test_config_registry.py`, `test_config_dispatcher.py`
+- New: `tests/unit/api/test_agents_crud.py`, `test_tools_crud.py`, `test_skills_crud.py`, `test_providers_crud.py`
 
 ---
 
@@ -171,4 +236,4 @@ Per AGENTS.md requirements:
    - Features/Architectural: Before starting work
    - Security/Bug/Performance/Dependency: As part of PR
 
-**Last Updated**: 2026-03-10
+**Last Updated**: 2026-03-18

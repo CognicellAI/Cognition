@@ -353,22 +353,18 @@ class ProviderList(BaseModel):
 
 
 class ConfigUpdateRequest(BaseModel):
-    """Request to update configuration.
+    """Request to update infrastructure configuration via PATCH /config.
 
-    Only specific safe fields can be updated via PATCH /config.
-    Protected fields (server endpoints, secrets, backends) are rejected.
+    Only rate_limit and observability settings are accepted here.
+    Agent, LLM, and provider configuration has moved to the ConfigRegistry
+    (use PATCH /agents/{name}, POST /models/providers, etc.).
     """
 
-    llm: dict[str, Any] | None = Field(None, description="LLM settings (temperature, max_tokens)")
-    agent: dict[str, Any] | None = Field(None, description="Agent settings (memory, skills)")
     rate_limit: dict[str, Any] | None = Field(
         None, description="Rate limiting settings (per_minute, burst)"
     )
     observability: dict[str, Any] | None = Field(
         None, description="Observability settings (otel_enabled, metrics_port, otel_endpoint)"
-    )
-    mlflow: dict[str, Any] | None = Field(
-        None, description="Observability settings (otel_enabled, metrics_port)"
     )
 
 
@@ -464,3 +460,166 @@ class ModelList(BaseModel):
     """List of available models."""
 
     models: list[ModelInfo] = Field(default_factory=list, description="List of available models")
+
+
+# ============================================================================
+# Skill Models
+# ============================================================================
+
+
+class SkillCreate(BaseModel):
+    """Request to create or replace a skill."""
+
+    name: str = Field(..., min_length=1, max_length=100, description="Skill identifier")
+    path: str = Field(
+        ..., min_length=1, description="Filesystem path to skill directory or SKILL.md"
+    )
+    enabled: bool = Field(default=True, description="Whether this skill is active")
+    description: str | None = Field(default=None, description="Short description")
+    scope: dict[str, str] = Field(default_factory=dict, description="Scope (empty = global)")
+
+
+class SkillUpdate(BaseModel):
+    """Request to partially update a skill."""
+
+    path: str | None = Field(default=None)
+    enabled: bool | None = Field(default=None)
+    description: str | None = Field(default=None)
+    scope: dict[str, str] | None = Field(default=None)
+
+
+class SkillResponse(BaseModel):
+    """Skill information for API responses."""
+
+    name: str
+    path: str
+    enabled: bool
+    description: str | None = None
+    scope: dict[str, str] = Field(default_factory=dict)
+    source: str = "api"
+
+
+class SkillList(BaseModel):
+    """List of skills response."""
+
+    skills: list[SkillResponse] = Field(default_factory=list)
+    count: int = 0
+
+
+# ============================================================================
+# Provider / Model CRUD Models
+# ============================================================================
+
+
+class ProviderCreate(BaseModel):
+    """Request to create or replace a provider config."""
+
+    id: str = Field(..., min_length=1, max_length=100, description="Unique provider identifier")
+    provider: str = Field(..., min_length=1, description="Provider type (openai, bedrock, …)")
+    model: str = Field(..., min_length=1, description="Model ID")
+    display_name: str | None = Field(default=None)
+    enabled: bool = Field(default=True)
+    priority: int = Field(default=0, description="Lower = tried first in fallback chain")
+    max_retries: int = Field(default=2, ge=0)
+    api_key_env: str | None = Field(
+        default=None,
+        description="Name of the env var holding the API key (not the key itself)",
+    )
+    base_url: str | None = Field(default=None)
+    region: str | None = Field(default=None)
+    role_arn: str | None = Field(default=None)
+    extra: dict[str, Any] = Field(default_factory=dict)
+    scope: dict[str, str] = Field(default_factory=dict)
+
+
+class ProviderUpdate(BaseModel):
+    """Request to partially update a provider config."""
+
+    model: str | None = None
+    display_name: str | None = None
+    enabled: bool | None = None
+    priority: int | None = None
+    max_retries: int | None = None
+    api_key_env: str | None = None
+    base_url: str | None = None
+    region: str | None = None
+    role_arn: str | None = None
+    extra: dict[str, Any] | None = None
+
+
+class ProviderResponse(BaseModel):
+    """Provider config for API responses."""
+
+    id: str
+    provider: str
+    model: str
+    display_name: str | None = None
+    enabled: bool
+    priority: int
+    max_retries: int
+    api_key_env: str | None = None
+    base_url: str | None = None
+    region: str | None = None
+    role_arn: str | None = None
+    extra: dict[str, Any] = Field(default_factory=dict)
+    scope: dict[str, str] = Field(default_factory=dict)
+    source: str = "api"
+
+
+class ProviderConfigList(BaseModel):
+    """List of providers response."""
+
+    providers: list[ProviderResponse] = Field(default_factory=list)
+    count: int = 0
+
+
+# ============================================================================
+# Agent CRUD Models
+# ============================================================================
+
+
+class AgentCreate(BaseModel):
+    """Request to create or replace an agent definition."""
+
+    name: str = Field(..., min_length=1, max_length=100, description="Agent identifier")
+    system_prompt: str = Field(default="", description="System prompt text")
+    description: str | None = Field(default=None)
+    mode: Literal["primary", "subagent", "all"] = Field(default="primary")
+    hidden: bool = Field(default=False)
+    tools: list[str] = Field(default_factory=list)
+    skills: list[str] = Field(default_factory=list)
+    memory: list[str] = Field(default_factory=list)
+    interrupt_on: dict[str, bool] = Field(default_factory=dict)
+    model: str | None = Field(default=None, description="Default model override")
+    temperature: float | None = Field(default=None)
+    scope: dict[str, str] = Field(default_factory=dict)
+
+
+class AgentUpdate(BaseModel):
+    """Request to partially update an agent definition."""
+
+    system_prompt: str | None = None
+    description: str | None = None
+    mode: Literal["primary", "subagent", "all"] | None = None
+    hidden: bool | None = None
+    tools: list[str] | None = None
+    skills: list[str] | None = None
+    memory: list[str] | None = None
+    interrupt_on: dict[str, bool] | None = None
+    model: str | None = None
+    temperature: float | None = None
+
+
+# ============================================================================
+# Tool CRUD Models
+# ============================================================================
+
+
+class ToolCreate(BaseModel):
+    """Request to register a tool in the ConfigRegistry."""
+
+    name: str = Field(..., min_length=1, max_length=100, description="Tool identifier")
+    path: str = Field(..., min_length=1, description="Module or file path for the tool")
+    enabled: bool = Field(default=True)
+    description: str | None = Field(default=None)
+    scope: dict[str, str] = Field(default_factory=dict)

@@ -3,26 +3,24 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from server.app.agent.cognition_agent import create_cognition_agent
-from server.app.settings import get_settings
 
 
 @pytest.mark.asyncio
 async def test_create_cognition_agent_pluggability():
-    """Verify that create_cognition_agent correctly applies pluggability settings."""
-    settings = get_settings()
+    """Verify that create_cognition_agent correctly applies pluggability parameters.
 
-    # Mock settings to provide sample values
-    with (
-        patch.object(settings, "agent_memory", ["TEST_MEMORY.md"]),
-        patch.object(settings, "agent_skills", [".cognition/skills/"]),
-        patch.object(
-            settings, "agent_subagents", [{"name": "test-subagent", "system_prompt": "..."}]
-        ),
-        patch.object(settings, "agent_interrupt_on", {"execute": True}),
-        patch("server.app.agent.cognition_agent.create_deep_agent") as mock_create,
-    ):
+    agent_memory/skills/subagents/interrupt_on moved from Settings to direct function
+    parameters (resolved from ConfigRegistry at runtime). Callers pass them explicitly.
+    """
+    with patch("server.app.agent.cognition_agent.create_deep_agent") as mock_create:
         mock_create.return_value = AsyncMock()
-        await create_cognition_agent(project_path=".")
+        await create_cognition_agent(
+            project_path=".",
+            memory=["TEST_MEMORY.md"],
+            skills=[".cognition/skills/"],
+            subagents=[{"name": "test-subagent", "system_prompt": "..."}],
+            interrupt_on={"execute": True},
+        )
 
         # Verify create_deep_agent was called with correct parameters
         args, kwargs = mock_create.call_args

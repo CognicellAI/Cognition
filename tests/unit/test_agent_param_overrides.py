@@ -66,12 +66,15 @@ class TestCreateAgentRuntimeRecursionLimit:
     """create_agent_runtime must honour per-agent recursion_limit overrides."""
 
     @pytest.mark.asyncio
-    async def test_uses_settings_default_when_definition_not_set(self):
-        """When definition.config.recursion_limit is None, settings.agent_recursion_limit wins."""
+    async def test_uses_global_default_when_definition_not_set(self):
+        """When definition.config.recursion_limit is None, the GlobalAgentDefaults value (1000) wins.
+
+        agent_recursion_limit was moved from Settings to GlobalAgentDefaults (ConfigRegistry).
+        The hardcoded fallback in create_agent_runtime now mirrors that default.
+        """
         definition = _make_definition(recursion_limit=None)
 
         mock_settings = MagicMock()
-        mock_settings.agent_recursion_limit = 500
         mock_settings.trusted_tool_namespaces = ["server.app.tools"]
 
         mock_runtime = MagicMock()
@@ -96,8 +99,8 @@ class TestCreateAgentRuntimeRecursionLimit:
             )
 
         _, kwargs = mock_runtime_cls.call_args
-        assert kwargs["recursion_limit"] == 500, (
-            "Should fall back to settings.agent_recursion_limit when definition has no override"
+        assert kwargs["recursion_limit"] == 1000, (
+            "Should fall back to GlobalAgentDefaults.recursion_limit (1000) when definition has no override"
         )
 
     @pytest.mark.asyncio

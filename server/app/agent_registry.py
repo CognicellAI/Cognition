@@ -770,7 +770,7 @@ class AgentRegistry:
             tools=tools if tools else None,
             middleware=middleware if middleware else None,
             settings=effective_settings,
-            mcp_configs=effective_settings.mcp_server_configs if effective_settings else None,
+            mcp_configs=None,  # MCP configs resolved from ConfigRegistry in deep_agent_service
         )
 
         # If session_id provided, associate agent with session

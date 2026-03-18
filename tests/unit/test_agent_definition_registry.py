@@ -629,11 +629,8 @@ class TestAgentDefinitionRegistryGlobal:
 
     def test_get_agent_registry_before_init(self):
         """Get registry before initialization returns None."""
-        # Ensure no global registry
-        from server.app.agent.agent_definition_registry import _registry
-
-        global _registry
-        _registry = None
+        # Clear any existing registry via the public setter
+        set_agent_definition_registry(None)
 
         assert get_agent_definition_registry() is None
 

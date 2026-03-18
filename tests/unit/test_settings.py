@@ -40,12 +40,6 @@ class TestSettingsDefaults:
         assert isinstance(settings.workspace_root, Path)
         assert settings.workspace_root.is_absolute()
 
-    def test_default_llm_settings(self):
-        """Test default LLM settings."""
-        settings = TestSettings()
-        assert settings.llm_provider == "mock"
-        assert settings.llm_model == "gpt-4o"
-
     def test_default_rate_limiting(self):
         """Test default rate limiting settings."""
         settings = TestSettings()
@@ -124,46 +118,6 @@ class TestSettingsValidation:
 
         with pytest.raises(PydanticValidationError):
             TestSettings(metrics_port=0)
-
-
-class TestLLMProviderSettings:
-    """Test LLM provider specific settings."""
-
-    def test_openai_provider_settings(self):
-        """Test OpenAI provider configuration."""
-        settings = TestSettings(
-            llm_provider="openai",
-            llm_model="gpt-4",
-            openai_api_key="sk-test",
-            openai_api_base="https://api.openai.com/v1",
-        )
-        assert settings.llm_provider == "openai"
-        assert settings.llm_model == "gpt-4"
-
-    def test_bedrock_provider_settings(self):
-        """Test Bedrock provider configuration."""
-        settings = TestSettings(
-            llm_provider="bedrock",
-            aws_region="us-west-2",
-            bedrock_model_id="anthropic.claude-3-sonnet",
-        )
-        assert settings.llm_provider == "bedrock"
-        assert settings.aws_region == "us-west-2"
-
-    def test_openai_compatible_settings(self):
-        """Test OpenAI compatible provider configuration."""
-        settings = TestSettings(
-            llm_provider="openai_compatible",
-            openai_compatible_base_url="http://localhost:8000/v1",
-            openai_compatible_api_key="custom-key",
-        )
-        assert settings.llm_provider == "openai_compatible"
-        assert settings.openai_compatible_base_url == "http://localhost:8000/v1"
-
-    def test_mock_provider_default(self):
-        """Test that mock is the default provider."""
-        settings = TestSettings()
-        assert settings.llm_provider == "mock"
 
 
 class TestSettingsLLMModel:

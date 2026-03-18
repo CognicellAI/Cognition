@@ -88,7 +88,7 @@ dev = [
 deploy = [
     "mlflow[genai]>=2.19.0",
     "docker>=7.0.0",
-    "psycopg2-binary>=2.9.0",
+    "psycopg[binary,pool]>=3.1.0",
     "asyncpg>=0.30.0",
     "langgraph-checkpoint-postgres>=2.0.0",
 ]

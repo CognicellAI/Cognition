@@ -17,7 +17,7 @@ from server.app.agent.agent_definition_registry import (
 from server.app.agent_registry import initialize_agent_registry
 from server.app.api.middleware import ObservabilityMiddleware, SecurityHeadersMiddleware
 from server.app.api.models import HealthStatus, ReadyStatus
-from server.app.api.routes import agents, config, messages, models, sessions, tools
+from server.app.api.routes import agents, config, messages, models, sessions, skills, tools
 from server.app.exceptions import RateLimitError
 from server.app.file_watcher import WorkspaceWatcher
 from server.app.observability import setup_metrics, setup_tracing
@@ -47,13 +47,30 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     set_storage_backend(storage_backend)
     logger.info("Storage backend initialized")
 
+    # Initialize ConfigRegistry and wire it globally
+    from server.app.storage.config_registry import set_config_registry
+    from server.app.storage.factory import create_config_dispatcher, create_config_registry
+
+    config_registry = create_config_registry(settings)
+    set_config_registry(config_registry)
+    logger.info("ConfigRegistry initialized")
+
+    # Initialize agent definition registry (file-based agents)
+    def_registry = initialize_agent_definition_registry(settings.workspace_path)
+    logger.info("Agent definition registry initialized")
+
+    # Seed ConfigRegistry from file-based agents (insert-if-absent)
+    await def_registry.seed_from_registry(config_registry)
+
+    # Initialize ConfigChangeDispatcher and wire hot-reload subscribers
+    dispatcher = create_config_dispatcher(settings)
+    dispatcher.subscribe(def_registry.on_config_change)
+    await dispatcher.start()
+    logger.info("ConfigChangeDispatcher started")
+
     # Initialize session manager
     initialize_session_manager(storage_backend, settings)
     logger.info("Session manager initialized")
-
-    # Initialize agent definition registry
-    initialize_agent_definition_registry(settings.workspace_path)
-    logger.info("Agent definition registry initialized")
 
     # Initialize agent registry for tools and middleware
     initialize_agent_registry(settings=settings)
@@ -90,7 +107,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         port=settings.metrics_port,
         enabled=settings.otel_enabled,
     )
-    setup_mlflow_tracing(settings)
+    setup_mlflow_tracing()
     rate_limiter = get_rate_limiter(
         RateLimitConfig(
             requests_per_minute=settings.rate_limit_per_minute,
@@ -100,8 +117,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     await rate_limiter.start()
     logger.info(
         "Server configuration",
-        llm_provider=settings.llm_provider,
         otel_enabled=settings.otel_enabled,
+        persistence_backend=settings.persistence_backend,
     )
     yield
     logger.info("Shutting down Cognition server")
@@ -112,6 +129,11 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         logger.info("File watcher stopped")
 
     await rate_limiter.stop()
+
+    # Stop ConfigChangeDispatcher
+    await dispatcher.stop()
+    logger.info("ConfigChangeDispatcher stopped")
+
     # Close storage backend connections
     if storage_backend:
         await storage_backend.close()
@@ -130,8 +152,8 @@ settings = get_settings()
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins,
-    allow_methods=settings.cors_methods,
-    allow_headers=settings.cors_headers,
+    allow_methods=["GET", "POST", "PUT", "DELETE", "PATCH"],
+    allow_headers=["Content-Type", "Authorization"],
     allow_credentials=settings.cors_credentials,
 )
 
@@ -142,7 +164,8 @@ app.include_router(sessions.router)
 app.include_router(messages.router)
 app.include_router(config.router)
 app.include_router(agents.router)
-app.include_router(models.router)  # ISSUE-008: GET /models endpoint
+app.include_router(skills.router)
+app.include_router(models.router)
 app.include_router(tools.router)
 
 

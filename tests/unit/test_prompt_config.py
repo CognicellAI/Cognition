@@ -73,26 +73,30 @@ class TestPromptConfig:
 
 
 class TestPromptConfigIntegration:
-    """Integration tests for PromptConfig."""
+    """Integration tests for PromptConfig and prompt resolution.
 
-    def test_settings_integration(self) -> None:
-        """Test PromptConfig works with settings."""
-        from server.app.settings import Settings
+    system_prompt was removed from Settings and moved to GlobalProviderDefaults
+    in the ConfigRegistry (system_prompt_type + system_prompt_value fields).
+    These tests verify the underlying PromptConfig model still works correctly
+    when used independently, and that GlobalProviderDefaults carries the config.
+    """
 
-        # Create settings with default prompt config
-        settings = Settings()
+    def test_global_provider_defaults_prompt_fields(self) -> None:
+        """GlobalProviderDefaults carries system_prompt_type and system_prompt_value."""
+        from server.app.storage.config_models import GlobalProviderDefaults
 
-        # Should have default PromptConfig
-        assert settings.system_prompt.type == "file"
-        assert settings.system_prompt.value == "system"
+        defaults = GlobalProviderDefaults()
+        assert defaults.system_prompt_type == "file"
+        assert defaults.system_prompt_value == "system"
 
-    def test_settings_with_custom_prompt(self, tmp_path: Path) -> None:
-        """Test settings with custom inline prompt."""
-        from server.app.settings import Settings
+    def test_global_provider_defaults_custom_inline_prompt(self) -> None:
+        """GlobalProviderDefaults can be set with an inline prompt."""
+        from server.app.storage.config_models import GlobalProviderDefaults
 
-        # Create settings with inline prompt using model_validate (populate_by_name=True)
-        settings = Settings.model_validate(
-            {"system_prompt": PromptConfig(type="inline", value="Custom system prompt")}
+        defaults = GlobalProviderDefaults(
+            system_prompt_type="inline",
+            system_prompt_value="Custom system prompt",
         )
-
-        assert settings.system_prompt.get_prompt_text() == "Custom system prompt"
+        # Inline prompts should be retrievable via PromptConfig
+        config = PromptConfig(type=defaults.system_prompt_type, value=defaults.system_prompt_value)
+        assert config.get_prompt_text() == "Custom system prompt"
