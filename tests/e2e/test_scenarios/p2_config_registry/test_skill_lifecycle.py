@@ -349,7 +349,8 @@ This is a test skill for E2E verification.
             f"/sessions/{session_id}/messages",
             json={"content": "What skills are available to help me?"},
         )
-        assert msg_resp.status_code == 202
+        # Accept either 200 (non-streaming) or 202 (streaming) status codes
+        assert msg_resp.status_code in (200, 202), f"Unexpected status: {msg_resp.status_code}"
 
         # Cleanup
         await api_client.delete(f"/skills/{name}")
@@ -391,7 +392,8 @@ This verifies API and filesystem skills can coexist.
         msg_resp = await api_client.post(
             f"/sessions/{session_id}/messages", json={"content": "List available skills."}
         )
-        assert msg_resp.status_code == 202
+        # Accept either 200 (non-streaming) or 202 (streaming) status codes
+        assert msg_resp.status_code in (200, 202), f"Unexpected status: {msg_resp.status_code}"
 
         # Cleanup
         await api_client.delete(f"/skills/{name}")
@@ -430,7 +432,8 @@ This should not be visible.
         msg_resp = await api_client.post(
             f"/sessions/{session_id}/messages", json={"content": "Hello"}
         )
-        assert msg_resp.status_code == 202
+        # Accept either 200 (non-streaming) or 202 (streaming) status codes
+        assert msg_resp.status_code in (200, 202), f"Unexpected status: {msg_resp.status_code}"
 
         # Cleanup
         await api_client.delete(f"/skills/{name}")
