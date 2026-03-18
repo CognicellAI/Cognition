@@ -212,6 +212,16 @@ ignore_errors = true
 module = ["langchain_aws", "botocore", "botocore.*"]
 ignore_missing_imports = true
 
+# asyncpg has no stubs on Python 3.11 CI env
+[[tool.mypy.overrides]]
+module = ["asyncpg", "asyncpg.*"]
+ignore_missing_imports = true
+
+# boto3 has no bundled stubs (boto3-stubs is optional)
+[[tool.mypy.overrides]]
+module = ["boto3", "boto3.*"]
+ignore_missing_imports = true
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
