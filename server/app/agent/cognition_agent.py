@@ -257,7 +257,7 @@ async def create_cognition_agent(
 
     # Create the sandbox backend using settings-driven factory
     sandbox_id = f"cognition-{project_path.name}"
-    backend = create_sandbox_backend(
+    sandbox_backend = create_sandbox_backend(
         root_dir=project_path,
         sandbox_id=sandbox_id,
         sandbox_backend=settings.sandbox_backend,
@@ -273,7 +273,7 @@ async def create_cognition_agent(
     # The backend can be either CognitionLocalSandboxBackend or CognitionDockerSandboxBackend
     # Both provide execute() method and cwd property that ContextManager supports
     try:
-        context_manager = ContextManager(backend)  # type: ignore[arg-type]
+        context_manager = ContextManager(sandbox_backend)  # type: ignore[arg-type]
         context_manager.build_index()
 
         # Get relevant context for system prompt
@@ -294,40 +294,60 @@ async def create_cognition_agent(
     agent_subagents: list[Any]
     agent_interrupt_on: dict[str, Any]
 
+    # Try to get config registry once - needed for defaults and skills backend
+    try:
+        from server.app.storage.config_registry import get_config_registry
+
+        reg = get_config_registry()
+    except RuntimeError:
+        reg = None
+
     if memory is not None:
         agent_memory = list(memory)
     else:
-        try:
-            from server.app.storage.config_registry import get_config_registry
-
-            reg = get_config_registry()
+        if reg:
             defaults = await reg.get_global_agent_defaults(scope)
             agent_memory = defaults.memory
-        except RuntimeError:
+        else:
             agent_memory = ["AGENTS.md"]
 
     if skills is not None:
         agent_skills = list(skills)
     else:
-        try:
-            from server.app.storage.config_registry import get_config_registry
-
-            reg = get_config_registry()
+        if reg:
             defaults = await reg.get_global_agent_defaults(scope)
             agent_skills = defaults.skills
-        except RuntimeError:
+        else:
             agent_skills = [".cognition/skills/"]
+
+    # Always include API skills route for ConfigRegistry-backed skills
+    if "/skills/api/" not in agent_skills:
+        agent_skills = agent_skills + ["/skills/api/"]
+
+    # Wrap sandbox backend with CompositeBackend to support DB-backed skills
+    if reg:
+        from deepagents.backends.composite import CompositeBackend
+        from server.app.agent.skills_backend import ConfigRegistrySkillsBackend
+
+        # Create DB-backed skills backend for API-created skills
+        db_skills_backend = ConfigRegistrySkillsBackend(registry=reg, scope=scope)
+
+        # CompositeBackend routes skill paths to DB backend, everything else to sandbox
+        backend = CompositeBackend(
+            default=sandbox_backend,  # Filesystem for tools, execute(), etc.
+            routes={"/skills/api/": db_skills_backend},  # DB for API-created skills
+        )
+    else:
+        # Fallback to sandbox backend only if ConfigRegistry not available
+        backend = sandbox_backend
 
     if subagents is not None:
         raw_subagents = list(subagents)
     else:
-        try:
-            from server.app.storage.config_registry import get_config_registry
-
-            reg = get_config_registry()
+        if reg:
             defaults = await reg.get_global_agent_defaults(scope)
             raw_subagents = list(defaults.subagents)
-        except RuntimeError:
+        else:
             raw_subagents = []
 
     # Normalize subagent specs: ensure required 'description' key is present
@@ -339,23 +359,17 @@ async def create_cognition_agent(
     if interrupt_on is not None:
         agent_interrupt_on = dict(interrupt_on)
     else:
-        try:
-            from server.app.storage.config_registry import get_config_registry
-
-            reg = get_config_registry()
+        if reg:
             defaults = await reg.get_global_agent_defaults(scope)
             agent_interrupt_on = dict(defaults.interrupt_on)
-        except RuntimeError:
+        else:
             agent_interrupt_on = {}
 
     # Resolve system prompt from ConfigRegistry
     if system_prompt:
         prompt = system_prompt
     else:
-        try:
-            from server.app.storage.config_registry import get_config_registry
-
-            reg = get_config_registry()
+        if reg:
             prov_defaults = await reg.get_global_provider_defaults(scope)
             prompt_type = prov_defaults.system_prompt_type
             prompt_value = prov_defaults.system_prompt_value
@@ -365,7 +379,7 @@ async def create_cognition_agent(
                 prompt = PromptConfig(type=prompt_type, value=prompt_value).get_prompt_text()
             except (FileNotFoundError, RuntimeError):
                 prompt = system_prompt_with_context
-        except RuntimeError:
+        else:
             prompt = system_prompt_with_context
 
     # Initialize middleware stack

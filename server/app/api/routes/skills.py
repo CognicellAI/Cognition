@@ -20,6 +20,7 @@ def _to_response(skill: object) -> SkillResponse:
         path=skill.path,  # type: ignore[attr-defined]
         enabled=skill.enabled,  # type: ignore[attr-defined]
         description=skill.description,  # type: ignore[attr-defined]
+        content=skill.content,  # type: ignore[attr-defined]
         scope=skill.scope,  # type: ignore[attr-defined]
         source=skill.source,  # type: ignore[attr-defined]
     )
@@ -86,16 +87,31 @@ async def create_skill(
         reg = get_config_registry()
         # Header scope overrides body scope if provided
         effective_scope = scope if scope is not None else (body.scope or {})
+
+        # Auto-generate path if content is provided, otherwise use provided path
+        skill_path: str
+        if body.content:
+            skill_path = f"/skills/api/{body.name}/SKILL.md"
+        else:
+            if not body.path:
+                raise HTTPException(
+                    status_code=400, detail="path is required when content is not provided"
+                )
+            skill_path = body.path
+
         skill = SkillDefinition(
             name=body.name,
-            path=body.path,
+            path=skill_path,
             enabled=body.enabled,
             description=body.description,
+            content=body.content,
             scope=effective_scope,
             source="api",
         )
         await reg.upsert_skill(skill)
         return _to_response(skill)
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e)) from e
 
@@ -127,6 +143,11 @@ async def update_skill(
             raise HTTPException(status_code=404, detail=f"Skill '{name}' not found")
 
         updates = body.model_dump(exclude_none=True)
+
+        # Auto-generate path if content is being set but path is not provided
+        if body.content and "path" not in updates:
+            updates["path"] = f"/skills/api/{name}/SKILL.md"
+
         updated = skill.model_copy(update=updates)
         await reg.upsert_skill(updated)
         return _to_response(updated)

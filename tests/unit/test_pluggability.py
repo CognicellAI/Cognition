@@ -25,7 +25,8 @@ async def test_create_cognition_agent_pluggability():
         # Verify create_deep_agent was called with correct parameters
         args, kwargs = mock_create.call_args
         assert kwargs["memory"] == ["TEST_MEMORY.md"]
-        assert kwargs["skills"] == [".cognition/skills/"]
+        # Skills now automatically includes /skills/api/ route for DB-backed skills
+        assert kwargs["skills"] == [".cognition/skills/", "/skills/api/"]
         # description is normalized to "" when missing (required by deepagents SubAgent spec)
         assert kwargs["subagents"] == [
             {"name": "test-subagent", "system_prompt": "...", "description": ""}

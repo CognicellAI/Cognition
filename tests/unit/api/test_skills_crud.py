@@ -79,9 +79,21 @@ class TestCreateSkill:
         response = client.post("/skills", json={"path": "some/path.md"})
         assert response.status_code == 422
 
-    def test_create_skill_missing_path_returns_422(self):
+    def test_create_skill_missing_path_and_content_returns_400(self):
+        """Without content, path is required."""
         response = client.post("/skills", json={"name": "no-path-skill"})
-        assert response.status_code == 422
+        assert response.status_code == 400
+
+    def test_create_skill_with_content_auto_generates_path(self):
+        """When content is provided, path is auto-generated."""
+        response = client.post(
+            "/skills",
+            json={"name": "content-skill", "content": "# My Skill\n\nInstructions here."},
+        )
+        assert response.status_code == 201
+        data = response.json()
+        assert data["path"] == "/skills/api/content-skill/SKILL.md"
+        assert data["content"] == "# My Skill\n\nInstructions here."
 
 
 class TestUpdateSkill:
