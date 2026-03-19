@@ -110,7 +110,9 @@ class ModelCatalog:
 
     @property
     def is_stale(self) -> bool:
-        """Whether the cache has expired."""
+        """Whether the cache has expired or was never populated."""
+        if self._last_refresh == 0.0:
+            return True
         return (time.monotonic() - self._last_refresh) > self._ttl_seconds
 
     @property
