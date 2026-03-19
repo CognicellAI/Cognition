@@ -64,7 +64,7 @@ curl -X PATCH http://localhost:8000/sessions/{id} \
   -d '{"config": {"model": "gpt-4o-mini", "temperature": 0.2}}'
 ```
 
-If only `model` is provided, Cognition infers the provider via the `DiscoveryEngine`.
+If only `model` is provided, Cognition resolves the provider from the ConfigRegistry (first enabled provider by priority). Use `provider_id` to pin a specific provider config.
 
 ---
 

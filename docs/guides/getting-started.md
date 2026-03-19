@@ -221,31 +221,81 @@ curl -X POST http://localhost:8000/sessions \
 
 ## Switching LLM Providers
 
+Provider configuration lives in `.cognition/config.yaml`. On first startup, the `llm:` section is seeded into the ConfigRegistry. You can also manage providers via the REST API.
+
+### OpenAI
+
+```yaml
+# .cognition/config.yaml
+llm:
+  provider: openai
+  model: gpt-4o
+```
+
+```bash
+export OPENAI_API_KEY=sk-...
+```
+
+### Anthropic
+
+```yaml
+llm:
+  provider: anthropic
+  model: claude-sonnet-4-6
+```
+
+```bash
+export ANTHROPIC_API_KEY=sk-ant-...
+```
+
 ### AWS Bedrock
+
+```yaml
+llm:
+  provider: bedrock
+  model: anthropic.claude-3-sonnet-20240229-v1:0
+  region: us-east-1
+```
 
 ```bash
 export AWS_REGION=us-east-1
 export AWS_ACCESS_KEY_ID=AKIA...
 export AWS_SECRET_ACCESS_KEY=...
-export COGNITION_LLM_PROVIDER=bedrock
-export COGNITION_LLM_MODEL=anthropic.claude-3-sonnet-20240229-v1:0
 ```
 
-### Ollama (local)
+### OpenAI-compatible (OpenRouter, vLLM, Ollama, etc.)
 
-```bash
-export COGNITION_LLM_PROVIDER=ollama
-export COGNITION_OLLAMA_MODEL=llama3.2
-export COGNITION_OLLAMA_BASE_URL=http://localhost:11434
+```yaml
+llm:
+  provider: openai_compatible
+  model: google/gemini-3-flash-preview
+  base_url: https://openrouter.ai/api/v1
 ```
 
-### OpenAI-compatible (OpenRouter, vLLM, etc.)
-
 ```bash
-export COGNITION_LLM_PROVIDER=openai_compatible
-export COGNITION_OPENAI_COMPATIBLE_BASE_URL=https://openrouter.ai/api/v1
 export COGNITION_OPENAI_COMPATIBLE_API_KEY=sk-or-...
-export COGNITION_LLM_MODEL=google/gemini-pro
+```
+
+### Managing providers via API
+
+You can also create, update, and delete providers at runtime without restarting:
+
+```bash
+# Create a provider
+curl -X POST http://localhost:8000/models/providers \
+  -H "Content-Type: application/json" \
+  -d '{"id": "openrouter", "provider": "openai_compatible", "model": "google/gemini-3-flash-preview", "base_url": "https://openrouter.ai/api/v1", "api_key_env": "COGNITION_OPENAI_COMPATIBLE_API_KEY"}'
+
+# Browse available models for the provider
+curl http://localhost:8000/models/providers/openrouter/models
+
+# Test connectivity
+curl -X POST http://localhost:8000/models/providers/openrouter/test
+
+# Pin a session to a specific provider
+curl -X PATCH http://localhost:8000/sessions/{id} \
+  -H "Content-Type: application/json" \
+  -d '{"config": {"provider_id": "openrouter"}}'
 ```
 
 ---
