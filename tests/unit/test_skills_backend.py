@@ -5,7 +5,6 @@ from __future__ import annotations
 import pytest
 
 from server.app.agent.skills_backend import ConfigRegistrySkillsBackend
-from server.app.storage.config_dispatcher import InProcessDispatcher
 from server.app.storage.config_models import SkillDefinition
 from server.app.storage.config_registry import MemoryConfigRegistry
 
