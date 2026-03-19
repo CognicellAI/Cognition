@@ -150,7 +150,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 app = FastAPI(
     title="Cognition",
     description="AI-powered coding assistant",
-    version="0.1.0",
+    version="0.4.0",
     lifespan=lifespan,
 )
 
@@ -184,7 +184,7 @@ async def health_check() -> HealthStatus:
 
     return HealthStatus(
         status="healthy",
-        version="0.1.0",
+        version="0.4.0",
         active_sessions=len(sessions_list),
         circuit_breakers=[],
         timestamp=datetime.now(UTC),
