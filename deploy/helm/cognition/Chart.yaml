@@ -1,0 +1,20 @@
+apiVersion: v2
+name: cognition
+description: Cognition AI coding assistant - batteries-included AI backend
+version: 0.1.0
+appVersion: "0.3.0"
+home: https://github.com/CognicellAI/Cognition
+sources:
+  - https://github.com/CognicellAI/Cognition
+maintainers:
+  - name: Cognition Team
+keywords:
+  - ai
+  - coding
+  - agent
+  - llm
+  - langgraph
+annotations:
+  category: AI/ML
+  # This chart is standalone and does not include PostgreSQL
+  # PostgreSQL must be deployed separately (recommended: CNPG Cluster)

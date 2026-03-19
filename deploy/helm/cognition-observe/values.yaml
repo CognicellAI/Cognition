@@ -1,0 +1,88 @@
+namespace:
+  create: true
+  name: cognition-observe
+
+# Prometheus configuration
+prometheus:
+  enabled: true
+  replicaCount: 1
+  image:
+    repository: prom/prometheus
+    tag: v2.48.0
+  service:
+    port: 9090
+  persistence:
+    enabled: true
+    storageClass: longhorn
+    size: 50Gi
+  retention: 30d
+  scrapeInterval: 15s
+
+# Grafana configuration
+grafana:
+  enabled: true
+  replicaCount: 1
+  image:
+    repository: grafana/grafana
+    tag: 10.2.3
+  service:
+    port: 3000
+  admin:
+    user: admin
+    password: admin
+  persistence:
+    enabled: true
+    storageClass: longhorn
+    size: 10Gi
+
+# MLflow configuration
+mlflow:
+  enabled: true
+  replicaCount: 1
+  image:
+    repository: ghcr.io/mlflow/mlflow
+    tag: v2.9.0
+  service:
+    port: 5000
+  persistence:
+    enabled: true
+    storageClass: longhorn
+    size: 50Gi
+  database:
+    host: cognition-db-rw.cognition.svc.cluster.local
+    port: 5432
+    name: mlflow
+    user: mlflow
+    password: mlflow
+
+# Loki configuration
+loki:
+  enabled: true
+  replicaCount: 1
+  image:
+    repository: grafana/loki
+    tag: 2.9.3
+  service:
+    port: 3100
+  persistence:
+    enabled: true
+    storageClass: longhorn
+    size: 30Gi
+
+# OpenTelemetry Collector configuration
+otelCollector:
+  enabled: true
+  replicaCount: 1
+  image:
+    repository: otel/opentelemetry-collector-contrib
+    tag: 0.96.0
+  service:
+    grpcPort: 4317
+    httpPort: 4318
+
+# Promtail configuration (runs as DaemonSet)
+promtail:
+  enabled: true
+  image:
+    repository: grafana/promtail
+    tag: 2.9.3

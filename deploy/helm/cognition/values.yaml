@@ -1,0 +1,201 @@
+# Default values for cognition.
+# This is a YAML-formatted file.
+# Declare variables to be passed into your templates.
+
+# Namespace configuration
+namespace:
+  create: true
+  name: cognition
+
+# Number of replicas for the Cognition server
+replicaCount: 3
+
+image:
+  # GitHub Container Registry image
+  # https://github.com/CognicellAI/Cognition/pkgs/container/cognition
+  repository: ghcr.io/cognicellai/cognition
+  pullPolicy: IfNotPresent
+  # Overrides the image tag whose default is the chart appVersion.
+  # Available tags: latest, 0.3.0, 0.2.0, etc.
+  tag: ""
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+serviceAccount:
+  # Specifies whether a service account should be created
+  create: true
+  # Annotations to add to the service account
+  annotations: {}
+  # The name of the service account to use.
+  # If not set and create is true, a name is generated using the fullname template
+  name: ""
+
+podAnnotations: {}
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 1000
+  fsGroup: 1000
+
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  runAsNonRoot: true
+  runAsUser: 1000
+  capabilities:
+    drop:
+      - ALL
+
+service:
+  type: ClusterIP
+  port: 8000
+  metricsPort: 9090
+
+# Tailscale ingress configuration
+tailscale:
+  enabled: true
+  hostname: cognition
+
+# Autoscaling configuration
+autoscaling:
+  enabled: false
+  minReplicas: 3
+  maxReplicas: 10
+  targetCPUUtilizationPercentage: 80
+  targetMemoryUtilizationPercentage: 80
+
+# Database configuration
+# Note: This chart does NOT deploy PostgreSQL. You must deploy it separately.
+database:
+  # Database host (service name or IP)
+  host: cognition-db-rw
+  # Database port
+  port: 5432
+  # Database name
+  name: cognition
+  # Database user
+  user: cognition
+  # Database password (only used if existingSecretName is not set)
+  password: ""
+  # Use existing secret for database credentials
+  # The secret should contain a key named 'uri' with the full connection string
+  # Format: postgresql+asyncpg://user:password@host:5432/dbname
+  existingSecretName: ""
+  existingSecretKey: "uri"
+
+# Persistence configuration
+persistence:
+  workspace:
+    enabled: true
+    # Storage class for the workspace PVC
+    storageClass: longhorn
+    # Access mode - ReadWriteMany allows multiple pods to share the workspace
+    accessMode: ReadWriteMany
+    # Size of the workspace volume
+    size: 50Gi
+    # Use existing PVC instead of creating a new one
+    existingClaim: ""
+
+# Cognition configuration
+config:
+  # Log level: debug, info, warn, error
+  logLevel: info
+  
+  # LLM provider configuration
+  llm:
+    # Provider: openai, bedrock, openai_compatible, ollama
+    provider: openai_compatible
+    # Model name
+    model: google/gemini-3-flash-preview
+    # Temperature (optional)
+    temperature: 0.5
+    # Max tokens (optional)
+    maxTokens: 4096
+    # Base URL for OpenAI compatible providers (e.g., OpenRouter, vLLM)
+    openaiCompatibleBaseUrl: "https://openrouter.ai/api/v1"
+  
+  # Agent configuration
+  agent:
+    # Memory files to load
+    memory:
+      - AGENTS.md
+    # Skills directories
+    skills:
+      - .cognition/skills/
+    # Additional tools (optional)
+    tools: []
+    # Custom AGENTS.md content (optional)
+    agentsMd: ""
+  
+  # AWS/Bedrock configuration
+  aws:
+    # AWS region
+    region: us-east-1
+    # Bedrock role ARN (optional - for cross-account access)
+    bedrockRoleArn: ""
+  
+  # Observability configuration
+  observability:
+    # Enable OpenTelemetry tracing
+    enabled: false
+    # OTel collector endpoint
+    otelEndpoint: http://otel-collector:4317
+    # Enable MLflow tracing
+    mlflowEnabled: false
+    # MLflow tracking URI
+    mlflowUri: http://mlflow:5000
+    # MLflow experiment name
+    mlflowExperiment: cognition
+  
+  # Sandbox configuration
+  sandbox:
+    # Backend: local, docker
+    backend: local
+  
+  # Session scoping configuration
+  scoping:
+    enabled: true
+    keys:
+      - user
+  
+  # Rate limiting configuration
+  rateLimit:
+    perMinute: 60
+    burst: 10
+
+# Secrets configuration
+# These values should be set in a separate secret or via --set flags
+secrets:
+  # OpenAI API key (for OpenAI provider)
+  openaiApiKey: ""
+  # OpenAI Compatible API key (for OpenRouter, vLLM, etc.)
+  openaiCompatibleApiKey: ""
+  # AWS credentials (for Bedrock provider)
+  awsAccessKeyId: ""
+  awsSecretAccessKey: ""
+
+# Resource configuration - no hard limits as requested
+resources:
+  requests:
+    cpu: 500m
+    memory: 1Gi
+  # limits: {}  # No hard limits
+
+nodeSelector: {}
+
+tolerations: []
+
+affinity:
+  podAntiAffinity:
+    preferredDuringSchedulingIgnoredDuringExecution:
+      - weight: 100
+        podAffinityTerm:
+          labelSelector:
+            matchExpressions:
+              - key: app.kubernetes.io/name
+                operator: In
+                values:
+                  - cognition
+          topologyKey: kubernetes.io/hostname

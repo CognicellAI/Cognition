@@ -1,0 +1,160 @@
+# CNPG Cluster for Cognition
+# Deploy this first before the Cognition Helm chart
+# 
+# Usage:
+#   kubectl apply -f deploy/cnpg/cluster.yaml
+#   # Wait for cluster to be ready
+#   kubectl wait --for=condition=Ready cluster/cognition-db -n cognition --timeout=300s
+#
+# Then create the database credentials secret:
+#   kubectl create secret generic cognition-db-credentials \
+#     --namespace cognition \
+#     --from-literal=uri="postgresql+asyncpg://cognition:$(PASSWORD)@cognition-db-rw:5432/cognition"
+
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: cognition-db
+  namespace: cognition
+spec:
+  description: Cognition AI Assistant Database
+  
+  # PostgreSQL version
+  imageName: ghcr.io/cloudnative-pg/postgresql:16.0
+  
+  # 3 instances for HA
+  instances: 3
+  
+  # Storage configuration
+  storage:
+    storageClass: longhorn
+    size: 20Gi
+  
+  # Monitoring disabled for now - CNPG version compatibility
+  
+  # Bootstrap - create initial database
+  bootstrap:
+    initdb:
+      database: cognition
+      owner: cognition
+      secret:
+        name: cognition-db-init-credentials
+      postInitTemplateSQLRefs:
+        configMapRefs:
+          - name: cognition-db-init-scripts
+            key: init.sql
+  
+  # PostgreSQL configuration
+  postgresql:
+    parameters:
+      max_connections: "200"
+      shared_buffers: "256MB"
+      effective_cache_size: "768MB"
+      maintenance_work_mem: "64MB"
+      checkpoint_completion_target: "0.9"
+      wal_buffers: "16MB"
+      default_statistics_target: "100"
+      random_page_cost: "1.1"
+      effective_io_concurrency: "200"
+      work_mem: "655kB"
+      min_wal_size: "1GB"
+      max_wal_size: "4GB"
+  
+  # Resource configuration - no hard limits as requested
+  resources:
+    requests:
+      memory: "512Mi"
+      cpu: "500m"
+  
+  # Affinity - spread across nodes
+  affinity:
+    enablePodAntiAffinity: true
+    topologyKey: kubernetes.io/hostname
+  
+  # Priority class
+  priorityClassName: system-cluster-critical
+  
+  # Failover configuration
+  failoverDelay: 60
+  switchoverDelay: 300
+  
+  # Enable superuser access for maintenance
+  enableSuperuserAccess: true
+
+---
+# Init credentials for database bootstrap
+apiVersion: v1
+kind: Secret
+metadata:
+  name: cognition-db-init-credentials
+  namespace: cognition
+type: Opaque
+stringData:
+  username: cognition
+  password: cognition-password-change-me
+
+---
+# Init scripts for database setup
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cognition-db-init-scripts
+  namespace: cognition
+data:
+  init.sql: |
+    -- Create extensions
+    CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
+    CREATE EXTENSION IF NOT EXISTS "pg_stat_statements";
+
+---
+# Service to expose the primary (read-write)
+apiVersion: v1
+kind: Service
+metadata:
+  name: cognition-db
+  namespace: cognition
+  labels:
+    cnpg.io/cluster: cognition-db
+    cnpg.io/serviceType: primary
+spec:
+  type: ClusterIP
+  selector:
+    cnpg.io/cluster: cognition-db
+    cnpg.io/instanceRole: primary
+  ports:
+    - name: postgres
+      port: 5432
+      targetPort: 5432
+
+---
+# Service for reads (optional - includes replicas)
+apiVersion: v1
+kind: Service
+metadata:
+  name: cognition-db-ro
+  namespace: cognition
+  labels:
+    cnpg.io/cluster: cognition-db
+    cnpg.io/serviceType: replica
+spec:
+  type: ClusterIP
+  selector:
+    cnpg.io/cluster: cognition-db
+    cnpg.io/instanceRole: replica
+  ports:
+    - name: postgres
+      port: 5432
+      targetPort: 5432
+
+---
+# Scheduled backup (optional - comment out if not needed)
+# apiVersion: postgresql.cnpg.io/v1
+# kind: ScheduledBackup
+# metadata:
+#   name: cognition-db-backup
+#   namespace: cognition
+# spec:
+#   schedule: "0 2 * * *"  # Daily at 2 AM
+#   backupOwnerReference: self
+#   cluster:
+#     name: cognition-db
