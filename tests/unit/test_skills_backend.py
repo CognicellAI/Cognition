@@ -42,7 +42,7 @@ class TestAlsInfo:
 
         result = await backend.als_info("/")
         assert len(result) == 1
-        assert result[0]["path"] == "/skills/api/test-skill/"
+        assert result[0]["path"] == "/test-skill/"
         assert result[0]["is_dir"] is True
 
     async def test_excludes_disabled_skills(self, registry, backend):
@@ -64,7 +64,7 @@ class TestAlsInfo:
 
         result = await backend.als_info("/")
         assert len(result) == 1
-        assert result[0]["path"] == "/skills/api/enabled-skill/"
+        assert result[0]["path"] == "/enabled-skill/"
 
     async def test_returns_multiple_skills(self, registry, backend):
         """Should return all enabled skills."""
@@ -81,9 +81,9 @@ class TestAlsInfo:
         assert len(result) == 3
         paths = {r["path"] for r in result}
         assert paths == {
-            "/skills/api/skill-0/",
-            "/skills/api/skill-1/",
-            "/skills/api/skill-2/",
+            "/skill-0/",
+            "/skill-1/",
+            "/skill-2/",
         }
 
 
@@ -271,8 +271,8 @@ class TestScopeFiltering:
         result = await alice_backend.als_info("/")
         paths = {r["path"] for r in result}
         # Should see both global and alice's skill
-        assert "/skills/api/global-skill/" in paths
-        assert "/skills/api/user-skill/" in paths
+        assert "/global-skill/" in paths
+        assert "/user-skill/" in paths
 
         # Backend with bob's scope
         bob_backend = ConfigRegistrySkillsBackend(registry=registry, scope={"user": "bob"})
@@ -280,8 +280,8 @@ class TestScopeFiltering:
         result = await bob_backend.als_info("/")
         paths = {r["path"] for r in result}
         # Should only see global skill, not alice's
-        assert "/skills/api/global-skill/" in paths
-        assert "/skills/api/user-skill/" not in paths
+        assert "/global-skill/" in paths
+        assert "/user-skill/" not in paths
 
 
 class TestReadSync:

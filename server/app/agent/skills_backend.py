@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import structlog
 from deepagents.backends.protocol import (
     BackendProtocol,
     FileDownloadResponse,
@@ -9,6 +10,8 @@ from deepagents.backends.protocol import (
 )
 
 from server.app.storage.config_registry import ConfigRegistry
+
+logger = structlog.get_logger(__name__)
 
 
 class ConfigRegistrySkillsBackend(BackendProtocol):
@@ -41,7 +44,6 @@ class ConfigRegistrySkillsBackend(BackendProtocol):
         Returns:
             List of FileInfo dicts representing skill directories.
         """
-        # Get all enabled skills for the current scope
         skills = await self._registry.list_skills(scope=self._scope)
 
         file_infos: list[FileInfo] = []
@@ -49,16 +51,15 @@ class ConfigRegistrySkillsBackend(BackendProtocol):
             if not skill.enabled:
                 continue
 
-            # Each skill appears as a directory under the source path
-            # The skill's "path" field is the virtual path to its SKILL.md file
-            # We need to extract the directory part
-            skill_dir = f"{skill.path.rsplit('/', 1)[0]}/"
-
+            # Each skill appears as a directory under the source path.
+            # Return "/{skill.name}/" so CompositeBackend can re-prefix it
+            # to the full virtual path (e.g. /skills/api/web-research/).
+            skill_dir = f"/{skill.name}/"
             file_infos.append(
                 FileInfo(
                     path=skill_dir,
                     is_dir=True,
-                    size=0,  # Directory size not meaningful here
+                    size=0,
                     modified_at="",
                 )
             )
@@ -80,32 +81,20 @@ class ConfigRegistrySkillsBackend(BackendProtocol):
         responses: list[FileDownloadResponse] = []
 
         for file_path in paths:
-            # Extract skill name from path like "/skills/api/web-research/SKILL.md"
-            # After CompositeBackend stripping, we get "/web-research/SKILL.md"
-            # We want just "web-research" to look up in registry
+            # Extract skill name from path like "/web-research/SKILL.md"
+            # (CompositeBackend has already stripped the /skills/api/ prefix)
             if not file_path.startswith("/") or not file_path.endswith("/SKILL.md"):
-                responses.append(
-                    FileDownloadResponse(
-                        path=file_path,
-                        error="invalid_path",
-                    )
-                )
+                responses.append(FileDownloadResponse(path=file_path, error="invalid_path"))
                 continue
 
-            # Remove leading slash and .SKILL.md suffix to get skill name
+            # Remove leading slash and /SKILL.md suffix to get skill name
             skill_name = file_path[1 : -len("/SKILL.md")]
 
             try:
                 skill = await self._registry.get_skill(skill_name, scope=self._scope)
                 if skill is None or not skill.enabled:
-                    responses.append(
-                        FileDownloadResponse(
-                            path=file_path,
-                            error="file_not_found",
-                        )
-                    )
+                    responses.append(FileDownloadResponse(path=file_path, error="file_not_found"))
                 else:
-                    # Content should be the full SKILL.md (YAML frontmatter + body)
                     content = skill.content or ""
                     responses.append(
                         FileDownloadResponse(
@@ -114,13 +103,9 @@ class ConfigRegistrySkillsBackend(BackendProtocol):
                             error=None,
                         )
                     )
-            except Exception:
-                responses.append(
-                    FileDownloadResponse(
-                        path=file_path,
-                        error="invalid_path",
-                    )
-                )
+            except Exception as e:
+                logger.error("skill_download_failed", path=file_path, error=str(e))
+                responses.append(FileDownloadResponse(path=file_path, error="invalid_path"))
 
         return responses
 
@@ -137,7 +122,7 @@ class ConfigRegistrySkillsBackend(BackendProtocol):
         Returns:
             Error message directing to use async version.
         """
-        return f"Error: Use aread() for ConfigRegistrySkillsBackend"
+        return "Error: Use aread() for ConfigRegistrySkillsBackend"
 
     async def aread(self, file_path: str, offset: int = 0, limit: int = 2000) -> str:
         """Read SKILL.md content for progressive disclosure (async version).
@@ -183,5 +168,7 @@ class ConfigRegistrySkillsBackend(BackendProtocol):
         except Exception as e:
             return f"Error reading skill {skill_name}: {str(e)}"
 
-    # Other methods can raise NotImplementedError (inherited defaults)
-    # SkillsMiddleware only calls als_info, adownload_files, and read
+    # Remaining BackendProtocol methods (glob_info, write, edit, upload_files, etc.)
+    # are intentionally not implemented. SkillsMiddleware only needs als_info,
+    # adownload_files, and aread. All other paths are handled by the default
+    # sandbox backend via CompositeBackend routing.

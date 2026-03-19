@@ -63,6 +63,7 @@ async def agent_event_stream(
     workspace_path: str,
     settings: Settings,
     agent_manager: SessionAgentManager,
+    scope: dict[str, str] | None = None,
 ) -> AsyncGenerator[dict, None]:
     """Generate agent events as SSE using DeepAgents.
 
@@ -71,6 +72,18 @@ async def agent_event_stream(
     2. State persistence via thread_id checkpointing
     3. Built-in planning with write_todos
     4. Context management and streaming
+
+    Args:
+        session_id: The session to stream events for.
+        thread_id: Thread ID for state persistence.
+        content: User message content.
+        workspace_path: Path to the workspace root.
+        settings: Application settings.
+        agent_manager: Manager for session agent lifecycle.
+        scope: Optional scope dict for multi-tenant isolation.
+            Propagated to the agent runtime so that scope-aware
+            backends (e.g. ConfigRegistrySkillsBackend) can filter
+            skills, providers, and other config by tenant.
 
     Yields:
         SSE events as dictionaries. The final 'done' event contains
@@ -115,6 +128,7 @@ async def agent_event_stream(
             content=content,
             system_prompt=system_prompt,
             manager=agent_manager,
+            scope=scope,
         ):
             if isinstance(event, TokenEvent):
                 accumulated_content.append(event.content)
@@ -286,7 +300,13 @@ async def send_message(
 
     # Create SSE stream with DeepAgents (multi-step support)
     event_stream = agent_event_stream(
-        session_id, thread_id, request.content, workspace_path, settings, agent_manager
+        session_id,
+        thread_id,
+        request.content,
+        workspace_path,
+        settings,
+        agent_manager,
+        scope=scope.get_all() if not scope.is_empty() else None,
     )
 
     # Wrap the event stream to persist assistant message on completion

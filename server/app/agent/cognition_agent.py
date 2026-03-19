@@ -327,6 +327,7 @@ async def create_cognition_agent(
     # Wrap sandbox backend with CompositeBackend to support DB-backed skills
     if reg:
         from deepagents.backends.composite import CompositeBackend
+
         from server.app.agent.skills_backend import ConfigRegistrySkillsBackend
 
         # Create DB-backed skills backend for API-created skills
@@ -420,6 +421,14 @@ async def create_cognition_agent(
             CognitionStreamingMiddleware(),
             ToolSecurityMiddleware(blocked_tools=blocked_tools),
         ]
+    )
+
+    logger.debug(
+        "creating_deep_agent",
+        skills=agent_skills,
+        backend_type=type(backend).__name__,
+        has_composite_routes=hasattr(backend, "routes")
+        and getattr(backend, "routes", None) is not None,
     )
 
     # Create the agent with multi-step support
