@@ -152,9 +152,12 @@ class DeepAgentStreamingService:
                         if system_prompt is None:
                             system_prompt = agent_def.system_prompt
 
-                        # Use agent's skills
+                        # Use agent's skills and add API skills route
                         if agent_def.skills:
-                            agent_skills = agent_def.skills
+                            agent_skills = list(agent_def.skills)
+                            # Always include API skills route for ConfigRegistry-backed skills
+                            if "/skills/api/" not in agent_skills:
+                                agent_skills.append("/skills/api/")
 
                         # Add subagents available to this agent
                         # Primary agents get all subagents except themselves

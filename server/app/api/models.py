@@ -471,11 +471,17 @@ class SkillCreate(BaseModel):
     """Request to create or replace a skill."""
 
     name: str = Field(..., min_length=1, max_length=100, description="Skill identifier")
-    path: str = Field(
-        ..., min_length=1, description="Filesystem path to skill directory or SKILL.md"
+    path: str | None = Field(
+        default=None,
+        min_length=1,
+        description="Filesystem path to skill directory or SKILL.md. Auto-generated if content is provided.",
     )
     enabled: bool = Field(default=True, description="Whether this skill is active")
     description: str | None = Field(default=None, description="Short description")
+    content: str | None = Field(
+        default=None,
+        description="Full SKILL.md content (YAML frontmatter + markdown body). If provided, path is auto-generated.",
+    )
     scope: dict[str, str] = Field(default_factory=dict, description="Scope (empty = global)")
 
 
@@ -485,6 +491,9 @@ class SkillUpdate(BaseModel):
     path: str | None = Field(default=None)
     enabled: bool | None = Field(default=None)
     description: str | None = Field(default=None)
+    content: str | None = Field(
+        default=None, description="Full SKILL.md content (YAML frontmatter + markdown body)"
+    )
     scope: dict[str, str] | None = Field(default=None)
 
 
@@ -495,6 +504,9 @@ class SkillResponse(BaseModel):
     path: str
     enabled: bool
     description: str | None = None
+    content: str | None = Field(
+        default=None, description="Full SKILL.md content (YAML frontmatter + markdown body)"
+    )
     scope: dict[str, str] = Field(default_factory=dict)
     source: str = "api"
 

@@ -133,6 +133,7 @@ class SkillDefinition(BaseModel):
         path: Filesystem path to the skill directory or SKILL.md file.
         enabled: Whether this skill is active.
         description: Short description shown in skill listings.
+        content: Full SKILL.md content (YAML frontmatter + markdown body).
         scope: Scope this entry applies to. Empty dict = global.
         source: "file" or "api".
     """
@@ -141,6 +142,7 @@ class SkillDefinition(BaseModel):
     path: str = Field(..., min_length=1)
     enabled: bool = Field(default=True)
     description: str | None = Field(default=None)
+    content: str | None = Field(default=None)
     scope: dict[str, str] = Field(default_factory=dict)
     source: Literal["file", "api"] = Field(default="file")
 
