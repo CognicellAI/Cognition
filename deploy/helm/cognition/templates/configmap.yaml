@@ -1,0 +1,60 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "cognition.fullname" . }}-config
+  namespace: {{ .Values.namespace.name | default .Release.Namespace }}
+  labels:
+    {{- include "cognition.labels" . | nindent 4 }}
+data:
+  config.yaml: |
+    llm:
+      provider: {{ .Values.config.llm.provider }}
+      model: {{ .Values.config.llm.model }}
+      {{- if .Values.config.llm.temperature }}
+      temperature: {{ .Values.config.llm.temperature }}
+      {{- end }}
+      {{- if .Values.config.llm.maxTokens }}
+      max_tokens: {{ .Values.config.llm.maxTokens }}
+      {{- end }}
+      {{- if .Values.config.llm.openaiCompatibleBaseUrl }}
+      base_url: {{ .Values.config.llm.openaiCompatibleBaseUrl }}
+      {{- end }}
+    
+    agent:
+      {{- if .Values.config.agent.memory }}
+      memory:
+        {{- toYaml .Values.config.agent.memory | nindent 8 }}
+      {{- end }}
+      {{- if .Values.config.agent.skills }}
+      skills:
+        {{- toYaml .Values.config.agent.skills | nindent 8 }}
+      {{- end }}
+      {{- if .Values.config.agent.tools }}
+      tools:
+        {{- toYaml .Values.config.agent.tools | nindent 8 }}
+      {{- end }}
+  
+  AGENTS.md: |
+    # Cognition Agent Configuration
+    
+    This file provides project-specific instructions for the Cognition AI assistant.
+    
+    ## Workspace Context
+    
+    - The workspace is mounted at `/workspace`
+    - All file operations should target this directory
+    - Use relative paths from the workspace root
+    
+    ## Development Guidelines
+    
+    - Write clean, well-documented code
+    - Follow existing project conventions
+    - Run tests before committing changes
+    - Use meaningful commit messages
+    
+    {{- if .Values.config.agent.agentsMd }}
+    
+    ## Custom Instructions
+    
+    {{ .Values.config.agent.agentsMd | nindent 4 }}
+    {{- end }}

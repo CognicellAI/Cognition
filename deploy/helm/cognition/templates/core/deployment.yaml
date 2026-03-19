@@ -1,0 +1,234 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "cognition.fullname" . }}
+  namespace: {{ .Values.namespace.name | default .Release.Namespace }}
+  labels:
+    {{- include "cognition.labels" . | nindent 4 }}
+    app.kubernetes.io/component: server
+spec:
+  {{- if not .Values.autoscaling.enabled }}
+  replicas: {{ .Values.replicaCount }}
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "cognition.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: server
+  template:
+    metadata:
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        checksum/secrets: {{ include (print $.Template.BasePath "/core/secrets.yaml") . | sha256sum }}
+        {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      labels:
+        {{- include "cognition.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: server
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "cognition.serviceAccountName" . }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      initContainers:
+        # Wait for database to be ready
+        - name: wait-for-db
+          image: busybox:1.36
+          command:
+            - sh
+            - -c
+            - |
+              echo "Waiting for database at {{ .Values.database.host }}:5432..."
+              until nc -z {{ .Values.database.host }} 5432; do
+                echo "Database not ready yet, waiting..."
+                sleep 2
+              done
+              echo "Database is ready!"
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsUser: 1000
+      containers:
+        - name: {{ .Chart.Name }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          env:
+            # Server settings
+            - name: COGNITION_HOST
+              value: "0.0.0.0"
+            - name: COGNITION_PORT
+              value: "{{ .Values.service.port }}"
+            - name: COGNITION_WORKSPACE_ROOT
+              value: "/workspace"
+            - name: COGNITION_LOG_LEVEL
+              value: "{{ .Values.config.logLevel }}"
+            
+            # Database settings
+            - name: COGNITION_PERSISTENCE_BACKEND
+              value: "postgres"
+            - name: COGNITION_PERSISTENCE_URI
+              {{- if .Values.database.existingSecretName }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.database.existingSecretName }}
+                  key: {{ .Values.database.existingSecretKey | default "uri" }}
+              {{- else }}
+              value: "postgresql+asyncpg://{{ .Values.database.user }}:$(DB_PASSWORD)@{{ .Values.database.host }}:5432/{{ .Values.database.name }}"
+              {{- end }}
+            
+            # Credentials (API keys remain as env vars in v0.3.0)
+            # Configuration moved to .cognition/config.yaml via ConfigMap
+            # Testing if env vars still work in v0.3.0
+            - name: COGNITION_LLM_PROVIDER
+              value: "{{ .Values.config.llm.provider }}"
+            - name: COGNITION_LLM_MODEL
+              value: "{{ .Values.config.llm.model }}"
+            {{- if .Values.config.llm.temperature }}
+            - name: COGNITION_LLM_TEMPERATURE
+              value: "{{ .Values.config.llm.temperature }}"
+            {{- end }}
+            {{- if .Values.config.llm.maxTokens }}
+            - name: COGNITION_LLM_MAX_TOKENS
+              value: "{{ .Values.config.llm.maxTokens }}"
+            {{- end }}
+            {{- if .Values.config.llm.openaiCompatibleBaseUrl }}
+            - name: COGNITION_OPENAI_COMPATIBLE_BASE_URL
+              value: "{{ .Values.config.llm.openaiCompatibleBaseUrl }}"
+            {{- end }}
+            {{- if .Values.secrets.openaiCompatibleApiKey }}
+            - name: COGNITION_OPENAI_COMPATIBLE_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "cognition.fullname" . }}-api-keys
+                  key: openai-compatible-api-key
+            {{- end }}
+            
+            # AWS/Bedrock credentials
+            {{- if .Values.config.aws.region }}
+            - name: AWS_REGION
+              value: "{{ .Values.config.aws.region }}"
+            {{- end }}
+            {{- if .Values.config.aws.bedrockRoleArn }}
+            - name: COGNITION_BEDROCK_ROLE_ARN
+              value: "{{ .Values.config.aws.bedrockRoleArn }}"
+            {{- end }}
+            {{- if .Values.secrets.awsAccessKeyId }}
+            - name: AWS_ACCESS_KEY_ID
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "cognition.fullname" . }}-api-keys
+                  key: aws-access-key-id
+            - name: AWS_SECRET_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "cognition.fullname" . }}-api-keys
+                  key: aws-secret-access-key
+            {{- end }}
+            
+            # Observability settings
+            - name: COGNITION_OTEL_ENABLED
+              value: "{{ .Values.config.observability.enabled }}"
+            {{- if .Values.config.observability.enabled }}
+            - name: COGNITION_OTEL_ENDPOINT
+              value: "{{ .Values.config.observability.otelEndpoint }}"
+            - name: COGNITION_METRICS_PORT
+              value: "{{ .Values.service.metricsPort }}"
+            - name: COGNITION_MLFLOW_ENABLED
+              value: "{{ .Values.config.observability.mlflowEnabled }}"
+            - name: COGNITION_MLFLOW_TRACKING_URI
+              value: "{{ .Values.config.observability.mlflowUri }}"
+            - name: COGNITION_MLFLOW_EXPERIMENT_NAME
+              value: "{{ .Values.config.observability.mlflowExperiment }}"
+            {{- end }}
+            
+            # Sandbox settings
+            - name: COGNITION_SANDBOX_BACKEND
+              value: "{{ .Values.config.sandbox.backend }}"
+            
+            # Session scoping
+            - name: COGNITION_SCOPING_ENABLED
+              value: "{{ .Values.config.scoping.enabled }}"
+            {{- if .Values.config.scoping.enabled }}
+            - name: COGNITION_SCOPE_KEYS
+              value: '["{{ join "\",\"" .Values.config.scoping.keys }}"]'
+            {{- end }}
+            
+            # Rate limiting
+            - name: COGNITION_RATE_LIMIT_PER_MINUTE
+              value: "{{ .Values.config.rateLimit.perMinute }}"
+            - name: COGNITION_RATE_LIMIT_BURST
+              value: "{{ .Values.config.rateLimit.burst }}"
+            
+            # Database password from secret (if not using existing secret with full URI)
+            {{- if not .Values.database.existingSecretName }}
+            - name: DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "cognition.fullname" . }}-db-credentials
+                  key: password
+            {{- end }}
+            
+          ports:
+            - name: http
+              containerPort: {{ .Values.service.port }}
+              protocol: TCP
+            - name: metrics
+              containerPort: {{ .Values.service.metricsPort }}
+              protocol: TCP
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 30
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          volumeMounts:
+            - name: workspace
+              mountPath: /workspace
+            - name: config
+              mountPath: /app/.cognition
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: workspace
+          {{- if .Values.persistence.workspace.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ .Values.persistence.workspace.existingClaim | default (printf "%s-workspace" (include "cognition.fullname" .)) }}
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+        - name: config
+          configMap:
+            name: {{ include "cognition.fullname" . }}-config
+        - name: tmp
+          emptyDir: {}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
