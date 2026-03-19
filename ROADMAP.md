@@ -37,6 +37,7 @@ See AGENTS.md for category definitions, DoD requirements, and precedence rules.
 | 2026-03-18 | Fix `asyncpg` JSONB columns returning raw strings in `PostgresConfigRegistry` and `PostgresListenDispatcher` — added `_scope_from_json()` / `_def_from_json()` safe-parse helpers | - | 2 | Completed |
 | 2026-03-18 | Fix SQLAlchemy DSN format mismatch: strip `+asyncpg` driver prefix before passing to raw `asyncpg` in `factory.py` | - | 2 | Completed |
 | 2026-03-18 | Fix scope header not applied to list/get endpoints in `skills.py`, `models.py`, `agents.py` routes — added optional `extract_scope` dependency to all read and write endpoints | - | 6 | Completed |
+| 2026-03-19 | Fix scope not propagated from `send_message` route through `agent_event_stream` → `stream_response` → `create_cognition_agent` — `ConfigRegistrySkillsBackend` always received `scope=None`, making all user-scoped API skills invisible to the agent | - | 4/6 | Completed |
 | 2026-03-18 | Fix `schema.py` `scope` columns as plain `JSON` preventing B-tree UNIQUE index on Postgres — replaced with `_JsonbOrJson` TypeDecorator (JSONB on Postgres, JSON on SQLite) | - | 2 | Completed |
 
 ---
