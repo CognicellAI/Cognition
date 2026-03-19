@@ -24,15 +24,17 @@ def setup_registry(tmp_path_factory):
 
 
 class TestListTools:
-    def test_list_returns_200(self):
+    def test_list_returns_503_when_registry_not_initialized(self):
+        """GET /tools returns 503 when the agent registry is not initialized."""
         response = client.get("/tools")
-        assert response.status_code == 200
-        data = response.json()
-        assert "tools" in data
+        # agent_registry is not initialized in unit tests (only config_registry is)
+        assert response.status_code == 503
 
-    def test_list_returns_list_type(self):
+    def test_list_503_has_detail_message(self):
+        """GET /tools 503 response includes an informative detail message."""
         response = client.get("/tools")
-        assert isinstance(response.json()["tools"], list)
+        assert response.status_code == 503
+        assert "detail" in response.json()
 
 
 class TestCreateTool:
@@ -81,7 +83,7 @@ class TestReloadTools:
         # The agent_registry (tool discovery layer) is not initialized in unit tests
         assert response.status_code == 503
 
-    def test_errors_endpoint_returns_200(self):
-        """GET /tools/errors should return any load errors."""
+    def test_errors_endpoint_returns_503_when_registry_not_initialized(self):
+        """GET /tools/errors returns 503 when the agent registry is not initialized."""
         response = client.get("/tools/errors")
-        assert response.status_code == 200
+        assert response.status_code == 503

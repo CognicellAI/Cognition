@@ -183,6 +183,22 @@ class Settings(BaseSettings):
         alias="COGNITION_SCOPE_KEYS",
     )
 
+    # Model catalog settings
+    model_catalog_url: str = Field(
+        default="https://models.dev/api.json",
+        alias="COGNITION_MODEL_CATALOG_URL",
+        description=(
+            "URL to fetch the model catalog JSON from. "
+            "Defaults to the public models.dev catalog. "
+            "Set to a local/mirror URL for air-gapped or self-hosted deployments."
+        ),
+    )
+    model_catalog_ttl_seconds: int = Field(
+        default=3600,
+        alias="COGNITION_MODEL_CATALOG_TTL_SECONDS",
+        description="How long (in seconds) to cache the model catalog in memory.",
+    )
+
     # SSE (Server-Sent Events) settings
     sse_heartbeat_interval_seconds: float = Field(
         default=15.0,

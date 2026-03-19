@@ -5,30 +5,28 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from server.app.agent.cognition_agent import create_cognition_agent
-from server.app.llm.registry import register_provider
 
 
 @pytest.mark.asyncio
-async def test_llm_provider_registry_integration():
-    """Verify that a custom provider can be registered in the LLM provider registry.
+async def test_custom_model_instance_integration():
+    """Verify that a pre-built BaseChatModel instance can be passed directly
+    to create_cognition_agent, bypassing provider resolution entirely.
 
-    Since llm_provider was moved from Settings to ConfigRegistry, this test now
-    validates that register_provider() makes a custom factory callable via the registry,
-    not via Settings.
+    This is the recommended pattern for custom providers: build the model
+    yourself via init_chat_model or a provider SDK, then pass the instance.
     """
-    mock_model = MagicMock()
+    from langchain_core.language_models import BaseChatModel
 
-    def create_custom_model(config, settings):
-        return mock_model
+    mock_model = MagicMock(spec=BaseChatModel)
 
-    # register_provider stores factories in the module-level registry dict
-    register_provider("custom_test_provider", create_custom_model)
+    with patch("server.app.agent.cognition_agent.create_deep_agent") as mock_create:
+        mock_create.return_value = MagicMock()
+        await create_cognition_agent(project_path=".", model=mock_model)
 
-    # Verify the provider is callable from the registry
-    from server.app.llm.registry import get_provider_factory
-
-    factory = get_provider_factory("custom_test_provider")
-    assert factory is create_custom_model
+        _, kwargs = mock_create.call_args
+        assert kwargs["model"] is mock_model, (
+            "The exact model instance should be forwarded to create_deep_agent"
+        )
 
 
 @pytest.mark.asyncio

@@ -19,6 +19,10 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
 
+import structlog
+
+logger = structlog.get_logger(__name__)
+
 from langgraph.checkpoint.base import BaseCheckpointSaver
 
 from server.app.agent.cognition_agent import create_cognition_agent
@@ -336,6 +340,12 @@ class DeepAgentRuntime:
         """
         tid = thread_id or self._thread_id or "default"
 
+        if tid == "default" and not thread_id and not self._thread_id:
+            logger.warning(
+                "No thread_id set on astream_events — all operations share the 'default' "
+                "thread which may cause cross-session state bleed in multi-user deployments"
+            )
+
         if tid in self._aborted:
             self._aborted.discard(tid)
             yield ErrorEvent(message="Execution was aborted", code="ABORTED")
@@ -482,6 +492,11 @@ class DeepAgentRuntime:
             return None
 
         except Exception:
+            logger.warning(
+                "Failed to retrieve agent state — returning None",
+                thread_id=tid,
+                exc_info=True,
+            )
             return None
 
     async def abort(self, thread_id: str | None = None) -> bool:

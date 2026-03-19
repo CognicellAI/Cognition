@@ -44,6 +44,27 @@ from server.app.settings import Settings, get_settings  # noqa: E402
 _agent_cache: dict[str, Any] = {}
 
 
+def _model_cache_key(model: Any) -> str:
+    """Return a stable string that identifies the model instance.
+
+    Uses model_name or model_id attributes if available so that two
+    ChatOpenAI instances pointing at different models produce different
+    cache keys (the type name alone is not sufficient).
+    """
+    if model is None:
+        return "None"
+    type_name = type(model).__name__
+    # LangChain models expose model_name or model_id
+    model_id = (
+        getattr(model, "model_name", None)
+        or getattr(model, "model_id", None)
+        or getattr(model, "model", None)
+    )
+    if model_id:
+        return f"{type_name}:{model_id}"
+    return type_name
+
+
 def _generate_cache_key(
     project_path: str | Path,
     model: Any,
@@ -74,7 +95,7 @@ def _generate_cache_key(
     # Build a string representation of the configuration
     config_parts = [
         str(Path(project_path).resolve()),
-        str(type(model).__name__) if model else "None",
+        _model_cache_key(model),
         str(store.__class__.__name__) if store else "None",
         str(system_prompt) if system_prompt else "default",
         str(sorted(memory)) if memory else "None",
@@ -285,7 +306,10 @@ async def create_cognition_agent(
         else:
             system_prompt_with_context = SYSTEM_PROMPT
     except Exception:
-        # Fallback if context manager fails
+        logger.warning(
+            "Context manager failed — running without project context in system prompt",
+            exc_info=True,
+        )
         system_prompt_with_context = SYSTEM_PROMPT
 
     # Resolve agent defaults from ConfigRegistry (falls back to hardcoded defaults)

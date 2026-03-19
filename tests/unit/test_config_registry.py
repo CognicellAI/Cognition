@@ -243,7 +243,7 @@ class TestMemoryGlobalDefaults:
     async def test_default_provider_defaults(self, mem_reg: MemoryConfigRegistry):
         defaults = await mem_reg.get_global_provider_defaults()
         assert isinstance(defaults, GlobalProviderDefaults)
-        assert defaults.provider == "mock"
+        assert defaults.provider == "openai_compatible"
 
     @pytest.mark.asyncio
     async def test_set_and_get_global_provider_defaults(self, mem_reg: MemoryConfigRegistry):

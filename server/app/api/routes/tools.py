@@ -15,8 +15,11 @@ async def list_tools() -> ToolList:
     """List all registered tools."""
     try:
         registry = get_agent_registry()
-    except RuntimeError:
-        return ToolList(tools=[], count=0)
+    except RuntimeError as e:
+        raise HTTPException(
+            status_code=503,
+            detail=f"Agent registry unavailable: {e}",
+        ) from e
 
     tools = registry.list_tools()
     return ToolList(
@@ -41,8 +44,11 @@ async def get_tool_errors() -> list[dict[str, Any]]:
     """
     try:
         registry = get_agent_registry()
-    except RuntimeError:
-        return []
+    except RuntimeError as e:
+        raise HTTPException(
+            status_code=503,
+            detail=f"Agent registry unavailable: {e}",
+        ) from e
 
     errors = registry.get_load_errors()
     return [e.to_dict() for e in errors]

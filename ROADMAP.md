@@ -39,6 +39,48 @@ See AGENTS.md for category definitions, DoD requirements, and precedence rules.
 | 2026-03-18 | Fix scope header not applied to list/get endpoints in `skills.py`, `models.py`, `agents.py` routes — added optional `extract_scope` dependency to all read and write endpoints | - | 6 | Completed |
 | 2026-03-19 | Fix scope not propagated from `send_message` route through `agent_event_stream` → `stream_response` → `create_cognition_agent` — `ConfigRegistrySkillsBackend` always received `scope=None`, making all user-scoped API skills invisible to the agent | - | 4/6 | Completed |
 | 2026-03-18 | Fix `schema.py` `scope` columns as plain `JSON` preventing B-tree UNIQUE index on Postgres — replaced with `_JsonbOrJson` TypeDecorator (JSONB on Postgres, JSON on SQLite) | - | 2 | Completed |
+| 2026-03-19 | Remove `ProviderFallbackChain` — silent fallback to mock provider masked real provider errors; replace with direct `init_chat_model` via Deep Agents' native model resolution. `provider_fallback.py` and `registry.py` deleted (~550 lines). Errors now surface immediately with the actual provider error message. | - | 5 | Completed |
+| 2026-03-19 | Fix agent cache key collision — `_generate_cache_key` used only `type(model).__name__`, causing `ChatOpenAI(kimi-k2.5)` and `ChatOpenAI(gpt-4o-mini)` to share a compiled graph. Fixed by including `model_name`/`model_id` in the key via `_model_cache_key()`. | - | 4 | Completed |
+
+---
+
+## Architectural Changes
+
+| Date | Description | Layer | Migration Plan | Status |
+|------|-------------|-------|----------------|--------|
+| 2026-03-19 | **Remove provider fallback chain; use Deep Agents `init_chat_model` natively** — `ProviderFallbackChain`, circuit breakers, and custom LLM factories replaced by a single `_resolve_provider_config()` + `_build_model()` using LangChain's `init_chat_model`. No fallback — if the configured provider fails, the error surfaces immediately. | 5 | Non-breaking: error path changes (errors surface instead of falling back to mock). Mock provider now test-only. `GlobalProviderDefaults.provider` default changed from `"mock"` to `"openai_compatible"`. | Completed |
+
+---
+
+## Explicit Error Policy
+
+Cognition does not use silent fallback logic. The following invariants are enforced:
+
+1. **Provider resolution fails loudly** — no silent fall-through to mock or default providers
+2. **Missing provider configuration** → `LLMProviderConfigError` with actionable message
+3. **Registry unavailable** → logged and surfaced to caller, never silently swallowed
+4. **Unscoped providers act as globals** — providers with empty scope (`{}`) are visible to all scopes. No separate "GlobalProviderDefaults" object in the LLM resolution path.
+
+### Known Fallback Sites (Backlog — to be removed)
+
+The following fallback patterns exist and are tracked for removal. They produce incorrect silent behavior in production:
+
+| ID | File | Line(s) | Pattern | Impact |
+|----|------|---------|---------|--------|
+| F-01 | `llm/deep_agent_service.py` | 306 | `except Exception: pass` on tool loading | Agent silently runs without custom tools |
+| F-02 | `llm/deep_agent_service.py` | 320 | Agent name not found → falls back to `"default"` | Wrong agent, no warning |
+| F-03 | `llm/deep_agent_service.py` | 463 | `model or "gpt-4o"` when session sets provider but not model | Wrong model, no error |
+| F-04 | `agent/cognition_agent.py` | 308 | `except Exception:` on context manager → bare system prompt | No project context, no warning |
+| F-05 | `agent/definition.py` | 363 | `except Exception: continue` on tool file load | Broken tools silently skipped |
+| F-06 | `llm/deep_agent_service.py` | 592 | `except RuntimeError: return []` on MCP config | MCP servers silently unavailable |
+| F-08 | `agent/cognition_agent.py` | 323 | `reg = None` → hardcoded memory/skills/subagent defaults | Configured values silently lost |
+| F-09 | `agent/cognition_agent.py` | 404 | `except (FileNotFoundError, RuntimeError):` on prompt file | Custom prompt silently replaced with default |
+| F-10 | `api/routes/tools.py` | 18, 44 | `except RuntimeError: return []` | `GET /tools` returns empty instead of 503 |
+| F-11 | `api/routes/models.py` | 92 | `except RuntimeError: return empty` | `GET /models/providers` returns empty instead of 503 |
+| F-21 | `agent/runtime.py` | 337+ | `thread_id or "default"` | All threads share one slot → cross-session state bleed |
+| F-22 | `agent/runtime.py` | 484 | `except Exception: return None` on state retrieval | DB errors indistinguishable from "no state" |
+| F-23 | `rate_limiter.py` | 137 | `except Exception: pass` with no logging | Rate limiter cleanup errors invisible |
+| F-24 | `execution/backend.py` | 94 | `except Exception: pass` on Docker container check | Docker daemon errors masked |
 
 ---
 
@@ -107,7 +149,7 @@ See AGENTS.md for category definitions, DoD requirements, and precedence rules.
 | **Wire rate_limit_per_minute / rate_limit_burst to RateLimiter** | Layer 6 | Completed | `COGNITION_RATE_LIMIT_PER_MINUTE` and `COGNITION_RATE_LIMIT_BURST` are actually enforced by the rate limiter (previously reported in `/config` but ignored) | 0.25 days | None |
 | Multi-user session isolation | Layer 2 | Pending | Users can only see/access their own sessions | 2 days | P0: Session lifecycle |
 | Graceful abort/cancellation | Layer 4 | Pending | Abort button immediately stops execution; no zombie processes | 1 day | P0: Session lifecycle |
-| Proper error propagation | Layer 6 | Pending | Errors from tools/agents bubble up with context; client sees meaningful messages | 1 day | None |
+| Proper error propagation | Layer 5/6 | Completed | All 14 fallback sites resolved: provider errors surface with `LLMProviderConfigError`, registry-missing returns 503, silent `except Exception: pass` replaced with logged warnings throughout | 2 days | None |
 | Rate limiting | Layer 6 | Pending | Per-user and global rate limits enforced | 1 day | None |
 
 ### P1-1: Configurable Agent Parameters
@@ -149,7 +191,11 @@ See AGENTS.md for category definitions, DoD requirements, and precedence rules.
 | Task | Layer | Status | Acceptance Criteria | Effort | Dependencies |
 |------|-------|--------|---------------------|--------|--------------|
 | **Dynamic ConfigRegistry (hot-reloadable agent config)** | Layers 1–6 | Completed | Agent/model/provider config changeable via API without restart; scoped per user/project; DB-backed with file bootstrap | 5–7 days | P0: Persistence, P1: Scoping |
-| LLM provider fallback | Layer 5 | In Progress | If primary provider fails, fallback to secondary | 2 days | None |
+| ~~LLM provider fallback~~ | Layer 5 | Cancelled | Superseded — explicit errors replace silent fallback. See Architectural Changes. | - | - |
+| **Remove `GlobalProviderDefaults` from LLM resolution path** | Layer 5 | Completed | `_resolve_provider_config()` no longer calls `get_global_provider_defaults()` as step 3; unscoped `ProviderConfig` entries (scope=`{}`) serve as globals; `LLMProviderConfigError` raised when no providers configured | 0.5 days | None |
+| **`POST /models/providers/{id}/test` endpoint** | Layer 6 | Completed | Calls `_build_model()` + lightweight `model.ainvoke()` to verify credentials; returns success/error with actual provider message; usable from GUI settings | 0.5 days | None |
+| **Eliminate known fallback sites (F-01 through F-24)** | Layers 4–6 | Completed | All `except Exception: pass` patterns replaced with logged warnings; `GET /tools` and `GET /models/providers` return 503 when registry unavailable; `model or "gpt-4o"` removed; thread_id/state retrieval warnings added; see Explicit Error Policy section | 2 days | None |
+| **Model catalog integration (models.dev)** | Layer 5/6 | Completed | `ModelCatalog` service fetches models.dev catalog; `GET /models` returns enriched model metadata (context window, tool call support, pricing, modalities); `GET /models/providers/{id}/models` lists catalog models for a provider config; `SessionConfig.provider_id` enables per-session provider selection by config ID; tool call validation warning on model resolution; `DiscoveryEngine` deprecated | 2 days | P2: ConfigRegistry |
 | Connection pooling | Layer 2 | Pending | Database connections pooled; no connection leaks | 1 day | None |
 | Health check endpoint | Layer 6 | Pending | `/health` returns 200 when all deps ready | 0.5 days | None |
 | Metrics and telemetry | Layer 7 | Pending | Prometheus metrics; OpenTelemetry traces | 2 days | None |
@@ -214,6 +260,57 @@ All write endpoints respect `X-Cognition-Scope-{key}` headers for multi-tenant s
 
 ---
 
+## P2-2: Model Catalog Integration (models.dev)
+
+**Layer**: Layer 5 (LLM Provider) / Layer 6 (API)
+
+**Problem**: Cognition had no way for users to browse available models for their configured providers. The `DiscoveryEngine` used stale hardcoded model lists (e.g., `o1-preview` which is outdated; missing Claude 3.5+, GPT-4o variants). `ModelInfo.context_window` and `ModelInfo.capabilities` were always `None`/`[]`. There was no per-session provider selection by config ID. Tool call validation was absent — users could configure non-tool-capable models with no warning.
+
+**Solution**: Replace `DiscoveryEngine` with a `ModelCatalog` service backed by models.dev (configurable URL). The catalog is **enrichment only** — it never blocks model execution. If unreachable, endpoints degrade gracefully.
+
+**Key Design Decisions**:
+- **Only models.dev**: No multi-catalog abstraction. URL configurable for mirrors/self-hosted.
+- **Static provider mapping**: `PROVIDER_TYPE_TO_CATALOG_SLUGS` maps Cognition provider types to models.dev slugs. `openai_compatible` returns empty (backing provider depends on base_url).
+- **In-memory cache with TTL**: Default 1-hour cache. Stale data served on refresh failure.
+- **Enrichment, not validation**: Any model ID accepted — catalog data only enriches API responses and powers warnings.
+- **`SessionConfig.provider_id`**: References a `ProviderConfig.id` from ConfigRegistry. Takes priority over `provider`/`model` overrides.
+
+**New API Surface**:
+- `GET /models` — enhanced with query parameters (`provider`, `tool_call`, `q`) and enriched `ModelInfo` fields (context_window, capabilities, pricing, modalities)
+- `GET /models/providers/{id}/models` — list catalog models available for a specific provider config
+
+**Acceptance Criteria**:
+- [x] `ModelCatalog` fetches and caches models.dev catalog with configurable TTL
+- [x] `GET /models` returns enriched model metadata from catalog
+- [x] `GET /models/providers/{id}/models` returns models filtered by provider config type
+- [x] `SessionConfig.provider_id` enables per-session provider selection by config ID
+- [x] Provider_id resolution takes priority over provider/model overrides in `_resolve_provider_config`
+- [x] Tool call validation warning logged when resolving a model without tool call support
+- [x] `DiscoveryEngine` deprecated (kept for backward compatibility)
+- [x] `GET /config` uses `ModelCatalog` instead of `DiscoveryEngine`
+- [x] `COGNITION_MODEL_CATALOG_URL` and `COGNITION_MODEL_CATALOG_TTL_SECONDS` settings added
+- [x] 36 new model catalog tests + 5 new provider_id resolution tests (all pass)
+- [x] 533 total unit tests pass, ruff clean, mypy clean
+
+**Effort**: 2 days
+
+**Dependencies**: P2: Dynamic ConfigRegistry
+
+**Files**:
+- New: `server/app/llm/model_catalog.py` — ModelCatalog service with caching, provider mapping, search
+- Modified: `server/app/settings.py` — Added `model_catalog_url`, `model_catalog_ttl_seconds`
+- Modified: `server/app/models.py` — Added `provider_id` to `SessionConfig`, updated serialization
+- Modified: `server/app/llm/deep_agent_service.py` — `provider_id` resolution, tool call warning
+- Modified: `server/app/api/routes/models.py` — Rewritten: catalog-backed endpoints, new `/providers/{id}/models`
+- Modified: `server/app/api/models.py` — Enriched `ModelInfo` with new fields
+- Modified: `server/app/api/routes/config.py` — Switched from `DiscoveryEngine` to `ModelCatalog`
+- Modified: `server/app/llm/discovery.py` — Deprecated
+- Modified: `server/app/llm/__init__.py` — Added `ModelCatalog` exports
+- New: `tests/unit/test_model_catalog.py` — 36 tests
+- Modified: `tests/unit/test_provider_resolution.py` — 5 new `provider_id` tests
+
+---
+
 ## P3: Full Vision
 
 | Task | Layer | Status | Acceptance Criteria | Effort | Dependencies |
@@ -237,4 +334,4 @@ Per AGENTS.md requirements:
    - Features/Architectural: Before starting work
    - Security/Bug/Performance/Dependency: As part of PR
 
-**Last Updated**: 2026-03-18
+**Last Updated**: 2026-03-19 (model catalog integration)

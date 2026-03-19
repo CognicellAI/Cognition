@@ -445,14 +445,30 @@ class ToolList(BaseModel):
 
 
 class ModelInfo(BaseModel):
-    """Information about an available LLM model."""
+    """Information about an available LLM model.
+
+    When backed by the models.dev catalog, all fields are populated.
+    For models not in the catalog, only ``id`` and ``provider`` are guaranteed.
+    """
 
     id: str = Field(..., description="Model identifier (value to pass in PATCH /sessions)")
     provider: str = Field(..., description="Provider name (e.g., 'openai', 'bedrock')")
     display_name: str | None = Field(None, description="Human-readable model name")
     context_window: int | None = Field(None, description="Context window size in tokens")
+    output_limit: int | None = Field(None, description="Maximum output tokens")
     capabilities: list[str] = Field(
-        default_factory=list, description="Model capabilities (e.g., 'vision', 'tools')"
+        default_factory=list,
+        description="Model capabilities (e.g., 'tool_call', 'reasoning', 'vision', 'structured_output')",
+    )
+    input_cost: float | None = Field(None, description="Input cost per million tokens (USD)")
+    output_cost: float | None = Field(None, description="Output cost per million tokens (USD)")
+    modalities: dict[str, list[str]] | None = Field(
+        None,
+        description="Supported modalities, e.g. {'input': ['text', 'image'], 'output': ['text']}",
+    )
+    family: str | None = Field(None, description="Model family (e.g., 'gpt', 'claude-sonnet')")
+    status: str | None = Field(
+        None, description="Model status: null (active), 'deprecated', or 'beta'"
     )
 
 
@@ -583,6 +599,16 @@ class ProviderConfigList(BaseModel):
 
     providers: list[ProviderResponse] = Field(default_factory=list)
     count: int = 0
+
+
+class ProviderTestResponse(BaseModel):
+    """Result of a provider connectivity test."""
+
+    success: bool
+    provider: str
+    model: str
+    message: str
+    response_preview: str | None = None
 
 
 # ============================================================================

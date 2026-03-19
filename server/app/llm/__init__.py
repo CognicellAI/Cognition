@@ -1,14 +1,21 @@
-"""LLM integration module.
+"""LLM integration module."""
 
-Provides DeepAgent service and provider fallback logic.
-"""
-
-from server.app.llm.provider_fallback import (
-    ProviderConfig,
-    ProviderFallbackChain,
+from server.app.llm.deep_agent_service import (
+    DeepAgentStreamingService,
+    SessionAgentManager,
+    get_session_agent_manager,
+)
+from server.app.llm.model_catalog import (
+    ModelCatalog,
+    get_model_catalog,
+    reset_model_catalog,
 )
 
 __all__ = [
-    "ProviderConfig",
-    "ProviderFallbackChain",
+    "DeepAgentStreamingService",
+    "ModelCatalog",
+    "SessionAgentManager",
+    "get_model_catalog",
+    "get_session_agent_manager",
+    "reset_model_catalog",
 ]

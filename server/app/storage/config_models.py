@@ -256,7 +256,7 @@ class GlobalProviderDefaults(BaseModel):
         system_prompt_value: Prompt text, filename, or mlflow ref.
     """
 
-    provider: str = Field(default="mock")
+    provider: str = Field(default="openai_compatible")
     model: str = Field(default="gpt-4o")
     max_tokens: int | None = Field(default=20000)
     system_prompt_type: Literal["file", "inline", "mlflow"] = Field(default="file")

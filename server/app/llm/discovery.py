@@ -1,5 +1,11 @@
 """Model discovery and heartbeating for the Cognition engine.
 
+.. deprecated::
+    This module is deprecated. Use :mod:`server.app.llm.model_catalog`
+    (backed by models.dev) for model browsing and metadata.  The
+    ``DiscoveryEngine`` is kept temporarily for backward compatibility
+    but will be removed in a future release.
+
 Handles probing configured providers to find available 'Brains'.
 """
 
