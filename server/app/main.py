@@ -55,6 +55,13 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     set_config_registry(config_registry)
     logger.info("ConfigRegistry initialized")
 
+    # Seed provider config from config.yaml (insert-if-absent)
+    from server.app.bootstrap import seed_providers_from_config
+    from server.app.config_loader import load_config
+
+    yaml_config = load_config()
+    await seed_providers_from_config(yaml_config)
+
     # Initialize agent definition registry (file-based agents)
     def_registry = initialize_agent_definition_registry(settings.workspace_path)
     logger.info("Agent definition registry initialized")
@@ -172,37 +179,14 @@ app.include_router(tools.router)
 @app.get("/health", response_model=HealthStatus, tags=["health"])
 async def health_check() -> HealthStatus:
     """Health check endpoint."""
-    from server.app.api.models import CircuitBreakerStatus
-    from server.app.execution.circuit_breaker import get_circuit_breaker_registry
-
     storage_backend = get_storage_backend()
     sessions_list = await storage_backend.list_sessions()
-
-    # Get circuit breaker status for all providers
-    breaker_registry = get_circuit_breaker_registry()
-    circuit_breakers = []
-
-    for name, breaker in breaker_registry.items():
-        if name.startswith("llm_provider_"):
-            provider = name.replace("llm_provider_", "")
-            metrics = breaker.metrics
-            circuit_breakers.append(
-                CircuitBreakerStatus(
-                    provider=provider,
-                    state=metrics.state,
-                    total_calls=metrics.total_calls,
-                    successful_calls=metrics.successful_calls,
-                    failed_calls=metrics.failed_calls,
-                    consecutive_failures=metrics.consecutive_failures,
-                    last_failure_time=metrics.last_failure_time,
-                )
-            )
 
     return HealthStatus(
         status="healthy",
         version="0.1.0",
         active_sessions=len(sessions_list),
-        circuit_breakers=circuit_breakers,
+        circuit_breakers=[],
         timestamp=datetime.now(UTC),
     )
 

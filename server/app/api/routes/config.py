@@ -22,7 +22,6 @@ from server.app.api.models import (
     ConfigUpdateResponse,
 )
 from server.app.config_loader import load_config
-from server.app.llm.discovery import DiscoveryEngine
 from server.app.settings import Settings, get_settings
 
 router = APIRouter(prefix="/config", tags=["config"])
@@ -104,8 +103,32 @@ async def get_config(
 ) -> ConfigResponse:
     """Get server configuration."""
     yaml_config = load_config()
-    discovery = DiscoveryEngine(settings)
-    discovered = await discovery.discover_models()
+
+    # Build available providers list from ConfigRegistry + ModelCatalog
+    available_providers: list[dict[str, Any]] = []
+    try:
+        from server.app.llm.model_catalog import get_model_catalog
+        from server.app.storage.config_registry import get_config_registry
+
+        reg = get_config_registry()
+        providers = await reg.list_providers(scope=None)
+        catalog = get_model_catalog()
+
+        seen_types: set[str] = set()
+        for p in providers:
+            if p.provider in seen_types:
+                continue
+            seen_types.add(p.provider)
+            catalog_models = await catalog.get_models_for_cognition_provider(p.provider)
+            available_providers.append(
+                {
+                    "id": p.provider,
+                    "name": p.provider.replace("_", " ").title(),
+                    "models": [m.id for m in catalog_models[:50]],  # Cap for response size
+                }
+            )
+    except Exception:
+        logger.warning("Failed to load providers for config response", exc_info=True)
 
     # LLM/provider defaults are now in the ConfigRegistry.
     # GET /config returns infrastructure settings only.
@@ -117,14 +140,7 @@ async def get_config(
             "scoping_enabled": settings.scoping_enabled,
         },
         llm={
-            "available_providers": [
-                {
-                    "id": p_id,
-                    "name": p_id.replace("_", " ").title(),
-                    "models": [m.id for m in discovered if m.provider_id == p_id],
-                }
-                for p_id in {m.provider_id for m in discovered}
-            ],
+            "available_providers": available_providers,
         },
         rate_limit={
             "per_minute": yaml_config.get("rate_limit", {}).get(

@@ -85,9 +85,28 @@ class PromptConfig(BaseModel):
 
 
 class SessionConfig(BaseModel):
-    """Session configuration options."""
+    """Session configuration options.
 
-    provider: Literal["openai", "bedrock", "mock", "openai_compatible"] | None = None
+    Provider resolution priority (highest to lowest):
+    1. ``provider_id`` — looks up a specific ProviderConfig by ID from the
+       ConfigRegistry. Overrides ``provider``/``model``.
+    2. ``provider`` + ``model`` — direct provider type / model override.
+    3. First enabled ProviderConfig from ConfigRegistry (sorted by priority).
+    """
+
+    provider_id: str | None = None
+    provider: (
+        Literal[
+            "openai",
+            "anthropic",
+            "bedrock",
+            "mock",
+            "openai_compatible",
+            "google_genai",
+            "google_vertexai",
+        ]
+        | None
+    ) = None
     model: str | None = None
     temperature: float | None = None
     max_tokens: int | None = None
@@ -120,6 +139,7 @@ class Session:
             "thread_id": self.thread_id,
             "status": self.status.value,
             "config": {
+                "provider_id": self.config.provider_id,
                 "provider": self.config.provider,
                 "model": self.config.model,
                 "temperature": self.config.temperature,
@@ -145,6 +165,7 @@ class Session:
             thread_id=data["thread_id"],
             status=SessionStatus(data.get("status", "active")),
             config=SessionConfig(
+                provider_id=config_data.get("provider_id"),
                 provider=config_data.get("provider"),
                 model=config_data.get("model"),
                 temperature=config_data.get("temperature"),

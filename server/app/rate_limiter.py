@@ -10,7 +10,11 @@ import time
 from collections import defaultdict
 from dataclasses import dataclass
 
+import structlog
+
 from server.app.exceptions import RateLimitError
+
+logger = structlog.get_logger(__name__)
 
 
 @dataclass
@@ -135,8 +139,7 @@ class RateLimiter:
             except asyncio.CancelledError:
                 break
             except Exception:
-                # Log but don't crash
-                pass
+                logger.exception("Rate limiter bucket cleanup failed")
 
 
 # Global rate limiter instance

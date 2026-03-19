@@ -19,6 +19,10 @@ import sys
 from pathlib import Path
 from typing import Any, Literal
 
+import structlog
+
+logger = structlog.get_logger(__name__)
+
 from langchain_core.tools import BaseTool
 from pydantic import BaseModel, Field, field_validator
 
@@ -361,7 +365,12 @@ class AgentDefinition(BaseModel):
                                         if isinstance(obj, BaseTool):
                                             resolved_tools.append(obj)
             except Exception:
-                # Skip tools that fail to load
+                logger.warning(
+                    "Failed to load tool — skipping",
+                    tool_path=tool_path,
+                    agent=self.name,
+                    exc_info=True,
+                )
                 continue
 
         return resolved_tools

@@ -91,8 +91,8 @@ class DockerExecutionBackend:
                     return
                 else:
                     existing.remove(force=True)
-            except Exception:
-                pass
+            except docker.errors.NotFound:  # type: ignore[attr-defined]
+                pass  # Expected: no existing container, proceed to create
 
             # Create and start new container with security hardening:
             # - cap_drop=ALL: Remove all Linux capabilities

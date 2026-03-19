@@ -92,12 +92,11 @@ def _stream_patches(mock_runtime: MagicMock, session: Any = None) -> tuple:
 
     Args:
         mock_runtime: The mock DeepAgentRuntime to use.
-        session: Optional Session whose config values should be returned by _resolve_llm_config.
+        session: Optional Session whose config values should be returned by _resolve_model.
                  If None, uses safe defaults (mock/mock-model).
     """
     provider = "mock"
     model_id = "mock-model"
-    max_tokens = None
     recursion_limit = 100
 
     if session is not None and session.config is not None:
@@ -105,8 +104,6 @@ def _stream_patches(mock_runtime: MagicMock, session: Any = None) -> tuple:
             provider = session.config.provider
         if session.config.model:
             model_id = session.config.model
-        if session.config.max_tokens is not None:
-            max_tokens = session.config.max_tokens
         if session.config.recursion_limit is not None:
             recursion_limit = session.config.recursion_limit
 
@@ -119,10 +116,12 @@ def _stream_patches(mock_runtime: MagicMock, session: Any = None) -> tuple:
             "server.app.llm.deep_agent_service.DeepAgentRuntime",
             return_value=mock_runtime,
         ),
+        # Patch _resolve_model so tests don't need real provider credentials.
+        # Returns (model_instance, provider, model_id, recursion_limit).
         patch(
-            "server.app.llm.deep_agent_service.DeepAgentStreamingService._get_model",
+            "server.app.llm.deep_agent_service.DeepAgentStreamingService._resolve_model",
             new_callable=AsyncMock,
-            return_value=MagicMock(),
+            return_value=(MagicMock(), provider, model_id, recursion_limit),
         ),
         patch(
             "server.app.llm.deep_agent_service.create_cognition_agent",
@@ -278,17 +277,14 @@ class TestUsageEventModelField:
     """UsageEvent.model must report the actual model ID used, not the llm_model default."""
 
     @pytest.mark.asyncio
-    async def test_bedrock_model_id_in_usage_event(self):
-        """When provider=bedrock, UsageEvent.model must be bedrock_model_id, not llm_model."""
+    async def test_session_model_in_usage_event(self):
+        """UsageEvent.model must reflect the session's model config, not a hardcoded default."""
         from server.app.llm.deep_agent_service import DeepAgentStreamingService
 
-        bedrock_model = "anthropic.claude-3-5-sonnet-20241022-v2:0"
-        settings = _make_settings(
-            provider="bedrock",
-            model="gpt-4o",  # the wrong default — must NOT appear in UsageEvent
-            bedrock_model_id=bedrock_model,
-        )
-        session = _make_session(provider="bedrock", model=bedrock_model)
+        # Use a custom model name to verify it's reflected in UsageEvent
+        custom_model = "custom-test-model-v1"
+        settings = _make_settings()
+        session = _make_session(provider="mock", model=custom_model)
         mock_runtime = _make_mock_runtime(TokenEvent(content="hi"), DoneEvent())
         service = DeepAgentStreamingService(settings)
 
@@ -298,18 +294,18 @@ class TestUsageEventModelField:
 
         usage_events = [e for e in collected if isinstance(e, UsageEvent)]
         assert len(usage_events) == 1
-        assert usage_events[0].model == bedrock_model, (
-            f"Expected model={bedrock_model!r}, got {usage_events[0].model!r}. "
-            "Bedrock users set COGNITION_BEDROCK_MODEL_ID, not COGNITION_LLM_MODEL."
+        assert usage_events[0].model == custom_model, (
+            f"Expected model={custom_model!r}, got {usage_events[0].model!r}. "
+            "UsageEvent.model must reflect the session's model configuration."
         )
 
     @pytest.mark.asyncio
-    async def test_openai_model_id_in_usage_event(self):
-        """When provider=openai, UsageEvent.model must be llm_model."""
+    async def test_mock_model_in_usage_event(self):
+        """UsageEvent.model must reflect the actual model used in the session."""
         from server.app.llm.deep_agent_service import DeepAgentStreamingService
 
-        settings = _make_settings(provider="openai", model="gpt-4o-mini")
-        session = _make_session(provider="openai", model="gpt-4o-mini")
+        settings = _make_settings()
+        session = _make_session(provider="mock", model="gpt-4o-mini")
         mock_runtime = _make_mock_runtime(TokenEvent(content="hi"), DoneEvent())
         service = DeepAgentStreamingService(settings)
 
@@ -320,39 +316,3 @@ class TestUsageEventModelField:
         usage_events = [e for e in collected if isinstance(e, UsageEvent)]
         assert len(usage_events) == 1
         assert usage_events[0].model == "gpt-4o-mini"
-
-    def test_get_model_id_bedrock(self):
-        """_get_model_id() returns bedrock_model_id for bedrock provider."""
-        # _get_model_id reads llm_provider and bedrock_model_id/llm_model from a settings-like
-        # object. Use a SimpleNamespace since these are no longer real Settings fields.
-        import types
-
-        from server.app.llm.provider_fallback import _get_model_id
-
-        settings = types.SimpleNamespace(
-            llm_provider="bedrock",
-            llm_model="gpt-4o",
-            bedrock_model_id="anthropic.claude-3-5-sonnet-20241022-v2:0",
-        )
-        assert _get_model_id(settings) == "anthropic.claude-3-5-sonnet-20241022-v2:0"
-
-    def test_get_model_id_openai(self):
-        """_get_model_id() returns llm_model for non-bedrock providers."""
-        import types
-
-        from server.app.llm.provider_fallback import _get_model_id
-
-        settings = types.SimpleNamespace(llm_provider="openai", llm_model="gpt-4o-mini")
-        assert _get_model_id(settings) == "gpt-4o-mini"
-
-    def test_get_model_id_openai_compatible(self):
-        """_get_model_id() returns llm_model for openai_compatible provider."""
-        import types
-
-        from server.app.llm.provider_fallback import _get_model_id
-
-        settings = types.SimpleNamespace(
-            llm_provider="openai_compatible",
-            llm_model="meta-llama/llama-3.3-70b",
-        )
-        assert _get_model_id(settings) == "meta-llama/llama-3.3-70b"

@@ -26,6 +26,7 @@ class ErrorCode(StrEnum):
     LLM_RATE_LIMIT = "llm_rate_limit"
     LLM_TIMEOUT = "llm_timeout"
     LLM_INVALID_RESPONSE = "llm_invalid_response"
+    LLM_PROVIDER_CONFIG_ERROR = "llm_provider_config_error"
 
     # Tool errors
     TOOL_EXECUTION_FAILED = "tool_execution_failed"
@@ -103,6 +104,22 @@ class LLMUnavailableError(LLMError):
         super().__init__(
             message=f"LLM service '{provider}' is unavailable",
             code=ErrorCode.LLM_UNAVAILABLE,
+            details={"provider": provider, "reason": reason},
+        )
+
+
+class LLMProviderConfigError(LLMError):
+    """LLM provider is misconfigured or credentials are missing.
+
+    Raised when provider resolution fails — e.g. no providers configured,
+    unknown provider type, missing API key, or bad base_url. The original
+    error message is passed through so the caller sees the actual problem.
+    """
+
+    def __init__(self, provider: str, reason: str) -> None:
+        super().__init__(
+            message=f"Provider '{provider}' configuration error: {reason}",
+            code=ErrorCode.LLM_PROVIDER_CONFIG_ERROR,
             details={"provider": provider, "reason": reason},
         )
 

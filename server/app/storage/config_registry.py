@@ -499,7 +499,8 @@ class SqliteConfigRegistry:
 
     async def list_providers(self, scope: dict[str, str] | None = None) -> list[ProviderConfig]:
         rows = await self._list_entities("provider", scope)
-        return [ProviderConfig.model_validate(r) for r in rows]
+        # Filter out global defaults entry (which has no 'id' field)
+        return [ProviderConfig.model_validate(r) for r in rows if "id" in r]
 
     async def upsert_provider(self, config: ProviderConfig) -> None:
         data = config.model_dump()
@@ -890,7 +891,8 @@ class PostgresConfigRegistry:
 
     async def list_providers(self, scope: dict[str, str] | None = None) -> list[ProviderConfig]:
         rows = await self._list_entities("provider", scope)
-        return [ProviderConfig.model_validate(r) for r in rows]
+        # Filter out global defaults entry (which has no 'id' field)
+        return [ProviderConfig.model_validate(r) for r in rows if "id" in r]
 
     async def upsert_provider(self, config: ProviderConfig) -> None:
         await self._upsert_entity(
@@ -1174,7 +1176,9 @@ class MemoryConfigRegistry:
         return ProviderConfig.model_validate(d) if d else None
 
     async def list_providers(self, scope: dict[str, str] | None = None) -> list[ProviderConfig]:
-        return [ProviderConfig.model_validate(r) for r in self._list_entities("provider", scope)]
+        rows = self._list_entities("provider", scope)
+        # Filter out global defaults entry (which has no 'id' field)
+        return [ProviderConfig.model_validate(r) for r in rows if "id" in r]
 
     async def upsert_provider(self, config: ProviderConfig) -> None:
         self._upsert("provider", config.id, config.scope, config.model_dump(), config.source)
