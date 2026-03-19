@@ -324,7 +324,11 @@ async def create_cognition_agent(
     if "/skills/api/" not in agent_skills:
         agent_skills = agent_skills + ["/skills/api/"]
 
-    # Wrap sandbox backend with CompositeBackend to support DB-backed skills
+    # Wrap sandbox backend with CompositeBackend to support DB-backed skills.
+    # Typed as the common BackendProtocol so both branches satisfy the union.
+    from deepagents.backends.protocol import BackendProtocol
+
+    backend: BackendProtocol
     if reg:
         from deepagents.backends.composite import CompositeBackend
 
