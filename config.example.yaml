@@ -27,18 +27,31 @@ workspace:
   root: .
 
 # LLM (Language Model) settings
-# Configure which AI model provider to use and model-specific options.
+# Configure which AI model provider to use.
 #
-# Supported providers: mock, openai, bedrock, openai_compatible, ollama
+# On first startup, this section is seeded into the ConfigRegistry as a
+# ProviderConfig entry (id="default", source="file", scope={}).
+# Once an API-written provider exists, this section is ignored on restart.
+#
+# Supported providers: openai, anthropic, bedrock, openai_compatible,
+#                      google_genai, google_vertexai
 #
 # Note: API keys should be set via environment variables:
-#   OPENAI_API_KEY, AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, etc.
+#   OPENAI_API_KEY, ANTHROPIC_API_KEY, COGNITION_OPENAI_COMPATIBLE_API_KEY,
+#   GOOGLE_API_KEY, AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, etc.
+#
+# Optional fields:
+#   base_url:    Override endpoint (required for openai_compatible)
+#   api_key_env: Custom env var name for the API key (auto-inferred if omitted)
+#   region:      AWS region (for bedrock)
+#   role_arn:    IAM role ARN for cross-account Bedrock access
 llm:
-  provider: mock
-  model: "gpt-4o"
-  temperature: null
-  max_tokens: null
-  system_prompt: null
+  provider: openai_compatible
+  model: "google/gemini-3-flash-preview"
+  base_url: "https://openrouter.ai/api/v1"
+  # api_key_env: COGNITION_OPENAI_COMPATIBLE_API_KEY  # auto-inferred
+  # region: us-east-1            # for bedrock
+  # role_arn: arn:aws:iam::...   # for bedrock cross-account
 
 # OpenAI-specific settings
 openai:

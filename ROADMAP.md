@@ -41,6 +41,7 @@ See AGENTS.md for category definitions, DoD requirements, and precedence rules.
 | 2026-03-18 | Fix `schema.py` `scope` columns as plain `JSON` preventing B-tree UNIQUE index on Postgres — replaced with `_JsonbOrJson` TypeDecorator (JSONB on Postgres, JSON on SQLite) | - | 2 | Completed |
 | 2026-03-19 | Remove `ProviderFallbackChain` — silent fallback to mock provider masked real provider errors; replace with direct `init_chat_model` via Deep Agents' native model resolution. `provider_fallback.py` and `registry.py` deleted (~550 lines). Errors now surface immediately with the actual provider error message. | - | 5 | Completed |
 | 2026-03-19 | Fix agent cache key collision — `_generate_cache_key` used only `type(model).__name__`, causing `ChatOpenAI(kimi-k2.5)` and `ChatOpenAI(gpt-4o-mini)` to share a compiled graph. Fixed by including `model_name`/`model_id` in the key via `_model_cache_key()`. | - | 4 | Completed |
+| 2026-03-19 | Fix provider bootstrap from config.yaml — `llm:` section was parsed but never consumed after ConfigRegistry migration. Added `seed_providers_from_config()` in `bootstrap.py` to seed a `ProviderConfig` entry on startup using `seed_if_absent` semantics (config.yaml provides defaults, API rows always win). | #24 comment | 1/2 | Completed |
 
 ---
 

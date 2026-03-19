@@ -55,6 +55,13 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     set_config_registry(config_registry)
     logger.info("ConfigRegistry initialized")
 
+    # Seed provider config from config.yaml (insert-if-absent)
+    from server.app.bootstrap import seed_providers_from_config
+    from server.app.config_loader import load_config
+
+    yaml_config = load_config()
+    await seed_providers_from_config(yaml_config)
+
     # Initialize agent definition registry (file-based agents)
     def_registry = initialize_agent_definition_registry(settings.workspace_path)
     logger.info("Agent definition registry initialized")
