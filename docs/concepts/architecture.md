@@ -19,7 +19,7 @@ The core promise: define your agent with tools, skills, and a system prompt — 
 │  server/app/api/                                          │
 ├─────────────────────────────────────────────────────────┤
 │  Layer 5: LLM PROVIDER                                    │
-│  Provider registry · Fallback chain · Circuit breakers    │
+│  ConfigRegistry · ModelCatalog · init_chat_model          │
 │  server/app/llm/                                          │
 ├─────────────────────────────────────────────────────────┤
 │  Layer 4: AGENT RUNTIME                                   │
@@ -35,8 +35,8 @@ The core promise: define your agent with tools, skills, and a system prompt — 
 │  server/app/storage/                                      │
 ├─────────────────────────────────────────────────────────┤
 │  Layer 1: FOUNDATION                                      │
-│  Pydantic Settings · Exception hierarchy · Config system  │
-│  server/app/settings.py · exceptions.py · config_loader  │
+│  Settings · Exceptions · ConfigLoader · Bootstrap         │
+│  server/app/settings.py · exceptions.py · bootstrap.py   │
 └─────────────────────────────────────────────────────────┘
 ```
 
@@ -169,22 +169,19 @@ User-defined agents are loaded from `.cognition/agents/*.md` and `.cognition/age
 
 ### Layer 5 — LLM Provider
 
-**`server/app/llm/registry.py`** — A simple dictionary registry mapping provider names to factory functions:
+**`server/app/llm/model_catalog.py`** — `ModelCatalog` fetches and caches the models.dev catalog (configurable URL, default 1-hour TTL). Provides enriched model metadata — context windows, tool call support, pricing, modalities — for API responses and validation warnings. The catalog is enrichment only: if unreachable, endpoints degrade gracefully. A static mapping (`PROVIDER_TYPE_TO_CATALOG_SLUGS`) translates Cognition provider types to models.dev provider slugs.
 
-| Provider | Factory | Requirements |
-|---|---|---|
-| `openai` | `ChatOpenAI` | `OPENAI_API_KEY` |
-| `openai_compatible` | `ChatOpenAI` + custom base URL | `COGNITION_OPENAI_COMPATIBLE_*` |
-| `bedrock` | `ChatBedrock` | AWS credentials |
-| `mock` | `MockLLM` | None |
+**`server/app/llm/deep_agent_service.py`** — `DeepAgentStreamingService` is the per-session streaming coordinator. Provider resolution follows a strict priority chain:
 
-Custom providers can be registered with `register_provider(name, factory)`.
+1. `SessionConfig.provider_id` — exact `ProviderConfig` lookup from ConfigRegistry
+2. `SessionConfig.provider` + `SessionConfig.model` — direct override
+3. First enabled `ProviderConfig` from ConfigRegistry (sorted by priority)
 
-**`server/app/llm/provider_fallback.py`** — `ProviderFallbackChain` tries providers in priority order. Each provider has its own circuit breaker (from the global registry). Open breakers are skipped; the chain raises `LLMUnavailableError` only when every provider fails. Retries use exponential backoff (1 s, 2 s, 4 s).
-
-**`server/app/llm/deep_agent_service.py`** — `DeepAgentStreamingService` is the per-session streaming coordinator. It resolves the correct `AgentDefinition` from the registry, merges session-level LLM overrides (a session can be created with a specific `model` or `temperature`), injects subagents into primary agents, and drives the event stream.
+If no provider can be resolved, `LLMProviderConfigError` is raised with an actionable message. There is no fallback chain — if a provider fails, the error surfaces immediately. `_build_model()` uses LangChain's `init_chat_model()` to construct the model instance.
 
 `SessionAgentManager` is the server-level singleton that manages one `DeepAgentStreamingService` per active session and routes abort signals to the right session.
+
+**`server/app/llm/discovery.py`** — Deprecated. The `DiscoveryEngine` is replaced by `ModelCatalog` for model browsing and metadata.
 
 ---
 
@@ -222,14 +219,18 @@ Custom providers can be registered with `register_provider(name, factory)`.
 
 ```
 1. Layer 2: Initialize storage backend
-2. Layer 2: Initialize session manager
-3. Layer 4: Initialize agent definition registry
-4. Layer 4: Initialize agent registry (tool/middleware auto-discovery)
-5. Layer 4: Start file watcher for .cognition/tools/ hot-reload
-6. Layer 7: Setup OTel tracing
-7. Layer 7: Setup Prometheus metrics
-8. Layer 7: Setup MLflow
-9. Layer 6: Start rate limiter
+2. Layer 2: Initialize ConfigRegistry
+3. Layer 1: Bootstrap providers from config.yaml (seed_if_absent)
+4. Layer 4: Initialize agent definition registry
+5. Layer 4: Seed agent definitions from ConfigRegistry
+6. Layer 4: Initialize ConfigChangeDispatcher (hot-reload)
+7. Layer 4: Initialize session manager
+8. Layer 4: Initialize agent registry (tool/middleware auto-discovery)
+9. Layer 4: Start file watcher for .cognition/tools/ hot-reload
+10. Layer 7: Setup OTel tracing
+11. Layer 7: Setup Prometheus metrics
+12. Layer 7: Setup MLflow
+13. Layer 6: Start rate limiter
 ```
 
 Shutdown happens in reverse: stop watcher → stop rate limiter → close storage.

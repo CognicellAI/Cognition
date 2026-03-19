@@ -366,24 +366,50 @@ Only HTTP/HTTPS URLs are accepted — stdio-based MCP servers are not supported 
 
 ## 7. Custom LLM Providers
 
-Register additional LLM providers if the built-ins (OpenAI, Bedrock, Ollama, OpenAI-compatible) are insufficient.
+Cognition uses LangChain's `init_chat_model()` under the hood, which supports any provider that has a LangChain integration. The built-in provider types are:
 
-```python
-# myapp/providers/custom.py
-from server.app.llm.registry import register_provider
-from langchain_core.language_models import BaseChatModel
+| Type | LangChain Package | Credentials |
+|---|---|---|
+| `openai` | `langchain-openai` | `OPENAI_API_KEY` |
+| `anthropic` | `langchain-anthropic` | `ANTHROPIC_API_KEY` |
+| `bedrock` | `langchain-aws` | AWS IAM credentials |
+| `google_genai` | `langchain-google-genai` | `GOOGLE_API_KEY` |
+| `google_vertexai` | `langchain-google-vertexai` | Google ADC |
+| `openai_compatible` | `langchain-openai` + custom `base_url` | `COGNITION_OPENAI_COMPATIBLE_API_KEY` |
 
-def create_custom_llm(config: dict, settings) -> BaseChatModel:
-    return MyCustomLLM(
-        api_key=settings.openai_api_key.get_secret_value(),
-        model=config.get("model", "my-model"),
-    )
+To add a provider, create a `ProviderConfig` entry via the REST API:
 
-# Register before server startup
-register_provider("custom", create_custom_llm)
+```bash
+curl -X POST http://localhost:8000/models/providers \
+  -H "Content-Type: application/json" \
+  -d '{
+    "id": "my-provider",
+    "provider": "openai_compatible",
+    "model": "my-model",
+    "base_url": "https://my-provider.example.com/v1",
+    "api_key_env": "MY_PROVIDER_API_KEY",
+    "enabled": true,
+    "priority": 0
+  }'
 ```
 
-After registration, use `COGNITION_LLM_PROVIDER=custom` in your environment.
+Or define it in `.cognition/config.yaml` (bootstrapped on first startup):
+
+```yaml
+llm:
+  provider: openai_compatible
+  model: my-model
+  base_url: https://my-provider.example.com/v1
+  api_key_env: MY_PROVIDER_API_KEY
+```
+
+Test connectivity:
+
+```bash
+curl -X POST http://localhost:8000/models/providers/my-provider/test
+```
+
+For providers not supported by `init_chat_model`, wrap them in a LangChain `BaseChatModel` and use `openai_compatible` with a local proxy, or contribute a LangChain integration upstream.
 
 ---
 

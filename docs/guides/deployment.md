@@ -64,8 +64,8 @@ cp .env.example .env
 Minimum required settings:
 
 ```bash
-# LLM provider
-COGNITION_LLM_PROVIDER=openai
+# LLM provider (set in .cognition/config.yaml or via API)
+# Config.yaml llm: section is seeded into ConfigRegistry on first startup
 OPENAI_API_KEY=sk-...
 
 # Database (matches docker-compose.yml service)

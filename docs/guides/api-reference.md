@@ -10,29 +10,18 @@ All request and response bodies are JSON. Streaming endpoints return `text/event
 
 ### `GET /health`
 
-Returns server health including circuit breaker state for all registered LLM providers.
+Returns server health status.
 
 **Response `200 OK`:**
 ```json
 {
-  "status": "ok",
-  "version": "0.1.0",
+  "status": "healthy",
+  "version": "0.4.0",
   "active_sessions": 3,
-  "circuit_breakers": {
-    "openai": {
-      "state": "closed",
-      "total_calls": 142,
-      "successful_calls": 140,
-      "failed_calls": 2,
-      "consecutive_failures": 0,
-      "rejection_count": 0
-    }
-  },
-  "timestamp": "2026-03-02T12:00:00Z"
+  "circuit_breakers": [],
+  "timestamp": "2026-03-19T12:00:00Z"
 }
 ```
-
-Circuit breaker `state` values: `closed` (healthy), `open` (failing, requests rejected), `half_open` (testing recovery).
 
 ### `GET /ready`
 
@@ -116,6 +105,7 @@ Update session metadata or LLM configuration.
   "title": "Updated title",
   "agent_name": "readonly",
   "config": {
+    "provider_id": "my-openai-config",
     "model": "gpt-4o-mini",
     "temperature": 0.3,
     "provider": "openai",
@@ -124,7 +114,18 @@ Update session metadata or LLM configuration.
 }
 ```
 
-When only `model` is supplied in `config`, the provider is inferred automatically from the model name.
+**`SessionConfig` fields:**
+
+| Field | Type | Description |
+|---|---|---|
+| `provider_id` | string | Reference a specific `ProviderConfig` by ID from ConfigRegistry. Takes priority over `provider`/`model`. |
+| `provider` | string | Provider type override: `openai`, `anthropic`, `bedrock`, `openai_compatible`, `google_genai`, `google_vertexai` |
+| `model` | string | Model ID override |
+| `temperature` | float | Temperature (0.0-2.0) |
+| `max_tokens` | int | Max output tokens |
+| `recursion_limit` | int | Max agent recursion depth |
+
+Provider resolution priority: `provider_id` (exact config lookup) > `provider` + `model` (direct override) > first enabled ProviderConfig from ConfigRegistry.
 
 **Response `200 OK`:** Updated session object  
 **Response `404 Not Found`**
@@ -490,7 +491,15 @@ Trigger a manual reload of tools from the discovery path (`.cognition/tools/`).
 
 ### `GET /models`
 
-List all available LLM models from all configured providers.
+List models from the catalog with optional filtering.
+
+**Query parameters:**
+
+| Parameter | Type | Description |
+|---|---|---|
+| `provider` | string | Filter by Cognition provider type (e.g. `openai`, `anthropic`) |
+| `tool_call` | bool | Filter by tool call support |
+| `q` | string | Search by model name or ID |
 
 **Response `200 OK`:**
 ```json
@@ -501,18 +510,64 @@ List all available LLM models from all configured providers.
       "provider": "openai",
       "display_name": "GPT-4o",
       "context_window": 128000,
-      "capabilities": ["chat", "function_calling"]
+      "output_limit": 16384,
+      "capabilities": ["tool_call", "vision", "structured_output"],
+      "input_cost": 2.5,
+      "output_cost": 10.0,
+      "modalities": {"input": ["text", "image"], "output": ["text"]},
+      "family": "gpt",
+      "status": null
     }
   ]
 }
 ```
 
-### `GET /models/providers/{provider_id}`
+### `GET /models/providers`
 
-List models for a specific provider.
+List all provider configs from the ConfigRegistry.
 
-**Response `200 OK`:** Model list filtered by provider  
-**Response `404 Not Found`:** No models found for this provider
+### `GET /models/providers/{provider_id}/models`
+
+List catalog models available for a specific provider config.
+
+### `POST /models/providers`
+
+Create a provider config.
+
+**Request body:**
+```json
+{
+  "id": "my-openai",
+  "provider": "openai",
+  "model": "gpt-4o",
+  "api_key_env": "OPENAI_API_KEY",
+  "enabled": true,
+  "priority": 0
+}
+```
+
+### `PATCH /models/providers/{provider_id}`
+
+Update a provider config.
+
+### `DELETE /models/providers/{provider_id}`
+
+Delete a provider config.
+
+### `POST /models/providers/{provider_id}/test`
+
+Test provider connectivity and credentials.
+
+**Response `200 OK`:**
+```json
+{
+  "success": true,
+  "provider": "openai",
+  "model": "gpt-4o",
+  "message": "Connection successful",
+  "response_preview": "Hello!"
+}
+```
 
 ---
 
@@ -520,7 +575,7 @@ List models for a specific provider.
 
 ### `GET /config`
 
-Get the current server configuration. Secrets are redacted.
+Get the current server configuration (infrastructure only). Secrets are redacted.
 
 **Response `200 OK`:**
 ```json
@@ -528,13 +583,13 @@ Get the current server configuration. Secrets are redacted.
   "server": {
     "host": "127.0.0.1",
     "port": 8000,
-    "log_level": "info"
+    "log_level": "info",
+    "scoping_enabled": false
   },
   "llm": {
-    "provider": "openai",
-    "model": "gpt-4o",
-    "temperature": null,
-    "max_tokens": null
+    "available_providers": [
+      {"id": "openai", "name": "Openai", "models": ["gpt-4o", "gpt-4o-mini", "..."]}
+    ]
   },
   "rate_limit": {
     "per_minute": 60,
@@ -545,17 +600,15 @@ Get the current server configuration. Secrets are redacted.
 
 ### `PATCH /config`
 
-Update configuration at runtime. Changes are persisted to `.cognition/config.yaml`.
+> **Note:** LLM and agent configuration is now managed via the ConfigRegistry API (`POST /models/providers`, `PATCH /agents/{name}`, etc.), not `PATCH /config`.
 
-**Allowed paths:** `llm.temperature`, `llm.max_tokens`, `llm.model`, `llm.provider`, `agent.memory`, `agent.skills`, `agent.interrupt_on`, `agent.subagents`, `rate_limit.per_minute`, `rate_limit.burst`, `observability.otel_enabled`, `observability.metrics_port`, `observability.otel_endpoint`, `mlflow.enabled`, `mlflow.experiment_name`.
+Update infrastructure configuration at runtime. Changes are persisted to `.cognition/config.yaml`.
+
+**Allowed paths:** `rate_limit.per_minute`, `rate_limit.burst`, `observability.otel_enabled`, `observability.metrics_port`, `observability.otel_endpoint`, `mlflow.enabled`, `mlflow.experiment_name`.
 
 **Request body:**
 ```json
 {
-  "llm": {
-    "temperature": 0.7,
-    "model": "gpt-4o-mini"
-  },
   "rate_limit": {
     "per_minute": 120
   }
@@ -566,7 +619,7 @@ Update configuration at runtime. Changes are persisted to `.cognition/config.yam
 ```json
 {
   "updated": true,
-  "changes": {"llm.temperature": 0.7, "llm.model": "gpt-4o-mini"},
+  "changes": {"rate_limit.per_minute": 120},
   "backup_created": true,
   "timestamp": "2026-03-02T12:00:00Z"
 }
@@ -650,6 +703,6 @@ All error responses follow a consistent structure:
 | `RATE_LIMITED` | 429 | Rate limit exceeded |
 | `VALIDATION_ERROR` | 422 | Request body validation failed |
 | `SESSION_NOT_FOUND` | 404 | Session ID does not exist |
-| `LLM_UNAVAILABLE` | 503 | All LLM providers failed |
+| `LLM_UNAVAILABLE` | 503 | LLM provider configuration error or provider unreachable |
 | `TOOL_EXECUTION_ERROR` | 500 | Tool raised an exception |
 | `INTERNAL_ERROR` | 500 | Unexpected server error |

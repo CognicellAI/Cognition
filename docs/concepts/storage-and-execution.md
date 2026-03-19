@@ -257,7 +257,7 @@ These run in the local process (not inside the Docker sandbox) and are always av
 
 ## Circuit Breaker (`server/app/execution/circuit_breaker.py`)
 
-The circuit breaker protects downstream LLM providers from cascading failures. The same implementation is used by the LLM provider fallback chain.
+The circuit breaker protects downstream services from cascading failures. It is used by the execution layer for Docker container management.
 
 States:
 
