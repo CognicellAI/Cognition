@@ -37,6 +37,9 @@ from server.app.agent.runtime import (
     ToolResultEvent,
     UsageEvent,
 )
+from server.app.agent.runtime import (
+    _resolve_middleware as _resolve_single_middleware,
+)
 from server.app.exceptions import LLMProviderConfigError
 from server.app.settings import Settings
 from server.app.storage import get_storage_backend
@@ -48,6 +51,30 @@ logger = structlog.get_logger(__name__)
 _TEST_ONLY_PROVIDERS = {"mock"}
 
 
+def _resolve_middleware(specs: list[str | dict[str, Any]]) -> list[Any]:
+    """Resolve a list of middleware specs to instantiated middleware objects.
+
+    Wraps ``_resolve_single_middleware`` from runtime.py, filtering out any
+    specs that fail to resolve (with a warning already logged by the inner
+    function).
+
+    Args:
+        specs: List of middleware specs — each is either a well-known name
+            (``"tool_retry"``, ``"tool_call_limit"``, ``"pii"``,
+            ``"human_in_the_loop"``), a dotted class path, or a dict with
+            a ``"name"`` key plus optional constructor kwargs.
+
+    Returns:
+        List of successfully resolved middleware instances.
+    """
+    resolved = []
+    for spec in specs:
+        instance = _resolve_single_middleware(spec)
+        if instance is not None:
+            resolved.append(instance)
+    return resolved
+
+
 def _build_model(
     provider: str,
     model_id: str,
@@ -56,6 +83,7 @@ def _build_model(
     region: str | None,
     role_arn: str | None,
     settings: Settings,
+    temperature: float | None = None,
 ) -> BaseChatModel:
     """Build a LangChain BaseChatModel from resolved provider config.
 
@@ -97,12 +125,16 @@ def _build_model(
                 kwargs["api_key"] = resolved_key
             if base_url or settings.openai_api_base:
                 kwargs["base_url"] = base_url or settings.openai_api_base
+            if temperature is not None:
+                kwargs["temperature"] = temperature
             return cast(BaseChatModel, init_chat_model(model_id, **kwargs))
 
         elif provider == "anthropic":
             kwargs = {"model_provider": "anthropic"}
             if api_key:
                 kwargs["api_key"] = api_key
+            if temperature is not None:
+                kwargs["temperature"] = temperature
             return cast(BaseChatModel, init_chat_model(model_id, **kwargs))
 
         elif provider == "bedrock":
@@ -111,6 +143,7 @@ def _build_model(
                 region=region,
                 role_arn=role_arn,
                 settings=settings,
+                temperature=temperature,
             )
 
         elif provider == "openai_compatible":
@@ -127,22 +160,28 @@ def _build_model(
                         "COGNITION_OPENAI_COMPATIBLE_BASE_URL."
                     ),
                 )
-            return init_chat_model(
-                model_id,
-                model_provider="openai",
-                base_url=resolved_base_url,
-                api_key=resolved_key,
-                max_tokens=8000,  # Sane default; keeps free-tier models within limits
-            )
+            compat_kwargs: dict[str, Any] = {
+                "model_provider": "openai",
+                "base_url": resolved_base_url,
+                "api_key": resolved_key,
+                "max_tokens": 8000,  # Sane default; keeps free-tier models within limits
+            }
+            if temperature is not None:
+                compat_kwargs["temperature"] = temperature
+            return cast(BaseChatModel, init_chat_model(model_id, **compat_kwargs))
 
         elif provider == "google_genai":
             kwargs = {"model_provider": "google_genai"}
             if api_key:
                 kwargs["api_key"] = api_key
+            if temperature is not None:
+                kwargs["temperature"] = temperature
             return cast(BaseChatModel, init_chat_model(model_id, **kwargs))
 
         elif provider == "google_vertexai":
             kwargs = {"model_provider": "google_vertexai"}
+            if temperature is not None:
+                kwargs["temperature"] = temperature
             return cast(BaseChatModel, init_chat_model(model_id, **kwargs))
 
         else:
@@ -169,6 +208,7 @@ def _build_bedrock_model(
     region: str | None,
     role_arn: str | None,
     settings: Settings,
+    temperature: float | None = None,
 ) -> BaseChatModel:
     """Build a ChatBedrock model, optionally assuming an IAM role via STS.
 
@@ -200,6 +240,8 @@ def _build_bedrock_model(
         "region_name": resolved_region,
         "config": botocore_config,
     }
+    if temperature is not None:
+        kwargs["model_kwargs"] = {"temperature": temperature}
 
     # Resolve role_arn: config takes priority over settings
     resolved_role_arn = role_arn or getattr(settings, "bedrock_role_arn", None)
@@ -284,16 +326,8 @@ class DeepAgentStreamingService:
             storage = get_storage_backend()
             session = await storage.get_session(session_id)
 
-            # Resolve provider config and build a BaseChatModel.
-            # This is the single source of truth for model selection.
-            model, provider, model_id, recursion_limit = await self._resolve_model(
-                session=session, scope=scope
-            )
-
-            # Get checkpointer from storage backend
-            checkpointer = await self.storage_backend.get_checkpointer()
-
-            # Get tools from AgentRegistry if available
+            # Get tools from AgentRegistry if available (needed before agent_def resolution
+            # so agent_def tools can be merged in below)
             custom_tools: list[Any] = []
             registry = None
             try:
@@ -309,9 +343,14 @@ class DeepAgentStreamingService:
                     exc_info=True,
                 )
 
-            # Resolve agent definition (system prompt, skills, subagents)
+            # Resolve agent definition — all fields consumed before model resolution
+            # so agent_def.config can feed into _resolve_model as an override tier.
             subagents: list[Any] = []
             agent_skills: list[str] = []
+            agent_memory: list[str] | None = None
+            agent_interrupt_on: dict[str, Any] | None = None
+            agent_middleware: list[Any] | None = None
+            agent_def = None
 
             if registry and session:
                 from server.app.agent.agent_definition_registry import (
@@ -329,18 +368,49 @@ class DeepAgentStreamingService:
                         agent_def = def_registry.get("default")
 
                     if agent_def:
+                        # system_prompt
                         if system_prompt is None:
                             system_prompt = agent_def.system_prompt
 
+                        # skills — always append the DB-backed skills API path
                         if agent_def.skills:
                             agent_skills = list(agent_def.skills)
-                            if "/skills/api/" not in agent_skills:
-                                agent_skills.append("/skills/api/")
+                        if "/skills/api/" not in agent_skills:
+                            agent_skills.append("/skills/api/")
 
+                        # subagents — all registry subagents except this agent itself
                         all_subagents = def_registry.subagents()
                         subagents = [
                             s.to_subagent() for s in all_subagents if s.name != agent_def.name
                         ]
+
+                        # memory — per-agent memory files (e.g. AGENTS.md paths)
+                        if agent_def.memory:
+                            agent_memory = list(agent_def.memory)
+
+                        # interrupt_on — per-agent HITL tool approval config
+                        if agent_def.interrupt_on:
+                            agent_interrupt_on = dict(agent_def.interrupt_on)
+
+                        # middleware — resolve declarative names to middleware instances
+                        if agent_def.middleware:
+                            agent_middleware = _resolve_middleware(agent_def.middleware)
+
+                        # tools — resolve agent-def tool paths and merge with registry tools
+                        if agent_def.tools:
+                            agent_def_tools = agent_def._resolve_tools(base_path=project_path)
+                            if agent_def_tools:
+                                custom_tools = list(custom_tools) + agent_def_tools
+
+            # Resolve provider config and build a BaseChatModel.
+            # agent_def is passed so its config tier slots between
+            # GlobalProviderDefaults and SessionConfig in the resolution hierarchy.
+            model, provider, model_id, recursion_limit = await self._resolve_model(
+                session=session, scope=scope, agent_def=agent_def
+            )
+
+            # Get checkpointer from storage backend
+            checkpointer = await self.storage_backend.get_checkpointer()
 
             # Resolve MCP servers from ConfigRegistry
             mcp_configs = await self._resolve_mcp_configs(scope=scope)
@@ -356,8 +426,11 @@ class DeepAgentStreamingService:
                 settings=self.settings,
                 tools=custom_tools if custom_tools else None,
                 system_prompt=system_prompt,
-                skills=agent_skills,
+                skills=agent_skills if agent_skills else None,
                 subagents=subagents,
+                memory=agent_memory,
+                interrupt_on=agent_interrupt_on,
+                middleware=agent_middleware,
                 mcp_configs=mcp_configs or None,
                 scope=scope,
             )
@@ -438,13 +511,18 @@ class DeepAgentStreamingService:
         self,
         session: Any,
         scope: dict[str, str] | None,
+        agent_def: Any | None = None,
     ) -> tuple[str, str, str | None, str | None, str | None, str | None, int]:
         """Resolve provider configuration from ConfigRegistry.
 
         Priority (highest to lowest):
         1. session.config.provider_id — looks up exact ProviderConfig by ID
         2. session.config.provider + session.config.model — direct override
-        3. First enabled ProviderConfig from ConfigRegistry (lowest priority number)
+        3. agent_def.config.provider + agent_def.config.model — per-agent override
+        4. First enabled ProviderConfig from ConfigRegistry (global default)
+
+        recursion_limit follows the same hierarchy:
+        session.config > agent_def.config > hardcoded default (1000)
 
         Returns:
             (provider, model_id, api_key, base_url, region, role_arn, recursion_limit)
@@ -453,7 +531,10 @@ class DeepAgentStreamingService:
             LLMProviderConfigError: If no provider can be resolved or the
                 resolved provider is test-only in a production context.
         """
+        # Resolve recursion_limit: session overrides agent, agent overrides default
         recursion_limit = 1000
+        if agent_def and agent_def.config and agent_def.config.recursion_limit is not None:
+            recursion_limit = agent_def.config.recursion_limit
         if session and session.config and session.config.recursion_limit is not None:
             recursion_limit = session.config.recursion_limit
 
@@ -541,15 +622,36 @@ class DeepAgentStreamingService:
                 enabled.sort(key=lambda pc: pc.priority)
                 chosen = enabled[0]
                 api_key = os.environ.get(chosen.api_key_env) if chosen.api_key_env else None
+
+                # Apply agent_def.config as an override tier above the global default.
+                # Only model/provider are overridable at the agent level — credentials
+                # and infra config (base_url, region, role_arn) stay from the registry.
+                resolved_provider = chosen.provider
+                resolved_model = chosen.model
+                if agent_def and agent_def.config:
+                    if agent_def.config.provider:
+                        resolved_provider = agent_def.config.provider
+                    if agent_def.config.model:
+                        resolved_model = agent_def.config.model
+                    if resolved_provider != chosen.provider or resolved_model != chosen.model:
+                        logger.debug(
+                            "Provider/model overridden by agent_def.config",
+                            agent=getattr(agent_def, "name", "unknown"),
+                            base_provider=chosen.provider,
+                            base_model=chosen.model,
+                            override_provider=resolved_provider,
+                            override_model=resolved_model,
+                        )
+
                 logger.debug(
                     "Provider resolved from ConfigRegistry",
-                    provider=chosen.provider,
-                    model=chosen.model,
+                    provider=resolved_provider,
+                    model=resolved_model,
                     id=chosen.id,
                 )
                 return (
-                    chosen.provider,
-                    chosen.model,
+                    resolved_provider,
+                    resolved_model,
                     api_key,
                     chosen.base_url,
                     chosen.region,
@@ -572,12 +674,15 @@ class DeepAgentStreamingService:
         self,
         session: Any,
         scope: dict[str, str] | None,
+        agent_def: Any | None = None,
     ) -> tuple[BaseChatModel, str, str, int]:
         """Resolve provider config and build a LangChain BaseChatModel.
 
         Args:
             session: Session object (may be None in tests).
             scope: Scope dict for ConfigRegistry lookup.
+            agent_def: Optional AgentDefinition whose config acts as an override
+                tier between GlobalProviderDefaults and SessionConfig.
 
         Returns:
             (model, provider_name, model_id, recursion_limit)
@@ -594,7 +699,7 @@ class DeepAgentStreamingService:
             region,
             role_arn,
             recursion_limit,
-        ) = await self._resolve_provider_config(session=session, scope=scope)
+        ) = await self._resolve_provider_config(session=session, scope=scope, agent_def=agent_def)
 
         # Guard: refuse to silently use mock in production
         if provider in _TEST_ONLY_PROVIDERS:
@@ -606,6 +711,12 @@ class DeepAgentStreamingService:
                 ),
             )
 
+        # Extract temperature from agent_def.config if present
+        # (session.config doesn't have a temperature field — that's agent-level config)
+        temperature: float | None = None
+        if agent_def and agent_def.config and agent_def.config.temperature is not None:
+            temperature = agent_def.config.temperature
+
         model = _build_model(
             provider=provider,
             model_id=model_id,
@@ -614,6 +725,7 @@ class DeepAgentStreamingService:
             region=region,
             role_arn=role_arn,
             settings=self.settings,
+            temperature=temperature,
         )
 
         # Tool call validation warning — enrichment only, never blocks execution
