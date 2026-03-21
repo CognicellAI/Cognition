@@ -13,6 +13,8 @@ from typing import Any, Literal
 import structlog
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.checkpoint.memory import InMemorySaver
+from langgraph.store.base import BaseStore
+from langgraph.store.memory import InMemoryStore
 
 from server.app.models import Message, Session, SessionConfig, SessionStatus
 from server.app.storage.backend import StorageBackend
@@ -37,6 +39,7 @@ class MemoryStorageBackend:
         self._sessions: dict[str, Session] = {}
         self._messages: dict[str, Message] = {}
         self._checkpointer: InMemorySaver | None = None
+        self._store: InMemoryStore | None = None
 
         logger.debug(
             "MemoryStorageBackend initialized",
@@ -260,6 +263,12 @@ class MemoryStorageBackend:
     async def close_checkpointer(self) -> None:
         """Close the checkpointer (no-op for memory)."""
         self._checkpointer = None
+
+    async def get_store(self) -> BaseStore | None:
+        """Get the in-memory store for cross-thread agent memory."""
+        if self._store is None:
+            self._store = InMemoryStore()
+        return self._store
 
     # Health check
     async def health_check(self) -> dict[str, Any]:
