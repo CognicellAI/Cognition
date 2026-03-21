@@ -262,11 +262,12 @@ class TestToolCallIdCorrelation:
         session_id = await api_client.create_session(_unique())
 
         try:
-            # A request that reliably triggers tool use on most models
+            # Explicitly instruct the model to use a specific tool — avoids the model
+            # answering from general knowledge without invoking any tool
             events = await _collect_events(
                 api_client,
                 session_id,
-                "List the files in the current directory using your tools.",
+                "Use the ls tool to list files in the current directory and show me what you find.",
                 timeout=45.0,
             )
 
@@ -308,7 +309,7 @@ class TestToolCallIdCorrelation:
             events = await _collect_events(
                 api_client,
                 session_id,
-                "List the files in the current directory.",
+                "Use the ls tool to list files in the current directory.",
                 timeout=45.0,
             )
 
