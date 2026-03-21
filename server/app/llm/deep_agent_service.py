@@ -3,7 +3,7 @@
 This service leverages deepagents' built-in capabilities:
 - Automatic ReAct loop (LLM → tool → LLM until completion)
 - State persistence via thread_id checkpointing
-- Built-in planning with write_todos tool
+- Built-in planning via Deep Agents' TodoListMiddleware
 - Context management and conversation summarization
 
 Provider/model resolution reads from ConfigRegistry (scope-aware) and builds
@@ -253,7 +253,7 @@ class DeepAgentStreamingService:
 
     This service uses deepagents' create_deep_agent which provides:
     - Automatic multi-turn ReAct loop
-    - Built-in write_todos for planning
+    - Built-in planning via Deep Agents' TodoListMiddleware
     - State checkpointing via thread_id
     - Context window management
     """
@@ -379,10 +379,6 @@ class DeepAgentStreamingService:
             output_tokens = 0
             accumulated_content = ""
             _current_tool_call = None
-            _planning_mode = False
-            _plan_todos: list[dict[str, Any]] = []
-            _current_step_index = -1
-            _completed_steps: set[int] = set()
 
             try:
                 async for event in runtime.astream_events(
@@ -402,12 +398,9 @@ class DeepAgentStreamingService:
                         _current_tool_call = None
                         yield event
 
-                    elif isinstance(event, PlanningEvent):
-                        _planning_mode = True
-                        _plan_todos = event.todos
-                        yield event
-
-                    elif isinstance(event, (DelegationEvent, StatusEvent)):
+                    elif isinstance(event, PlanningEvent) or isinstance(
+                        event, (DelegationEvent, StatusEvent)
+                    ):
                         yield event
 
                     elif isinstance(event, ErrorEvent):
@@ -688,18 +681,7 @@ class DeepAgentStreamingService:
         messages: list = []
 
         if custom_system_prompt is not None:
-            base_prompt = custom_system_prompt
-            if "write_todos" not in base_prompt:
-                base_prompt += """
-
-For complex tasks (refactoring, implementing features, debugging):
-1. First call write_todos to break down the task into steps
-2. Execute each step systematically
-3. Mark completion when all todos are done
-
-For simple tasks (single file edits, quick checks), execute directly."""
-
-            messages.append(SystemMessage(content=base_prompt))
+            messages.append(SystemMessage(content=custom_system_prompt))
 
         messages.append(HumanMessage(content=user_content))
         return messages

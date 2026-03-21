@@ -28,7 +28,6 @@ from deepagents import create_deep_agent
 
 logger = structlog.get_logger(__name__)
 
-from server.app.agent.context import ContextManager  # noqa: E402
 from server.app.agent.mcp_adapter import create_mcp_tools  # noqa: E402
 from server.app.agent.mcp_client import McpManager, McpServerConfig  # noqa: E402
 from server.app.agent.middleware import (  # noqa: E402
@@ -186,7 +185,6 @@ Key capabilities:
 - List directory contents
 - Search files using glob patterns and grep
 - Execute shell commands (tests, git, etc.)
-- Break down complex tasks using todos
 
 Best practices:
 1. Always check what files exist before making changes
@@ -194,13 +192,6 @@ Best practices:
 3. Use edit_file for precise changes rather than rewriting entire files
 4. Run tests after making changes
 5. Explain your reasoning before taking actions
-
-For complex tasks (refactoring, implementing features, debugging):
-1. First call write_todos to break down the task into steps
-2. Execute each step systematically
-3. Mark completion when all todos are done
-
-For simple tasks (single file edits, quick checks), execute directly.
 
 The current working directory is the project root. All file paths are relative to this root."""
 
@@ -226,7 +217,7 @@ async def create_cognition_agent(
     This factory creates an agent with:
     - Settings-driven sandbox backend (local or Docker) for execution
     - FilesystemBackend for file operations (shared across both backends)
-    - Multi-step ReAct loop with write_todos support
+    - Multi-step ReAct loop with planning support
     - State checkpointing via thread_id
     - Automatic tool chaining
     - Configurable memory, skills, and subagents
@@ -288,29 +279,6 @@ async def create_cognition_agent(
         docker_cpu_limit=settings.docker_cpu_limit,
         docker_host_workspace="",  # docker_host_workspace removed from Settings (niche Docker-in-Docker only)
     )
-
-    # Initialize context manager (P2-7)
-    # This automatically indexes the project and identifies relevant files
-    # The backend can be either CognitionLocalSandboxBackend or CognitionDockerSandboxBackend
-    # Both provide execute() method and cwd property that ContextManager supports
-    try:
-        context_manager = ContextManager(sandbox_backend)  # type: ignore[arg-type]
-        context_manager.build_index()
-
-        # Get relevant context for system prompt
-        context_info = context_manager.format_context_for_llm("")
-
-        # Base system prompt with context
-        if context_info:
-            system_prompt_with_context = SYSTEM_PROMPT + f"\n\nProject Context:\n{context_info}"
-        else:
-            system_prompt_with_context = SYSTEM_PROMPT
-    except Exception:
-        logger.warning(
-            "Context manager failed — running without project context in system prompt",
-            exc_info=True,
-        )
-        system_prompt_with_context = SYSTEM_PROMPT
 
     # Resolve agent defaults from ConfigRegistry (falls back to hardcoded defaults)
     agent_memory: list[str]
@@ -407,9 +375,9 @@ async def create_cognition_agent(
             try:
                 prompt = PromptConfig(type=prompt_type, value=prompt_value).get_prompt_text()
             except (FileNotFoundError, RuntimeError):
-                prompt = system_prompt_with_context
+                prompt = SYSTEM_PROMPT
         else:
-            prompt = system_prompt_with_context
+            prompt = SYSTEM_PROMPT
 
     # Initialize middleware stack
     agent_middleware = list(middleware) if middleware else []
