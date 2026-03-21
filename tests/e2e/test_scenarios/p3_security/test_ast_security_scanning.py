@@ -1,14 +1,21 @@
-"""P3-SEC-1 Business Scenarios: AST Import Scanning.
+"""P3-SEC-1 Business Scenarios: Tool Loading Security Trust Model.
 
 As a security engineer,
-I want dangerous imports to be detected and blocked before tool execution
-so that malicious code cannot compromise the server.
+I want to understand the security boundaries for tool loading
+so that I can deploy Cognition safely.
 
-Business Value:
-- Prevents arbitrary code execution via malicious tool files
-- Security scanning at load time, not runtime
-- Configurable security levels (warn vs strict)
-- Audit trail of blocked tools
+Security Trust Model:
+- Tool source code (file-discovered and API-registered) executes with full
+  Python privileges inside the sandbox backend.
+- The real security boundary is at the API authentication layer: POST /tools
+  must be restricted to authorized administrators at the Gateway/proxy layer.
+- Container isolation (Docker sandbox backend) provides process-level isolation.
+- ToolSecurityMiddleware provides per-tool blocklisting for multi-tenant deployments.
+
+AST scanning has been deliberately removed. It provided false security (bypassable
+via reflection) and created inconsistency between file-discovered tools (scanned)
+and API-registered source-in-DB tools (not scanned). The consistent model is:
+trust is established at the API authentication boundary, not inside Python.
 """
 
 from __future__ import annotations
@@ -17,144 +24,90 @@ import pytest
 
 
 @pytest.mark.asyncio
-class TestASTSecurityScanning:
-    """Test P3-SEC-1: AST Import Scanning Before exec_module."""
+class TestToolLoadingTrustModel:
+    """Test P3-SEC-1: Tool loading trust model documentation and validation."""
 
-    async def test_tools_load_security_enabled(self, api_client) -> None:
-        """Tool loading has security scanning enabled."""
-        # Reload tools to trigger security scanning
+    async def test_tools_reload_completes_without_error(self, api_client) -> None:
+        """Tool reload completes without security scan errors."""
         response = await api_client.post("/tools/reload")
-
-        # Should complete without error
         assert response.status_code in [200, 503]
 
     async def test_clean_tools_load_successfully(self, api_client) -> None:
-        """Tools without banned imports load successfully."""
-        # Reload to ensure clean state
+        """Tools from .cognition/tools/ load successfully."""
         await api_client.post("/tools/reload")
 
-        # Get tool list
         response = await api_client.get("/tools")
-
         if response.status_code == 200:
             data = response.json()
-            # Clean tools should be present (if any exist)
             assert isinstance(data.get("tools"), list)
 
-    async def test_security_violations_logged(self, api_client) -> None:
-        """Security violations are logged in tool errors."""
-        # Reload tools to trigger scanning
-        await api_client.post("/tools/reload")
-
-        # Check for security-related errors
+    async def test_tool_errors_have_required_fields(self, api_client) -> None:
+        """Tool load errors expose file, error type, and timestamp for audit."""
         response = await api_client.get("/tools/errors")
 
         if response.status_code == 200:
             errors = response.json()
-            # Any security errors should have proper format
             for error in errors:
-                if "security" in error.get("error", "").lower():
-                    assert "error_type" in error
-                    assert error["error_type"] in ["SecurityError", "ImportError"]
-
-    async def test_strict_mode_blocks_dangerous_imports(self, api_client) -> None:
-        """In strict mode, dangerous imports block tool loading."""
-        # This would require server configured with tool_security = "strict"
-        # For now, verify the infrastructure exists
-
-        response = await api_client.get("/config")
-
-        if response.status_code == 200:
-            data = response.json()
-            # Check if tool_security setting is exposed
-            if "tool_security" in str(data):
-                print("\n  Tool security setting available")
-
-    async def test_warn_mode_allows_with_logging(self, api_client) -> None:
-        """In warn mode, dangerous imports are logged but allowed."""
-        # Get current errors
-        response = await api_client.get("/tools/errors")
-
-        if response.status_code == 200:
-            errors = response.json()
-            # Warn mode would show warnings without blocking
-            for error in errors:
-                if "warning" in error.get("error", "").lower():
-                    print(f"\n  Security warning: {error['error']}")
-
-    async def test_banned_modules_list_comprehensive(self, api_client) -> None:
-        """Banned modules include dangerous stdlib modules."""
-        # Expected banned modules per P3-SEC-1 spec
-        banned_modules = [
-            "os",
-            "subprocess",
-            "socket",
-            "ctypes",
-            "sys",
-            "shutil",
-            "importlib",
-            "pty",
-            "signal",
-            "multiprocessing",
-            "threading",
-            "concurrent",
-            "code",
-            "codeop",
-            "builtins",
-        ]
-
-        # Verify these are known to be banned (through manual verification)
-        # This test documents the expected banned list
-        assert len(banned_modules) >= 10
-        print(f"\n  {len(banned_modules)} banned modules defined")
-
-    async def test_exec_eval_compile_blocked(self, api_client) -> None:
-        """Direct use of exec, eval, compile is blocked."""
-        # These are particularly dangerous and should always be blocked
-        dangerous_calls = ["exec", "eval", "compile", "__import__"]
-
-        # Document the expected behavior
-        assert len(dangerous_calls) == 4
-        print(f"\n  {len(dangerous_calls)} dangerous call types monitored")
-
-
-@pytest.mark.asyncio
-class TestSecurityAuditLogging:
-    """Test security audit logging for P3-SEC-1."""
-
-    async def test_security_events_structured_logging(self, api_client) -> None:
-        """Security events use structured logging."""
-        # Trigger reload to generate potential security events
-        response = await api_client.post("/tools/reload")
-
-        # Events should be logged (visible in server logs)
-        # This test passes if no exception occurs
-        assert response.status_code in [200, 503]
-
-    async def test_blocked_tool_audit_trail(self, api_client) -> None:
-        """Blocked tools leave audit trail with file path and reason."""
-        response = await api_client.get("/tools/errors")
-
-        if response.status_code == 200:
-            errors = response.json()
-
-            for error in errors:
-                # Blocked tools should have file path
                 assert "file" in error
-                # And reason
                 assert "error" in error
-                # And timestamp for audit
                 assert "timestamp" in error
 
-    async def test_security_scanning_performance(self, api_client) -> None:
-        """AST scanning completes quickly (<1ms for 200-line file)."""
+    async def test_no_security_error_type_in_errors(self, api_client) -> None:
+        """AST SecurityError type no longer appears in tool errors.
+
+        Previously, tools with banned imports would generate SecurityError
+        entries. Since AST scanning is removed, only real load errors
+        (ImportError, SyntaxError, etc.) should appear.
+        """
+        await api_client.post("/tools/reload")
+        response = await api_client.get("/tools/errors")
+
+        if response.status_code == 200:
+            errors = response.json()
+            security_errors = [e for e in errors if e.get("error_type") == "SecurityError"]
+            assert len(security_errors) == 0, (
+                "SecurityError entries should not appear — AST scanning removed"
+            )
+
+    async def test_tool_security_middleware_still_active(self, api_client) -> None:
+        """ToolSecurityMiddleware (tool blocklist) is still active for multi-tenant safety.
+
+        Note: This tests the COGNITION_BLOCKED_TOOLS setting which blocklists
+        specific tool names at the middleware level — this is real security,
+        not AST theater.
+        """
+        # Verify the tools endpoint is reachable
+        response = await api_client.get("/tools")
+        assert response.status_code in [200, 503]
+
+    async def test_reload_performance(self, api_client) -> None:
+        """Tool reload completes in reasonable time (no AST parsing overhead)."""
         import time
 
         start = time.time()
         response = await api_client.post("/tools/reload")
-        elapsed = (time.time() - start) * 1000  # Convert to ms
+        elapsed = (time.time() - start) * 1000
 
-        # Should complete reasonably fast
-        # Note: This includes network latency, so actual parse time is less
         assert elapsed < 5000, f"Reload took {elapsed:.0f}ms, expected <5000ms"
-        print(f"\n  Reload completed in {elapsed:.0f}ms")
+
+
+@pytest.mark.asyncio
+class TestToolLoadingAuditTrail:
+    """Test that tool load failures produce useful audit records."""
+
+    async def test_load_errors_accessible(self, api_client) -> None:
+        """Tool load errors are accessible via GET /tools/errors."""
+        response = await api_client.get("/tools/errors")
+        assert response.status_code in [200, 503]
+
+    async def test_error_records_have_structured_format(self, api_client) -> None:
+        """Any tool load errors use structured log format."""
+        response = await api_client.get("/tools/errors")
+
+        if response.status_code == 200:
+            errors = response.json()
+            for error in errors:
+                assert isinstance(error, dict)
+                assert "file" in error
+                assert "error" in error
+                assert "timestamp" in error

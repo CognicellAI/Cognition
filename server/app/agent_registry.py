@@ -20,7 +20,6 @@ Security:
 
 from __future__ import annotations
 
-import ast
 import importlib
 import importlib.util
 import inspect
@@ -44,134 +43,6 @@ from server.app.settings import Settings
 logger = structlog.get_logger(__name__)
 
 T = TypeVar("T")
-
-# ============================================================================
-# Security: Dangerous imports and calls
-# ============================================================================
-
-BANNED_IMPORTS = {
-    "subprocess",
-    "socket",
-    "ctypes",
-    "sys",
-    "shutil",
-    "importlib",
-    "pty",
-    "signal",
-    "multiprocessing",
-    "threading",
-    "concurrent",
-    "code",
-    "codeop",
-    "builtins",
-}
-
-# ISSUE-006: Removed "os" from BANNED_IMPORTS - instead ban dangerous os calls
-# This allows safe uses like os.environ while blocking dangerous ones
-BANNED_CALLS = {"exec", "eval", "compile", "__import__"}
-
-# Dangerous os module calls that should be banned
-BANNED_OS_CALLS = {
-    "system",
-    "popen",
-    "popen2",
-    "popen3",
-    "popen4",
-    "execv",
-    "execve",
-    "execvp",
-    "execvpe",
-    "execl",
-    "execle",
-    "execlp",
-    "execlpe",
-    "spawnl",
-    "spawnle",
-    "spawnlp",
-    "spawnlpe",
-    "spawnv",
-    "spawnve",
-    "spawnvp",
-    "spawnvpe",
-    "fork",
-    "forkpty",
-    "kill",
-    "killpg",
-    "remove",
-    "unlink",
-    "rmdir",
-    "removedirs",
-    "rename",
-    "renames",
-    "makedirs",
-    "mkdir",
-    "chmod",
-    "chown",
-    "chroot",
-}
-
-
-class SecurityASTVisitor(ast.NodeVisitor):
-    """AST visitor to detect dangerous imports and calls."""
-
-    def __init__(self) -> None:
-        self.violations: list[str] = []
-
-    def visit_Import(self, node: ast.Import) -> None:
-        for alias in node.names:
-            module = alias.name.split(".")[0]
-            if module in BANNED_IMPORTS:
-                self.violations.append(f"Import of banned module: {alias.name}")
-        self.generic_visit(node)
-
-    def visit_ImportFrom(self, node: ast.ImportFrom) -> None:
-        if node.module:
-            module = node.module.split(".")[0]
-            if module in BANNED_IMPORTS:
-                self.violations.append(f"Import from banned module: {node.module}")
-        self.generic_visit(node)
-
-    def visit_Call(self, node: ast.Call) -> None:
-        func_name = None
-        is_os_call = False
-
-        if isinstance(node.func, ast.Name):
-            func_name = node.func.id
-        elif isinstance(node.func, ast.Attribute):
-            func_name = node.func.attr
-            # ISSUE-006: Check for dangerous os module calls
-            # e.g., os.system, os.popen, os.remove, etc.
-            if isinstance(node.func.value, ast.Name) and node.func.value.id == "os":
-                is_os_call = True
-
-        # Check banned global calls
-        if func_name in BANNED_CALLS:
-            self.violations.append(f"Call to dangerous function: {func_name}")
-
-        # Check banned os calls
-        if is_os_call and func_name in BANNED_OS_CALLS:
-            self.violations.append(f"Call to dangerous os function: os.{func_name}")
-
-        self.generic_visit(node)
-
-
-def scan_for_security_violations(source_code: str) -> list[str]:
-    """Scan source code for dangerous imports and calls.
-
-    Args:
-        source_code: Python source code to scan.
-
-    Returns:
-        List of violation messages (empty if no violations).
-    """
-    try:
-        tree = ast.parse(source_code)
-        visitor = SecurityASTVisitor()
-        visitor.visit(tree)
-        return visitor.violations
-    except SyntaxError:
-        return []
-
 
 # ============================================================================
 # Factory Types
@@ -576,40 +447,6 @@ class AgentRegistry:
         # Remove existing module if already loaded (for hot reload)
         if module_name in sys.modules:
             del sys.modules[module_name]
-
-        # AST security scan before loading
-        try:
-            source_code = py_file.read_text()
-            violations = scan_for_security_violations(source_code)
-            if violations:
-                security_level = (
-                    getattr(self._settings, "tool_security", "warn") if self._settings else "warn"
-                )
-                for v in violations:
-                    logger.warning(
-                        "tool_security_violation",
-                        file=str(py_file),
-                        violation=v,
-                        security_level=security_level,
-                    )
-                if security_level == "strict":
-                    error_msg = f"Security violations: {', '.join(violations)}"
-                    self._load_errors.append(
-                        ToolLoadError(
-                            file=str(py_file),
-                            error_type="SecurityError",
-                            message=error_msg,
-                            timestamp=time.time(),
-                        )
-                    )
-                    logger.error(
-                        "tool_blocked_by_security",
-                        file=str(py_file),
-                        violations=violations,
-                    )
-                    return 0
-        except Exception as e:
-            logger.warning("tool_security_scan_failed", file=str(py_file), error=str(e))
 
         # Load the module
         try:
