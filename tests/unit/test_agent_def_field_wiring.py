@@ -26,7 +26,6 @@ import pytest
 from server.app.agent.runtime import DoneEvent, TokenEvent
 from server.app.models import Session, SessionConfig, SessionStatus
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -407,8 +406,9 @@ class TestToolsWiring:
     @pytest.mark.asyncio
     async def test_empty_tools_not_duplicated(self):
         """Empty AgentDefinition.tools → no extra tools added to registry tools."""
-        from server.app.agent.definition import AgentDefinition
         from langchain_core.tools import BaseTool
+
+        from server.app.agent.definition import AgentDefinition
 
         session = _make_session()
         mock_runtime = _make_mock_runtime(DoneEvent())
