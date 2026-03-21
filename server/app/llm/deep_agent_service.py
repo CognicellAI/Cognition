@@ -51,6 +51,77 @@ logger = structlog.get_logger(__name__)
 _TEST_ONLY_PROVIDERS = {"mock"}
 
 
+async def _load_config_registry_tools(scope: dict[str, str] | None) -> list[Any]:
+    """Load tools registered via POST /tools from ConfigRegistry.
+
+    For each enabled ToolRegistration:
+    - ``code`` tools: executed via ``exec()`` in a fresh namespace; all
+      ``BaseTool`` instances and ``@tool``-decorated functions found in that
+      namespace are collected.
+    - ``path`` tools: loaded via ``importlib.import_module()``; all ``BaseTool``
+      instances found in the module are collected.
+
+    Errors are logged and skipped — a single bad tool does not prevent others
+    from loading.
+
+    Security note: Tool code executes with full Python privileges. The caller
+    is responsible for ensuring that ``POST /tools`` is restricted to
+    authorized administrators at the Gateway/proxy layer.
+
+    Args:
+        scope: Scope dict for ConfigRegistry lookup. ``None`` or ``{}`` returns
+            global tools visible to all scopes.
+
+    Returns:
+        List of ``BaseTool`` instances loaded from ConfigRegistry.
+    """
+    from langchain_core.tools import BaseTool
+
+    tools: list[Any] = []
+
+    try:
+        from server.app.storage.config_registry import get_config_registry
+
+        reg = get_config_registry()
+        registrations = await reg.list_tools(scope)
+    except RuntimeError:
+        logger.debug("ConfigRegistry not initialized — skipping API-registered tools")
+        return tools
+
+    for reg_tool in registrations:
+        if not reg_tool.enabled:
+            continue
+
+        try:
+            if reg_tool.code:
+                # Source-in-DB: exec into a fresh namespace and collect BaseTool instances
+                namespace: dict[str, Any] = {}
+                exec(compile(reg_tool.code, reg_tool.name, "exec"), namespace)  # noqa: S102
+                for obj in namespace.values():
+                    if isinstance(obj, BaseTool) or callable(obj) and hasattr(obj, "name") and hasattr(obj, "run"):
+                        tools.append(obj)
+
+            elif reg_tool.path:
+                # Module path: import and inspect for BaseTool instances
+                import importlib
+                import inspect as _inspect
+
+                module = importlib.import_module(reg_tool.path)
+                for _, obj in _inspect.getmembers(module):
+                    if isinstance(obj, BaseTool):
+                        tools.append(obj)
+
+        except Exception:
+            logger.warning(
+                "Failed to load ConfigRegistry tool — skipping",
+                tool_name=reg_tool.name,
+                source_type="api_code" if reg_tool.code else "api_path",
+                exc_info=True,
+            )
+
+    return tools
+
+
 def _resolve_middleware(specs: list[str | dict[str, Any]]) -> list[Any]:
     """Resolve a list of middleware specs to instantiated middleware objects.
 
@@ -411,6 +482,13 @@ class DeepAgentStreamingService:
 
             # Get checkpointer from storage backend
             checkpointer = await self.storage_backend.get_checkpointer()
+
+            # Load tools registered via POST /tools from ConfigRegistry.
+            # These are merged on top of AgentRegistry (file-discovered) and
+            # agent_def tools. Errors are logged and skipped.
+            config_registry_tools = await _load_config_registry_tools(scope=scope)
+            if config_registry_tools:
+                custom_tools = list(custom_tools) + config_registry_tools
 
             # Resolve MCP servers from ConfigRegistry
             mcp_configs = await self._resolve_mcp_configs(scope=scope)
