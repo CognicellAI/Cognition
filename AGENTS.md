@@ -131,6 +131,41 @@ Cognition is designed to be highly pluggable using native `deepagents` extension
 - **Command Execution**: No shell=True. Use argument lists.
 - **Secrets**: Never commit keys. Use `.env` and `Settings` class.
 
+### Tool Security Trust Model
+
+Cognition does **not** perform AST scanning or Python-level restrictions on tool source
+code. This is a deliberate design decision, not an oversight.
+
+**Why AST scanning was removed:**
+AST scanning is a blocklist approach that catches accidental mistakes but not intentional
+abuse — it is bypassable via reflection (`getattr(__builtins__, '__import__')('subprocess')`).
+It also creates an inconsistency: file-discovered tools were scanned, API-registered
+source-in-DB tools were not. The consistent model is: trust is established at the API
+authentication boundary.
+
+**The real security boundaries are:**
+
+| Boundary | Mechanism |
+|----------|-----------|
+| API authentication | Gateway/proxy (OAuth, API keys, mTLS) — Cognition assumes authenticated callers |
+| Multi-tenant tool isolation | `ToolSecurityMiddleware` — `COGNITION_BLOCKED_TOOLS` blocklists specific tool names per deployment |
+| Process isolation | Docker sandbox backend — container per session, separate network namespace |
+| Network isolation | `network_mode="none"` on Docker sandbox backend |
+| Filesystem isolation | `CognitionLocalSandboxBackend` protected paths; `virtual_mode=True` |
+| Memory isolation | LangGraph Store namespaces scoped per user via `CognitionContext` |
+
+**What this means for builders:**
+- `POST /tools` executes arbitrary Python with full privileges inside the sandbox.
+  Restrict this endpoint to authorized administrators at the Gateway layer.
+- Tools registered via the API are equivalent in trust to tools placed in `.cognition/tools/`.
+- If you need strict tool sandboxing (e.g., multi-tenant SaaS where untrusted users can
+  register tools), use the Docker sandbox backend with `network_mode="none"` and resource
+  limits. Do not rely on Python-level restrictions.
+
+**`COGNITION_BLOCKED_TOOLS` (per-name blocklist) is still supported** — this is real
+multi-tenant security enforced by `ToolSecurityMiddleware` at the middleware layer.
+It prevents specific tool names from being called regardless of who registered them.
+
 
 # Hard Requirements
 

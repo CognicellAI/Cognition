@@ -155,15 +155,6 @@ class Settings(BaseSettings):
         alias="COGNITION_DOCKER_CPU_LIMIT",
     )
 
-    # Security settings
-    tool_security: Literal["warn", "strict"] = Field(
-        default="warn",
-        alias="COGNITION_TOOL_SECURITY",
-        description=(
-            "Security level for loading tools from .cognition/tools/. "
-            "'warn' logs violations but continues loading; 'strict' blocks loading."
-        ),
-    )
     blocked_tools: list[str] = Field(
         default=[],
         alias="COGNITION_BLOCKED_TOOLS",
