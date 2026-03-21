@@ -185,33 +185,32 @@ class TestAgentSystemPrompt:
 @pytest.mark.asyncio
 @pytest.mark.e2e
 class TestAgentFallback:
-    """Sessions bound to unknown agent names fall back gracefully to default."""
+    """Sessions bound to unknown agent names are rejected at creation time."""
 
-    async def test_unknown_agent_session_falls_back(self, api_client: ScenarioTestClient) -> None:
-        """Creating a session with a non-existent agent_name doesn't crash.
+    async def test_unknown_agent_name_rejected_at_session_creation(
+        self, api_client: ScenarioTestClient
+    ) -> None:
+        """Creating a session with a non-existent agent_name returns 422.
 
-        The service should warn and fall back to the 'default' agent.
-        The session should be usable — streaming completes with a done event.
+        The API validates agent_name at session creation time and rejects
+        unknown names immediately rather than silently falling back. This
+        protects builders from accidentally running sessions with the wrong
+        agent due to a typo.
         """
-        session_id = await api_client.create_session(
-            _unique("session"),
-            agent_name="definitely-does-not-exist-xyz-9999",
+        response = await api_client.post(
+            "/sessions",
+            json={
+                "title": _unique("session"),
+                "agent_name": "definitely-does-not-exist-xyz-9999",
+            },
         )
-
-        try:
-            events = await _collect_events(api_client, session_id, "Say: ok")
-
-            done_events = [e for e in events if e.get("event") == "done"]
-            error_events = [e for e in events if e.get("event") == "error"]
-
-            # Either done (fallback succeeded) or error (explicit failure) is acceptable —
-            # what's NOT acceptable is a hung stream with neither
-            assert len(done_events) + len(error_events) > 0, (
-                "Stream neither completed nor errored after unknown agent_name — "
-                "possible hung stream"
-            )
-        finally:
-            await api_client.delete(f"/sessions/{session_id}")
+        assert response.status_code == 422, (
+            f"Expected 422 for unknown agent_name, got {response.status_code}: {response.text}"
+        )
+        data = response.json()
+        assert "detail" in data or "error" in data, (
+            "422 response should include a detail or error message"
+        )
 
     async def test_default_agent_session_works(self, api_client: ScenarioTestClient) -> None:
         """Sessions bound to the 'default' agent work normally."""

@@ -279,23 +279,22 @@ class TestToolCallIdCorrelation:
                     "Run against a model that uses tools."
                 )
 
-            # Every tool_call must have a tool_call_id
+            # tool_call events use 'id' as the key (EventBuilder.tool_call serialization)
             for tc in tool_calls:
-                assert "tool_call_id" in tc, f"tool_call event missing tool_call_id: {tc}"
-                assert tc["tool_call_id"], "tool_call_id is empty"
+                assert "id" in tc, f"tool_call event missing 'id' field: {tc}"
+                assert tc["id"], "tool_call 'id' field is empty"
 
-            # Every tool_result must have a tool_call_id
+            # tool_result events use 'tool_call_id' as the key
             for tr in tool_results:
-                assert "tool_call_id" in tr, f"tool_result event missing tool_call_id: {tr}"
+                assert "tool_call_id" in tr, f"tool_result event missing 'tool_call_id': {tr}"
                 assert tr["tool_call_id"], "tool_call_id is empty"
 
-            # The IDs from tool_call events and tool_result events must overlap
-            # (i.e. results correlate to calls)
-            call_ids = {tc["tool_call_id"] for tc in tool_calls}
+            # The IDs must overlap — results correlate to calls
+            call_ids = {tc["id"] for tc in tool_calls}
             result_ids = {tr["tool_call_id"] for tr in tool_results}
 
             assert call_ids & result_ids, (
-                f"No matching tool_call_id between calls {call_ids} and results {result_ids}. "
+                f"No matching IDs between tool_calls {call_ids} and tool_results {result_ids}. "
                 "This indicates broken tool call correlation."
             )
         finally:
@@ -322,7 +321,8 @@ class TestToolCallIdCorrelation:
             event_list = list(events)
 
             for tc in tool_calls:
-                tc_id = tc.get("tool_call_id")
+                # tool_call events use 'id', tool_result events use 'tool_call_id'
+                tc_id = tc.get("id")
                 if not tc_id:
                     continue
 
@@ -334,8 +334,7 @@ class TestToolCallIdCorrelation:
                 tr_idx = event_list.index(matching_results[0])
 
                 assert tc_idx < tr_idx, (
-                    f"tool_call (idx={tc_idx}) came AFTER tool_result (idx={tr_idx}) "
-                    f"for tool_call_id={tc_id}"
+                    f"tool_call (idx={tc_idx}) came AFTER tool_result (idx={tr_idx}) for id={tc_id}"
                 )
         finally:
             await api_client.delete(f"/sessions/{session_id}")
