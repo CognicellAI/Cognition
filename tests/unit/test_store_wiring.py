@@ -218,13 +218,9 @@ class TestRuntimeContextForwarding:
 
         ctx = CognitionContext(user_id="alice", org_id="acme")
 
-        async def _fake_astream(*args: Any, **kwargs: Any):
-            # Capture kwargs to inspect them
-            _fake_astream.captured_kwargs = kwargs
+        async def _fake_astream(*args: Any, **kwargs: Any) -> Any:
             if False:
-                yield  # Make it a generator
-
-        _fake_astream.captured_kwargs = {}
+                yield  # Make it an async generator
 
         mock_agent = MagicMock()
         mock_agent.astream = MagicMock(return_value=_fake_astream())

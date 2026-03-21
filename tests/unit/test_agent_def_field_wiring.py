@@ -18,7 +18,7 @@ of 12+ fields.
 from __future__ import annotations
 
 from collections.abc import AsyncGenerator
-from typing import Any
+from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -42,7 +42,10 @@ def _make_session(
         title="Wire Test",
         thread_id="thread-wire-test",
         status=SessionStatus.ACTIVE,
-        config=SessionConfig(provider=provider, model=model),
+        config=SessionConfig(
+            provider=cast(Any, provider),
+            model=model,
+        ),
         agent_name=agent_name,
         created_at="2026-01-01T00:00:00",
         updated_at="2026-01-01T00:00:00",
