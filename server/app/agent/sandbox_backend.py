@@ -107,12 +107,17 @@ class CognitionLocalSandboxBackend(LocalShellBackend, SandboxBackendProtocol):
             raise PermissionError(f"Writing to protected path is not allowed: {file_path}")
         return super().write(file_path, content)
 
-    def execute(self, command: str) -> ExecuteResponse:
+    def execute(self, command: str, *, timeout: int | None = None) -> ExecuteResponse:
         """Execute a command in the sandbox using shell=False for security.
 
         This overrides the parent class to use shlex.split() + shell=False
         instead of shell=True, preventing shell injection attacks.
         Also checks for protected path access in the command.
+
+        Args:
+            command: Shell command to execute.
+            timeout: Optional per-command timeout override in seconds.
+                If not provided, falls back to the backend's configured timeout.
         """
         if not command or not isinstance(command, str):
             return ExecuteResponse(
@@ -130,6 +135,8 @@ class CognitionLocalSandboxBackend(LocalShellBackend, SandboxBackendProtocol):
                     truncated=False,
                 )
 
+        effective_timeout = timeout if timeout is not None else self._default_timeout
+
         try:
             # Parse command using shlex for safe argument splitting
             cmd_args = shlex.split(command)
@@ -140,7 +147,7 @@ class CognitionLocalSandboxBackend(LocalShellBackend, SandboxBackendProtocol):
                 capture_output=True,
                 text=True,
                 cwd=str(self.cwd),
-                timeout=self._timeout,
+                timeout=effective_timeout,
                 env=self._env,
             )
 
@@ -173,7 +180,7 @@ class CognitionLocalSandboxBackend(LocalShellBackend, SandboxBackendProtocol):
 
         except subprocess.TimeoutExpired:
             return ExecuteResponse(
-                output=f"Error: Command timed out after {self._timeout:.1f} seconds.",
+                output=f"Error: Command timed out after {effective_timeout:.1f} seconds.",
                 exit_code=124,
                 truncated=False,
             )
@@ -268,14 +275,19 @@ class CognitionDockerSandboxBackend(FilesystemBackend, SandboxBackendProtocol):
             )
         return self._docker_backend
 
-    def execute(self, command: str) -> ExecuteResponse:
+    def execute(self, command: str, *, timeout: int | None = None) -> ExecuteResponse:
         """Execute a command inside the Docker container.
 
         Commands are run via docker exec_run inside an isolated container.
         The workspace directory is volume-mounted so file changes are visible.
+
+        Args:
+            command: Shell command to execute.
+            timeout: Optional per-command timeout override in seconds.
+                Forwarded to the underlying Docker backend.
         """
         docker_backend = self._get_docker_backend()
-        result = docker_backend.execute(command)
+        result = docker_backend.execute(command, timeout=timeout)
 
         return ExecuteResponse(
             output=result.output,
