@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import hashlib
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, cast
 
@@ -41,6 +42,49 @@ from server.app.settings import Settings, get_settings  # noqa: E402
 
 # Global agent cache: cache_key -> compiled_agent
 _agent_cache: dict[str, Any] = {}
+
+
+@dataclass
+class CognitionContext:
+    """Invocation context passed to each agent run.
+
+    LangGraph threads this through ``runtime.context`` so nodes and middleware
+    can scope Store namespaces to the requesting user/org/project without
+    needing to pass scope explicitly through every tool call.
+
+    Attributes:
+        user_id: Primary user identifier for Store namespace isolation.
+        org_id: Optional organisation identifier for org-shared namespaces.
+        project_id: Optional project identifier for project-scoped namespaces.
+        extra: Additional scope dimensions from session.scopes.
+    """
+
+    user_id: str = "anonymous"
+    org_id: str | None = None
+    project_id: str | None = None
+    extra: dict[str, str] = field(default_factory=dict)
+
+    @classmethod
+    def from_scope(cls, scope: dict[str, str] | None) -> CognitionContext:
+        """Build a CognitionContext from a session scope dict.
+
+        Maps well-known keys (``user``, ``org``, ``project``) to typed
+        attributes; all other keys are stored in ``extra``.
+
+        Args:
+            scope: Session scope dict, e.g. ``{"user": "alice", "org": "acme"}``.
+
+        Returns:
+            CognitionContext with scope dimensions filled in.
+        """
+        if not scope:
+            return cls()
+        return cls(
+            user_id=scope.get("user", "anonymous"),
+            org_id=scope.get("org"),
+            project_id=scope.get("project"),
+            extra={k: v for k, v in scope.items() if k not in ("user", "org", "project")},
+        )
 
 
 def _model_cache_key(model: Any) -> str:
@@ -434,6 +478,8 @@ async def create_cognition_agent(
         system_prompt=prompt,
         backend=backend,
         checkpointer=checkpointer,
+        store=store,
+        context_schema=CognitionContext,
         memory=agent_memory,
         skills=agent_skills,
         subagents=cast(Any, agent_subagents),

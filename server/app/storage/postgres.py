@@ -17,6 +17,8 @@ import psycopg
 import structlog
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
+from langgraph.store.base import BaseStore
+from langgraph.store.postgres.aio import AsyncPostgresStore
 
 from server.app.models import Message, Session, SessionConfig, SessionStatus, ToolCall
 from server.app.storage.backend import StorageBackend
@@ -58,6 +60,9 @@ class PostgresStorageBackend:
         # Checkpointer state
         self._checkpointer: AsyncPostgresSaver | None = None
         self._checkpointer_context: Any | None = None
+
+        # Store state (LangGraph cross-thread memory)
+        self._store: AsyncPostgresStore | None = None
 
         logger.debug(
             "PostgresStorageBackend initialized",
@@ -162,6 +167,7 @@ class PostgresStorageBackend:
     async def close(self) -> None:
         """Close all connections."""
         await self.close_checkpointer()
+        await self.close_store()
 
         if self._pool:
             await self._pool.close()
@@ -545,6 +551,25 @@ class PostgresStorageBackend:
             except Exception:
                 pass  # Ignore errors during cleanup
             self._checkpointer = None
+
+    async def get_store(self) -> BaseStore | None:
+        """Get the PostgreSQL store for cross-thread agent memory."""
+        if self._store:
+            return self._store
+
+        conn_string = self.connection_string.replace("postgresql+asyncpg://", "postgresql://")
+        self._store = AsyncPostgresStore.from_conn_string(conn_string)
+        await self._store.setup()
+        return self._store
+
+    async def close_store(self) -> None:
+        """Close the store connection."""
+        if self._store:
+            try:
+                await self._store.close()
+            except Exception:
+                pass
+            self._store = None
 
     # Health check
     async def health_check(self) -> dict[str, Any]:
