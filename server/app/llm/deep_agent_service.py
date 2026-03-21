@@ -98,7 +98,12 @@ async def _load_config_registry_tools(scope: dict[str, str] | None) -> list[Any]
                 namespace: dict[str, Any] = {}
                 exec(compile(reg_tool.code, reg_tool.name, "exec"), namespace)  # noqa: S102
                 for obj in namespace.values():
-                    if isinstance(obj, BaseTool) or callable(obj) and hasattr(obj, "name") and hasattr(obj, "run"):
+                    if (
+                        isinstance(obj, BaseTool)
+                        or callable(obj)
+                        and hasattr(obj, "name")
+                        and hasattr(obj, "run")
+                    ):
                         tools.append(obj)
 
             elif reg_tool.path:
@@ -490,6 +495,20 @@ class DeepAgentStreamingService:
             if config_registry_tools:
                 custom_tools = list(custom_tools) + config_registry_tools
 
+            # Get LangGraph Store for cross-thread agent memory.
+            # Store namespaces are scoped per-user via CognitionContext so
+            # different users cannot read each other's memories.
+            store = await self.storage_backend.get_store()
+
+            # Build invocation context from session scope.
+            # This is forwarded to astream() so that runtime.context is
+            # available inside nodes and middleware for Store scoping.
+            from server.app.agent.cognition_agent import CognitionContext
+
+            invocation_context = CognitionContext.from_scope(
+                session.scopes if session and hasattr(session, "scopes") else scope
+            )
+
             # Resolve MCP servers from ConfigRegistry
             mcp_configs = await self._resolve_mcp_configs(scope=scope)
 
@@ -499,7 +518,7 @@ class DeepAgentStreamingService:
             agent = await create_cognition_agent(
                 project_path=project_path,
                 model=model,
-                store=None,
+                store=store,
                 checkpointer=checkpointer,
                 settings=self.settings,
                 tools=custom_tools if custom_tools else None,
@@ -518,6 +537,7 @@ class DeepAgentStreamingService:
                 checkpointer=checkpointer,
                 thread_id=thread_id,
                 recursion_limit=recursion_limit,
+                context=invocation_context,
             )
             if manager:
                 manager.register_runtime(session_id, runtime)

@@ -10,6 +10,7 @@ from __future__ import annotations
 from typing import Any, Literal, Protocol, runtime_checkable
 
 from langgraph.checkpoint.base import BaseCheckpointSaver
+from langgraph.store.base import BaseStore
 
 from server.app.models import Message, Session, SessionConfig
 
@@ -193,6 +194,14 @@ class CheckpointerStore(Protocol):
         """
         ...
 
+    async def get_store(self) -> BaseStore | None:
+        """Get or create a LangGraph Store instance for cross-thread memory.
+
+        Returns:
+            Configured store ready for use, or None if not supported.
+        """
+        ...
+
     async def close_checkpointer(self) -> None:
         """Close the checkpointer connection."""
         ...
@@ -295,6 +304,10 @@ class StorageBackend(Protocol):
     # Checkpointer operations
     async def get_checkpointer(self) -> BaseCheckpointSaver:
         """Get or create a checkpointer instance."""
+        ...
+
+    async def get_store(self) -> BaseStore | None:
+        """Get or create a LangGraph Store instance for cross-thread memory."""
         ...
 
     # Lifecycle operations
