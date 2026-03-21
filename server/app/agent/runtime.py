@@ -1,8 +1,12 @@
 """AgentRuntime protocol and DeepAgentRuntime implementation.
 
-This module defines the AgentRuntime protocol (P1-6 roadmap item) and provides
-a DeepAgentRuntime wrapper that implements the protocol using the existing
-Deep Agents implementation from cognition_agent.py.
+This module defines the AgentRuntime protocol and provides a DeepAgentRuntime
+wrapper that implements it using the Deep Agents graph compiled by
+cognition_agent.py.
+
+Streaming uses LangGraph's native astream() v2 format with
+stream_mode=["messages", "updates", "custom"] and subgraphs=True, replacing
+the previous brittle astream_events() callback-event parser.
 
 Layer: 4 (Agent Runtime)
 
@@ -23,6 +27,7 @@ import structlog
 
 logger = structlog.get_logger(__name__)
 
+from langchain_core.messages import AIMessageChunk, ToolMessage
 from langgraph.checkpoint.base import BaseCheckpointSaver
 
 from server.app.agent.cognition_agent import create_cognition_agent
@@ -326,17 +331,31 @@ class DeepAgentRuntime:
         input_data: str | dict[str, Any],
         thread_id: str | None = None,
     ) -> AsyncIterator[AgentEvent]:
-        """Stream agent execution events.
+        """Stream agent execution events using the LangGraph v2 astream format.
 
-        Transforms Deep Agents events into standardized AgentEvent types.
+        Uses ``stream_mode=["messages", "updates", "custom"]`` with
+        ``subgraphs=True`` and ``version="v2"`` so that:
+
+        * Token streaming comes from the structured ``messages`` chunks rather
+          than raw ``on_chat_model_stream`` callbacks — avoids the brittle
+          string-matching that the old ``astream_events`` approach required.
+        * Tool call IDs are real IDs taken from ``tool_call_chunks[*].id`` and
+          from the ``ToolMessage.tool_call_id`` field, so ``ToolCallEvent`` and
+          ``ToolResultEvent`` can be correlated by the client.
+        * Subagent execution is visible via ``chunk["ns"]`` — events that
+          arrive with a non-empty namespace came from a subagent and are
+          translated to ``DelegationEvent``.
+        * Custom status events emitted by tools / middleware via
+          ``get_stream_writer()`` arrive as ``custom`` chunks.
 
         Args:
-            input_data: User input (string or structured dict)
+            input_data: User input (string or structured dict with ``messages``
+                key)
             thread_id: Optional thread ID for state persistence
 
         Yields:
             AgentEvent: TokenEvent, ToolCallEvent, ToolResultEvent,
-                       StatusEvent, DoneEvent, or ErrorEvent
+                       DelegationEvent, StatusEvent, DoneEvent, or ErrorEvent
         """
         tid = thread_id or self._thread_id or "default"
 
@@ -363,53 +382,120 @@ class DeepAgentRuntime:
 
             config = {"configurable": {"thread_id": tid}, "recursion_limit": self._recursion_limit}
 
-            # Stream events from Deep Agents
-            async for event in self._agent.astream_events(
+            # Accumulator for streaming tool call chunks.
+            # Maps tool_call_id -> {"name": str, "args": str} so we can emit
+            # ToolCallEvent once the name is first seen and assemble args.
+            _pending_tool_calls: dict[str, dict[str, Any]] = {}
+
+            # Track active subagent delegations so we emit DelegationEvent once
+            # per subagent invocation (on first subagent activity), not on every
+            # chunk.
+            _active_delegations: set[str] = set()
+
+            async for chunk in self._agent.astream(
                 agent_input,
                 config=config,
+                stream_mode=["messages", "updates", "custom"],
+                subgraphs=True,
                 version="v2",
             ):
-                # Check if aborted
+                # Check if aborted mid-stream
                 if tid in self._aborted:
                     self._aborted.discard(tid)
                     yield ErrorEvent(message="Execution was aborted", code="ABORTED")
                     return
 
-                event_type = event.get("event")
-                data = event.get("data", {})
-                name = event.get("name", "")
+                chunk_type: str = chunk.get("type", "")
+                ns: tuple[str, ...] = chunk.get("ns", ())
+                data: Any = chunk.get("data")
 
-                # Transform events to standardized format
-                if event_type == "on_chat_model_stream":
-                    chunk = data.get("chunk", {})
-                    if hasattr(chunk, "content") and chunk.content:
-                        yield TokenEvent(content=_content_to_str(chunk.content))
+                # ── messages mode ────────────────────────────────────────────
+                # Yields (message_chunk, metadata) tuples.
+                # message_chunk is a LangChain BaseMessage subclass:
+                #   AIMessageChunk  → token content or tool call fragments
+                #   ToolMessage     → tool execution result
+                if chunk_type == "messages":
+                    msg, _metadata = data
 
-                elif event_type == "on_tool_start":
-                    tool_name = name
-                    tool_args = data.get("input", {})
-                    tool_call_id = f"{tool_name}_{id(data)}"
+                    # ── Token streaming ──────────────────────────────────────
+                    # AIMessageChunk with text content → TokenEvent
+                    if isinstance(msg, AIMessageChunk) and msg.content:
+                        text = _content_to_str(msg.content)
+                        if text:
+                            yield TokenEvent(content=text)
 
-                    yield ToolCallEvent(
-                        name=tool_name,
-                        args=tool_args,
-                        tool_call_id=tool_call_id,
-                    )
+                    # ── Tool call start ──────────────────────────────────────
+                    # AIMessageChunk with tool_call_chunks carries real IDs.
+                    # Chunks stream in over multiple messages; we emit
+                    # ToolCallEvent on the first chunk that has a name.
+                    if isinstance(msg, AIMessageChunk) and getattr(msg, "tool_call_chunks", None):
+                        for tc_chunk in msg.tool_call_chunks:
+                            tc_id: str | None = tc_chunk.get("id")
+                            tc_name: str | None = tc_chunk.get("name")
+                            tc_args: str = tc_chunk.get("args") or ""
 
-                elif event_type == "on_tool_end":
-                    output = data.get("output", "")
-                    tool_call_id = f"{name}_{id(data)}"
+                            if not tc_id:
+                                continue
 
-                    yield ToolResultEvent(
-                        tool_call_id=tool_call_id,
-                        output=str(output),
-                        exit_code=0,
-                    )
+                            if tc_id not in _pending_tool_calls:
+                                _pending_tool_calls[tc_id] = {"name": "", "args": ""}
 
-                elif event_type == "on_custom_event":
-                    event_name = event.get("name", "")
-                    if event_name == "status" and isinstance(data, dict) and "status" in data:
-                        yield StatusEvent(status=data["status"])
+                            # Name arrives on the first chunk for this tool call
+                            if tc_name and not _pending_tool_calls[tc_id]["name"]:
+                                _pending_tool_calls[tc_id]["name"] = tc_name
+                                yield ToolCallEvent(
+                                    name=tc_name,
+                                    args={},  # args stream in; full args on result
+                                    tool_call_id=tc_id,
+                                )
+
+                            _pending_tool_calls[tc_id]["args"] += tc_args
+
+                    # ── Tool result ──────────────────────────────────────────
+                    # ToolMessage carries the real tool_call_id that correlates
+                    # to the ToolCallEvent emitted above.
+                    if isinstance(msg, ToolMessage):
+                        tool_call_id: str = getattr(msg, "tool_call_id", "") or ""
+                        output = _content_to_str(msg.content) if msg.content else ""
+                        _pending_tool_calls.pop(tool_call_id, None)
+                        yield ToolResultEvent(
+                            tool_call_id=tool_call_id,
+                            output=output,
+                            exit_code=0,
+                        )
+
+                # ── updates mode ─────────────────────────────────────────────
+                # Yields {node_name: state_updates} dicts.
+                # Used to detect subagent lifecycle events via namespace.
+                elif chunk_type == "updates":
+                    is_subagent = any(s.startswith("tools:") for s in ns)
+
+                    if is_subagent:
+                        # Extract the pregel task ID from the namespace to use
+                        # as a stable delegation identifier.
+                        delegation_key = next((s for s in ns if s.startswith("tools:")), "")
+                        if delegation_key and delegation_key not in _active_delegations:
+                            _active_delegations.add(delegation_key)
+                            # Extract tool_call_id portion (after "tools:")
+                            subagent_id = (
+                                delegation_key.split(":", 1)[1]
+                                if ":" in delegation_key
+                                else delegation_key
+                            )
+                            yield DelegationEvent(
+                                from_agent="main",
+                                to_agent="subagent",
+                                task=subagent_id,
+                            )
+
+                # ── custom mode ───────────────────────────────────────────────
+                # Yields arbitrary dicts emitted via get_stream_writer() in
+                # tools or middleware — e.g. {"status": "thinking"}.
+                elif chunk_type == "custom":
+                    if isinstance(data, dict):
+                        status = data.get("status")
+                        if status and isinstance(status, str):
+                            yield StatusEvent(status=status)
 
             yield DoneEvent()
 
