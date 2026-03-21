@@ -16,7 +16,7 @@ See AGENTS.md for category definitions, DoD requirements, and precedence rules.
 
 | Date | Description | Severity | Layer | Status |
 |------|-------------|----------|-------|--------|
-| | | | | |
+| 2026-03-21 | **deepagents 0.4.6: enforce path boundaries in CompositeBackend routing** — upstream fix for path traversal in `CompositeBackend.route()`. Cognition uses `CompositeBackend` to route between `ConfigRegistrySkillsBackend` and the sandbox backend. Pulled in via deepagents upgrade 0.3.12 → 0.4.12. | High | 3 | Completed |
 
 ---
 
@@ -41,7 +41,8 @@ See AGENTS.md for category definitions, DoD requirements, and precedence rules.
 | 2026-03-18 | Fix `schema.py` `scope` columns as plain `JSON` preventing B-tree UNIQUE index on Postgres — replaced with `_JsonbOrJson` TypeDecorator (JSONB on Postgres, JSON on SQLite) | - | 2 | Completed |
 | 2026-03-19 | Remove `ProviderFallbackChain` — silent fallback to mock provider masked real provider errors; replace with direct `init_chat_model` via Deep Agents' native model resolution. `provider_fallback.py` and `registry.py` deleted (~550 lines). Errors now surface immediately with the actual provider error message. | - | 5 | Completed |
 | 2026-03-19 | Fix agent cache key collision — `_generate_cache_key` used only `type(model).__name__`, causing `ChatOpenAI(kimi-k2.5)` and `ChatOpenAI(gpt-4o-mini)` to share a compiled graph. Fixed by including `model_name`/`model_id` in the key via `_model_cache_key()`. | - | 4 | Completed |
-| 2026-03-19 | Fix provider bootstrap from config.yaml — `llm:` section was parsed but never consumed after ConfigRegistry migration. Added `seed_providers_from_config()` in `bootstrap.py` to seed a `ProviderConfig` entry on startup using `seed_if_absent` semantics (config.yaml provides defaults, API rows always win). | #24 comment | 1/2 | Completed |
+| 2026-03-21 | Fix `AsyncPostgresStore` initialization — `from_conn_string()` is an `@asynccontextmanager`; calling it returned a `_AsyncGeneratorContextManager` object that lacks `.setup()`. Every streaming response in Postgres deployments was silently returning a `STREAMING_ERROR` event. Fixed by creating a `psycopg.AsyncConnection` directly (same pattern as `AsyncPostgresSaver`). Discovered via E2E testing against docker-compose. | #44 | 2 | Completed |
+| 2026-03-21 | Fix provider bootstrap from config.yaml — `llm:` section was parsed but never consumed after ConfigRegistry migration. Added `seed_providers_from_config()` in `bootstrap.py` to seed a `ProviderConfig` entry on startup using `seed_if_absent` semantics (config.yaml provides defaults, API rows always win). | #24 | 1/2 | Completed |
 
 ---
 
@@ -51,6 +52,11 @@ See AGENTS.md for category definitions, DoD requirements, and precedence rules.
 |------|-------------|-------|----------------|--------|
 | 2026-03-19 | **Remove provider fallback chain; use Deep Agents `init_chat_model` natively** — `ProviderFallbackChain`, circuit breakers, and custom LLM factories replaced by a single `_resolve_provider_config()` + `_build_model()` using LangChain's `init_chat_model`. No fallback — if the configured provider fails, the error surfaces immediately. | 5 | Non-breaking: error path changes (errors surface instead of falling back to mock). Mock provider now test-only. `GlobalProviderDefaults.provider` default changed from `"mock"` to `"openai_compatible"`. | Completed |
 | 2026-03-21 | **Replace `astream_events()` callback parser with `astream()` v2 format** — `DeepAgentRuntime.astream_events()` previously called `astream_events(version="v2")` and manually matched raw LangGraph callback strings (`on_chat_model_stream`, `on_tool_start`, `on_tool_end`). Replaced with `astream(stream_mode=["messages", "updates", "custom"], subgraphs=True, version="v2")`. Uses `isinstance(msg, AIMessageChunk)` / `isinstance(msg, ToolMessage)` and real `tool_call_id` fields — fixes broken tool call correlation. Subagent execution now visible via `chunk["ns"]`. | 4 | Non-breaking for callers: same `AgentEvent` domain types emitted. `ToolCallEvent.tool_call_id` now real ID instead of CPython `id(data)`. Requires LangGraph >= 1.1 (upgraded as part of this change). | Completed |
+| 2026-03-21 | **Remove `ContextManager` / `context.py`** — `ContextManager` shelled out to `find`/`stat` at session init time (N+1 subprocess calls, static snapshot). Deleted `context.py` (~305 lines). Also removed dead tracking state (`_planning_mode`, `_plan_todos`, `_current_step_index`, `_completed_steps`) and redundant `write_todos` prompt injections. Agent discovers project structure dynamically via filesystem tools. | 4 | Non-breaking. `SYSTEM_PROMPT` retains persona only; `TodoListMiddleware` handles tool guidance. | Completed |
+| 2026-03-21 | **Wire all `AgentDefinition` fields to runtime** — `stream_response()` consumed only 3 of 12+ fields. Now wires `memory`, `interrupt_on`, `middleware`, `tools`, `config.model/provider`, `config.recursion_limit`, `config.temperature`. Agent-def resolved before `_resolve_model()` so config feeds the provider hierarchy: session > agent_def > registry > global. | 4/5 | Non-breaking. | Completed |
+| 2026-03-21 | **Bridge ConfigRegistry tools to runtime — source-in-DB** — Tools registered via `POST /tools` were stored but never loaded at runtime. Added `code: str \| None` to `ToolRegistration` (XOR with `path`). `_load_config_registry_tools(scope)` called on every invocation. `GET /tools` returns tools from both file discovery and ConfigRegistry with `source_type` discriminator. No AST scanning — trust model: Gateway enforces authorization on `POST /tools`. | 3/6 | `POST /tools` now requires `code` or `path` (not both, not neither). | Completed |
+| 2026-03-21 | **Wire LangGraph Store for DB-native cross-thread memory** — `store=None` was vestigial. Added `get_store()` to all backends. Added `CognitionContext` for per-user Store namespace scoping. `create_deep_agent()` receives `store=` and `context_schema=CognitionContext`. `runtime.store` and `runtime.context` available in nodes/middleware. No built-in memory tools yet — see #45. | 2/4 | Non-breaking. | Completed |
+| 2026-03-21 | **Remove AST security theater — document real trust model** — Removed `BANNED_IMPORTS`, `BANNED_CALLS`, `BANNED_OS_CALLS`, `SecurityASTVisitor`, `scan_for_security_violations()`, and `tool_security` from `Settings`. AST scanning was bypassable via reflection and inconsistent (file tools scanned, API tools not). Real security boundaries documented in `AGENTS.md`. | 3/1 | `COGNITION_TOOL_SECURITY` ignored. If hard tool blocking needed, use `COGNITION_BLOCKED_TOOLS` + Gateway authorization. | Completed |
 
 ---
 
@@ -136,9 +142,9 @@ The following fallback patterns exist and are tracked for removal. They produce 
 
 | Task | Layer | Status | Acceptance Criteria | Effort | Dependencies |
 |------|-------|--------|---------------------|--------|--------------|
-| Message persistence (SQLite/Postgres) | Layer 2 | In Progress | Messages survive server restart; SQLite works; Postgres works | 2 days | None |
-| Session lifecycle management | Layer 2 | In Progress | Sessions can be created, listed, retrieved, deleted | 1 day | None |
-| Basic tool execution security | Layer 3 | In Progress | No shell=True; no arbitrary code execution | 1 day | None |
+| Message persistence (SQLite/Postgres) | Layer 2 | Completed | Messages survive server restart; SQLite works; Postgres works | 2 days | None |
+| Session lifecycle management | Layer 2 | Completed | Sessions can be created, listed, retrieved, deleted | 1 day | None |
+| Basic tool execution security | Layer 3 | Completed | No shell=True; no arbitrary code execution via `CognitionLocalSandboxBackend` | 1 day | None |
 
 ---
 
@@ -150,10 +156,10 @@ The following fallback patterns exist and are tracked for removal. They produce 
 | **MCP server wiring** | Layer 4/5 | Completed | `COGNITION_MCP_SERVERS` env var / YAML key configures remote MCP servers; each entry validated (HTTP/HTTPS only) at startup; tools from MCP servers available to agent in all execution paths | 0.5 days | None |
 | **Bedrock IAM role support** | Layer 5 | Completed | Ambient credentials (instance profile, ECS task role, Lambda, IRSA) work without any key configuration; `COGNITION_BEDROCK_ROLE_ARN` enables cross-account role assumption; `AWS_SESSION_TOKEN` supported for STS temp credentials; partial key pair raises clear error | 0.5 days | None |
 | **Wire rate_limit_per_minute / rate_limit_burst to RateLimiter** | Layer 6 | Completed | `COGNITION_RATE_LIMIT_PER_MINUTE` and `COGNITION_RATE_LIMIT_BURST` are actually enforced by the rate limiter (previously reported in `/config` but ignored) | 0.25 days | None |
-| Multi-user session isolation | Layer 2 | Pending | Users can only see/access their own sessions | 2 days | P0: Session lifecycle |
-| Graceful abort/cancellation | Layer 4 | Pending | Abort button immediately stops execution; no zombie processes | 1 day | P0: Session lifecycle |
+| Multi-user session isolation | Layer 2 | Completed | Users can only see/access their own sessions (scope isolation via `X-Cognition-Scope-{key}` headers) | 2 days | P0: Session lifecycle |
+| Graceful abort/cancellation | Layer 4 | Completed | Abort button immediately stops execution via `POST /sessions/{id}/abort` | 1 day | P0: Session lifecycle |
 | Proper error propagation | Layer 5/6 | Completed | All 14 fallback sites resolved: provider errors surface with `LLMProviderConfigError`, registry-missing returns 503, silent `except Exception: pass` replaced with logged warnings throughout | 2 days | None |
-| Rate limiting | Layer 6 | Pending | Per-user and global rate limits enforced | 1 day | None |
+| Rate limiting | Layer 6 | Completed | `COGNITION_RATE_LIMIT_PER_MINUTE` and `COGNITION_RATE_LIMIT_BURST` enforced | 1 day | None |
 
 ### P1-1: Configurable Agent Parameters
 
@@ -200,8 +206,9 @@ The following fallback patterns exist and are tracked for removal. They produce 
 | **Eliminate known fallback sites (F-01 through F-24)** | Layers 4–6 | Completed | All `except Exception: pass` patterns replaced with logged warnings; `GET /tools` and `GET /models/providers` return 503 when registry unavailable; `model or "gpt-4o"` removed; thread_id/state retrieval warnings added; see Explicit Error Policy section | 2 days | None |
 | **Model catalog integration (models.dev)** | Layer 5/6 | Completed | `ModelCatalog` service fetches models.dev catalog; `GET /models` returns enriched model metadata (context window, tool call support, pricing, modalities); `GET /models/providers/{id}/models` lists catalog models for a provider config; `SessionConfig.provider_id` enables per-session provider selection by config ID; tool call validation warning on model resolution; `DiscoveryEngine` deprecated | 2 days | P2: ConfigRegistry |
 | Connection pooling | Layer 2 | Pending | Database connections pooled; no connection leaks | 1 day | None |
-| Health check endpoint | Layer 6 | Pending | `/health` returns 200 when all deps ready | 0.5 days | None |
-| Metrics and telemetry | Layer 7 | Pending | Prometheus metrics; OpenTelemetry traces | 2 days | None |
+| Health check endpoint | Layer 6 | Completed | `/health` returns 200 with status, version, active sessions | 0.5 days | None |
+| Metrics and telemetry | Layer 7 | Completed | Prometheus metrics via `/metrics`; OpenTelemetry traces via `COGNITION_OTEL_ENABLED`; MLflow experiment tracking | 2 days | None |
+| **Memory tools: `save_memory` / `search_memories`** | Layer 4 | Pending | Agent can persist and retrieve context across sessions via `runtime.store`; user-scoped namespaces; works with all backends | 1-2 days | #17 (Store plumbing, completed) |
 
 ---
 
@@ -337,4 +344,4 @@ Per AGENTS.md requirements:
    - Features/Architectural: Before starting work
    - Security/Bug/Performance/Dependency: As part of PR
 
-**Last Updated**: 2026-03-19 (model catalog integration)
+**Last Updated**: 2026-03-21 (deep-agents-alignment initiative complete; memory tools planned)
