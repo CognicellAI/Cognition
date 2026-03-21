@@ -15,6 +15,8 @@ import aiosqlite
 import structlog
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
+from langgraph.store.base import BaseStore
+from langgraph.store.sqlite.aio import AsyncSqliteStore
 
 from server.app.models import Message, Session, SessionConfig, SessionStatus, ToolCall
 from server.app.storage.backend import StorageBackend
@@ -56,6 +58,10 @@ class SqliteStorageBackend:
         self._checkpointer: AsyncSqliteSaver | None = None
         self._checkpointer_context: Any | None = None
 
+        # Store state (LangGraph cross-thread memory)
+        self._store: AsyncSqliteStore | None = None
+        self._store_context: Any | None = None
+
         logger.debug(
             "SqliteStorageBackend initialized",
             db_path=str(self.db_path),
@@ -91,6 +97,7 @@ class SqliteStorageBackend:
     async def close(self) -> None:
         """Close all connections."""
         await self.close_checkpointer()
+        await self.close_store()
         logger.debug("SQLite storage closed")
 
     # Session operations
@@ -456,6 +463,22 @@ class SqliteStorageBackend:
             await self._checkpointer_context.__aexit__(None, None, None)
             self._checkpointer_context = None
             self._checkpointer = None
+
+    async def get_store(self) -> BaseStore | None:
+        """Get the SQLite store for cross-thread agent memory."""
+        if self._store:
+            return self._store
+
+        self._store_context = AsyncSqliteStore.from_conn_string(str(self.db_path))
+        self._store = await self._store_context.__aenter__()
+        return self._store
+
+    async def close_store(self) -> None:
+        """Close the store connection."""
+        if self._store_context:
+            await self._store_context.__aexit__(None, None, None)
+            self._store_context = None
+            self._store = None
 
     # Health check
     async def health_check(self) -> dict[str, Any]:
