@@ -102,6 +102,7 @@ The following fallback patterns exist and are tracked for removal. They produce 
 | CI/CD Docker Images | N/A | N/A | None | Completed |
 | `psycopg2-binary` → `psycopg[binary,pool]` | psycopg2-binary (any) | psycopg 3.x | API surface change (psycopg3 vs psycopg2); only affects import paths, not used directly | Completed |
 | `langgraph` + `langchain` | langgraph 1.0.8, langchain 1.2.9 | langgraph 1.1.3, langchain 1.2.13 | `astream()` now supports `version="v2"` unified StreamPart format; required for streaming rewrite (#34) | Completed |
+| `deepagents` + `anthropic` + `langchain-anthropic` | deepagents 0.3.12, anthropic 0.79.0, langchain-anthropic 1.3.2 | deepagents 0.4.12, anthropic 0.86.0, langchain-anthropic 1.4.0 | `execute()` in `SandboxBackendProtocol` gained `timeout: int \| None = None` kwarg — updated `CognitionLocalSandboxBackend` and `CognitionDockerSandboxBackend` to match. Also fixed latent `self._timeout` bug (attribute didn't exist; now uses `self._default_timeout` from parent). | Completed |
 
 ### CI/CD Docker Image Builds
 
