@@ -16,7 +16,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-
 # ---------------------------------------------------------------------------
 # CognitionContext.from_scope()
 # ---------------------------------------------------------------------------
@@ -215,7 +214,7 @@ class TestRuntimeContextForwarding:
     async def test_astream_called_with_context(self):
         """DeepAgentRuntime passes context= to the underlying graph's astream()."""
         from server.app.agent.cognition_agent import CognitionContext
-        from server.app.agent.runtime import DeepAgentRuntime, DoneEvent
+        from server.app.agent.runtime import DeepAgentRuntime
 
         ctx = CognitionContext(user_id="alice", org_id="acme")
 

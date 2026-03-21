@@ -20,7 +20,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from langchain_core.tools import BaseTool, tool
 
-
 # ---------------------------------------------------------------------------
 # ToolRegistration model validation
 # ---------------------------------------------------------------------------
