@@ -25,6 +25,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 from langchain_core.messages import AIMessageChunk, ToolMessage
+from langchain_core.messages.tool import ToolCallChunk
 
 from server.app.agent.runtime import (
     DeepAgentRuntime,
@@ -64,7 +65,7 @@ def _ai_tool_call_chunk(
     index: int = 0,
 ) -> dict[str, Any]:
     """Build a messages-mode chunk carrying a tool call fragment."""
-    tc_chunk = {"id": tool_call_id, "name": name, "args": args, "index": index}
+    tc_chunk = ToolCallChunk(id=tool_call_id, name=name, args=args, index=index)
     msg = AIMessageChunk(content="", tool_call_chunks=[tc_chunk])
     return _make_chunk("messages", (msg, {}))
 
@@ -228,7 +229,7 @@ class TestToolCallIdCorrelation:
     @pytest.mark.asyncio
     async def test_chunk_without_id_is_ignored(self):
         """Tool call chunks with no id are silently ignored."""
-        tc_chunk = {"id": None, "name": "broken_tool", "args": "", "index": 0}
+        tc_chunk = ToolCallChunk(id=None, name="broken_tool", args="", index=0)
         msg = AIMessageChunk(content="", tool_call_chunks=[tc_chunk])
         runtime = _make_runtime(_make_chunk("messages", (msg, {})))
         events = await _collect(runtime)
