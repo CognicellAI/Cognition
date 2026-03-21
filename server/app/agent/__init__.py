@@ -1,7 +1,6 @@
 """Phase 4: Advanced Agent Capabilities.
 
-Enhanced tool system, context management, and agent workflows
-built on top of the deepagents foundation.
+Enhanced tool system and agent workflows built on top of the deepagents foundation.
 """
 
 from server.app.agent.agent_definition_registry import (
@@ -10,11 +9,6 @@ from server.app.agent.agent_definition_registry import (
     initialize_agent_definition_registry,
 )
 from server.app.agent.cognition_agent import create_cognition_agent
-from server.app.agent.context import (
-    ContextManager,
-    FileRelevanceScorer,
-    ProjectIndex,
-)
 from server.app.agent.definition import (
     AgentConfig,
     AgentDefinition,
@@ -43,9 +37,6 @@ __all__ = [
     # Agent creation
     "create_cognition_agent",
     "CognitionLocalSandboxBackend",
-    "ContextManager",
-    "ProjectIndex",
-    "FileRelevanceScorer",
     # Tools
     "BrowserTool",
     "InspectPackageTool",

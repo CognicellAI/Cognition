@@ -1,0 +1,62 @@
+---
+Deep Agents Core Capabilities Audit: Where Cognition Extends vs. Reimplements
+Areas Where Cognition Properly Extends Deep Agents
+These are well-architected and should stay as-is:
+Area	Files	Why It's Justified
+ConfigRegistrySkillsBackend	skills_backend.py	Cleanly implements BackendProtocol for DB-backed skills; gold standard extension
+CompositeBackend routing	cognition_agent.py:365-368	Routes /skills/api/ to DB backend, everything else to sandbox — proper use of deep agents primitive
+ToolSecurityMiddleware	middleware.py:14-74	Tool blocklist for multi-tenant security — deep agents has no equivalent
+CognitionObservabilityMiddleware	middleware.py:77-117	Prometheus metrics — deep agents has no metrics middleware
+CognitionStreamingMiddleware	middleware.py:120-147	Status events for client UX — deep agents doesn't emit thinking/idle signals
+CognitionLocalSandboxBackend	sandbox_backend.py:110-185	shell=False security hardening + protected paths — deep agents intentionally uses shell=True
+CognitionDockerSandboxBackend	sandbox_backend.py:188-284	Docker-based isolation — deep agents has no Docker backend
+BrowserTool, SearchTool, InspectPackageTool	tools.py	Web browsing/search — not provided by deep agents harness
+Agent caching	cognition_agent.py:44-178	Prevents graph recompilation — application-level concern
+_build_model() with provider resolution	deep_agent_service.py:51-165	Bedrock STS, ConfigRegistry, multi-provider — beyond what init_chat_model() does
+SSE transport layer	sse.py	HTTP SSE formatting, reconnection, heartbeat — transport, not agent logic
+Event type hierarchy	runtime.py:87-205	Clean typed interface between runtime and API layer
+Areas Where Cognition Reimplements Deep Agents Capabilities
+These are the problems to fix:
+1. HIGH: Manual Event Parsing in astream_events() (runtime.py:367-413)
+What it does: Calls self._agent.astream_events(version="v2") and manually parses raw LangGraph callback events (on_chat_model_stream, on_tool_start, on_tool_end, on_custom_event) into AgentEvent dataclasses.
+What Deep Agents provides: The compiled graph supports astream() with stream_mode="messages" or stream_mode=["messages", "updates"] plus subgraphs=True for structured access to all events including subagent execution.
+Concrete problems:
+- Broken tool_call_id correlation (runtime.py:391,401): Uses f"{tool_name}_{id(data)}" — id(data) is a CPython memory address that differs between on_tool_start and on_tool_end events, so tool starts and results can never be correlated by the client
+- No subagent visibility: Doesn't pass subgraphs=True, so all subagent execution is invisible to the streaming layer
+- Fragile string matching: Depends on exact internal LangGraph event type strings
+Plan: Replace with astream(stream_mode=["messages", "updates"], subgraphs=True, version="v2"). The AgentEvent types are fine to keep as Cognition's domain model, but the translation should use the structured v2 format, not raw callback events.
+2. MEDIUM: ContextManager project indexing (context.py, cognition_agent.py:292-313)
+What it does: At agent creation time, shells out to find . -type f | head -1000 then runs stat on each file (N+1 subprocess calls), runs naive regex scoring, and appends a static "Project Context" block to the system prompt.
+What Deep Agents provides: ls, glob, grep tools that the agent can use dynamically during execution. MemoryMiddleware for AGENTS.md loading. The agent is capable of discovering project structure itself.
+Concrete problems:
+- N+1 subprocess calls during initialization (one stat per file up to 1000 files)
+- Static snapshot — doesn't update as files change during the session
+- Naive regex scoring adds minimal value vs. letting the agent explore dynamically
+- Silently caught Exception (cognition_agent.py:308) — masked by fallback pattern (tracked as F-04 in ROADMAP)
+Plan: Remove context.py entirely. If a project summary is desired, load it from AGENTS.md (which deep agents already supports via memory), or let the agent use its filesystem tools. The value-add does not justify the complexity.
+3. LOW: Redundant write_todos instructions in system prompt
+Two places:
+- cognition_agent.py:189,198-203 — SYSTEM_PROMPT includes "Break down complex tasks using todos" and "First call write_todos..."
+- deep_agent_service.py:692-700 — _build_messages() appends write_todos instructions if not already present
+What Deep Agents provides: TodoListMiddleware injects the write_todos tool with its own description. BASE_AGENT_PROMPT in the deep agents graph already includes structured tool usage guidance. The todo list prompt section ("3. To-do list prompt") is part of Deep Agents' prompt assembly as documented in the harness capabilities page.
+Plan: Remove the duplicate write_todos instructions from both locations. Keep only the Cognition persona portion of SYSTEM_PROMPT ("You are Cognition, an expert AI coding assistant..."). The deep agents harness handles tool usage guidance.
+4. LOW: Dead tracking state in stream_response() (deep_agent_service.py:381-385)
+_planning_mode = False
+_plan_todos: list[dict[str, Any]] = []
+_current_step_index = -1
+_completed_steps: set[int] = set()
+These variables are assigned but never read back anywhere meaningful — the stream_response() method just re-yields events without using this state. This is dead code from a planned feature that was never completed.
+Plan: Remove the dead variables. If todo tracking is needed at the service layer, it should consume deep agents' native todo state from the graph state rather than manually tracking.
+---
+Proposed Plan
+Priority	Change	Files
+HIGH	Replace astream_events() with astream() v2 format + subgraphs=True	runtime.py
+MEDIUM	Remove ContextManager / context.py; let agent use its own tools	context.py, cognition_agent.py
+LOW	Remove redundant write_todos prompt instructions	cognition_agent.py, deep_agent_service.py
+LOW	Remove dead tracking state variables	deep_agent_service.py
+The HIGH item (streaming rewrite) is the most impactful because it fixes the broken tool_call_id correlation, enables subagent visibility, and reduces coupling to LangGraph internals. It would also be a prerequisite for properly surfacing Deep Agents' todo updates and subagent lifecycle events to clients.
+The MEDIUM item (context.py removal) is straightforward cleanup that removes ~305 lines of code, eliminates initialization latency, and removes a silent-exception fallback pattern.
+The two LOW items are simple deletions of redundant text.
+Do you want me to refine any part of this plan before we add it to the ROADMAP? In particular:
+1. For the streaming rewrite — should I investigate what the exact astream() v2 output format looks like for the deep agents graph, so we can plan the translation layer precisely?
+2. For context.py removal — do you want to keep any form of automatic project context, or is AGENTS.md + the agent's filesystem tools sufficient?

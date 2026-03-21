@@ -71,7 +71,6 @@ The following fallback patterns exist and are tracked for removal. They produce 
 | F-01 | `llm/deep_agent_service.py` | 306 | `except Exception: pass` on tool loading | Agent silently runs without custom tools |
 | F-02 | `llm/deep_agent_service.py` | 320 | Agent name not found → falls back to `"default"` | Wrong agent, no warning |
 | F-03 | `llm/deep_agent_service.py` | 463 | `model or "gpt-4o"` when session sets provider but not model | Wrong model, no error |
-| F-04 | `agent/cognition_agent.py` | 308 | `except Exception:` on context manager → bare system prompt | No project context, no warning |
 | F-05 | `agent/definition.py` | 363 | `except Exception: continue` on tool file load | Broken tools silently skipped |
 | F-06 | `llm/deep_agent_service.py` | 592 | `except RuntimeError: return []` on MCP config | MCP servers silently unavailable |
 | F-08 | `agent/cognition_agent.py` | 323 | `reg = None` → hardcoded memory/skills/subagent defaults | Configured values silently lost |
