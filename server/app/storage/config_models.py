@@ -19,7 +19,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 # ---------------------------------------------------------------------------
 # Provider / LLM
@@ -87,20 +87,33 @@ class ProviderConfig(BaseModel):
 class ToolRegistration(BaseModel):
     """A tool registered in the config registry.
 
-    Tools can be file-path based (.cognition/tools/my_tool.py) or
-    module-path based (server.app.tools.my_tool).
+    Tools can be registered in two ways:
+    - ``path``: A Python module path (e.g. ``mypackage.tools.jira``) or file
+      path (e.g. ``.cognition/tools/my_tool.py``). The module must be importable
+      by the server process — suitable for pre-installed packages.
+    - ``code``: Full Python source code stored directly in the DB. Cognition
+      executes it at runtime via ``exec()``. Suitable for builder applications
+      that cannot access the server filesystem (e.g. separate containers).
+
+    Exactly one of ``path`` or ``code`` must be provided.
+
+    Security note: Tool code executes with full Python privileges inside the
+    sandbox backend. ``POST /tools`` should be restricted to authorized
+    administrators at the Gateway/proxy layer.
 
     Attributes:
-        name: Tool identifier (must match the BaseTool.name).
+        name: Tool identifier.
         path: File path or module path to load the tool from.
+        code: Python source code to execute at runtime.
         enabled: Whether this tool is active.
         description: Optional description for documentation purposes.
         scope: Scope this entry applies to. Empty dict = global.
-        source: "file" or "api".
+        source: "file" (bootstrapped from disk) or "api" (registered via API).
     """
 
     name: str = Field(..., min_length=1, max_length=100)
-    path: str = Field(..., min_length=1)
+    path: str | None = Field(default=None)
+    code: str | None = Field(default=None)
     enabled: bool = Field(default=True)
     description: str | None = Field(default=None)
     scope: dict[str, str] = Field(default_factory=dict)
@@ -115,6 +128,17 @@ class ToolRegistration(BaseModel):
                 f"Tool name must be alphanumeric with hyphens/underscores/dots only: {v}"
             )
         return v
+
+    @model_validator(mode="after")
+    def validate_path_or_code(self) -> ToolRegistration:
+        """Validate that exactly one of path or code is provided."""
+        has_path = self.path is not None and self.path.strip() != ""
+        has_code = self.code is not None and self.code.strip() != ""
+        if not has_path and not has_code:
+            raise ValueError("Either 'path' or 'code' must be provided.")
+        if has_path and has_code:
+            raise ValueError("Provide either 'path' or 'code', not both.")
+        return self
 
 
 # ---------------------------------------------------------------------------
