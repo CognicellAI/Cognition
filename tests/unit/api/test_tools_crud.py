@@ -24,17 +24,22 @@ def setup_registry(tmp_path_factory):
 
 
 class TestListTools:
-    def test_list_returns_503_when_registry_not_initialized(self):
-        """GET /tools returns 503 when the agent registry is not initialized."""
-        response = client.get("/tools")
-        # agent_registry is not initialized in unit tests (only config_registry is)
-        assert response.status_code == 503
+    def test_list_returns_200_when_registry_not_initialized(self):
+        """GET /tools returns 200 even when the AgentRegistry is not initialized.
 
-    def test_list_503_has_detail_message(self):
-        """GET /tools 503 response includes an informative detail message."""
+        The endpoint now gracefully skips the AgentRegistry if unavailable and
+        returns whatever ConfigRegistry tools exist (empty list in this case).
+        """
         response = client.get("/tools")
-        assert response.status_code == 503
-        assert "detail" in response.json()
+        assert response.status_code == 200
+
+    def test_list_returns_empty_when_no_tools_registered(self):
+        """GET /tools returns an empty list when no tools have been registered."""
+        response = client.get("/tools")
+        assert response.status_code == 200
+        data = response.json()
+        assert "tools" in data
+        assert "count" in data
 
 
 class TestCreateTool:
@@ -53,8 +58,9 @@ class TestCreateTool:
         response = client.post("/tools", json={"path": "some.path"})
         assert response.status_code == 422
 
-    def test_create_tool_missing_path_returns_422(self):
-        response = client.post("/tools", json={"name": "no-path"})
+    def test_create_tool_missing_both_path_and_code_returns_422(self):
+        """POST /tools with neither path nor code returns 422."""
+        response = client.post("/tools", json={"name": "no-source"})
         assert response.status_code == 422
 
     def test_create_tool_upserts_on_duplicate(self):

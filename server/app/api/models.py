@@ -428,8 +428,18 @@ class ToolResponse(BaseModel):
     """Tool information for API responses."""
 
     name: str = Field(..., description="Tool name")
-    source: str = Field(..., description="Source of the tool (programmatic or file path)")
-    module: str | None = Field(None, description="Module path if loaded from file")
+    source_type: str = Field(
+        ...,
+        description=(
+            "Origin of the tool: 'builtin' (built-in), 'file' (file-discovered), "
+            "'api_code' (API-registered Python source), 'api_path' (API-registered module path)"
+        ),
+    )
+    module: str | None = Field(None, description="Module path if loaded from a module path")
+    description: str | None = Field(None, description="Tool description")
+    enabled: bool = Field(True, description="Whether the tool is enabled")
+    # Back-compat alias kept for existing consumers
+    source: str = Field(..., description="Deprecated — use source_type")
 
 
 class ToolList(BaseModel):
@@ -654,10 +664,23 @@ class AgentUpdate(BaseModel):
 
 
 class ToolCreate(BaseModel):
-    """Request to register a tool in the ConfigRegistry."""
+    """Request to register a tool in the ConfigRegistry.
+
+    Exactly one of ``path`` or ``code`` must be provided:
+
+    - ``path``: Python module path (e.g. ``mypackage.tools.jira``) or file
+      path. The module must be importable by the Cognition server process.
+    - ``code``: Full Python source code. Stored in the DB and executed at
+      runtime via ``exec()``. Suitable for builder applications that cannot
+      access the server filesystem.
+
+    Security note: Tool code executes with full Python privileges. This
+    endpoint should be restricted to authorized administrators.
+    """
 
     name: str = Field(..., min_length=1, max_length=100, description="Tool identifier")
-    path: str = Field(..., min_length=1, description="Module or file path for the tool")
+    path: str | None = Field(default=None, description="Module or file path for the tool")
+    code: str | None = Field(default=None, description="Python source code to execute at runtime")
     enabled: bool = Field(default=True)
     description: str | None = Field(default=None)
     scope: dict[str, str] = Field(default_factory=dict)
