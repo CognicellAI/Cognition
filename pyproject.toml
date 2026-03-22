@@ -1,6 +1,6 @@
 [project]
 name = "cognition"
-version = "0.4.0"
+version = "0.5.0"
 description = "Local AI coding assistant built on LangGraph Deep Agents"
 readme = "README.md"
 requires-python = ">=3.11"

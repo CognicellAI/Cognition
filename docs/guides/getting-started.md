@@ -62,7 +62,7 @@ Verify it's up:
 
 ```bash
 curl -s http://localhost:8000/health
-# {"status": "healthy", "version": "0.4.0", ...}
+# {"status": "healthy", "version": "0.5.0", ...}
 ```
 
 > **Don't want Docker?** Install with `uv sync --extra openai` and run `uv run uvicorn server.app.main:app --reload --port 8000`. See [Deployment](./deployment.md) for production options (PostgreSQL, Kubernetes, multi-instance).

@@ -80,7 +80,7 @@ Returns server health status.
 ```json
 {
   "status": "healthy",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "active_sessions": 3,
   "circuit_breakers": [],
   "timestamp": "2026-03-19T12:00:00Z"
