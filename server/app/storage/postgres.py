@@ -557,16 +557,25 @@ class PostgresStorageBackend:
         if self._store:
             return self._store
 
+        import psycopg
+
         conn_string = self.connection_string.replace("postgresql+asyncpg://", "postgresql://")
-        self._store = AsyncPostgresStore.from_conn_string(conn_string)
-        await self._store.setup()
+        conn = await psycopg.AsyncConnection.connect(
+            conn_string,
+            row_factory=psycopg.rows.dict_row,
+            autocommit=True,
+        )
+        store = AsyncPostgresStore(conn)  # type: ignore[arg-type]
+        await store.setup()
+        self._store = store
         return self._store
 
     async def close_store(self) -> None:
         """Close the store connection."""
         if self._store:
             try:
-                await self._store.close()
+                if hasattr(self._store, "conn"):
+                    await self._store.conn.close()  # type: ignore[union-attr]
             except Exception:
                 pass
             self._store = None
