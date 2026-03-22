@@ -433,7 +433,7 @@ Get a specific agent by name.
 
 ### `GET /tools`
 
-List all registered tools.
+List all registered tools from both file discovery (AgentRegistry) and API registration (ConfigRegistry).
 
 **Response `200 OK`:**
 ```json
@@ -441,17 +441,73 @@ List all registered tools.
   "tools": [
     {
       "name": "bash",
-      "source": "builtin",
-      "module": "server.app.agent.tools"
+      "source_type": "file",
+      "source": "file",
+      "module": "server.app.agent.tools",
+      "description": null,
+      "enabled": true
+    },
+    {
+      "name": "search-jira",
+      "source_type": "api_code",
+      "source": "api_code",
+      "module": null,
+      "description": "Search Jira issues",
+      "enabled": true
     },
     {
       "name": "run_analysis",
-      "source": "auto-discovered",
-      "module": "myapp.tools.analysis"
+      "source_type": "api_path",
+      "source": "api_path",
+      "module": "myapp.tools.analysis",
+      "description": null,
+      "enabled": true
     }
   ],
-  "count": 2
+  "count": 3
 }
+```
+
+`source_type` values:
+- `"file"` — auto-discovered from `.cognition/tools/` or built-in
+- `"api_code"` — registered via `POST /tools` with `code` field (Python source stored in DB)
+- `"api_path"` — registered via `POST /tools` with `path` field (module path)
+
+### `POST /tools`
+
+Register a tool in the ConfigRegistry. Exactly one of `code` or `path` must be provided.
+
+**Request body:**
+```json
+{
+  "name": "search-jira",
+  "code": "from langchain_core.tools import tool\n\n@tool\ndef search_jira(query: str) -> str:\n    ...",
+  "enabled": true,
+  "description": "Search Jira issues",
+  "scope": {}
+}
+```
+
+Or with a module path instead of inline code:
+```json
+{
+  "name": "jira-tools",
+  "path": "mycompany.cognition_tools.jira",
+  "enabled": true
+}
+```
+
+**Response `201 Created`:** Tool object with `source_type`  
+**Response `422 Unprocessable Entity`:** Neither `code` nor `path` provided; or both provided  
+
+> **Security:** Tool code executes with full Python privileges. Restrict this endpoint to authorized administrators at the Gateway/proxy layer.
+
+### `DELETE /tools/{name}`
+
+Remove an API-registered tool.
+
+**Response `204 No Content`**  
+**Response `404 Not Found`:** Tool not in registry
 ```
 
 ### `GET /tools/{name}`

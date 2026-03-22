@@ -151,7 +151,7 @@ pytest tests/e2e/test_scenarios/ -v
 | Analytics Tracking | Cost optimization and analytics | P2-5: Enrich Message Model |
 | Cross-Domain Access | Custom frontends securely | P2-4: CORS Middleware |
 | Isolated Execution | Safe AI-generated code | P2-6: ExecutionBackend |
-| Project Awareness | Contextually relevant suggestions | P2-7: ContextManager |
+| Project Awareness | Contextually relevant suggestions | Agent uses filesystem tools (ls, glob, grep) to discover project structure dynamically |
 | Multi-User Management | Team leaders oversee conversations | P2-8: SessionManager |
 | Dynamic Capability Extension | Runtime tool registration | P2-9: AgentRegistry |
 | Configuration Updates | Zero-downtime config changes | P2-10: File Watcher |

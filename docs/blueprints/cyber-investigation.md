@@ -63,7 +63,7 @@ BreachLens uses Cognition's **Docker Sandbox Backend**.
 
 #### 2. The Private Intelligence (Local LLM)
 To satisfy privacy requirements, Cognition is configured to use a local inference endpoint (e.g., vLLM hosting Llama 3 or a fine-tuned security model).
-*   **Config:** `COGNITION_LLM_PROVIDER=openai_compatible`
+*   **Config:** Set `provider: openai_compatible` and `base_url: http://vllm-host:8000/v1` in `.cognition/config.yaml`
 *   **Result:** No data ever leaves the VPC.
 
 #### 3. The Audit Trail
