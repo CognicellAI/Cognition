@@ -460,9 +460,9 @@ You have a running Cognition instance, a connected LLM provider, streaming worki
 | What you want to do | Where to go |
 |---|---|
 | Create custom agent personas (different prompts, tools, models per agent) | [Extending Agents → Custom Agents](./extending-agents.md#3-custom-agents) |
-| Add persistent memory across sessions | [Extending Agents → Skills & Memory](./extending-agents.md#2-skills) |
-| Require human approval before the agent runs certain tools | [Configuration → `interrupt_on`](./configuration.md#agent-defaults) |
-| Run agent code in a Docker container instead of the server process | [Deployment → Docker Sandbox](./deployment.md) |
+| Inject project-specific context into every session (AGENTS.md) | [Extending Agents → Memory](./extending-agents.md#1-memory-agentsmd) |
+| Add skills — progressive disclosure docs the agent reads on demand | [Extending Agents → Skills](./extending-agents.md#2-skills-skillmd) |
 | Add retry logic, PII redaction, or call limits to tools | [Configuration → Middleware](./configuration.md#agent-defaults) |
+| Run agent code in a Docker container instead of the server process | [Deployment → Docker Sandbox](./deployment.md) |
 | Move to PostgreSQL and run multiple server instances | [Deployment](./deployment.md) |
 | See every endpoint and SSE event schema | [API Reference](./api-reference.md) |
