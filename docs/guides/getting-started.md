@@ -10,7 +10,7 @@ This guide walks you from zero to a running Cognition instance with an active se
 
 **Python path:** Python 3.11+, `pip` or `uv`.
 
-You will also need an LLM provider API key. Examples in this guide use OpenAI, but Cognition also supports AWS Bedrock, Ollama (local), and any OpenAI-compatible endpoint.
+You will also need an LLM provider API key. Examples in this guide use OpenAI, but Cognition also supports AWS Bedrock and any OpenAI-compatible endpoint (OpenRouter, vLLM, Ollama, etc.).
 
 ---
 
@@ -28,13 +28,21 @@ cd Cognition
 cp .env.example .env
 ```
 
-Edit `.env` and set your API key:
+Edit `.env` to add your API key. Then configure the LLM provider in `.cognition/config.yaml`:
+
+```yaml
+# .cognition/config.yaml
+llm:
+  provider: openai
+  model: gpt-4o
+```
 
 ```bash
+# .env — API keys only, never put these in config.yaml
 OPENAI_API_KEY=sk-...
-COGNITION_LLM_PROVIDER=openai
-COGNITION_LLM_MODEL=gpt-4o
 ```
+
+On first startup, the `llm:` section in `config.yaml` is seeded into the ConfigRegistry as the default provider. You can also configure providers via the API after startup — see [Switching LLM Providers](#switching-llm-providers) below.
 
 ### 2. Start the server
 
@@ -79,19 +87,29 @@ For AWS Bedrock add `[bedrock]`; for local development add `[dev,test]`.
 
 ### 2. Configure
 
+Configure the LLM provider in `.cognition/config.yaml`:
+
+```yaml
+# .cognition/config.yaml
+llm:
+  provider: openai
+  model: gpt-4o
+```
+
+Set your API key as an environment variable (not in the YAML file):
+
 ```bash
 export OPENAI_API_KEY="sk-..."
-export COGNITION_LLM_PROVIDER=openai
-export COGNITION_LLM_MODEL=gpt-4o
 ```
 
 Or create a `.env` file in your working directory (Cognition auto-loads it):
 
 ```bash
+# .env
 OPENAI_API_KEY=sk-...
-COGNITION_LLM_PROVIDER=openai
-COGNITION_LLM_MODEL=gpt-4o
 ```
+
+On first startup, the `llm:` section seeds the ConfigRegistry as the default provider. You can also configure providers via the API after startup without restarting — see [Switching LLM Providers](#switching-llm-providers) below.
 
 ### 3. Start the server
 

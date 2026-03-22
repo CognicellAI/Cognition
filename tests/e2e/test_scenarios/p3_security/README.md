@@ -4,36 +4,30 @@ End-to-end tests for P3-SEC (Security Hardening) features.
 
 ## Overview
 
-These scenarios test Cognition's security features from a business value perspective, ensuring that malicious code cannot compromise the system through multiple layers of defense.
+These scenarios test Cognition's security features from a business value perspective, ensuring that the real security boundaries (sandbox isolation, path protection, namespace enforcement) function correctly.
 
 ## Structure
 
 ```
 tests/e2e/test_scenarios/p3_security/
 ├── __init__.py
-├── test_ast_security_scanning.py      # P3-SEC-1: AST Import Scanning
+├── test_ast_security_scanning.py      # P3-SEC-1: Tool loading trust model
 ├── test_cognition_protection.py        # P3-SEC-2 & P3-SEC-3: Path Protection
 └── test_namespace_cors_security.py     # P3-SEC-4 & P3-SEC-5: Namespace & CORS
 ```
 
 ## P3-SEC Items Covered
 
-### P3-SEC-1: AST Import Scanning (`test_ast_security_scanning.py`)
-**Business Value:** Prevents arbitrary code execution via malicious tool files
+### P3-SEC-1: Tool Loading Trust Model (`test_ast_security_scanning.py`)
+**Business Value:** Documents and validates the tool security trust model
+
+**Note:** AST scanning (`SecurityASTVisitor`, `BANNED_IMPORTS`, `COGNITION_TOOL_SECURITY`) was removed. The real security boundary is Gateway-level authorization on `POST /tools`. See [AGENTS.md — Tool Security Trust Model](../../../../AGENTS.md).
 
 **Scenarios:**
+- Tool reload completes without security scan errors (`SecurityError` entries should not appear)
 - Clean tools load successfully
-- Security violations are logged
-- Strict mode blocks dangerous imports
-- Warn mode allows with logging
-- Comprehensive banned modules list
-- Performance: <1ms for 200-line file
-
-**Banned Modules:**
-- `os`, `subprocess`, `socket`, `ctypes`, `sys`
-- `shutil`, `importlib`, `pty`, `signal`
-- `multiprocessing`, `threading`, `concurrent`
-- `code`, `codeop`, `builtins`
+- Tool load errors have required audit fields (file, error type, timestamp)
+- `ToolSecurityMiddleware` (per-name blocklist via `COGNITION_BLOCKED_TOOLS`) still active
 
 ### P3-SEC-2: Protect .cognition/ from Agent Writes (`test_cognition_protection.py`)
 **Business Value:** Prevents self-modification attacks and privilege escalation

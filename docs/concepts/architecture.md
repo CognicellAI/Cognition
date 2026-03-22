@@ -161,9 +161,9 @@ Definitions can be loaded from YAML files (`load_agent_definition`) or Markdown 
 - `default` — Full-access coding agent, all tools enabled, mode `primary`
 - `readonly` — Analysis-only agent, write and execute tools disabled, mode `primary`
 
-User-defined agents are loaded from `.cognition/agents/*.md` and `.cognition/agents/*.yaml`. The registry exposes `list()`, `get(name)`, `primaries()` (agents that can own a session), `subagents()` (agents that can only be invoked by other agents), and `reload()`.
+User-defined agents are loaded from `.cognition/agents/*.md` and `.cognition/agents/*.yaml`. The registry exposes `get_all()`, `get(name)`, `primaries()` (agents that can own a session), `subagents()` (agents that can only be invoked by other agents), and `reload()`.
 
-**`server/app/agent/cognition_agent.py`** — `create_cognition_agent()` is the async factory that instantiates a Deep Agent from an `AgentDefinition`. It attaches the sandbox backend, built-in tools (`BrowserTool`, `SearchTool`, `InspectPackageTool`), MCP tools, and the middleware stack (`CognitionObservabilityMiddleware`, `CognitionStreamingMiddleware`, `ToolSecurityMiddleware`). Agent instances are cached by an MD5 key of the definition for efficient reuse across sessions.
+**`server/app/agent/cognition_agent.py`** — `create_cognition_agent()` is the async factory that instantiates a Deep Agent from an `AgentDefinition`. It attaches the sandbox backend, built-in tools (`BrowserTool`, `SearchTool`, `InspectPackageTool`), MCP tools, ConfigRegistry API-registered tools, and the middleware stack (`CognitionObservabilityMiddleware`, `CognitionStreamingMiddleware`, `ToolSecurityMiddleware`). It also receives `store=` (LangGraph `BaseStore`) and `context_schema=CognitionContext` to enable cross-thread memory scoped by user. Agent instances are cached by an MD5 key of the definition for efficient reuse across sessions.
 
 ---
 
@@ -174,8 +174,9 @@ User-defined agents are loaded from `.cognition/agents/*.md` and `.cognition/age
 **`server/app/llm/deep_agent_service.py`** — `DeepAgentStreamingService` is the per-session streaming coordinator. Provider resolution follows a strict priority chain:
 
 1. `SessionConfig.provider_id` — exact `ProviderConfig` lookup from ConfigRegistry
-2. `SessionConfig.provider` + `SessionConfig.model` — direct override
-3. First enabled `ProviderConfig` from ConfigRegistry (sorted by priority)
+2. `SessionConfig.provider` + `SessionConfig.model` — direct session override
+3. `AgentDefinition.config.provider` + `.model` — per-agent definition override
+4. First enabled `ProviderConfig` from ConfigRegistry (sorted by priority)
 
 If no provider can be resolved, `LLMProviderConfigError` is raised with an actionable message. There is no fallback chain — if a provider fails, the error surfaces immediately. `_build_model()` uses LangChain's `init_chat_model()` to construct the model instance.
 

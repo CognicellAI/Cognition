@@ -18,8 +18,6 @@ server:
   host: 127.0.0.1
   port: 8000
   log_level: info
-  max_sessions: 100
-  session_timeout_seconds: 3600.0
 
 # Workspace settings
 # Configure where projects/workspaces are stored.
@@ -68,11 +66,6 @@ aws:
 # Bedrock model settings
 bedrock:
   model_id: "anthropic.claude-3-sonnet-20240229-v1:0"
-
-# Ollama (local LLM) settings
-ollama:
-  model: llama3.2
-  base_url: "http://localhost:11434"
 
 # Rate limiting settings
 # Control API request throttling.
@@ -130,8 +123,3 @@ agent:
 persistence:
   backend: sqlite
   uri: .cognition/state.db
-
-# Test settings
-# Configure testing behavior.
-test:
-  llm_mode: mock

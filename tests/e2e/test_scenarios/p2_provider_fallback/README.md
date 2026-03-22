@@ -1,6 +1,8 @@
-# Provider Fallback E2E Tests
+# Provider Management E2E Tests
 
-Comprehensive end-to-end tests for the Cognition provider fallback system, testing real Agent interactions with the live docker-compose environment.
+End-to-end tests for Cognition provider management via the ConfigRegistry API.
+
+> **Note:** The `ProviderFallbackChain` was removed in favour of explicit provider errors (see ROADMAP Architectural Changes). These tests now focus on provider CRUD lifecycle, hot-reload, session overrides, and credential handling — not fallback chain behaviour.
 
 ## Prerequisites
 

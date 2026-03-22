@@ -226,7 +226,7 @@ On startup, the registry scans `.cognition/agents/` for `*.md` and `*.yaml` file
 registry = get_agent_definition_registry()
 
 # List all non-hidden agents
-agents = registry.list()
+agents = registry.get_all()
 
 # Get a specific agent
 agent = registry.get("security-auditor")
@@ -263,16 +263,16 @@ Response fields include `name`, `description`, `mode`, `hidden`, `native`, `mode
 The factory:
 
 1. Selects the sandbox backend from settings (`local` or `docker`)
-2. Creates a `ContextManager` that indexes the workspace for project-aware responses
-3. Loads built-in tools: `BrowserTool`, `SearchTool`, `InspectPackageTool`
-4. Loads MCP tools from configured remote servers
-5. Resolves tools from the `AgentDefinition`
-6. Attaches the middleware stack:
-   - `ToolSecurityMiddleware` — blocks tools on the deny-list
+2. Loads built-in tools: `BrowserTool`, `SearchTool`, `InspectPackageTool`
+3. Loads MCP tools from configured remote servers
+4. Resolves tools from the `AgentDefinition` (dotted import paths + ConfigRegistry API-registered tools)
+5. Attaches the middleware stack:
+   - `ToolSecurityMiddleware` — blocks tools on the `COGNITION_BLOCKED_TOOLS` deny-list
    - `CognitionObservabilityMiddleware` — tracks LLM and tool Prometheus metrics
    - `CognitionStreamingMiddleware` — emits `thinking`/`idle` status events
-7. Loads upstream middleware specified in the definition (see [Extending Agents](../guides/extending-agents.md))
-8. Injects subagents as Deep Agents `SubAgent` dicts
+6. Loads upstream middleware specified in the definition (see [Extending Agents](../guides/extending-agents.md))
+7. Injects subagents as Deep Agents `SubAgent` dicts
+8. Passes `store=` (LangGraph `BaseStore`) and `context_schema=CognitionContext` for cross-thread memory
 
 ### Agent Caching
 
@@ -290,3 +290,36 @@ When a `primary` agent needs to delegate a task, it invokes the `task` tool with
 4. Returns the result to the primary agent's context
 
 Subagents have their own tool sets and system prompts but run within the same session's thread, preserving shared state. Clients can observe delegation via the `delegation` SSE event and the subsequent events from the subagent's execution.
+
+---
+
+## CognitionContext and Cross-Thread Memory
+
+`CognitionContext` (`server/app/agent/cognition_agent.py`) is a typed invocation context injected into every agent run. It is built from `session.scopes` and forwarded to `astream()` and `ainvoke()` so that nodes and middleware can access it via `runtime.context`.
+
+```python
+@dataclass
+class CognitionContext:
+    user_id: str = "anonymous"
+    org_id: str | None = None
+    project_id: str | None = None
+    extra: dict[str, str] = field(default_factory=dict)
+```
+
+This context serves two purposes:
+
+1. **Store namespace scoping** — `runtime.store` (a LangGraph `BaseStore`) is available inside agent nodes and middleware. `CognitionContext.user_id` is the natural key for building per-user memory namespaces, ensuring user A cannot read user B's stored memories.
+
+2. **Middleware access** — any custom middleware can read `runtime.context` to branch on user, org, or project dimensions without coupling to the HTTP layer.
+
+```python
+# Inside a custom tool or middleware
+async def save_to_memory(content: str, config: RunnableConfig) -> str:
+    store = config["store"]
+    context = config["configurable"].get("cognition_context")
+    namespace = (context.user_id, "memories")
+    await store.aput(namespace, key, {"content": content})
+    return "Saved."
+```
+
+> **Note:** Built-in memory tools (`save_memory`, `search_memories`) are planned but not yet shipped. See [GitHub issue #45](https://github.com/CognicellAI/Cognition/issues/45) for the design discussion. In the meantime, the Store infrastructure is fully wired and custom tools can use it today.

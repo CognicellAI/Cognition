@@ -88,7 +88,26 @@ The container is created from `cognition-sandbox:latest`, a minimal image withou
 
 ## Tool Security
 
-Implemented in `server/app/agent/middleware.py:ToolSecurityMiddleware` and `server/app/settings.py`.
+Implemented in `server/app/agent/middleware.py:ToolSecurityMiddleware`.
+
+### Trust Model
+
+Tool source code (both file-discovered and API-registered) executes with full Python privileges inside the sandbox backend. Cognition does not perform AST scanning or Python-level restrictions on tool code — these were removed as they were bypassable via reflection and created a false sense of security.
+
+**The real security boundaries are:**
+
+| Boundary | Mechanism |
+|---|---|
+| API authorization | Gateway/proxy layer — Cognition assumes authenticated callers |
+| Per-name tool blocking | `ToolSecurityMiddleware` — `COGNITION_BLOCKED_TOOLS` blocklist enforced at call time |
+| Process isolation | Docker sandbox backend — container per session |
+| Network isolation | Docker `network_mode=none` |
+| Filesystem isolation | `CognitionLocalSandboxBackend` protected paths |
+| Memory isolation | LangGraph Store namespaces scoped per user via `CognitionContext` |
+
+`POST /tools` (API-registered tools) executes arbitrary Python with full privileges. **Restrict this endpoint to authorized administrators at the Gateway/proxy layer.**
+
+For a detailed explanation, see [AGENTS.md — Tool Security Trust Model](../../AGENTS.md).
 
 ### Tool Namespace Allowlist
 
@@ -108,23 +127,10 @@ If a tool's dotted path does not start with a trusted namespace, it is rejected 
 COGNITION_BLOCKED_TOOLS=["file_write", "execute_bash"]
 ```
 
-### Tool Security Mode
-
-```env
-COGNITION_TOOL_SECURITY=warn   # Log blocked calls but allow them (development)
-COGNITION_TOOL_SECURITY=strict # Block and return error (production)
-```
-
-In `strict` mode, blocked tool calls return:
+The blocked call returns:
 ```
 Tool 'file_write' is blocked by the tool security policy.
 ```
-
-In `warn` mode, the call is logged and allowed to proceed.
-
-### AST Import Scanning
-
-User-defined tools loaded from `.cognition/tools/` are scanned using Python's `ast` module before import. The scanner checks for dangerous patterns (e.g. `__import__`, `exec`, `eval`, `subprocess.run` with `shell=True`) and refuses to load tools that contain them.
 
 ---
 
@@ -216,7 +222,7 @@ These prevent MIME sniffing, clickjacking, and reflected XSS attacks in browser 
 - [ ] Set `COGNITION_SCOPING_ENABLED=true` and configure `COGNITION_SCOPE_KEYS`
 - [ ] Set `COGNITION_SANDBOX_BACKEND=docker`
 - [ ] Set `COGNITION_DOCKER_NETWORK=none`
-- [ ] Set `COGNITION_TOOL_SECURITY=strict`
+- [ ] Restrict `POST /tools` to authorized administrators at the Gateway/proxy layer
 - [ ] Set `COGNITION_TRUSTED_TOOL_NAMESPACES` to your allowed namespaces
 - [ ] Set `COGNITION_CORS_ORIGINS` to your specific frontend domains
 - [ ] Set `COGNITION_RATE_LIMIT_PER_MINUTE` appropriate for your load

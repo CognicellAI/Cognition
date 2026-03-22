@@ -279,10 +279,11 @@ COGNITION_PERSISTENCE_URI=postgresql://user:password@host:5432/dbname
 
 | YAML key | Environment variable | Default | Description |
 |---|---|---|---|
-| `security.tool_security` | `COGNITION_TOOL_SECURITY` | `warn` | `warn` (log only) or `strict` (block and error) |
 | `security.protected_paths` | `COGNITION_PROTECTED_PATHS` | `[".cognition/"]` | Paths the agent cannot write to |
 | `security.trusted_tool_namespaces` | `COGNITION_TRUSTED_TOOL_NAMESPACES` | `[]` | Allowed Python namespaces for tool imports; empty = allow all |
-| `security.blocked_tools` | `COGNITION_BLOCKED_TOOLS` | `[]` | Tool names the agent cannot invoke |
+| `security.blocked_tools` | `COGNITION_BLOCKED_TOOLS` | `[]` | Tool names the agent cannot invoke (enforced by `ToolSecurityMiddleware`) |
+
+> **Note:** `COGNITION_TOOL_SECURITY` (`warn`/`strict`) was removed. AST scanning has been replaced with Gateway-level authorization. See [Security concepts](../concepts/security.md) for the current trust model.
 
 ---
 
@@ -325,6 +326,19 @@ These settings configure the default agent behaviour when no `AgentDefinition` o
 | `tool_call_limit` | `run_limit`, `thread_limit`, `per_tool_limits` | Per-tool and global call ceilings |
 | `pii` | `pii_types`, `strategy` | Detect and redact PII (email, phone, credit card, IP, SSN) |
 | `human_in_the_loop` | `approve_tools` | Require human approval before specified tools execute |
+
+### Provider and Model Resolution Hierarchy
+
+Provider and model selection follow a strict priority chain (highest to lowest):
+
+1. **`SessionConfig.provider_id`** — exact `ProviderConfig` lookup by ID from ConfigRegistry  
+2. **`SessionConfig.provider` + `SessionConfig.model`** — direct per-session override  
+3. **`AgentDefinition.config.provider` + `.model`** — per-agent definition override  
+4. **First enabled `ProviderConfig` from ConfigRegistry** — sorted by `priority` (ascending)
+
+`recursion_limit` and `temperature` follow the same chain: session > agent definition > ConfigRegistry default.
+
+If no provider is found at any tier, `LLMProviderConfigError` is raised with an actionable message — there is no silent fallback.
 
 ---
 
@@ -418,7 +432,6 @@ mlflow:
   tracking_uri: http://mlflow:5000
 
 security:
-  tool_security: strict
   trusted_tool_namespaces:
     - "myapp.tools"
 
