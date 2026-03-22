@@ -6,6 +6,22 @@ The core promise: define your agent with tools, skills, and a system prompt — 
 
 ---
 
+## Contents
+
+- [The 7-Layer Model](#the-7-layer-model)
+- [Layer Breakdown](#layer-breakdown)
+  - [Layer 1 — Foundation](#layer-1--foundation)
+  - [Layer 2 — Persistence](#layer-2--persistence)
+  - [Layer 3 — Execution](#layer-3--execution)
+  - [Layer 4 — Agent Runtime](#layer-4--agent-runtime)
+  - [Layer 5 — LLM Provider](#layer-5--llm-provider)
+  - [Layer 6 — API & Streaming](#layer-6--api--streaming)
+  - [Layer 7 — Observability](#layer-7--observability)
+- [Startup Sequence](#startup-sequence)
+- [The North Star](#the-north-star)
+
+---
+
 ## The 7-Layer Model
 
 ```
@@ -19,7 +35,7 @@ The core promise: define your agent with tools, skills, and a system prompt — 
 │  server/app/api/                                          │
 ├─────────────────────────────────────────────────────────┤
 │  Layer 5: LLM PROVIDER                                    │
-│  Provider registry · Fallback chain · Circuit breakers    │
+│  ConfigRegistry · ModelCatalog · init_chat_model          │
 │  server/app/llm/                                          │
 ├─────────────────────────────────────────────────────────┤
 │  Layer 4: AGENT RUNTIME                                   │
@@ -31,12 +47,12 @@ The core promise: define your agent with tools, skills, and a system prompt — 
 │  server/app/execution/  server/app/agent/sandbox_backend  │
 ├─────────────────────────────────────────────────────────┤
 │  Layer 2: PERSISTENCE                                     │
-│  StorageBackend protocol · SQLite · PostgreSQL · Memory   │
+│  StorageBackend · ConfigRegistry · SQLite · PostgreSQL    │
 │  server/app/storage/                                      │
 ├─────────────────────────────────────────────────────────┤
 │  Layer 1: FOUNDATION                                      │
-│  Pydantic Settings · Exception hierarchy · Config system  │
-│  server/app/settings.py · exceptions.py · config_loader  │
+│  Settings · Exceptions · ConfigLoader · Bootstrap         │
+│  server/app/settings.py · exceptions.py · bootstrap.py   │
 └─────────────────────────────────────────────────────────┘
 ```
 
@@ -48,9 +64,11 @@ The dependency rule is absolute: a layer may only import from layers below it. L
 
 ### Layer 1 — Foundation
 
-The bedrock of the system. Everything else builds on these three components.
+The bedrock of the system. Everything else builds on these components.
 
-**`server/app/settings.py`** — A single `Settings` class (Pydantic v2 `BaseSettings`) holding all configuration. Loaded via a 4-level hierarchy: built-in defaults → `~/.cognition/config.yaml` → `.cognition/config.yaml` → environment variables. The highest-precedence source wins. See the [Configuration guide](../guides/configuration.md) for all fields.
+**`server/app/settings.py`** — A single `Settings` class (Pydantic v2 `BaseSettings`) holding all infrastructure configuration. Loaded via a 4-level hierarchy: built-in defaults → `~/.cognition/config.yaml` → `.cognition/config.yaml` → environment variables. The highest-precedence source wins.
+
+Infrastructure settings (server, persistence, sandbox, CORS, scoping, observability, rate limiting) live here permanently. Agent and provider configuration has moved to the `ConfigRegistry` in Layer 2 — these are hot-reloadable and API-manageable. See the [Configuration guide](../guides/configuration.md) for all fields.
 
 **`server/app/exceptions.py`** — A typed exception hierarchy rooted at `CognitionError`. Every subsystem raises a domain-specific subclass (`SessionNotFoundError`, `LLMUnavailableError`, `ToolExecutionError`, etc.) rather than bare exceptions. All exceptions carry an `ErrorCode` enum value and an optional `details` dict for structured error reporting.
 
@@ -60,25 +78,46 @@ The bedrock of the system. Everything else builds on these three components.
 
 ### Layer 2 — Persistence
 
-All durable state lives in this layer behind the `StorageBackend` protocol.
+All durable state lives in this layer behind two protocol abstractions: `StorageBackend` for session/message/checkpoint data, and `ConfigRegistry` for hot-reloadable agent/provider/skill/tool configuration.
 
-**`server/app/storage/backend.py`** — Three composable `Protocol` classes:
+#### StorageBackend
+
+**`server/app/storage/backend.py`** — Four composable `Protocol` classes:
 
 - `SessionStore` — CRUD for sessions (create, get, list with scope filtering, update, delete)
 - `MessageStore` — CRUD for messages (create, get, list with pagination, delete by session)
 - `CheckpointerStore` — LangGraph checkpoint persistence (`get_checkpointer`, `close_checkpointer`)
+- `get_store()` → `BaseStore | None` — LangGraph cross-thread memory store for persistent agent memories
 
-The unified `StorageBackend` protocol combines all three plus lifecycle methods (`initialize`, `close`, `health_check`). Swapping backends requires no changes to any code above Layer 2.
+The unified `StorageBackend` protocol combines all four plus lifecycle methods (`initialize`, `close`, `health_check`). Swapping backends requires no changes to any code above Layer 2.
 
 **Implementations** (`server/app/storage/`):
 
-| Backend | Module | Use Case |
-|---|---|---|
-| `SqliteStorageBackend` | `sqlite.py` | Development, single-node |
-| `PostgresStorageBackend` | `postgres.py` | Production, multi-node |
-| `MemoryStorageBackend` | `memory.py` | Testing, ephemeral |
+| Backend | Module | Checkpointer | Store |
+|---|---|---|---|
+| `SqliteStorageBackend` | `sqlite.py` | `AsyncSqliteSaver` | `AsyncSqliteStore` |
+| `PostgresStorageBackend` | `postgres.py` | `AsyncPostgresSaver` | `AsyncPostgresStore` |
+| `MemoryStorageBackend` | `memory.py` | `InMemorySaver` | `InMemoryStore` |
 
-**`server/app/storage/factory.py`** — `create_storage_backend(settings)` reads `settings.persistence_backend` and returns the correct implementation. Unknown backend values raise `StorageBackendError` — there is no silent fallback to SQLite.
+**`server/app/storage/factory.py`** — `create_storage_backend(settings)` reads `settings.persistence_backend` and returns the correct implementation. Unknown backend values raise `StorageBackendError` — no silent fallback.
+
+#### ConfigRegistry
+
+**`server/app/storage/config_registry.py`** — The `ConfigRegistry` is a scoped, hot-reloadable key-value store for agent/provider/skill/tool configuration. It replaces environment variables and YAML for these concerns — all of which can now be changed at runtime via the REST API without a server restart.
+
+**Implementations**:
+
+| Implementation | Backed by | Hot-reload mechanism |
+|---|---|---|
+| `SqliteConfigRegistry` | SQLite (`config_entities` table) | `InProcessDispatcher` (in-memory pub/sub) |
+| `PostgresConfigRegistry` | Postgres (`config_entities` table) | `PostgresListenDispatcher` (LISTEN/NOTIFY) |
+| `MemoryConfigRegistry` | In-memory dict | `InProcessDispatcher` |
+
+Each entry has `(entity_type, name, scope, definition)`. The `scope` column restricts which requests see the entry — entries with empty scope `{}` are global. Scope resolution walks from most-specific to global.
+
+**`server/app/storage/config_dispatcher.py`** — `ConfigChangeDispatcher` invalidates in-process caches on every write:
+- `InProcessDispatcher` — zero-latency, same-process pub/sub (SQLite, single-node)
+- `PostgresListenDispatcher` — maintains a persistent `LISTEN cognition_config_changes` connection; near-real-time invalidation across multiple server instances (no external broker required)
 
 ---
 
@@ -95,9 +134,9 @@ Code execution is isolated from the server process using pluggable backends.
 - Configurable memory and CPU limits
 - Network isolation (`network_mode=none` by default)
 
-**`server/app/agent/sandbox_backend.py`** — Two Cognition-specific backends that wrap the execution layer:
+**`server/app/agent/sandbox_backend.py`** — Two Cognition-specific backends:
 
-- `CognitionLocalSandboxBackend` — Commands executed in the local process using `shlex.split()` + `shell=False`. Protected paths (`.cognition/` by default) block write operations. No `shell=True` anywhere.
+- `CognitionLocalSandboxBackend` — Commands executed in the local process using `shlex.split()` + `shell=False`. Protected paths (`.cognition/` by default) block write operations. Per-command `timeout` override supported. No `shell=True` anywhere.
 - `CognitionDockerSandboxBackend` — File operations run directly on the host filesystem; command execution is routed through `DockerExecutionBackend`. Container is created lazily and reused within a session.
 
 `create_sandbox_backend(settings)` selects between them based on `settings.sandbox_backend`.
@@ -106,35 +145,53 @@ Code execution is isolated from the server process using pluggable backends.
 
 ### Layer 4 — Agent Runtime
 
-The agent runtime is the brain of the system. It translates high-level `AgentDefinition` objects into running agents and normalizes all events into a single canonical stream.
+The agent runtime is the brain of the system. It translates high-level `AgentDefinition` objects into running agents, normalizes all Deep Agents events into a canonical stream, and manages the agent lifecycle.
+
+#### AgentRuntime Protocol
 
 **`server/app/agent/runtime.py`** — The `AgentRuntime` protocol:
 
 ```python
 class AgentRuntime(Protocol):
-    async def astream_events(self, message: str, ...) -> AsyncIterator[AgentEvent]: ...
-    async def ainvoke(self, message: str, ...) -> AgentEvent: ...
-    async def get_state(self) -> dict[str, Any]: ...
-    async def abort(self) -> None: ...
-    def get_checkpointer(self) -> BaseCheckpointSaver: ...
+    async def astream_events(
+        self,
+        input_data: str | dict[str, Any],
+        thread_id: str | None = None,
+    ) -> AsyncIterator[AgentEvent]: ...
+
+    async def ainvoke(
+        self,
+        input_data: str | dict[str, Any],
+        thread_id: str | None = None,
+    ) -> AgentEvent: ...
+
+    async def get_state(
+        self, thread_id: str | None = None
+    ) -> dict[str, Any] | None: ...
+
+    async def abort(self, thread_id: str | None = None) -> bool: ...
+
+    async def get_checkpointer(self) -> BaseCheckpointSaver: ...
 ```
 
-`DeepAgentRuntime` is the concrete implementation. It wraps Deep Agents, transforms its event stream into the 11 canonical `AgentEvent` subtypes, and handles abort via a thread-ID-based cancellation set.
+`DeepAgentRuntime` is the concrete implementation. It wraps Deep Agents and uses `astream(stream_mode=["messages", "updates", "custom"], subgraphs=True, version="v2")` to transform events into the canonical `AgentEvent` types. Abort is handled via a thread-ID-based cancellation set. An optional `context` parameter (`CognitionContext`) is forwarded to `astream()` for per-user Store namespace scoping.
 
-**Canonical event types** emitted by every runtime:
+#### Canonical Event Types
 
 | Event | Key Fields | Description |
 |---|---|---|
-| `TokenEvent` | `content` | A single streaming LLM token |
-| `ToolCallEvent` | `name`, `args`, `id` | Agent invoking a tool |
+| `TokenEvent` | `content: str` | A single streaming LLM token |
+| `ToolCallEvent` | `name`, `args`, `id` | Agent invoking a tool; `id` correlates with `ToolResultEvent.tool_call_id` |
 | `ToolResultEvent` | `tool_call_id`, `output`, `exit_code` | Tool execution result |
-| `PlanningEvent` | `todos` | Agent creating a task plan |
+| `PlanningEvent` | `todos: list[str]` | Agent creating a task plan |
 | `StepCompleteEvent` | `step_number`, `total_steps`, `description` | Plan step finished |
-| `DelegationEvent` | `target_agent`, `task` | Primary agent delegating to subagent |
-| `StatusEvent` | `status` | `thinking` or `idle` |
-| `UsageEvent` | `input_tokens`, `output_tokens`, `estimated_cost` | Token accounting |
+| `DelegationEvent` | `from_agent`, `to_agent`, `task` | Primary agent delegating to subagent |
+| `StatusEvent` | `status: str` | `"thinking"` or `"idle"` |
+| `UsageEvent` | `input_tokens`, `output_tokens`, `estimated_cost`, `provider`, `model` | Token accounting |
 | `DoneEvent` | `assistant_data` | Stream complete |
-| `ErrorEvent` | `message`, `code` | Recoverable error |
+| `ErrorEvent` | `message`, `code` | Fatal error; stream terminates |
+
+#### AgentDefinition
 
 **`server/app/agent/definition.py`** — `AgentDefinition` is a Pydantic model that fully describes an agent:
 
@@ -142,63 +199,118 @@ class AgentRuntime(Protocol):
 class AgentDefinition(BaseModel):
     name: str
     system_prompt: str | PromptConfig | None
-    tools: list[str]          # dotted import paths
-    skills: list[str]         # paths to SKILL.md files or directories
-    memory: list[str]         # paths to AGENTS.md-style files
+    tools: list[str]                  # dotted import paths or ConfigRegistry tool names
+    skills: list[str]                 # paths to SKILL.md files or directories
+    memory: list[str]                 # paths to AGENTS.md-style instruction files
     subagents: list[SubagentDefinition]
-    middleware: list[str | dict]
-    config: AgentConfig       # provider, model, temperature, max_tokens
+    interrupt_on: dict[str, bool]     # tool_name -> require approval before execution
+    middleware: list[str | dict]      # declarative middleware names or {name, **kwargs}
+    config: AgentConfig               # per-agent provider/model/temperature overrides
     mode: Literal["primary", "subagent", "all"]
     description: str | None
     hidden: bool
-    native: bool
+    native: bool                      # True for built-in agents (default, readonly)
 ```
 
-Definitions can be loaded from YAML files (`load_agent_definition`) or Markdown with YAML frontmatter (`load_agent_definition_from_markdown`). In the Markdown format, the frontmatter provides fields and the body becomes the `system_prompt`.
+`AgentConfig` carries per-agent LLM overrides that slot between the global ConfigRegistry default and any session-level override:
 
-**`server/app/agent/agent_definition_registry.py`** — `AgentDefinitionRegistry` holds all known agents. It initializes with two built-in agents:
+```python
+class AgentConfig(BaseModel):
+    provider: str | None = None
+    model: str | None = None
+    temperature: float | None = None
+    max_tokens: int | None = None
+    recursion_limit: int | None = None
+```
 
-- `default` — Full-access coding agent, all tools enabled, mode `primary`
-- `readonly` — Analysis-only agent, write and execute tools disabled, mode `primary`
+Definitions can be loaded from YAML files (`load_agent_definition`), Markdown with YAML frontmatter (`load_agent_definition_from_markdown`), or created via `POST /agents` (stored in ConfigRegistry).
 
-User-defined agents are loaded from `.cognition/agents/*.md` and `.cognition/agents/*.yaml`. The registry exposes `list()`, `get(name)`, `primaries()` (agents that can own a session), `subagents()` (agents that can only be invoked by other agents), and `reload()`.
+#### Agent Registry
 
-**`server/app/agent/cognition_agent.py`** — `create_cognition_agent()` is the async factory that instantiates a Deep Agent from an `AgentDefinition`. It attaches the sandbox backend, built-in tools (`BrowserTool`, `SearchTool`, `InspectPackageTool`), MCP tools, and the middleware stack (`CognitionObservabilityMiddleware`, `CognitionStreamingMiddleware`, `ToolSecurityMiddleware`). Agent instances are cached by an MD5 key of the definition for efficient reuse across sessions.
+**`server/app/agent/agent_definition_registry.py`** — `AgentDefinitionRegistry` is the in-memory catalog of available agents. It is seeded from two sources on startup and kept in sync by the `ConfigChangeDispatcher`:
+
+1. **Built-in agents** — always reseeded from code: `default` (full-access, `primary`) and `readonly` (analysis-only, `primary`)
+2. **File-based agents** — from `.cognition/agents/*.md` and `.cognition/agents/*.yaml`; hot-reloaded by the file watcher
+3. **API agents** — from ConfigRegistry (`POST /agents`); invalidated via `ConfigChangeDispatcher`
+
+Key methods: `get_all()`, `get(name)`, `primaries()`, `subagents()`, `reload()`, `is_valid_primary(name)`.
+
+#### Agent Factory
+
+**`server/app/agent/cognition_agent.py`** — `create_cognition_agent()` is the async factory that instantiates a Deep Agent from an `AgentDefinition`. In order:
+
+1. Selects the sandbox backend (`local` or `docker`)
+2. Loads built-in tools: `BrowserTool`, `SearchTool`, `InspectPackageTool`
+3. Loads MCP tools from configured remote servers
+4. Resolves tools from `AgentDefinition.tools` (dotted import paths)
+5. Loads API-registered tools from `ConfigRegistry.list_tools(scope)`
+6. Attaches the middleware stack: `ToolSecurityMiddleware` (COGNITION_BLOCKED_TOOLS deny-list), `CognitionObservabilityMiddleware` (Prometheus), `CognitionStreamingMiddleware` (status events)
+7. Resolves declarative upstream middleware from the definition
+8. Injects subagents as Deep Agents `SubAgent` dicts
+9. Passes `store=` (LangGraph `BaseStore` from `storage_backend.get_store()`) and `context_schema=CognitionContext`
+
+Agent instances are cached by an MD5 hash of their definition. The cache is invalidated by `ConfigChangeDispatcher` on any agent/tool/skill change.
+
+#### CognitionContext
+
+`CognitionContext` is a typed invocation context built from `session.scopes` and forwarded to every `astream()` / `ainvoke()` call:
+
+```python
+@dataclass
+class CognitionContext:
+    user_id: str = "anonymous"
+    org_id: str | None = None
+    project_id: str | None = None
+    extra: dict[str, str] = field(default_factory=dict)
+```
+
+Nodes and middleware access it via `runtime.context`. It provides the primary key for scoping LangGraph Store namespaces — ensuring user A cannot read user B's cross-session memories.
 
 ---
 
 ### Layer 5 — LLM Provider
 
-**`server/app/llm/registry.py`** — A simple dictionary registry mapping provider names to factory functions:
+**`server/app/llm/model_catalog.py`** — `ModelCatalog` fetches and caches the models.dev catalog (configurable URL, default 1-hour TTL). Provides enriched model metadata — context windows, tool call support, pricing, modalities — for API responses and validation warnings. The catalog is enrichment only: if unreachable, endpoints degrade gracefully.
 
-| Provider | Factory | Requirements |
-|---|---|---|
-| `openai` | `ChatOpenAI` | `OPENAI_API_KEY` |
-| `openai_compatible` | `ChatOpenAI` + custom base URL | `COGNITION_OPENAI_COMPATIBLE_*` |
-| `bedrock` | `ChatBedrock` | AWS credentials |
-| `mock` | `MockLLM` | None |
+**`server/app/llm/deep_agent_service.py`** — `DeepAgentStreamingService` is the per-session streaming coordinator. It resolves the LLM provider from ConfigRegistry and drives the agent via `DeepAgentRuntime`. Provider resolution follows a strict priority chain — the first match wins, no fallback:
 
-Custom providers can be registered with `register_provider(name, factory)`.
+1. `SessionConfig.provider_id` — exact `ProviderConfig` lookup by ID from ConfigRegistry
+2. `SessionConfig.provider` + `SessionConfig.model` — direct session override
+3. `AgentDefinition.config.provider` + `.model` — per-agent definition override
+4. First enabled `ProviderConfig` from ConfigRegistry (sorted by `priority` ascending)
 
-**`server/app/llm/provider_fallback.py`** — `ProviderFallbackChain` tries providers in priority order. Each provider has its own circuit breaker (from the global registry). Open breakers are skipped; the chain raises `LLMUnavailableError` only when every provider fails. Retries use exponential backoff (1 s, 2 s, 4 s).
+If no provider is resolved, `LLMProviderConfigError` is raised immediately with an actionable message. `_build_model()` uses LangChain's `init_chat_model()` to construct the model instance.
 
-**`server/app/llm/deep_agent_service.py`** — `DeepAgentStreamingService` is the per-session streaming coordinator. It resolves the correct `AgentDefinition` from the registry, merges session-level LLM overrides (a session can be created with a specific `model` or `temperature`), injects subagents into primary agents, and drives the event stream.
-
-`SessionAgentManager` is the server-level singleton that manages one `DeepAgentStreamingService` per active session and routes abort signals to the right session.
+`SessionAgentManager` is the server-level singleton that manages one `DeepAgentStreamingService` per active session and routes abort signals to the correct session.
 
 ---
 
 ### Layer 6 — API & Streaming
 
-**`server/app/api/routes/`** — FastAPI route handlers for all resources. The routes do not contain business logic; they validate inputs, call into Layer 4 or Layer 2, and serialize outputs.
+**`server/app/api/routes/`** — FastAPI route handlers for all resources: sessions, messages, agents, skills, tools, models, config. Routes do not contain business logic; they validate inputs, call into Layer 4 or Layer 2, and serialize outputs.
+
+**Route inventory:**
+
+| Prefix | CRUD | Description |
+|---|---|---|
+| `/sessions` | `POST GET PATCH DELETE` | Session lifecycle |
+| `/sessions/{id}/messages` | `POST GET` | Message send (streaming) and history |
+| `/sessions/{id}/abort` | `POST` | Cancel in-progress execution |
+| `/agents` | `GET POST PUT PATCH DELETE` | Agent definitions (ConfigRegistry) |
+| `/skills` | `GET POST PUT PATCH DELETE` | Skill definitions (ConfigRegistry) |
+| `/tools` | `GET POST DELETE` + `/reload` `/errors` | Tool registry |
+| `/models` | `GET` | Model catalog |
+| `/models/providers` | `GET POST PATCH DELETE` + `/test` | Provider configs (ConfigRegistry) |
+| `/config` | `GET PATCH` + `/rollback` | Infrastructure config |
+| `/health` `/ready` | `GET` | Health and readiness probes |
 
 **`server/app/api/sse.py`** — `SSEStream` implements the SSE protocol with:
-- Automatic reconnection support via `Last-Event-ID` header and `EventBuffer` replay
-- Heartbeat comments (`:heartbeat`) sent every 15 seconds to keep proxies alive
+- Automatic reconnection via `Last-Event-ID` header and `EventBuffer` replay
+- Heartbeat comments (`:heartbeat`) every 15 seconds to keep proxies alive
 - Sequential event IDs for ordering and gap detection
 - `EventBuilder` static factory for every event type
 
-**`server/app/api/scoping.py`** — `create_scope_dependency()` builds a FastAPI dependency that reads `x-cognition-scope-{key}` headers for each key in `settings.scope_keys`. When `scoping_enabled=true`, missing headers return `403 Forbidden` (fail-closed). Scope values are matched against session scopes to enforce tenant isolation.
+**`server/app/api/scoping.py`** — `create_scope_dependency()` builds a FastAPI dependency that reads `x-cognition-scope-{key}` headers for each key in `settings.scope_keys`. When `scoping_enabled=true`, missing headers return `403 Forbidden` (fail-closed). Scope values filter sessions and ConfigRegistry entries to enforce tenant isolation.
 
 **`server/app/api/middleware.py`** — `SecurityHeadersMiddleware` adds `X-Content-Type-Options`, `X-Frame-Options`, and `X-XSS-Protection` to every response. `ObservabilityMiddleware` records request count and duration into Prometheus.
 
@@ -221,18 +333,22 @@ Custom providers can be registered with `register_provider(name, factory)`.
 `server/app/main.py` wires all layers together in its lifespan context manager, in strict dependency order:
 
 ```
-1. Layer 2: Initialize storage backend
-2. Layer 2: Initialize session manager
-3. Layer 4: Initialize agent definition registry
-4. Layer 4: Initialize agent registry (tool/middleware auto-discovery)
-5. Layer 4: Start file watcher for .cognition/tools/ hot-reload
-6. Layer 7: Setup OTel tracing
-7. Layer 7: Setup Prometheus metrics
-8. Layer 7: Setup MLflow
-9. Layer 6: Start rate limiter
+ 1. Layer 2: Initialize storage backend (SQLite / Postgres / Memory)
+ 2. Layer 2: Initialize ConfigRegistry (same backend, config_entities table)
+ 3. Layer 1: Bootstrap providers from config.yaml llm: section (seed_if_absent)
+ 4. Layer 4: Initialize agent definition registry (built-ins seeded)
+ 5. Layer 4: Seed agent definitions from ConfigRegistry (API-created agents)
+ 6. Layer 2: Start ConfigChangeDispatcher (InProcess or Postgres LISTEN)
+ 7. Layer 4: Initialize session manager
+ 8. Layer 4: Initialize agent registry (tool auto-discovery from .cognition/tools/)
+ 9. Layer 4: Start file watcher for .cognition/ hot-reload
+10. Layer 7: Setup OTel tracing
+11. Layer 7: Setup Prometheus metrics
+12. Layer 7: Setup MLflow
+13. Layer 6: Start rate limiter
 ```
 
-Shutdown happens in reverse: stop watcher → stop rate limiter → close storage.
+Shutdown reverses: stop file watcher → stop rate limiter → stop ConfigChangeDispatcher → close storage backend.
 
 ---
 
@@ -253,4 +369,4 @@ app = Cognition(agent)
 app.run()
 ```
 
-This one call should provision the full 7-layer stack: REST API, SSE streaming, SQLite/Postgres persistence, local/Docker sandbox, OTel tracing, Prometheus metrics, multi-tenant scoping, rate limiting, and an evaluation pipeline. All layers, all infrastructure, from a single agent definition.
+This one call should provision the full 7-layer stack: REST API, SSE streaming, SQLite/Postgres persistence, local/Docker sandbox, LangGraph Store for cross-session memory, OTel tracing, Prometheus metrics, multi-tenant scoping, rate limiting, and an evaluation pipeline. All layers, all infrastructure, from a single agent definition.

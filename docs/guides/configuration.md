@@ -22,8 +22,6 @@ Controls the HTTP server.
 | `server.host` | `COGNITION_HOST` | `127.0.0.1` | Bind address |
 | `server.port` | `COGNITION_PORT` | `8000` | Listen port (1–65535) |
 | `server.log_level` | `COGNITION_LOG_LEVEL` | `info` | `debug`, `info`, `warning`, `error` |
-| `server.max_sessions` | `COGNITION_MAX_SESSIONS` | `100` | Maximum concurrent active sessions |
-| `server.session_timeout_seconds` | `COGNITION_SESSION_TIMEOUT_SECONDS` | `3600.0` | Session idle timeout in seconds |
 
 ---
 
@@ -37,69 +35,171 @@ The workspace root is resolved to an absolute path at startup. The agent's tools
 
 ---
 
-## LLM Provider
+## LLM Provider Configuration
 
-| YAML key | Environment variable | Default | Description |
-|---|---|---|---|
-| `llm.provider` | `COGNITION_LLM_PROVIDER` | `mock` | `openai`, `bedrock`, `openai_compatible`, `ollama`, `mock` |
-| `llm.model` | `COGNITION_LLM_MODEL` | `gpt-4o` | Model identifier |
-| `llm.temperature` | `COGNITION_LLM_TEMPERATURE` | `null` | 0.0–2.0; `null` uses provider default |
-| `llm.max_tokens` | `COGNITION_LLM_MAX_TOKENS` | `null` | Max output tokens; `null` uses provider default |
-| `llm.system_prompt` | `COGNITION_LLM_SYSTEM_PROMPT` | `null` | Override the default system prompt (inline text, `{file: name}`, or `{mlflow: name}`) |
+LLM provider and model settings are managed through the **ConfigRegistry**, a database-backed configuration store that supports hot-reloading. Provider configuration no longer lives in `Settings` or environment variables like `COGNITION_LLM_PROVIDER` / `COGNITION_LLM_MODEL`.
 
-### OpenAI
+### How it works
 
-```env
+1. The `llm:` section in `.cognition/config.yaml` is **bootstrapped** into the ConfigRegistry on first startup using `seed_if_absent` — YAML values provide defaults, but rows written via the API always take precedence.
+2. Providers can also be created, updated, and deleted at runtime via the REST API (`POST /models/providers`, `PATCH /models/providers/{id}`, `DELETE /models/providers/{id}`).
+3. To list available models for a provider: `GET /models/providers/{id}/models`.
+4. To verify credentials: `POST /models/providers/{id}/test`.
+5. Sessions reference a provider via `SessionConfig.provider_id`.
+
+### Supported provider types
+
+| Type | Description |
+|---|---|
+| `openai` | OpenAI API (GPT-4o, o1, etc.) |
+| `anthropic` | Anthropic API (Claude 3.5, Claude 4, etc.) |
+| `bedrock` | AWS Bedrock (any model available in your region) |
+| `openai_compatible` | Any OpenAI-compatible endpoint (OpenRouter, vLLM, LiteLLM, Ollama, Azure OpenAI, etc.) |
+| `google_genai` | Google Generative AI (Gemini) |
+| `google_vertexai` | Google Vertex AI |
+| `mock` | Test-only provider; skipped during bootstrap |
+
+### config.yaml `llm:` section format
+
+```yaml
+# .cognition/config.yaml
+llm:
+  - provider: openai
+    model: gpt-4o
+
+  - provider: anthropic
+    model: claude-sonnet-4-20250514
+
+  - provider: bedrock
+    model: anthropic.claude-3-sonnet-20240229-v1:0
+    region: us-east-1
+    role_arn: arn:aws:iam::123456789012:role/BedrockAccess  # optional
+
+  - provider: openai_compatible
+    model: google/gemini-pro
+    base_url: https://openrouter.ai/api/v1
+    api_key_env: COGNITION_OPENAI_COMPATIBLE_API_KEY
+
+  - provider: google_genai
+    model: gemini-1.5-pro
+
+  - provider: google_vertexai
+    model: gemini-1.5-pro
+    region: us-central1
+```
+
+Each entry supports the following fields:
+
+| Field | Required | Description |
+|---|---|---|
+| `provider` | Yes | One of the supported provider types above |
+| `model` | Yes | Model identifier (provider-specific) |
+| `base_url` | No | Custom API endpoint (required for `openai_compatible`) |
+| `api_key_env` | No | Name of the environment variable holding the API key |
+| `region` | No | AWS region (`bedrock`) or GCP region (`google_vertexai`) |
+| `role_arn` | No | AWS IAM role ARN for cross-account Bedrock access |
+
+### Credential environment variables
+
+| Provider | Environment variable |
+|---|---|
+| `openai` | `OPENAI_API_KEY` |
+| `anthropic` | `ANTHROPIC_API_KEY` |
+| `bedrock` | AWS IAM credentials (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_REGION`) |
+| `openai_compatible` | `COGNITION_OPENAI_COMPATIBLE_API_KEY` (or custom via `api_key_env`) |
+| `google_genai` | `GOOGLE_API_KEY` |
+| `google_vertexai` | GCP Application Default Credentials |
+
+### Provider examples
+
+**OpenAI:**
+
+```yaml
+llm:
+  - provider: openai
+    model: gpt-4o
+```
+
+```bash
 OPENAI_API_KEY=sk-...
-COGNITION_LLM_PROVIDER=openai
-COGNITION_LLM_MODEL=gpt-4o
 ```
 
-Optional custom base URL (for Azure OpenAI or proxies):
+**Anthropic:**
 
-```env
-OPENAI_API_BASE=https://myazure.openai.azure.com/
+```yaml
+llm:
+  - provider: anthropic
+    model: claude-sonnet-4-20250514
 ```
 
-### AWS Bedrock
+```bash
+ANTHROPIC_API_KEY=sk-ant-...
+```
 
-```env
+**AWS Bedrock:**
+
+```yaml
+llm:
+  - provider: bedrock
+    model: anthropic.claude-3-sonnet-20240229-v1:0
+    region: us-east-1
+```
+
+```bash
 AWS_REGION=us-east-1
 AWS_ACCESS_KEY_ID=AKIA...
 AWS_SECRET_ACCESS_KEY=...
-COGNITION_LLM_PROVIDER=bedrock
-COGNITION_LLM_MODEL=anthropic.claude-3-sonnet-20240229-v1:0
 ```
 
-| YAML key | Environment variable | Default |
-|---|---|---|
-| `aws.region` | `AWS_REGION` | `us-east-1` |
-| `bedrock.model_id` | `COGNITION_BEDROCK_MODEL_ID` | `anthropic.claude-3-sonnet-20240229-v1:0` |
+**OpenAI-Compatible (OpenRouter, vLLM, LiteLLM, Ollama, etc.):**
 
-### OpenAI-Compatible (OpenRouter, vLLM, LiteLLM, etc.)
+```yaml
+llm:
+  - provider: openai_compatible
+    model: google/gemini-pro
+    base_url: https://openrouter.ai/api/v1
+    api_key_env: COGNITION_OPENAI_COMPATIBLE_API_KEY
+```
 
-```env
-COGNITION_LLM_PROVIDER=openai_compatible
-COGNITION_OPENAI_COMPATIBLE_BASE_URL=https://openrouter.ai/api/v1
+```bash
 COGNITION_OPENAI_COMPATIBLE_API_KEY=sk-or-...
-COGNITION_LLM_MODEL=google/gemini-pro
 ```
 
-### Ollama (local)
+To use a local Ollama instance, configure it as an `openai_compatible` provider:
 
-```env
-COGNITION_LLM_PROVIDER=ollama
-COGNITION_OLLAMA_BASE_URL=http://localhost:11434
-COGNITION_OLLAMA_MODEL=llama3.2
+```yaml
+llm:
+  - provider: openai_compatible
+    model: llama3.2
+    base_url: http://localhost:11434/v1
 ```
 
-### Mock (testing)
+**Google Generative AI:**
 
-```env
-COGNITION_LLM_PROVIDER=mock
+```yaml
+llm:
+  - provider: google_genai
+    model: gemini-1.5-pro
 ```
 
-No credentials required. Returns deterministic responses. Used by all unit tests.
+```bash
+GOOGLE_API_KEY=AI...
+```
+
+**Google Vertex AI:**
+
+```yaml
+llm:
+  - provider: google_vertexai
+    model: gemini-1.5-pro
+    region: us-central1
+```
+
+Requires GCP Application Default Credentials to be configured.
+
+**Mock (testing only):**
+
+No credentials required. Returns deterministic responses. Used by unit tests. The `mock` provider is skipped during bootstrap and cannot be seeded from config.yaml.
 
 ---
 
@@ -179,10 +279,11 @@ COGNITION_PERSISTENCE_URI=postgresql://user:password@host:5432/dbname
 
 | YAML key | Environment variable | Default | Description |
 |---|---|---|---|
-| `security.tool_security` | `COGNITION_TOOL_SECURITY` | `warn` | `warn` (log only) or `strict` (block and error) |
 | `security.protected_paths` | `COGNITION_PROTECTED_PATHS` | `[".cognition/"]` | Paths the agent cannot write to |
 | `security.trusted_tool_namespaces` | `COGNITION_TRUSTED_TOOL_NAMESPACES` | `[]` | Allowed Python namespaces for tool imports; empty = allow all |
-| `security.blocked_tools` | `COGNITION_BLOCKED_TOOLS` | `[]` | Tool names the agent cannot invoke |
+| `security.blocked_tools` | `COGNITION_BLOCKED_TOOLS` | `[]` | Tool names the agent cannot invoke (enforced by `ToolSecurityMiddleware`) |
+
+> **Note:** `COGNITION_TOOL_SECURITY` (`warn`/`strict`) was removed. AST scanning has been replaced with Gateway-level authorization. See [Security concepts](../concepts/security.md) for the current trust model.
 
 ---
 
@@ -226,6 +327,19 @@ These settings configure the default agent behaviour when no `AgentDefinition` o
 | `pii` | `pii_types`, `strategy` | Detect and redact PII (email, phone, credit card, IP, SSN) |
 | `human_in_the_loop` | `approve_tools` | Require human approval before specified tools execute |
 
+### Provider and Model Resolution Hierarchy
+
+Provider and model selection follow a strict priority chain (highest to lowest):
+
+1. **`SessionConfig.provider_id`** — exact `ProviderConfig` lookup by ID from ConfigRegistry  
+2. **`SessionConfig.provider` + `SessionConfig.model`** — direct per-session override  
+3. **`AgentDefinition.config.provider` + `.model`** — per-agent definition override  
+4. **First enabled `ProviderConfig` from ConfigRegistry** — sorted by `priority` (ascending)
+
+`recursion_limit` and `temperature` follow the same chain: session > agent definition > ConfigRegistry default.
+
+If no provider is found at any tier, `LLMProviderConfigError` is raised with an actionable message — there is no silent fallback.
+
 ---
 
 ## MCP Remote Servers
@@ -242,13 +356,14 @@ Each server must be an HTTP/HTTPS SSE endpoint. Stdio-based MCP servers are not 
 
 ---
 
-## Prompt Registry
+## Model Catalog
 
-| YAML key | Environment variable | Default | Description |
-|---|---|---|---|
-| `prompt_registry.source` | `COGNITION_PROMPT_SOURCE` | `local` | `local` or `mlflow` |
-| `prompt_registry.prompts_dir` | `COGNITION_PROMPTS_DIR` | `.cognition/prompts/` | Directory for local prompt files |
-| `prompt_registry.fallback` | `COGNITION_PROMPT_FALLBACK` | `null` | Fallback prompt name if primary not found |
+Cognition integrates with [models.dev](https://models.dev) to provide enriched model metadata including context windows, tool call support, pricing, and modalities.
+
+| Environment variable | Default | Description |
+|---|---|---|
+| `COGNITION_MODEL_CATALOG_URL` | `https://models.dev/api.json` | URL for the model catalog data source |
+| `COGNITION_MODEL_CATALOG_TTL_SECONDS` | `3600` | Cache TTL for model catalog data (seconds) |
 
 ---
 
@@ -262,9 +377,8 @@ server:
   log_level: debug
 
 llm:
-  provider: openai
-  model: gpt-4o
-  temperature: 0.5
+  - provider: openai
+    model: gpt-4o
 
 persistence:
   backend: sqlite
@@ -278,7 +392,7 @@ agent:
 ```
 
 ```bash
-# .env
+# .env — API keys are set via env vars; the config.yaml llm: section seeds the ConfigRegistry
 OPENAI_API_KEY=sk-...
 ```
 
@@ -290,11 +404,14 @@ server:
   host: 0.0.0.0
   port: 8000
   log_level: info
-  max_sessions: 500
 
 llm:
-  provider: bedrock
-  model: anthropic.claude-3-sonnet-20240229-v1:0
+  - provider: bedrock
+    model: anthropic.claude-3-sonnet-20240229-v1:0
+    region: us-east-1
+
+  - provider: anthropic
+    model: claude-sonnet-4-20250514
 
 persistence:
   backend: postgres
@@ -315,7 +432,6 @@ mlflow:
   tracking_uri: http://mlflow:5000
 
 security:
-  tool_security: strict
   trusted_tool_namespaces:
     - "myapp.tools"
 
@@ -331,10 +447,11 @@ rate_limit:
 ```
 
 ```bash
-# .env (secrets only)
+# .env — secrets only; the config.yaml llm: section seeds the ConfigRegistry on first startup
 AWS_REGION=us-east-1
 AWS_ACCESS_KEY_ID=AKIA...
 AWS_SECRET_ACCESS_KEY=...
+ANTHROPIC_API_KEY=sk-ant-...
 COGNITION_PERSISTENCE_URI=postgresql://cognition:secret@postgres:5432/cognition
 ```
 
@@ -342,8 +459,10 @@ COGNITION_PERSISTENCE_URI=postgresql://cognition:secret@postgres:5432/cognition
 
 ## Runtime Configuration Changes
 
-The `PATCH /config` endpoint allows updating a subset of settings at runtime without restarting:
+LLM provider and agent configuration is now managed via the **ConfigRegistry API** (`POST/PATCH/DELETE /models/providers`), not the `PATCH /config` endpoint. Changes made through the ConfigRegistry are hot-reloaded and always take precedence over config.yaml seed values.
 
-**Allowed paths:** `llm.temperature`, `llm.max_tokens`, `llm.model`, `llm.provider`, `agent.memory`, `agent.skills`, `agent.interrupt_on`, `agent.subagents`, `rate_limit.per_minute`, `rate_limit.burst`, `observability.otel_enabled`, `observability.metrics_port`, `observability.otel_endpoint`, `mlflow.enabled`, `mlflow.experiment_name`.
+The `PATCH /config` endpoint is restricted to **infrastructure settings only**:
+
+**Allowed paths:** `rate_limit.per_minute`, `rate_limit.burst`, `observability.otel_enabled`, `observability.metrics_port`, `observability.otel_endpoint`, `mlflow.enabled`, `mlflow.experiment_name`.
 
 Changes are persisted to `.cognition/config.yaml` and a backup is created at `.cognition/config.yaml.backup`. Roll back with `POST /config/rollback`.

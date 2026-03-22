@@ -140,7 +140,7 @@ See [Extending Agents](./docs/guides/extending-agents.md) for code examples and 
 | **StorageBackend** | Unified protocol: SQLite ↔ PostgreSQL |
 | **Docker Sandbox** | Container-per-session with resource limits |
 | **Alembic Migrations** | Database schema versioning |
-| **Circuit Breaker** | Resilient LLM provider failover |
+| **Model Catalog** | Browse 3,870+ models via models.dev integration |
 | **CORS** | Cross-origin web app support |
 | **MLflow Evaluation** | Offline evaluation pipeline with 3 built-in scorers |
 | **Multi-Agent Registry** | Built-in + user-defined agents; `GET /agents` endpoint |

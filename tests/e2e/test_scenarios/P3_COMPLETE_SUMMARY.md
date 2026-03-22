@@ -44,7 +44,7 @@ All P3 tier E2E scenario tests have been created and verified against the docker
 **Location:** `tests/e2e/test_scenarios/p3_security/`
 
 ### Test Files
-- `test_ast_security_scanning.py` (11 tests)
+- `test_ast_security_scanning.py` (updated — now documents trust model, not AST scanning)
 - `test_cognition_protection.py` (14 tests)
 - `test_namespace_cors_security.py` (8 tests)
 - `README.md`
@@ -53,7 +53,7 @@ All P3 tier E2E scenario tests have been created and verified against the docker
 
 | Item | Description | Test Count | Status |
 |------|-------------|------------|--------|
-| P3-SEC-1 | AST Import Scanning | 11 | ✅ 11 pass |
+| P3-SEC-1 | Tool Loading Trust Model (AST scanning removed; Gateway auth is real boundary) | varies | see test file |
 | P3-SEC-2 | Protect .cognition/ Directory | 5 | ✅ 5 pass |
 | P3-SEC-3 | Path Confinement | 5 | ✅ 5 pass |
 | P3-SEC-4 | Tool Namespace Allowlist | 4 | ✅ 4 pass |
@@ -61,7 +61,7 @@ All P3 tier E2E scenario tests have been created and verified against the docker
 | **Audit & Validation** | Extra coverage | 3 | ✅ 3 pass |
 
 **Key Security Tests:**
-- Banned module detection (os, subprocess, socket, etc.)
+- Tool loading trust model (no SecurityError entries; Gateway enforces authorization)
 - Path traversal prevention (../, /etc/passwd)
 - .cognition/ directory protection
 - CORS origin validation
@@ -137,7 +137,7 @@ uv run pytest tests/e2e/test_scenarios/p3_alignment/test_cli_scaffolding.py -v
 ## Business Value Validated
 
 ### Security Posture (P3-SEC)
-✅ AST scanning prevents code injection
+✅ Tool loading trust model validated (no SecurityError; AST scanning removed as security theater)
 ✅ Path confinement prevents traversal attacks
 ✅ .cognition/ protection prevents self-modification
 ✅ Namespace allowlist prevents arbitrary imports

@@ -211,6 +211,57 @@ def post_comment(ticket_id: str, comment: str) -> str:
     ...
 ```
 
+### Register via API (Source-in-DB)
+
+When Cognition runs in a separate container from your builder application, you cannot write files into `.cognition/tools/`. Use the REST API to register tools with inline Python source code instead:
+
+```bash
+curl -X POST http://localhost:8000/tools \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "search-jira",
+    "code": "from langchain_core.tools import tool\nimport httpx\n\n@tool\ndef search_jira(query: str) -> str:\n    \"\"\"Search Jira issues by query string.\"\"\"\n    resp = httpx.get(f\"https://jira.example.com/search?q={query}\")\n    return resp.text"
+  }'
+```
+
+The tool is stored in the ConfigRegistry (Postgres or SQLite) and loaded on every agent invocation — no restart required.
+
+```python
+# The code field contains a complete Python module as a string.
+# @tool-decorated functions and BaseTool subclasses are extracted automatically.
+code = """
+from langchain_core.tools import tool
+
+@tool
+def search_jira(query: str) -> str:
+    \"\"\"Search Jira issues by query string.\"\"\"
+    import httpx
+    resp = httpx.get(f"https://jira.example.com/search?q={query}")
+    return resp.text
+"""
+
+import httpx
+httpx.post("http://localhost:8000/tools", json={"name": "search-jira", "code": code})
+```
+
+> **Security:** Tool code executes with full Python privileges inside the sandbox backend. Restrict `POST /tools` to authorized administrators at your Gateway/proxy layer.
+
+Alternatively, register by module path if the module is already importable in the server's Python environment:
+
+```bash
+curl -X POST http://localhost:8000/tools \
+  -H "Content-Type: application/json" \
+  -d '{"name": "jira-tools", "path": "mycompany.cognition_tools.jira"}'
+```
+
+To see all registered tools (both file-discovered and API-registered):
+
+```bash
+curl http://localhost:8000/tools
+```
+
+Response includes a `source_type` field: `"file"` for auto-discovered tools, `"api_code"` for source-in-DB tools, and `"api_path"` for module-path tools.
+
 ### Async Tools
 
 Async functions are supported natively:
@@ -366,24 +417,50 @@ Only HTTP/HTTPS URLs are accepted — stdio-based MCP servers are not supported 
 
 ## 7. Custom LLM Providers
 
-Register additional LLM providers if the built-ins (OpenAI, Bedrock, Ollama, OpenAI-compatible) are insufficient.
+Cognition uses LangChain's `init_chat_model()` under the hood, which supports any provider that has a LangChain integration. The built-in provider types are:
 
-```python
-# myapp/providers/custom.py
-from server.app.llm.registry import register_provider
-from langchain_core.language_models import BaseChatModel
+| Type | LangChain Package | Credentials |
+|---|---|---|
+| `openai` | `langchain-openai` | `OPENAI_API_KEY` |
+| `anthropic` | `langchain-anthropic` | `ANTHROPIC_API_KEY` |
+| `bedrock` | `langchain-aws` | AWS IAM credentials |
+| `google_genai` | `langchain-google-genai` | `GOOGLE_API_KEY` |
+| `google_vertexai` | `langchain-google-vertexai` | Google ADC |
+| `openai_compatible` | `langchain-openai` + custom `base_url` | `COGNITION_OPENAI_COMPATIBLE_API_KEY` |
 
-def create_custom_llm(config: dict, settings) -> BaseChatModel:
-    return MyCustomLLM(
-        api_key=settings.openai_api_key.get_secret_value(),
-        model=config.get("model", "my-model"),
-    )
+To add a provider, create a `ProviderConfig` entry via the REST API:
 
-# Register before server startup
-register_provider("custom", create_custom_llm)
+```bash
+curl -X POST http://localhost:8000/models/providers \
+  -H "Content-Type: application/json" \
+  -d '{
+    "id": "my-provider",
+    "provider": "openai_compatible",
+    "model": "my-model",
+    "base_url": "https://my-provider.example.com/v1",
+    "api_key_env": "MY_PROVIDER_API_KEY",
+    "enabled": true,
+    "priority": 0
+  }'
 ```
 
-After registration, use `COGNITION_LLM_PROVIDER=custom` in your environment.
+Or define it in `.cognition/config.yaml` (bootstrapped on first startup):
+
+```yaml
+llm:
+  provider: openai_compatible
+  model: my-model
+  base_url: https://my-provider.example.com/v1
+  api_key_env: MY_PROVIDER_API_KEY
+```
+
+Test connectivity:
+
+```bash
+curl -X POST http://localhost:8000/models/providers/my-provider/test
+```
+
+For providers not supported by `init_chat_model`, wrap them in a LangChain `BaseChatModel` and use `openai_compatible` with a local proxy, or contribute a LangChain integration upstream.
 
 ---
 

@@ -73,6 +73,23 @@ class CheckpointerStore(Protocol):
 
 The checkpointer is passed to LangGraph and stores agent state at every step — enabling resumable workflows that survive server restarts.
 
+### StoreBackend (Cross-Thread Memory)
+
+```python
+class StorageBackend(Protocol):
+    async def get_store(self) -> BaseStore | None: ...
+```
+
+Each storage backend also exposes `get_store()`, which returns a LangGraph `BaseStore` instance for cross-thread persistent memory. This is separate from the checkpointer: the checkpointer stores agent graph state (messages, tool call history) per thread; the Store holds long-lived structured data that spans threads and sessions.
+
+| Implementation | Store Backend |
+|---|---|
+| `MemoryStorageBackend` | `InMemoryStore` (ephemeral — suitable for tests and development) |
+| `SqliteStorageBackend` | `AsyncSqliteStore` (persisted to same database file as checkpointer) |
+| `PostgresStorageBackend` | `AsyncPostgresStore` (separate psycopg connection to same Postgres instance) |
+
+The Store is passed to `create_deep_agent()` and available inside agent nodes and middleware via `runtime.store`. Namespace scoping (via `CognitionContext.user_id`) ensures user A cannot read user B's stored data. See [CognitionContext and Cross-Thread Memory](./agent-runtime.md#cognitioncontext-and-cross-thread-memory) for details.
+
 ### Unified StorageBackend
 
 `StorageBackend` combines all three plus lifecycle methods:
@@ -257,7 +274,7 @@ These run in the local process (not inside the Docker sandbox) and are always av
 
 ## Circuit Breaker (`server/app/execution/circuit_breaker.py`)
 
-The circuit breaker protects downstream LLM providers from cascading failures. The same implementation is used by the LLM provider fallback chain.
+The circuit breaker protects downstream services from cascading failures. It is used by the execution layer for Docker container management.
 
 States:
 
