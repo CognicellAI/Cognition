@@ -24,8 +24,8 @@ All request and response bodies are JSON unless noted. Streaming endpoints retur
   - [`token`](#token)
   - [`tool_call`](#tool_call)
   - [`tool_result`](#tool_result)
-  - [`planning`](#planning)
-  - [`step_complete`](#step_complete)
+   - [`planning`](#planning) *(reserved)*
+   - [`step_complete`](#step_complete) *(reserved)*
   - [`delegation`](#delegation)
   - [`status`](#status)
   - [`usage`](#usage)
@@ -347,9 +347,11 @@ Result of a tool invocation. `tool_call_id` matches the `id` in the preceding `t
 
 `exit_code` is `0` for success, non-zero for failure.
 
-### `planning`
+### `planning` *(reserved — not currently emitted)*
 
-The agent has created a task plan (list of todo items).
+> **Note:** `PlanningEvent` is defined in the runtime but is not emitted by the current streaming implementation. Do not build UI that depends on receiving this event. Planned for a future release alongside todo streaming.
+
+The agent has created a task plan.
 
 ```json
 {
@@ -361,7 +363,9 @@ The agent has created a task plan (list of todo items).
 }
 ```
 
-### `step_complete`
+### `step_complete` *(reserved — not currently emitted)*
+
+> **Note:** `StepCompleteEvent` is defined in the runtime but is not emitted by the current streaming implementation. Do not build UI that depends on receiving this event.
 
 A step in the agent's task plan has been completed.
 
@@ -874,7 +878,7 @@ Create a provider config in the ConfigRegistry. Takes effect immediately — no 
 | `api_key_env` | string | No | Name of the env var holding the API key (not the key itself) |
 | `enabled` | bool | No | Default `true` |
 | `priority` | int | No | Lower = higher priority in resolution chain. Default `0` |
-| `max_retries` | int | No | Retry attempts on 429/5xx. Default `2` |
+| `max_retries` | int | No | Stored but **not yet enforced** — field is accepted and persisted but not passed to the LLM client. Default `2` |
 | `base_url` | string | No | Required for `openai_compatible` |
 | `region` | string | No | AWS region for `bedrock` |
 | `role_arn` | string | No | IAM role ARN for Bedrock cross-account access |
