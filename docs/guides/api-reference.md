@@ -2,7 +2,71 @@
 
 Base URL: `http://localhost:8000`
 
-All request and response bodies are JSON. Streaming endpoints return `text/event-stream`.
+All request and response bodies are JSON unless noted. Streaming endpoints return `text/event-stream`.
+
+---
+
+## Contents
+
+- [Health & Readiness](#health--readiness)
+- [Sessions](#sessions)
+  - [`POST /sessions`](#post-sessions)
+  - [`GET /sessions`](#get-sessions)
+  - [`GET /sessions/{session_id}`](#get-sessionssession_id)
+  - [`PATCH /sessions/{session_id}`](#patch-sessionssession_id)
+  - [`DELETE /sessions/{session_id}`](#delete-sessionssession_id)
+  - [`POST /sessions/{session_id}/abort`](#post-sessionssession_idabort)
+- [Messages](#messages)
+  - [`POST /sessions/{session_id}/messages`](#post-sessionssession_idmessages)
+  - [`GET /sessions/{session_id}/messages`](#get-sessionssession_idmessages)
+  - [`GET /sessions/{session_id}/messages/{message_id}`](#get-sessionssession_idmessagesmessage_id)
+- [SSE Event Types](#sse-event-types)
+  - [`token`](#token)
+  - [`tool_call`](#tool_call)
+  - [`tool_result`](#tool_result)
+  - [`planning`](#planning)
+  - [`step_complete`](#step_complete)
+  - [`delegation`](#delegation)
+  - [`status`](#status)
+  - [`usage`](#usage)
+  - [`error`](#error)
+  - [`done`](#done)
+- [Agents](#agents)
+  - [`GET /agents`](#get-agents)
+  - [`GET /agents/{name}`](#get-agentsname)
+  - [`POST /agents`](#post-agents)
+  - [`PUT /agents/{name}`](#put-agentsname)
+  - [`PATCH /agents/{name}`](#patch-agentsname)
+  - [`DELETE /agents/{name}`](#delete-agentsname)
+- [Skills](#skills)
+  - [`GET /skills`](#get-skills)
+  - [`GET /skills/{name}`](#get-skillsname)
+  - [`POST /skills`](#post-skills)
+  - [`PUT /skills/{name}`](#put-skillsname)
+  - [`PATCH /skills/{name}`](#patch-skillsname)
+  - [`DELETE /skills/{name}`](#delete-skillsname)
+- [Tools](#tools)
+  - [`GET /tools`](#get-tools)
+  - [`GET /tools/{name}`](#get-toolsname)
+  - [`GET /tools/errors`](#get-toolserrors)
+  - [`POST /tools`](#post-tools)
+  - [`DELETE /tools/{name}`](#delete-toolsname)
+  - [`POST /tools/reload`](#post-toolsreload)
+- [Models](#models)
+  - [`GET /models`](#get-models)
+  - [`GET /models/providers`](#get-modelsproviders)
+  - [`GET /models/providers/{provider_id}/models`](#get-modelsprovidersprovider_idmodels)
+  - [`POST /models/providers`](#post-modelsproviders)
+  - [`PATCH /models/providers/{provider_id}`](#patch-modelsprovidersprovider_id)
+  - [`DELETE /models/providers/{provider_id}`](#delete-modelsprovidersprovider_id)
+  - [`POST /models/providers/{provider_id}/test`](#post-modelsprovidersprovider_idtest)
+- [Configuration](#configuration)
+  - [`GET /config`](#get-config)
+  - [`PATCH /config`](#patch-config)
+  - [`POST /config/rollback`](#post-configrollback)
+- [Multi-Tenant Scoping](#multi-tenant-scoping)
+- [Rate Limiting](#rate-limiting)
+- [Error Format](#error-format)
 
 ---
 
@@ -51,7 +115,7 @@ Create a new session.
 | Field | Type | Required | Description |
 |---|---|---|---|
 | `title` | string (max 200) | No | Human-readable label |
-| `agent_name` | string | No | Agent to bind; default `"default"` |
+| `agent_name` | string | No | Agent to bind; must be a known `primary` or `all` agent. Defaults to `"default"`. Returns `422` if name is unknown. |
 
 **Headers (when scoping enabled):**
 ```
@@ -73,12 +137,11 @@ X-Cognition-Scope-Project: proj-123
 }
 ```
 
+**Response `422 Unprocessable Entity`:** `agent_name` is not a known primary agent.
+
 ### `GET /sessions`
 
 List sessions for the current workspace. Filtered by scope when scoping is enabled.
-
-**Query parameters:**
-- None (all sessions for the workspace/scope are returned)
 
 **Response `200 OK`:**
 ```json
@@ -109,7 +172,8 @@ Update session metadata or LLM configuration.
     "model": "gpt-4o-mini",
     "temperature": 0.3,
     "provider": "openai",
-    "max_tokens": 2048
+    "max_tokens": 2048,
+    "recursion_limit": 500
   }
 }
 ```
@@ -121,11 +185,11 @@ Update session metadata or LLM configuration.
 | `provider_id` | string | Reference a specific `ProviderConfig` by ID from ConfigRegistry. Takes priority over `provider`/`model`. |
 | `provider` | string | Provider type override: `openai`, `anthropic`, `bedrock`, `openai_compatible`, `google_genai`, `google_vertexai` |
 | `model` | string | Model ID override |
-| `temperature` | float | Temperature (0.0-2.0) |
+| `temperature` | float | Temperature (0.0–2.0) |
 | `max_tokens` | int | Max output tokens |
-| `recursion_limit` | int | Max agent recursion depth |
+| `recursion_limit` | int | Max agent ReAct loop depth |
 
-Provider resolution priority: `provider_id` (exact config lookup) > `provider` + `model` (direct override) > first enabled ProviderConfig from ConfigRegistry.
+**Provider resolution priority** (highest to lowest): `provider_id` → `provider`+`model` → `AgentDefinition.config` → first enabled ProviderConfig from ConfigRegistry.
 
 **Response `200 OK`:** Updated session object  
 **Response `404 Not Found`**
@@ -166,7 +230,7 @@ Send a user message and receive the agent's streaming response via Server-Sent E
 
 | Field | Type | Required | Description |
 |---|---|---|---|
-| `content` | string (min length 1) | Yes | The user's message |
+| `content` | string (min 1) | Yes | The user's message |
 | `model` | string | No | Override model for this message only |
 | `parent_id` | string | No | Parent message ID for threaded context |
 
@@ -259,7 +323,7 @@ A single LLM output token. Stream these into a buffer to accumulate the full res
 
 ### `tool_call`
 
-The agent is invoking a tool.
+The agent is invoking a tool. `id` correlates with the `tool_call_id` in the subsequent `tool_result`.
 
 ```json
 {
@@ -271,7 +335,7 @@ The agent is invoking a tool.
 
 ### `tool_result`
 
-Result of a tool invocation.
+Result of a tool invocation. `tool_call_id` matches the `id` in the preceding `tool_call`.
 
 ```json
 {
@@ -315,8 +379,9 @@ The primary agent is delegating a subtask to a subagent.
 
 ```json
 {
-  "target_agent": "security-auditor",
-  "task": "Audit auth.py for SQL injection vulnerabilities"
+  "from_agent": "main",
+  "to_agent": "security-auditor",
+  "task": "call_abc123"
 }
 ```
 
@@ -346,7 +411,7 @@ Token usage and estimated cost for this response.
 
 ### `error`
 
-A recoverable error occurred. The stream may continue after an error event.
+A recoverable error occurred. The stream terminates after an error event.
 
 ```json
 {
@@ -397,18 +462,6 @@ List all non-hidden agents available in the registry.
       "tools": [],
       "skills": [],
       "system_prompt": "You are a coding agent..."
-    },
-    {
-      "name": "readonly",
-      "description": "Analysis-only agent; write and execute tools disabled",
-      "mode": "primary",
-      "hidden": false,
-      "native": true,
-      "model": null,
-      "temperature": null,
-      "tools": [],
-      "skills": [],
-      "system_prompt": "You are a read-only analyst..."
     }
   ]
 }
@@ -426,6 +479,174 @@ Get a specific agent by name.
 **Response `200 OK`:** Agent object  
 **Response `404 Not Found`:** Agent not found or hidden  
 **Response `503 Service Unavailable`:** Registry not yet initialized
+
+### `POST /agents`
+
+Create or replace an agent definition in the ConfigRegistry.
+
+**Request body:**
+```json
+{
+  "name": "security-auditor",
+  "system_prompt": "You are a security expert. Audit code for vulnerabilities.",
+  "description": "Audits code for security issues",
+  "mode": "subagent",
+  "tools": ["myapp.tools.security.run_semgrep"],
+  "skills": [],
+  "memory": ["AGENTS.md"],
+  "interrupt_on": {},
+  "model": "gpt-4o",
+  "temperature": 0.1,
+  "scope": {}
+}
+```
+
+| Field | Type | Description |
+|---|---|---|
+| `name` | string | Agent identifier (1–100 chars) |
+| `system_prompt` | string | Agent's system prompt |
+| `description` | string | Human-readable description |
+| `mode` | `"primary"` \| `"subagent"` \| `"all"` | Whether agent can own sessions, be delegated to, or both |
+| `tools` | list[string] | Dotted Python import paths for tool functions |
+| `skills` | list[string] | Paths to SKILL.md files or directories |
+| `memory` | list[string] | Paths to instruction files (e.g. AGENTS.md) |
+| `interrupt_on` | dict | Tool names mapped to `true` for HITL confirmation |
+| `model` | string | Model override (overrides global default for this agent's sessions) |
+| `temperature` | float | Temperature override |
+| `scope` | dict | Scope restriction; empty `{}` = global |
+
+**Response `201 Created`:** Agent object  
+**Response `422 Unprocessable Entity`:** Validation error
+
+### `PUT /agents/{name}`
+
+Replace an agent definition entirely.
+
+**Request body:** Same as `POST /agents`  
+**Response `200 OK`:** Updated agent object  
+**Response `404 Not Found`**
+
+### `PATCH /agents/{name}`
+
+Partially update an agent definition. Only provided fields are changed.
+
+**Request body (all fields optional):**
+```json
+{
+  "system_prompt": "Updated prompt.",
+  "model": "claude-sonnet-4-6",
+  "temperature": 0.5
+}
+```
+
+**Response `200 OK`:** Updated agent object  
+**Response `404 Not Found`**
+
+### `DELETE /agents/{name}`
+
+Delete an agent definition from the ConfigRegistry.
+
+**Response `204 No Content`**  
+**Response `404 Not Found`:** Agent not found  
+**Response `400 Bad Request`:** Attempt to delete a built-in (native) agent
+
+---
+
+## Skills
+
+Skills are SKILL.md files stored in the ConfigRegistry. When an agent loads, its configured skills are injected progressively as the context window fills.
+
+### `GET /skills`
+
+List all registered skills.
+
+**Query parameters:**
+
+| Parameter | Type | Description |
+|---|---|---|
+| `scope` | dict (via headers) | Filtered by scope when scoping is enabled |
+
+**Response `200 OK`:**
+```json
+{
+  "skills": [
+    {
+      "name": "python-testing",
+      "path": "/skills/api/python-testing",
+      "enabled": true,
+      "description": "pytest patterns and fixtures",
+      "content": "# Python Testing\n\n...",
+      "scope": {},
+      "source": "api"
+    }
+  ],
+  "count": 1
+}
+```
+
+### `GET /skills/{name}`
+
+Get a specific skill by name, including full content.
+
+**Response `200 OK`:** Skill object  
+**Response `404 Not Found`**
+
+### `POST /skills`
+
+Create or replace a skill in the ConfigRegistry.
+
+**Request body:**
+```json
+{
+  "name": "python-testing",
+  "content": "# Python Testing\n\nUse pytest. Write tests in tests/. Run with `pytest`.",
+  "description": "pytest patterns for this project",
+  "enabled": true,
+  "scope": {}
+}
+```
+
+| Field | Type | Description |
+|---|---|---|
+| `name` | string | Skill identifier (1–100 chars) |
+| `content` | string | Full SKILL.md content (YAML frontmatter + Markdown body) |
+| `path` | string | Filesystem path alternative to inline content |
+| `description` | string | Short description |
+| `enabled` | bool | Whether this skill is active (default `true`) |
+| `scope` | dict | Scope restriction; empty `{}` = global |
+
+**Response `201 Created`:** Skill object  
+**Response `422 Unprocessable Entity`:** Validation error
+
+### `PUT /skills/{name}`
+
+Replace a skill entirely.
+
+**Request body:** Same as `POST /skills`  
+**Response `200 OK`:** Updated skill object  
+**Response `404 Not Found`**
+
+### `PATCH /skills/{name}`
+
+Partially update a skill. Only provided fields are changed.
+
+**Request body (all fields optional):**
+```json
+{
+  "content": "# Updated content...",
+  "enabled": false
+}
+```
+
+**Response `200 OK`:** Updated skill object  
+**Response `404 Not Found`**
+
+### `DELETE /skills/{name}`
+
+Delete a skill from the ConfigRegistry.
+
+**Response `204 No Content`**  
+**Response `404 Not Found`**
 
 ---
 
@@ -473,46 +694,9 @@ List all registered tools from both file discovery (AgentRegistry) and API regis
 - `"api_code"` — registered via `POST /tools` with `code` field (Python source stored in DB)
 - `"api_path"` — registered via `POST /tools` with `path` field (module path)
 
-### `POST /tools`
-
-Register a tool in the ConfigRegistry. Exactly one of `code` or `path` must be provided.
-
-**Request body:**
-```json
-{
-  "name": "search-jira",
-  "code": "from langchain_core.tools import tool\n\n@tool\ndef search_jira(query: str) -> str:\n    ...",
-  "enabled": true,
-  "description": "Search Jira issues",
-  "scope": {}
-}
-```
-
-Or with a module path instead of inline code:
-```json
-{
-  "name": "jira-tools",
-  "path": "mycompany.cognition_tools.jira",
-  "enabled": true
-}
-```
-
-**Response `201 Created`:** Tool object with `source_type`  
-**Response `422 Unprocessable Entity`:** Neither `code` nor `path` provided; or both provided  
-
-> **Security:** Tool code executes with full Python privileges. Restrict this endpoint to authorized administrators at the Gateway/proxy layer.
-
-### `DELETE /tools/{name}`
-
-Remove an API-registered tool.
-
-**Response `204 No Content`**  
-**Response `404 Not Found`:** Tool not in registry
-```
-
 ### `GET /tools/{name}`
 
-Get a specific tool by name.
+Get a specific tool by name. Checks file-discovered tools first, then ConfigRegistry.
 
 **Response `200 OK`:** Tool object  
 **Response `404 Not Found`**
@@ -525,16 +709,62 @@ Get any errors that occurred during tool discovery or reload.
 ```json
 [
   {
-    "module": "myapp.tools.broken",
-    "error": "ImportError: No module named 'missing_dep'",
-    "timestamp": "2026-03-02T12:00:00Z"
+    "file": ".cognition/tools/broken_tool.py",
+    "error_type": "ImportError",
+    "error": "No module named 'missing_dep'",
+    "timestamp": 1711972800.0
   }
 ]
 ```
 
+### `POST /tools`
+
+Register a tool in the ConfigRegistry. Exactly one of `code` or `path` must be provided.
+
+**Request body — inline source code:**
+```json
+{
+  "name": "search-jira",
+  "code": "from langchain_core.tools import tool\n\n@tool\ndef search_jira(query: str) -> str:\n    \"\"\"Search Jira issues by query string.\"\"\"\n    ...",
+  "enabled": true,
+  "description": "Search Jira issues",
+  "scope": {}
+}
+```
+
+**Request body — module path:**
+```json
+{
+  "name": "jira-tools",
+  "path": "mycompany.cognition_tools.jira",
+  "enabled": true
+}
+```
+
+| Field | Type | Description |
+|---|---|---|
+| `name` | string | Tool identifier (1–100 chars) |
+| `code` | string | Full Python source containing `@tool`-decorated functions or `BaseTool` subclasses |
+| `path` | string | Dotted module path importable by the server process |
+| `enabled` | bool | Whether this tool is active (default `true`) |
+| `description` | string | Optional description |
+| `scope` | dict | Scope restriction; empty `{}` = global |
+
+**Response `201 Created`:** Tool object with `source_type`  
+**Response `422 Unprocessable Entity`:** Neither `code` nor `path` provided; or both provided
+
+> **Security:** Tool code executes with full Python privileges inside the sandbox backend. Restrict this endpoint to authorized administrators at the Gateway/proxy layer.
+
+### `DELETE /tools/{name}`
+
+Remove an API-registered tool from the ConfigRegistry.
+
+**Response `204 No Content`**  
+**Response `404 Not Found`:** Tool not in ConfigRegistry
+
 ### `POST /tools/reload`
 
-Trigger a manual reload of tools from the discovery path (`.cognition/tools/`).
+Trigger a manual reload of file-discovered tools from `.cognition/tools/`.
 
 **Response `200 OK`:**
 ```json
@@ -547,7 +777,7 @@ Trigger a manual reload of tools from the discovery path (`.cognition/tools/`).
 
 ### `GET /models`
 
-List models from the catalog with optional filtering.
+List models from the models.dev catalog with optional filtering.
 
 **Query parameters:**
 
@@ -578,17 +808,46 @@ List models from the catalog with optional filtering.
 }
 ```
 
+`status` values: `null` (active), `"deprecated"`, `"beta"`.
+
 ### `GET /models/providers`
 
 List all provider configs from the ConfigRegistry.
+
+**Response `200 OK`:**
+```json
+{
+  "providers": [
+    {
+      "id": "default",
+      "provider": "openai_compatible",
+      "model": "google/gemini-3-flash-preview",
+      "display_name": null,
+      "enabled": true,
+      "priority": 1,
+      "max_retries": 2,
+      "api_key_env": "COGNITION_OPENAI_COMPATIBLE_API_KEY",
+      "base_url": "https://openrouter.ai/api/v1",
+      "region": null,
+      "role_arn": null,
+      "extra": {},
+      "scope": {},
+      "source": "api"
+    }
+  ],
+  "count": 1
+}
+```
 
 ### `GET /models/providers/{provider_id}/models`
 
 List catalog models available for a specific provider config.
 
+**Response `200 OK`:** Same schema as `GET /models`
+
 ### `POST /models/providers`
 
-Create a provider config.
+Create a provider config in the ConfigRegistry. Takes effect immediately — no restart required.
 
 **Request body:**
 ```json
@@ -598,17 +857,54 @@ Create a provider config.
   "model": "gpt-4o",
   "api_key_env": "OPENAI_API_KEY",
   "enabled": true,
-  "priority": 0
+  "priority": 0,
+  "max_retries": 2,
+  "base_url": null,
+  "region": null,
+  "role_arn": null,
+  "scope": {}
 }
 ```
 
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `id` | string | Yes | Unique identifier for this config |
+| `provider` | string | Yes | `openai`, `anthropic`, `bedrock`, `openai_compatible`, `google_genai`, `google_vertexai` |
+| `model` | string | Yes | Model ID |
+| `api_key_env` | string | No | Name of the env var holding the API key (not the key itself) |
+| `enabled` | bool | No | Default `true` |
+| `priority` | int | No | Lower = higher priority in resolution chain. Default `0` |
+| `max_retries` | int | No | Retry attempts on 429/5xx. Default `2` |
+| `base_url` | string | No | Required for `openai_compatible` |
+| `region` | string | No | AWS region for `bedrock` |
+| `role_arn` | string | No | IAM role ARN for Bedrock cross-account access |
+| `scope` | dict | No | Scope restriction; empty `{}` = global |
+
+**Response `201 Created`:** Provider config object  
+**Response `422 Unprocessable Entity`:** Validation error
+
 ### `PATCH /models/providers/{provider_id}`
 
-Update a provider config.
+Partially update a provider config.
+
+**Request body (all fields optional):**
+```json
+{
+  "model": "gpt-4o-mini",
+  "enabled": false,
+  "priority": 10
+}
+```
+
+**Response `200 OK`:** Updated provider config  
+**Response `404 Not Found`**
 
 ### `DELETE /models/providers/{provider_id}`
 
 Delete a provider config.
+
+**Response `204 No Content`**  
+**Response `404 Not Found`**
 
 ### `POST /models/providers/{provider_id}/test`
 
@@ -622,6 +918,17 @@ Test provider connectivity and credentials.
   "model": "gpt-4o",
   "message": "Connection successful",
   "response_preview": "Hello!"
+}
+```
+
+**Response `200 OK` (failure):**
+```json
+{
+  "success": false,
+  "provider": "openai",
+  "model": "gpt-4o",
+  "message": "AuthenticationError: Invalid API key",
+  "response_preview": null
 }
 ```
 
@@ -656,7 +963,7 @@ Get the current server configuration (infrastructure only). Secrets are redacted
 
 ### `PATCH /config`
 
-> **Note:** LLM and agent configuration is now managed via the ConfigRegistry API (`POST /models/providers`, `PATCH /agents/{name}`, etc.), not `PATCH /config`.
+> **Note:** LLM and agent configuration is managed via the ConfigRegistry API (`POST /models/providers`, `PATCH /agents/{name}`, etc.), not `PATCH /config`.
 
 Update infrastructure configuration at runtime. Changes are persisted to `.cognition/config.yaml`.
 
@@ -761,4 +1068,6 @@ All error responses follow a consistent structure:
 | `SESSION_NOT_FOUND` | 404 | Session ID does not exist |
 | `LLM_UNAVAILABLE` | 503 | LLM provider configuration error or provider unreachable |
 | `TOOL_EXECUTION_ERROR` | 500 | Tool raised an exception |
+| `STREAMING_ERROR` | 500 | Error during agent streaming |
+| `ABORTED` | — | Stream aborted via `POST /sessions/{id}/abort` (delivered as SSE `error` event) |
 | `INTERNAL_ERROR` | 500 | Unexpected server error |
