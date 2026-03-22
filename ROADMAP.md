@@ -323,6 +323,7 @@ All write endpoints respect `X-Cognition-Scope-{key}` headers for multi-tenant s
 | Skills progressive disclosure | Layer 4 | Pending | Skills loaded on-demand based on context | 2 days | None |
 | GraphQL API | Layer 6 | Pending | Alternative to REST for complex queries | 3 days | P1: Production-Ready |
 | Evaluation framework | Layer 7 | Pending | Automated benchmark runs on agent performance | 5 days | P1: Production-Ready |
+| Builder boundary documentation | Layer 6 | Completed | A builder-facing guide clearly defines Cognition Core vs app-layer responsibilities, gives decision rules, and links from the main docs index and root README | 0.25 days | None |
 | `app = Cognition(agent); app.run()` | All | Pending | Single-line instantiation provides all features | 5 days | All above |
 
 ---
