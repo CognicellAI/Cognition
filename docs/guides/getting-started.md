@@ -1,355 +1,468 @@
 # Getting Started
 
-This guide walks you from zero to a running Cognition instance with an active session and a streaming response. It covers both paths: Docker Compose (no local Python required) and a direct Python install.
+Cognition is a backend service your application talks to over HTTP. You deploy it alongside your app, point it at an LLM provider, and send messages from your code — Cognition handles the agent loop, tool execution, streaming, and persistence.
+
+This guide gets you from zero to a working integration in under 15 minutes.
 
 ---
 
-## Prerequisites
+## Contents
 
-**Docker Compose path:** Docker Desktop or Docker Engine + Docker Compose v2.
-
-**Python path:** Python 3.11+, `pip` or `uv`.
-
-You will also need an LLM provider API key. Examples in this guide use OpenAI, but Cognition also supports AWS Bedrock and any OpenAI-compatible endpoint (OpenRouter, vLLM, Ollama, etc.).
+- [1. Deploy Cognition](#1-deploy-cognition)
+- [2. Connect your first LLM provider](#2-connect-your-first-llm-provider)
+- [3. Send a message from your application](#3-send-a-message-from-your-application)
+- [4. Parse the streaming response](#4-parse-the-streaming-response)
+- [5. Persist context across turns](#5-persist-context-across-turns)
+- [6. Give the agent your tools](#6-give-the-agent-your-tools)
+- [7. Scope sessions to your users](#7-scope-sessions-to-your-users)
+- [What's next](#whats-next)
 
 ---
 
-## Option A — Docker Compose
+## 1. Deploy Cognition
 
-The fastest path. Starts Cognition with SQLite persistence. No local Python install required.
-
-### 1. Clone and configure
+The fastest path is Docker Compose. Clone the repo, set your API key, and start:
 
 ```bash
 git clone https://github.com/CognicellAI/Cognition.git
 cd Cognition
 
-# Copy the example env file
+# Create your env file — this is where secrets live, never config.yaml
 cp .env.example .env
 ```
 
-Edit `.env` to add your API key. Then configure the LLM provider in `.cognition/config.yaml`:
+Edit `.env` — add your API key for whichever provider you want to start with:
+
+```bash
+# .env
+COGNITION_OPENAI_COMPATIBLE_API_KEY=sk-or-v1-...   # OpenRouter
+# or
+OPENAI_API_KEY=sk-...                               # OpenAI
+# or
+ANTHROPIC_API_KEY=sk-ant-...                        # Anthropic
+```
+
+Then configure the provider in `.cognition/config.yaml` (create the file if it doesn't exist):
 
 ```yaml
 # .cognition/config.yaml
 llm:
-  provider: openai
-  model: gpt-4o
+  provider: openai_compatible
+  model: google/gemini-2.5-flash-preview
+  base_url: https://openrouter.ai/api/v1
 ```
+
+Start the server:
 
 ```bash
-# .env — API keys only, never put these in config.yaml
-OPENAI_API_KEY=sk-...
+docker compose up -d cognition
 ```
 
-On first startup, the `llm:` section in `config.yaml` is seeded into the ConfigRegistry as the default provider. You can also configure providers via the API after startup — see [Switching LLM Providers](#switching-llm-providers) below.
-
-### 2. Start the server
+Verify it's up:
 
 ```bash
-docker-compose up -d cognition
+curl -s http://localhost:8000/health
+# {"status": "healthy", "version": "0.4.0", ...}
 ```
 
-This starts only the Cognition service. To start the full observability stack (Postgres, MLflow, Prometheus, Grafana, OTel Collector, Loki, Promtail) see the [Deployment guide](./deployment.md).
+> **Don't want Docker?** Install with `uv sync --extra openai` and run `uv run uvicorn server.app.main:app --reload --port 8000`. See [Deployment](./deployment.md) for production options (PostgreSQL, Kubernetes, multi-instance).
 
-### 3. Verify it's running
+---
+
+## 2. Connect your first LLM provider
+
+The `llm:` section in `.cognition/config.yaml` seeds the ConfigRegistry on first startup. You can also manage providers live via the API — changes take effect immediately, no restart required.
+
+### Supported providers
+
+| Provider | `provider` value | Key env var | Notes |
+|---|---|---|---|
+| OpenAI | `openai` | `OPENAI_API_KEY` | |
+| Anthropic | `anthropic` | `ANTHROPIC_API_KEY` | |
+| AWS Bedrock | `bedrock` | ambient AWS credentials | Instance role, ECS task role, IRSA — no static keys needed |
+| OpenAI-compatible | `openai_compatible` | `COGNITION_OPENAI_COMPATIBLE_API_KEY` | OpenRouter, vLLM, Ollama, LM Studio, any OpenAI-spec endpoint |
+| Google Vertex AI | `google_vertexai` | application default credentials | |
+| Google AI Studio | `google_genai` | `GOOGLE_API_KEY` | |
+
+### Switching providers at runtime
+
+You do not need to restart Cognition to change providers. Use the API:
 
 ```bash
-curl -s http://localhost:8000/health | jq .
+# Add a new provider
+curl -X POST http://localhost:8000/models/providers \
+  -H "Content-Type: application/json" \
+  -d '{
+    "id": "claude",
+    "provider": "anthropic",
+    "model": "claude-sonnet-4-6",
+    "api_key_env": "ANTHROPIC_API_KEY",
+    "enabled": true,
+    "priority": 1
+  }'
+
+# Test it before using it
+curl -X POST http://localhost:8000/models/providers/claude/test
+# {"success": true, "provider": "anthropic", "model": "claude-sonnet-4-6", ...}
+
+# List all configured providers
+curl http://localhost:8000/models/providers
 ```
 
-Expected output:
-```json
-{
-  "status": "ok",
-  "version": "0.1.0",
-  "active_sessions": 0,
-  "circuit_breakers": {},
-  "timestamp": "2026-03-02T12:00:00Z"
+The `priority` field controls which provider is used when a session doesn't specify one — lower number means higher priority.
+
+---
+
+## 3. Send a message from your application
+
+Cognition uses a session model: create a session once, send messages into it, and the agent maintains conversational context. Sessions map naturally to a user conversation or task.
+
+### Create a session
+
+```python
+import httpx
+
+COGNITION_URL = "http://localhost:8000"
+
+async def create_session(title: str) -> str:
+    async with httpx.AsyncClient() as client:
+        resp = await client.post(
+            f"{COGNITION_URL}/sessions",
+            json={"title": title},
+        )
+        resp.raise_for_status()
+        return resp.json()["id"]
+```
+
+```typescript
+const COGNITION_URL = "http://localhost:8000";
+
+async function createSession(title: string): Promise<string> {
+  const resp = await fetch(`${COGNITION_URL}/sessions`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ title }),
+  });
+  const data = await resp.json();
+  return data.id;
+}
+```
+
+### Send a message and stream the response
+
+Messages stream back as [Server-Sent Events](https://developer.mozilla.org/en-US/docs/Web/API/Server-sent_events). Every chunk has an `event:` type and a JSON `data:` payload.
+
+```python
+async def send_message(session_id: str, content: str):
+    async with httpx.AsyncClient(timeout=120) as client:
+        async with client.stream(
+            "POST",
+            f"{COGNITION_URL}/sessions/{session_id}/messages",
+            json={"content": content},
+            headers={"Accept": "text/event-stream"},
+        ) as response:
+            async for line in response.aiter_lines():
+                if line.startswith("data: "):
+                    import json
+                    event_data = json.loads(line[6:])
+                    yield event_data
+```
+
+```typescript
+async function* sendMessage(sessionId: string, content: string) {
+  const resp = await fetch(
+    `${COGNITION_URL}/sessions/${sessionId}/messages`,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "text/event-stream",
+      },
+      body: JSON.stringify({ content }),
+    }
+  );
+
+  const reader = resp.body!.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split("\n");
+    buffer = lines.pop() ?? "";
+    for (const line of lines) {
+      if (line.startsWith("data: ")) {
+        yield JSON.parse(line.slice(6));
+      }
+    }
+  }
 }
 ```
 
 ---
 
-## Option B — Python Install
+## 4. Parse the streaming response
 
-### 1. Install
+Every event has a type. Here are the ones you'll use in a UI:
 
-```bash
-# From GitHub (includes OpenAI provider)
-pip install "git+https://github.com/CognicellAI/Cognition.git#egg=cognition[openai]"
-
-# Or with uv
-uv add "git+https://github.com/CognicellAI/Cognition.git#egg=cognition[openai]"
-```
-
-For AWS Bedrock add `[bedrock]`; for local development add `[dev,test]`.
-
-### 2. Configure
-
-Configure the LLM provider in `.cognition/config.yaml`:
-
-```yaml
-# .cognition/config.yaml
-llm:
-  provider: openai
-  model: gpt-4o
-```
-
-Set your API key as an environment variable (not in the YAML file):
-
-```bash
-export OPENAI_API_KEY="sk-..."
-```
-
-Or create a `.env` file in your working directory (Cognition auto-loads it):
-
-```bash
-# .env
-OPENAI_API_KEY=sk-...
-```
-
-On first startup, the `llm:` section seeds the ConfigRegistry as the default provider. You can also configure providers via the API after startup without restarting — see [Switching LLM Providers](#switching-llm-providers) below.
-
-### 3. Start the server
-
-```bash
-cognition-server
-```
-
-The server starts on `http://localhost:8000` by default.
-
----
-
-## Your First Session
-
-With the server running, create a session and send a message:
-
-```bash
-# Create a session
-SESSION=$(curl -s -X POST http://localhost:8000/sessions \
-  -H "Content-Type: application/json" \
-  -d '{"title": "My first session"}' | jq -r .id)
-
-echo "Session ID: $SESSION"
-```
-
-```bash
-# Send a message — streams tokens via SSE
-curl -N -X POST "http://localhost:8000/sessions/$SESSION/messages" \
-  -H "Content-Type: application/json" \
-  -d '{"content": "What files are in the current directory?"}'
-```
-
-You will see a stream of SSE events:
-
-```
-event: status
-data: {"status": "thinking"}
-
-event: token
-data: {"content": "I"}
-
-event: token
-data: {"content": " can"}
-
-event: tool_call
-data: {"name": "bash", "args": {"command": "ls -la"}, "id": "call_abc123"}
-
-event: tool_result
-data: {"tool_call_id": "call_abc123", "output": "total 24\ndrwxr-xr-x ...", "exit_code": 0}
-
-event: token
-data: {"content": "Here are the files..."}
-
-event: usage
-data: {"input_tokens": 45, "output_tokens": 120, "estimated_cost": 0.0008}
-
-event: done
-data: {"assistant_data": {...}}
-```
-
----
-
-## Using the CLI Client
-
-Cognition ships with an interactive REPL built on `prompt_toolkit` and `rich`.
-
-### Start the client
-
-```bash
-cognition-cli
-```
-
-The client auto-starts a server if one is not already running, creates a session, and drops into the interactive shell.
-
-### Interactive Shell
-
-The REPL shows a header with the active workspace and session ID, and a footer with the current model, token counts, and estimated cost.
-
-**Slash commands:**
-
-| Command | Description |
-|---|---|
-| `/help` | List available commands |
-| `/session` | Show current session details |
-| `/model <name>` | Switch the active model for this session |
-| `/status` | Show server health and circuit breaker state |
-| `/clear` | Clear the screen |
-| `/exit` | Exit the REPL |
-
-### Single-Message Mode
-
-For scripting, pass a message directly:
-
-```bash
-cognition-cli --message "Summarize main.py"
-```
-
-Piped input also works:
-
-```bash
-cat error.log | cognition-cli
-```
-
----
-
-## List Available Agents
-
-```bash
-curl http://localhost:8000/agents
-```
-
-Cognition ships with two built-in agents:
-
-| Name | Mode | Description |
+| Event type | `data` fields | What to do |
 |---|---|---|
-| `default` | primary | Full-access coding agent; all tools enabled |
-| `readonly` | primary | Analysis-only; write and execute tools disabled |
+| `token` | `content: string` | Append to the response text buffer |
+| `tool_call` | `name`, `args`, `id` | Show a "running tool…" indicator |
+| `tool_result` | `tool_call_id`, `output`, `exit_code` | Hide the indicator; optionally show the output |
+| `status` | `status: "thinking" \| "idle"` | Drive a loading spinner |
+| `usage` | `input_tokens`, `output_tokens`, `estimated_cost`, `model` | Update a cost tracker |
+| `done` | `assistant_data` | Final message stored; stream is complete |
+| `error` | `message`, `code` | Show an error; stream is terminated |
 
-Create a session with a specific agent:
+`tool_call.id` always matches `tool_result.tool_call_id` — use this to correlate which spinner to replace with which result.
 
-```bash
-curl -X POST http://localhost:8000/sessions \
-  -H "Content-Type: application/json" \
-  -d '{"agent_name": "readonly", "title": "Code review"}'
+### Minimal example: print the response
+
+```python
+async def ask(session_id: str, question: str) -> str:
+    response_text = ""
+    async for event in send_message(session_id, question):
+        match event.get("event"):
+            case "token":
+                response_text += event["content"]
+                print(event["content"], end="", flush=True)
+            case "done":
+                print()  # newline after streaming
+            case "error":
+                raise RuntimeError(event["message"])
+    return response_text
+```
+
+### React component example
+
+```typescript
+function AgentChat({ sessionId }: { sessionId: string }) {
+  const [response, setResponse] = useState("");
+  const [thinking, setThinking] = useState(false);
+  const [activeTools, setActiveTools] = useState<Record<string, string>>({});
+
+  async function submit(content: string) {
+    setResponse("");
+    setThinking(true);
+
+    for await (const event of sendMessage(sessionId, content)) {
+      switch (event.event) {
+        case "token":
+          setResponse((r) => r + event.content);
+          break;
+        case "tool_call":
+          setActiveTools((t) => ({ ...t, [event.id]: event.name }));
+          break;
+        case "tool_result":
+          setActiveTools((t) => {
+            const { [event.tool_call_id]: _, ...rest } = t;
+            return rest;
+          });
+          break;
+        case "status":
+          setThinking(event.status === "thinking");
+          break;
+        case "done":
+          setThinking(false);
+          break;
+      }
+    }
+  }
+
+  return (
+    <div>
+      {thinking && <Spinner />}
+      {Object.entries(activeTools).map(([id, name]) => (
+        <ToolBadge key={id} name={name} />
+      ))}
+      <div>{response}</div>
+    </div>
+  );
+}
 ```
 
 ---
 
-## Switching LLM Providers
+## 5. Persist context across turns
 
-Provider configuration lives in `.cognition/config.yaml`. On first startup, the `llm:` section is seeded into the ConfigRegistry. You can also manage providers via the REST API.
+Sessions automatically persist conversation history — just reuse the same session ID:
 
-### OpenAI
+```python
+session_id = await create_session("Refactor auth module")
 
-```yaml
-# .cognition/config.yaml
-llm:
-  provider: openai
-  model: gpt-4o
+# Turn 1
+await ask(session_id, "Read src/auth.py and summarise the current structure.")
+
+# Turn 2 — agent remembers the previous exchange
+await ask(session_id, "Now refactor it to use JWT tokens.")
+
+# Turn 3
+await ask(session_id, "Write tests for the new implementation.")
 ```
+
+Sessions survive server restarts (SQLite or Postgres, depending on your backend). Retrieve a session's message history at any time:
 
 ```bash
-export OPENAI_API_KEY=sk-...
+curl "http://localhost:8000/sessions/$SESSION/messages?limit=50"
 ```
 
-### Anthropic
-
-```yaml
-llm:
-  provider: anthropic
-  model: claude-sonnet-4-6
-```
+To cancel a running agent operation (e.g., if the user clicks Stop):
 
 ```bash
-export ANTHROPIC_API_KEY=sk-ant-...
-```
-
-### AWS Bedrock
-
-```yaml
-llm:
-  provider: bedrock
-  model: anthropic.claude-3-sonnet-20240229-v1:0
-  region: us-east-1
-```
-
-```bash
-export AWS_REGION=us-east-1
-export AWS_ACCESS_KEY_ID=AKIA...
-export AWS_SECRET_ACCESS_KEY=...
-```
-
-### OpenAI-compatible (OpenRouter, vLLM, Ollama, etc.)
-
-```yaml
-llm:
-  provider: openai_compatible
-  model: google/gemini-3-flash-preview
-  base_url: https://openrouter.ai/api/v1
-```
-
-```bash
-export COGNITION_OPENAI_COMPATIBLE_API_KEY=sk-or-...
-```
-
-### Managing providers via API
-
-You can also create, update, and delete providers at runtime without restarting:
-
-```bash
-# Create a provider
-curl -X POST http://localhost:8000/models/providers \
-  -H "Content-Type: application/json" \
-  -d '{"id": "openrouter", "provider": "openai_compatible", "model": "google/gemini-3-flash-preview", "base_url": "https://openrouter.ai/api/v1", "api_key_env": "COGNITION_OPENAI_COMPATIBLE_API_KEY"}'
-
-# Browse available models for the provider
-curl http://localhost:8000/models/providers/openrouter/models
-
-# Test connectivity
-curl -X POST http://localhost:8000/models/providers/openrouter/test
-
-# Pin a session to a specific provider
-curl -X PATCH http://localhost:8000/sessions/{id} \
-  -H "Content-Type: application/json" \
-  -d '{"config": {"provider_id": "openrouter"}}'
+curl -X POST "http://localhost:8000/sessions/$SESSION/abort"
 ```
 
 ---
 
-## Project Configuration
+## 6. Give the agent your tools
 
-Drop a `.cognition/config.yaml` in your project directory to configure the agent for that project:
+Tools are the primary way to connect Cognition to your systems — databases, APIs, queues, filesystems. The agent calls them during its ReAct loop just like any other tool.
 
-```yaml
-# .cognition/config.yaml
-llm:
-  provider: openai
-  model: gpt-4o
-  temperature: 0.5
+### Option A — File drop (for filesystem access)
 
-agent:
-  memory:
-    - "AGENTS.md"       # Project-specific rules injected into system prompt
-  skills:
-    - ".cognition/skills/"
+Drop Python files into `.cognition/tools/`. Every public function becomes a tool. Hot-reloaded on change.
+
+```python
+# .cognition/tools/jira_tools.py
+import httpx
+
+def get_ticket(ticket_id: str) -> str:
+    """Fetch a Jira ticket by ID and return its title and status."""
+    resp = httpx.get(
+        f"https://jira.example.com/rest/api/2/issue/{ticket_id}",
+        headers={"Authorization": "Bearer ..."},
+    )
+    return resp.json()["fields"]["summary"]
+
+def add_comment(ticket_id: str, comment: str) -> str:
+    """Add a comment to a Jira ticket."""
+    httpx.post(
+        f"https://jira.example.com/rest/api/2/issue/{ticket_id}/comment",
+        json={"body": comment},
+    )
+    return f"Comment added to {ticket_id}"
 ```
 
-Place an `AGENTS.md` in your project root to inject project-specific context:
+### Option B — API registration (for containerised builder apps)
 
-```markdown
-# My Project
+When your builder app and Cognition run in separate containers, use `POST /tools` with inline Python source:
 
-This is a Django REST API. Use Python 3.11+. Follow PEP 8.
-Tests are in tests/ and run with pytest. The database is PostgreSQL.
+```python
+import httpx
+
+tool_code = """
+from langchain_core.tools import tool
+import httpx as _httpx
+
+@tool
+def get_ticket(ticket_id: str) -> str:
+    \"\"\"Fetch a Jira ticket by ID and return its title and status.\"\"\"
+    resp = _httpx.get(
+        f"https://jira.example.com/rest/api/2/issue/{ticket_id}",
+        headers={"Authorization": "Bearer ..."},
+    )
+    return resp.json()["fields"]["summary"]
+"""
+
+async with httpx.AsyncClient() as client:
+    await client.post(
+        "http://localhost:8000/tools",
+        json={
+            "name": "jira-tools",
+            "code": tool_code,
+            "description": "Jira ticket operations",
+        },
+    )
+```
+
+The tool is stored in the database and loaded on every agent invocation — no restart needed. Use `DELETE /tools/{name}` to remove it.
+
+> **Trust model:** Tool code runs with full Python privileges inside the sandbox. Restrict `POST /tools` to administrators at your Gateway layer.
+
+### Inspect what tools are active
+
+```bash
+curl http://localhost:8000/tools
+```
+
+```json
+{
+  "tools": [
+    {"name": "ls",         "source_type": "file",     "enabled": true},
+    {"name": "grep",       "source_type": "file",     "enabled": true},
+    {"name": "jira-tools", "source_type": "api_code", "enabled": true}
+  ],
+  "count": 3
+}
 ```
 
 ---
 
-## Next Steps
+## 7. Scope sessions to your users
 
-- [Configuration](./configuration.md) — Full reference for all settings
-- [Extending Agents](./extending-agents.md) — Add custom tools, skills, and subagents
-- [Deployment](./deployment.md) — Run with PostgreSQL, Docker sandbox, and full observability
-- [API Reference](./api-reference.md) — Every endpoint and SSE event type
+In a multi-user application, you must isolate sessions by user. Cognition enforces this through scope headers.
+
+Enable scoping in your deployment config:
+
+```bash
+COGNITION_SCOPING_ENABLED=true
+COGNITION_SCOPE_KEYS=["user"]
+```
+
+Then pass the user's identity with every request:
+
+```python
+USER_ID = "user_abc123"
+
+headers = {
+    "Content-Type": "application/json",
+    "X-Cognition-Scope-User": USER_ID,
+}
+
+# Create session — scoped to this user
+session = await client.post(
+    f"{COGNITION_URL}/sessions",
+    json={"title": "My task"},
+    headers=headers,
+)
+
+# List sessions — only this user's sessions are returned
+sessions = await client.get(
+    f"{COGNITION_URL}/sessions",
+    headers=headers,
+)
+```
+
+A missing scope header returns `403 Forbidden` — fail-closed, never fail-open. Users cannot access each other's sessions, message history, or stored memories.
+
+For per-project isolation, add a project dimension:
+
+```bash
+COGNITION_SCOPE_KEYS=["user", "project"]
+```
+
+```python
+headers = {
+    "X-Cognition-Scope-User": "alice",
+    "X-Cognition-Scope-Project": "proj-456",
+}
+```
+
+---
+
+## What's next
+
+You have a running Cognition instance, a connected LLM provider, streaming working in your app, and sessions scoped to your users. The natural next steps:
+
+| What you want to do | Where to go |
+|---|---|
+| Create custom agent personas (different prompts, tools, models per agent) | [Extending Agents → Custom Agents](./extending-agents.md#3-custom-agents) |
+| Add persistent memory across sessions | [Extending Agents → Skills & Memory](./extending-agents.md#2-skills) |
+| Require human approval before the agent runs certain tools | [Configuration → `interrupt_on`](./configuration.md#agent-defaults) |
+| Run agent code in a Docker container instead of the server process | [Deployment → Docker Sandbox](./deployment.md) |
+| Add retry logic, PII redaction, or call limits to tools | [Configuration → Middleware](./configuration.md#agent-defaults) |
+| Move to PostgreSQL and run multiple server instances | [Deployment](./deployment.md) |
+| See every endpoint and SSE event schema | [API Reference](./api-reference.md) |
