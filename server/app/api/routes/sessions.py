@@ -15,24 +15,34 @@ Git-Style Workspace Model:
 from __future__ import annotations
 
 import uuid
+from collections.abc import AsyncGenerator
 
-from fastapi import APIRouter, Depends, Header, HTTPException, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
+from fastapi.responses import StreamingResponse
 
 from server.app.agent.agent_definition_registry import get_agent_definition_registry
 from server.app.api.models import (
     ErrorResponse,
     SessionCreate,
     SessionList,
+    SessionResumeRequest,
     SessionResponse,
     SessionUpdate,
 )
+from server.app.api.sse import EventBuilder, SSEStream, get_last_event_id
 from server.app.api.scoping import SessionScope
 from server.app.llm.deep_agent_service import (
+    DeepAgentStreamingService,
+    DoneEvent,
+    ErrorEvent as ResumeErrorEvent,
     SessionAgentManager,
+    TokenEvent,
+    UsageEvent,
     get_session_agent_manager,
 )
 from server.app.llm.discovery import DiscoveryEngine
 from server.app.models import SessionConfig
+from server.app.models import SessionStatus
 from server.app.settings import Settings, get_settings
 from server.app.storage import get_storage_backend
 
@@ -350,3 +360,111 @@ async def abort_session(
     await agent_manager.abort_session(session_id, session.thread_id)
 
     return {"success": True, "message": "Operation aborted"}
+
+
+@router.post(
+    "/{session_id}/resume",
+    status_code=status.HTTP_200_OK,
+    response_model=None,
+    responses={
+        404: {"model": ErrorResponse, "description": "Session not found"},
+        409: {"model": ErrorResponse, "description": "Session is not waiting for approval"},
+    },
+)
+async def resume_session(
+    session_id: str,
+    request: SessionResumeRequest,
+    http_request: Request,
+    settings: Settings = Depends(get_settings_dependency),
+    scope: SessionScope = Depends(get_scope_dependency),
+) -> dict[str, str | bool] | StreamingResponse:
+    """Resume an interrupted Deep Agents session using native Command(resume=...)."""
+    _workspace_path = str(settings.workspace_path)
+    store = get_storage_backend()
+
+    session = await store.get_session(session_id)
+    if session is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Session not found: {session_id}",
+        )
+
+    if not scope.is_empty() and not scope.matches(session.scopes):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Session not found: {session_id}",
+        )
+
+    if session.status != SessionStatus.WAITING_FOR_APPROVAL.value:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Session {session_id} is not waiting for approval",
+        )
+
+    service = DeepAgentStreamingService(settings)
+
+    accept_header = http_request.headers.get("accept", "")
+    wants_stream = "text/event-stream" in accept_header.lower()
+
+    if not wants_stream:
+        async for event in service.resume_response(
+            session_id=session_id,
+            thread_id=session.thread_id,
+            project_path=str(settings.workspace_path),
+            decision=request.decision,
+            tool_name=request.tool_name,
+            args=request.args,
+            scope=session.scopes,
+        ):
+            if isinstance(event, ResumeErrorEvent):
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail=event.message,
+                )
+        await store.update_session(session_id=session_id, status=SessionStatus.ACTIVE.value)
+        return {"success": True, "message": "Session resumed"}
+
+    sse = SSEStream.from_settings(settings)
+    last_event_id = get_last_event_id(http_request)
+
+    async def event_generator() -> AsyncGenerator[dict[str, object], None]:
+        await store.update_session(session_id=session_id, status=SessionStatus.ACTIVE.value)
+        yield EventBuilder.status("resuming")
+
+        async for event in service.resume_response(
+            session_id=session_id,
+            thread_id=session.thread_id,
+            project_path=str(settings.workspace_path),
+            decision=request.decision,
+            tool_name=request.tool_name,
+            args=request.args,
+            scope=session.scopes,
+        ):
+            if isinstance(event, TokenEvent):
+                yield EventBuilder.token(event.content)
+            elif isinstance(event, UsageEvent):
+                yield EventBuilder.usage(
+                    input_tokens=event.input_tokens,
+                    output_tokens=event.output_tokens,
+                    estimated_cost=event.estimated_cost,
+                    provider=event.provider,
+                    model=event.model,
+                )
+            elif isinstance(event, DoneEvent):
+                yield EventBuilder.done(
+                    message_id="resume",
+                    assistant_data={"content": "resumed", "tool_calls": None, "token_count": 0},
+                )
+            elif isinstance(event, ResumeErrorEvent):
+                yield EventBuilder.error(event.message, code=event.code)
+                return
+
+    return StreamingResponse(
+        sse.event_generator(event_generator(), request=http_request, last_event_id=last_event_id),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )

@@ -31,6 +31,8 @@ def _agent_to_response(agent: Any) -> AgentResponse:
         native=agent.native,
         model=agent.config.model,
         temperature=agent.config.temperature,
+        response_format=getattr(agent, "response_format", None),
+        interrupt_on={k: bool(v) for k, v in (agent.interrupt_on or {}).items()},
         tools=agent.tools or [],
         skills=agent.skills or [],
         system_prompt=agent.system_prompt[:500] + "..."
@@ -89,6 +91,7 @@ async def create_agent(body: AgentCreate) -> AgentResponse:
             "memory": body.memory,
             "subagents": [],
             "interrupt_on": body.interrupt_on,
+            "response_format": body.response_format,
             "middleware": [],
             "config": {
                 "model": body.model,
@@ -155,6 +158,8 @@ async def update_agent(name: str, body: AgentUpdate) -> AgentResponse:
             if "temperature" in updates:
                 config["temperature"] = updates.pop("temperature")
             data["config"] = config
+        if "response_format" in updates:
+            data["response_format"] = updates.pop("response_format")
         data.update(updates)
 
         scope: dict[str, Any] = data.get("scope", {})

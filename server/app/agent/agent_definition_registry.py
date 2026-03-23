@@ -85,6 +85,7 @@ class AgentDefinitionRegistry:
             memory=["AGENTS.md"],
             subagents=[],
             interrupt_on={},
+            response_format=None,
             middleware=[],
             config=AgentConfig(),
         )
@@ -111,10 +112,39 @@ You can only read files, search, and provide analysis.""",
                 "edit_file": True,
                 "execute": True,
             },
+            response_format=None,
             middleware=[],
             config=AgentConfig(),
         )
         self._agents["readonly"] = readonly_agent
+
+        hitl_test_agent = AgentDefinition(
+            name="hitl_test",
+            system_prompt=SYSTEM_PROMPT
+            + """
+
+HITL TESTING MODE: You should actively use tools when a task requires changing files or executing commands.
+If the user asks you to create, edit, or execute something, do not refuse or describe the steps first.
+Attempt the exact protected tool call immediately so that human-in-the-loop approval can be exercised.
+""",
+            description="Manual HITL verification agent. Attempts protected tool calls immediately so interrupt_on can be tested.",
+            mode="primary",
+            hidden=False,
+            native=True,
+            tools=[],
+            skills=[".cognition/skills/"],
+            memory=["AGENTS.md"],
+            subagents=[],
+            interrupt_on={
+                "write_file": True,
+                "edit_file": True,
+                "execute": True,
+            },
+            response_format=None,
+            middleware=[],
+            config=AgentConfig(),
+        )
+        self._agents["hitl_test"] = hitl_test_agent
 
         logger.debug(f"Initialized {len(self._agents)} built-in agents")
 

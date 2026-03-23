@@ -134,6 +134,7 @@ class SqliteStorageBackend:
                 "temperature": config.temperature,
                 "max_tokens": config.max_tokens,
                 "recursion_limit": config.recursion_limit,
+                "response_format": config.response_format,
                 "system_prompt": config.system_prompt,
             }
         )
@@ -243,6 +244,9 @@ class SqliteStorageBackend:
                 recursion_limit=config.recursion_limit
                 if config.recursion_limit is not None
                 else existing_config.recursion_limit,
+                response_format=config.response_format
+                if config.response_format is not None
+                else existing_config.response_format,
                 system_prompt=config.system_prompt
                 if config.system_prompt is not None
                 else existing_config.system_prompt,
@@ -255,6 +259,7 @@ class SqliteStorageBackend:
                     "temperature": new_config.temperature,
                     "max_tokens": new_config.max_tokens,
                     "recursion_limit": new_config.recursion_limit,
+                    "response_format": new_config.response_format,
                     "system_prompt": new_config.system_prompt,
                 }
             )
@@ -516,6 +521,7 @@ class SqliteStorageBackend:
                 temperature=config_data.get("temperature"),
                 max_tokens=config_data.get("max_tokens"),
                 recursion_limit=config_data.get("recursion_limit"),
+                response_format=config_data.get("response_format"),
                 system_prompt=config_data.get("system_prompt"),
             ),
             created_at=row["created_at"],

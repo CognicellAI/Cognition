@@ -48,6 +48,7 @@ class AgentConfig(BaseModel):
     temperature: float | None = Field(default=None, ge=0.0, le=2.0)
     max_tokens: int | None = Field(default=None, gt=0)
     recursion_limit: int | None = Field(default=None, gt=0)
+    tool_token_limit_before_evict: int | None = Field(default=None, gt=0)
     provider: str | None = Field(default=None)
     model: str | None = Field(default=None)
     timeout_seconds: float | None = Field(default=None, gt=0)
@@ -107,8 +108,10 @@ class AgentDefinition(BaseModel):
     skills: list[str] = Field(default_factory=list)
     memory: list[str] = Field(default_factory=list)
     subagents: list[SubagentDefinition] = Field(default_factory=list)
-    interrupt_on: dict[str, bool] = Field(default_factory=dict)
+    interrupt_on: dict[str, Any] = Field(default_factory=dict)
+    response_format: str | None = Field(default=None)
     middleware: list[str | dict[str, Any]] = Field(default_factory=list)
+
     config: AgentConfig = Field(default_factory=AgentConfig)
     # P3 Multi-Agent Registry additions
     mode: Literal["primary", "subagent", "all"] = Field(default="all")

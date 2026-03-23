@@ -19,13 +19,14 @@ their own compiled graph.
 from __future__ import annotations
 
 import hashlib
+import importlib
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, cast
 
 import structlog
-from deepagents import create_deep_agent
+from deepagents import create_deep_agent as _create_deep_agent
 
 logger = structlog.get_logger(__name__)
 
@@ -39,6 +40,9 @@ from server.app.agent.middleware import (  # noqa: E402
 from server.app.agent.sandbox_backend import create_sandbox_backend  # noqa: E402
 from server.app.agent.tools import BrowserTool, InspectPackageTool, SearchTool  # noqa: E402
 from server.app.settings import Settings, get_settings  # noqa: E402
+
+DeepAgentResponseFormat = Any
+create_deep_agent: Any = _create_deep_agent
 
 # Global agent cache: cache_key -> compiled_agent
 _agent_cache: dict[str, Any] = {}
@@ -117,6 +121,8 @@ def _generate_cache_key(
     skills: Sequence[str] | None,
     subagents: Sequence[Any] | None,
     interrupt_on: Mapping[str, Any] | None,
+    response_format: str | None,
+    tool_token_limit_before_evict: int | None,
     middleware: Sequence[Any] | None,
     tools: Sequence[Any] | None,
     settings: Settings | None,
@@ -145,6 +151,8 @@ def _generate_cache_key(
         str(sorted(skills)) if skills else "None",
         str(len(subagents)) if subagents else "0",
         str(sorted(interrupt_on.keys())) if interrupt_on else "None",
+        str(response_format) if response_format else "None",
+        str(tool_token_limit_before_evict) if tool_token_limit_before_evict is not None else "None",
         str(len(middleware)) if middleware else "0",
         str(len(tools)) if tools else "0",
         str(settings.sandbox_backend) if settings else "default",
@@ -250,6 +258,8 @@ async def create_cognition_agent(
     skills: Sequence[str] | None = None,
     subagents: Sequence[Any] | None = None,
     interrupt_on: Mapping[str, Any] | None = None,
+    response_format: str | type[Any] | None = None,
+    tool_token_limit_before_evict: int | None = None,
     middleware: Sequence[Any] | None = None,
     tools: Sequence[Any] | None = None,
     settings: Settings | None = None,
@@ -278,6 +288,8 @@ async def create_cognition_agent(
         skills: Optional list of skill directory paths.
         subagents: Optional list of subagent definitions.
         interrupt_on: Optional dict mapping tool names to human-approval requirement.
+        response_format: Optional dotted path or Pydantic model class for structured output.
+        tool_token_limit_before_evict: Optional Deep Agents offload threshold.
         middleware: Optional additional middleware to apply.
         tools: Optional additional tools to register.
         settings: Optional settings override.
@@ -300,6 +312,10 @@ async def create_cognition_agent(
         skills=skills,
         subagents=subagents,
         interrupt_on=interrupt_on,
+        response_format=response_format
+        if isinstance(response_format, str)
+        else getattr(response_format, "__name__", None),
+        tool_token_limit_before_evict=tool_token_limit_before_evict,
         middleware=middleware,
         tools=tools,
         settings=settings,
@@ -329,6 +345,8 @@ async def create_cognition_agent(
     agent_skills: list[str]
     agent_subagents: list[Any]
     agent_interrupt_on: dict[str, Any]
+    agent_response_format: str | type[Any] | None = response_format
+    agent_tool_token_limit_before_evict = tool_token_limit_before_evict
 
     # Try to get config registry once - needed for defaults and skills backend
     try:
@@ -403,6 +421,10 @@ async def create_cognition_agent(
         if reg:
             defaults = await reg.get_global_agent_defaults(scope)
             agent_interrupt_on = dict(defaults.interrupt_on)
+            if agent_response_format is None:
+                agent_response_format = defaults.response_format
+            if agent_tool_token_limit_before_evict is None:
+                agent_tool_token_limit_before_evict = defaults.tool_token_limit_before_evict
         else:
             agent_interrupt_on = {}
 
@@ -471,23 +493,51 @@ async def create_cognition_agent(
         and getattr(backend, "routes", None) is not None,
     )
 
-    # Create the agent with multi-step support
-    agent = create_deep_agent(
-        model=model,
-        tools=agent_tools,
-        system_prompt=prompt,
-        backend=backend,
-        checkpointer=checkpointer,
-        store=store,
-        context_schema=CognitionContext,
-        memory=agent_memory,
-        skills=agent_skills,
-        subagents=cast(Any, agent_subagents),
-        interrupt_on=cast(Any, agent_interrupt_on),
-        middleware=agent_middleware,
+    resolved_response_format: DeepAgentResponseFormat = _resolve_response_format(
+        agent_response_format
     )
+
+    # Create the agent with multi-step support
+    create_kwargs = cast(
+        Any,
+        {
+            "model": model,
+            "tools": agent_tools,
+            "system_prompt": prompt,
+            "backend": backend,
+            "checkpointer": checkpointer,
+            "store": store,
+            "context_schema": CognitionContext,
+            "memory": agent_memory,
+            "skills": agent_skills,
+            "subagents": cast(Any, agent_subagents),
+            "interrupt_on": cast(Any, agent_interrupt_on),
+            "response_format": resolved_response_format,
+            "middleware": agent_middleware,
+        },
+    )
+    if agent_tool_token_limit_before_evict is not None:
+        create_kwargs["tool_token_limit_before_evict"] = agent_tool_token_limit_before_evict
+
+    agent = cast(Any, create_deep_agent)(**create_kwargs)
 
     # Cache the compiled agent
     cache_agent(cache_key, agent)
 
     return agent
+
+
+def _resolve_response_format(response_format: str | type[Any] | None) -> type[Any] | None:
+    """Resolve a dotted response format path to a model class."""
+    if response_format is None or isinstance(response_format, type):
+        return response_format
+
+    module_path, _, attr = response_format.rpartition(".")
+    if not module_path or not attr:
+        raise ValueError("response_format must be a dotted Python path to a Pydantic model class")
+
+    module = importlib.import_module(module_path)
+    resolved = getattr(module, attr)
+    if not isinstance(resolved, type):
+        raise TypeError(f"response_format must resolve to a class, got: {response_format}")
+    return resolved

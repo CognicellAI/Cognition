@@ -468,6 +468,26 @@ class EventBuilder:
         }
 
     @staticmethod
+    def interrupt(
+        tool_call_id: str,
+        tool_name: str,
+        args: dict[str, Any],
+        session_id: str,
+        action_requests: list[dict[str, Any]] | None = None,
+    ) -> dict:
+        """Create an interrupt event for HITL approval."""
+        return {
+            "event": "interrupt",
+            "data": {
+                "tool_call_id": tool_call_id,
+                "tool_name": tool_name,
+                "args": args,
+                "session_id": session_id,
+                "action_requests": action_requests or [],
+            },
+        }
+
+    @staticmethod
     def status(status: str) -> dict:
         """Create a status update event."""
         return {"event": "status", "data": {"status": status}}

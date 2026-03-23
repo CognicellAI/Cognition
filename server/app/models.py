@@ -20,6 +20,7 @@ class SessionStatus(StrEnum):
     ACTIVE = "active"
     INACTIVE = "inactive"
     ERROR = "error"
+    WAITING_FOR_APPROVAL = "waiting_for_approval"
 
 
 class PromptConfig(BaseModel):
@@ -111,6 +112,7 @@ class SessionConfig(BaseModel):
     temperature: float | None = None
     max_tokens: int | None = None
     recursion_limit: int | None = None
+    response_format: str | None = None
     system_prompt: str | None = None  # Kept for backward compatibility
 
 
@@ -145,6 +147,7 @@ class Session:
                 "temperature": self.config.temperature,
                 "max_tokens": self.config.max_tokens,
                 "recursion_limit": self.config.recursion_limit,
+                "response_format": self.config.response_format,
                 "system_prompt": self.config.system_prompt,
             },
             "created_at": self.created_at,
@@ -171,6 +174,7 @@ class Session:
                 temperature=config_data.get("temperature"),
                 max_tokens=config_data.get("max_tokens"),
                 recursion_limit=config_data.get("recursion_limit"),
+                response_format=config_data.get("response_format"),
                 system_prompt=config_data.get("system_prompt"),
             ),
             created_at=data["created_at"],
