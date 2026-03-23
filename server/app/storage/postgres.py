@@ -22,6 +22,7 @@ from langgraph.store.postgres.aio import AsyncPostgresStore
 
 from server.app.models import Message, Session, SessionConfig, SessionStatus, ToolCall
 from server.app.storage.backend import StorageBackend
+from server.app.storage.message_projection import project_checkpoint_messages
 
 logger = structlog.get_logger(__name__)
 
@@ -449,6 +450,55 @@ class PostgresStorageBackend:
         )
 
         return message
+
+    async def rebuild_message_projection(
+        self,
+        session_id: str,
+        thread_id: str,
+        checkpoint_messages: list[Any],
+    ) -> int:
+        """Rebuild API message projection from authoritative checkpoint messages."""
+        del thread_id
+
+        projected_messages = project_checkpoint_messages(session_id, checkpoint_messages)
+
+        async with self._pool.acquire() as conn:
+            async with conn.transaction():
+                await conn.execute("DELETE FROM messages WHERE session_id = $1", session_id)
+                for message in projected_messages:
+                    await conn.execute(
+                        """
+                        INSERT INTO messages (id, session_id, role, content, parent_id, tool_calls, tool_call_id, token_count, model_used, metadata, created_at)
+                        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+                        """,
+                        message.id,
+                        message.session_id,
+                        message.role,
+                        message.content,
+                        message.parent_id,
+                        json.dumps(
+                            [
+                                {"name": tc.name, "args": tc.args, "id": tc.id}
+                                for tc in message.tool_calls
+                            ]
+                        )
+                        if message.tool_calls
+                        else None,
+                        message.tool_call_id,
+                        message.token_count,
+                        message.model_used,
+                        json.dumps(message.metadata) if message.metadata else None,
+                        message.created_at,
+                    )
+
+                await conn.execute(
+                    "UPDATE sessions SET message_count = $1, updated_at = $2 WHERE id = $3",
+                    len(projected_messages),
+                    datetime.now(UTC),
+                    session_id,
+                )
+
+        return len(projected_messages)
 
     async def get_message(self, message_id: str) -> Message | None:
         """Get a message by ID."""

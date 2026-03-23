@@ -20,6 +20,7 @@ from langgraph.store.sqlite.aio import AsyncSqliteStore
 
 from server.app.models import Message, Session, SessionConfig, SessionStatus, ToolCall
 from server.app.storage.backend import StorageBackend
+from server.app.storage.message_projection import project_checkpoint_messages
 
 logger = structlog.get_logger(__name__)
 
@@ -432,6 +433,56 @@ class SqliteStorageBackend:
                 async for row in cursor:
                     messages.append(self._row_to_message(row))
         return messages
+
+    async def rebuild_message_projection(
+        self,
+        session_id: str,
+        thread_id: str,
+        checkpoint_messages: list[Any],
+    ) -> int:
+        """Rebuild API message projection from authoritative checkpoint messages."""
+        del thread_id
+
+        projected_messages = project_checkpoint_messages(session_id, checkpoint_messages)
+
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute("DELETE FROM messages WHERE session_id = ?", (session_id,))
+            for message in projected_messages:
+                await db.execute(
+                    """
+                    INSERT INTO messages (id, session_id, role, content, parent_id, created_at, tool_calls, tool_call_id, token_count, model_used, metadata)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        message.id,
+                        message.session_id,
+                        message.role,
+                        message.content,
+                        message.parent_id,
+                        message.created_at.isoformat(),
+                        json.dumps(
+                            [
+                                {"name": tc.name, "args": tc.args, "id": tc.id}
+                                for tc in message.tool_calls
+                            ]
+                        )
+                        if message.tool_calls
+                        else None,
+                        message.tool_call_id,
+                        message.token_count,
+                        message.model_used,
+                        json.dumps(message.metadata) if message.metadata else None,
+                    ),
+                )
+
+            now = datetime.now(UTC).isoformat()
+            await db.execute(
+                "UPDATE sessions SET message_count = ?, updated_at = ? WHERE id = ?",
+                (len(projected_messages), now, session_id),
+            )
+            await db.commit()
+
+        return len(projected_messages)
 
     async def delete_messages_for_session(self, session_id: str) -> int:
         """Delete all messages for a session."""

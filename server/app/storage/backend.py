@@ -3,6 +3,17 @@
 Defines the unified storage interface that all backends must implement.
 This protocol combines session storage, message storage, and checkpoint
 persistence into a single cohesive interface.
+
+Message persistence follows an explicit split of responsibilities:
+
+- LangGraph checkpoint state is the authoritative record for agent/runtime state.
+- The custom ``messages`` table is a read-optimized projection used by Cognition's
+  REST API for pagination, timestamps, threading metadata, and per-message
+  attributes like token usage.
+
+Backends therefore support both normal message writes and projection
+reconciliation from checkpoint state when the projection drifts or must be
+rebuilt after an interrupted write path.
 """
 
 from __future__ import annotations
@@ -99,7 +110,13 @@ class SessionStore(Protocol):
 
 @runtime_checkable
 class MessageStore(Protocol):
-    """Protocol for message storage operations."""
+    """Protocol for message projection storage operations.
+
+    The message store is not the source of truth for runtime conversation state.
+    It is a read-optimized projection used for API queries. Implementations must
+    therefore support rebuilding the projection from LangGraph checkpoint state
+    for a given session/thread.
+    """
 
     async def create_message(
         self,
@@ -178,6 +195,24 @@ class MessageStore(Protocol):
 
         Returns:
             Number of messages deleted.
+        """
+        ...
+
+    async def rebuild_message_projection(
+        self,
+        session_id: str,
+        thread_id: str,
+        checkpoint_messages: list[Any],
+    ) -> int:
+        """Rebuild the message projection for a session from checkpoint state.
+
+        Args:
+            session_id: Session whose projection should be reconciled.
+            thread_id: LangGraph thread identifier for documentation/debugging.
+            checkpoint_messages: Message list from authoritative checkpoint state.
+
+        Returns:
+            Number of projected messages written.
         """
         ...
 
@@ -299,6 +334,15 @@ class StorageBackend(Protocol):
 
     async def delete_messages_for_session(self, session_id: str) -> int:
         """Delete all messages for a session."""
+        ...
+
+    async def rebuild_message_projection(
+        self,
+        session_id: str,
+        thread_id: str,
+        checkpoint_messages: list[Any],
+    ) -> int:
+        """Rebuild the message projection for a session from checkpoint state."""
         ...
 
     # Checkpointer operations

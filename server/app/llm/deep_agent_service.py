@@ -829,6 +829,28 @@ class DeepAgentStreamingService:
             logger.error("DeepAgents resume error", error=str(e), session_id=session_id)
             yield ErrorEvent(message=str(e), code="RESUME_ERROR")
 
+    async def rebuild_message_projection(
+        self,
+        session_id: str,
+        thread_id: str,
+    ) -> int:
+        """Rebuild the API message projection from authoritative checkpoint state."""
+        checkpointer = await self.storage_backend.get_checkpointer()
+        checkpoint = await checkpointer.aget({"configurable": {"thread_id": thread_id}})
+        if checkpoint is None:
+            return 0
+
+        checkpoint_messages = checkpoint.get("channel_values", {}).get("messages", [])
+        if not isinstance(checkpoint_messages, list):
+            return 0
+
+        rebuilt_count = await self.storage_backend.rebuild_message_projection(
+            session_id=session_id,
+            thread_id=thread_id,
+            checkpoint_messages=checkpoint_messages,
+        )
+        return int(rebuilt_count)
+
     async def _resolve_provider_config(
         self,
         session: Any,

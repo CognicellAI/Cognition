@@ -5,6 +5,12 @@ REST endpoints for sending messages and receiving SSE streams.
 Git-Style Workspace Model:
   The server's current working directory (CWD) is the workspace.
   All messages are scoped to the server's workspace.
+
+Persistence contract:
+  LangGraph checkpoint state is authoritative for runtime conversation state.
+  The custom ``messages`` table is a read-optimized projection used by the API.
+  This route still performs the normal projection writes, but backends may
+  rebuild that projection from checkpoint state if the projection drifts.
 """
 
 from __future__ import annotations
