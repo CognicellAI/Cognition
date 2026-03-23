@@ -18,10 +18,10 @@ Architecture:
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Protocol, runtime_checkable
+from typing import Any, Protocol, cast, runtime_checkable
 
 import structlog
 
@@ -29,6 +29,8 @@ logger = structlog.get_logger(__name__)
 
 from langchain_core.messages import AIMessageChunk, ToolMessage
 from langgraph.checkpoint.base import BaseCheckpointSaver
+from langgraph.errors import GraphInterrupt
+from langgraph.types import Command
 
 from server.app.agent.cognition_agent import create_cognition_agent
 from server.app.agent.definition import AgentDefinition
@@ -187,6 +189,17 @@ class StepCompleteEvent(AgentEvent):
 
 
 @dataclass
+class InterruptEvent(AgentEvent):
+    """Deep Agents is waiting for human approval before executing a tool."""
+
+    tool_call_id: str
+    tool_name: str
+    args: dict[str, Any]
+    session_id: str | None = None
+    action_requests: list[dict[str, Any]] = field(default_factory=list)
+
+
+@dataclass
 class DelegationEvent(AgentEvent):
     """Agent is delegating to a sub-agent."""
 
@@ -206,8 +219,130 @@ StreamEvent = (
     | UsageEvent
     | PlanningEvent
     | StepCompleteEvent
+    | InterruptEvent
     | DelegationEvent
 )
+
+
+def _normalize_todo_item(item: Any) -> dict[str, Any]:
+    """Normalize a Deep Agents todo item to a dict for SSE/state diffing."""
+    if hasattr(item, "model_dump"):
+        data = item.model_dump()
+    elif isinstance(item, Mapping):
+        data = dict(item)
+    else:
+        data = {"content": str(item)}
+
+    if "content" not in data and "task" in data:
+        data["content"] = data["task"]
+    return cast(dict[str, Any], data)
+
+
+def _extract_todos_from_update(update: Any) -> list[dict[str, Any]] | None:
+    """Extract todo state from a LangGraph updates-mode chunk."""
+    if not isinstance(update, Mapping):
+        return None
+
+    for state_update in update.values():
+        if not isinstance(state_update, Mapping):
+            continue
+        todos = state_update.get("todos")
+        if isinstance(todos, list):
+            return [_normalize_todo_item(todo) for todo in todos]
+    return None
+
+
+def _extract_interrupt_requests_from_update(update: Any) -> list[dict[str, Any]] | None:
+    """Extract interrupt action requests from updates/value chunks."""
+    if not isinstance(update, Mapping):
+        return None
+
+    interrupts = update.get("__interrupt__")
+    if not isinstance(interrupts, tuple | list):
+        return None
+
+    requests: list[dict[str, Any]] = []
+    for interrupt in interrupts:
+        value = getattr(interrupt, "value", interrupt)
+        if not isinstance(value, Mapping):
+            continue
+        action_requests = value.get("action_requests")
+        review_configs = value.get("review_configs") or []
+        if not isinstance(action_requests, list):
+            continue
+        for idx, action_request in enumerate(action_requests):
+            if not isinstance(action_request, Mapping):
+                continue
+            request = dict(action_request)
+            request["id"] = getattr(interrupt, "id", None)
+            review_config = review_configs[idx] if idx < len(review_configs) else None
+            if isinstance(review_config, Mapping):
+                request["review_config"] = dict(review_config)
+            requests.append(request)
+    return requests or None
+
+
+def _todo_description(todo: Mapping[str, Any]) -> str:
+    """Return the human-readable todo description."""
+    content = todo.get("content") or todo.get("task") or todo.get("description")
+    return str(content) if content is not None else ""
+
+
+def _todo_is_completed(todo: Mapping[str, Any]) -> bool:
+    """Return whether a todo is completed."""
+    status = todo.get("status")
+    if isinstance(status, str):
+        return status == "completed"
+    return bool(todo.get("completed", False))
+
+
+def _completed_step_events(
+    previous_todos: list[dict[str, Any]],
+    current_todos: list[dict[str, Any]],
+) -> list[StepCompleteEvent]:
+    """Diff two todo lists and emit step completion events."""
+    previous_by_description = {
+        _todo_description(todo): _todo_is_completed(todo) for todo in previous_todos
+    }
+    total_steps = len(current_todos)
+    events: list[StepCompleteEvent] = []
+    for index, todo in enumerate(current_todos, start=1):
+        description = _todo_description(todo)
+        if not description:
+            continue
+        is_completed = _todo_is_completed(todo)
+        was_completed = previous_by_description.get(description, False)
+        if is_completed and not was_completed:
+            events.append(
+                StepCompleteEvent(
+                    step_number=index,
+                    total_steps=total_steps,
+                    description=description,
+                )
+            )
+    return events
+
+
+def _extract_interrupt_requests(exc: GraphInterrupt) -> list[dict[str, Any]]:
+    """Extract human-in-the-loop tool approval requests from GraphInterrupt."""
+    requests: list[dict[str, Any]] = []
+    for interrupt in getattr(exc, "interrupts", ()):
+        value = getattr(interrupt, "value", interrupt)
+        if not isinstance(value, Mapping):
+            continue
+        action_requests = value.get("action_requests")
+        review_configs = value.get("review_configs") or []
+        if not isinstance(action_requests, list):
+            continue
+        for idx, action_request in enumerate(action_requests):
+            if not isinstance(action_request, Mapping):
+                continue
+            review_config = review_configs[idx] if idx < len(review_configs) else None
+            request = dict(action_request)
+            if isinstance(review_config, Mapping):
+                request["review_config"] = dict(review_config)
+            requests.append(request)
+    return requests
 
 
 @runtime_checkable
@@ -230,7 +365,7 @@ class AgentRuntime(Protocol):
 
     async def astream_events(
         self,
-        input_data: str | dict[str, Any],
+        input_data: str | dict[str, Any] | Command,
         thread_id: str | None = None,
     ) -> AsyncIterator[AgentEvent]:
         """Stream agent execution events.
@@ -332,9 +467,61 @@ class DeepAgentRuntime:
         self._aborted: set[str] = set()
         self._context = context
 
+    async def resume(
+        self,
+        decision: str,
+        tool_name: str,
+        args: dict[str, Any] | None = None,
+        thread_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Resume an interrupted Deep Agents run using LangGraph Command."""
+        tid = thread_id or self._thread_id or "default"
+        config = {"configurable": {"thread_id": tid}, "recursion_limit": self._recursion_limit}
+
+        resume_decision: dict[str, Any] = {"type": decision}
+        if decision == "edit":
+            resume_decision["edited_action"] = {"name": tool_name, "args": args or {}}
+        elif decision == "reject" and args and isinstance(args.get("message"), str):
+            resume_decision["message"] = args["message"]
+        elif decision != "approve":
+            raise ValueError(f"Unsupported resume decision: {decision}")
+
+        return cast(
+            dict[str, Any],
+            await self._agent.ainvoke(
+                Command(resume={"decisions": [resume_decision]}),
+                config=config,
+                context=self._context,
+            ),
+        )
+
+    async def astream_resume_events(
+        self,
+        decision: str,
+        tool_name: str,
+        args: dict[str, Any] | None = None,
+        thread_id: str | None = None,
+    ) -> AsyncIterator[AgentEvent]:
+        """Stream events while resuming an interrupted Deep Agents run."""
+        tid = thread_id or self._thread_id or "default"
+
+        resume_decision: dict[str, Any] = {"type": decision}
+        if decision == "edit":
+            resume_decision["edited_action"] = {"name": tool_name, "args": args or {}}
+        elif decision == "reject" and args and isinstance(args.get("message"), str):
+            resume_decision["message"] = args["message"]
+        elif decision != "approve":
+            raise ValueError(f"Unsupported resume decision: {decision}")
+
+        async for event in self.astream_events(
+            Command(resume={"decisions": [resume_decision]}),
+            thread_id=tid,
+        ):
+            yield event
+
     async def astream_events(
         self,
-        input_data: str | dict[str, Any],
+        input_data: str | dict[str, Any] | Command,
         thread_id: str | None = None,
     ) -> AsyncIterator[AgentEvent]:
         """Stream agent execution events using the LangGraph v2 astream format.
@@ -378,7 +565,10 @@ class DeepAgentRuntime:
 
         try:
             # Prepare input
-            if isinstance(input_data, str):
+            agent_input: Any
+            if isinstance(input_data, Command):
+                agent_input = input_data
+            elif isinstance(input_data, str):
                 from langchain_core.messages import HumanMessage
 
                 messages = [HumanMessage(content=input_data)]
@@ -397,6 +587,9 @@ class DeepAgentRuntime:
             # per subagent invocation (on first subagent activity), not on every
             # chunk.
             _active_delegations: set[str] = set()
+            previous_todos: list[dict[str, Any]] = []
+            emitted_initial_plan = False
+            interrupt_emitted = False
 
             async for chunk in self._agent.astream(
                 agent_input,
@@ -475,6 +668,34 @@ class DeepAgentRuntime:
                 # Yields {node_name: state_updates} dicts.
                 # Used to detect subagent lifecycle events via namespace.
                 elif chunk_type == "updates":
+                    interrupt_requests = _extract_interrupt_requests_from_update(data)
+                    if interrupt_requests and not interrupt_emitted:
+                        interrupt_emitted = True
+                        first_request = interrupt_requests[0]
+                        action_name = first_request.get("name")
+                        tool_call_id_raw = first_request.get("id")
+                        action_args = first_request.get("args")
+                        tool_call_id_str = (
+                            str(tool_call_id_raw) if tool_call_id_raw is not None else ""
+                        )
+                        yield InterruptEvent(
+                            tool_call_id=tool_call_id_str,
+                            tool_name=str(action_name) if action_name is not None else "unknown",
+                            args=dict(action_args) if isinstance(action_args, Mapping) else {},
+                            action_requests=interrupt_requests,
+                        )
+                        yield StatusEvent(status="waiting_for_approval")
+                        return
+
+                    todos = _extract_todos_from_update(data)
+                    if todos is not None:
+                        if todos and not emitted_initial_plan:
+                            emitted_initial_plan = True
+                            yield PlanningEvent(todos=todos)
+                        for step_event in _completed_step_events(previous_todos, todos):
+                            yield step_event
+                        previous_todos = todos
+
                     is_subagent = any(s.startswith("tools:") for s in ns)
 
                     if is_subagent:
@@ -505,6 +726,28 @@ class DeepAgentRuntime:
                             yield StatusEvent(status=status)
 
             yield DoneEvent()
+
+        except GraphInterrupt as interrupt_exc:
+            interrupt_requests = _extract_interrupt_requests(interrupt_exc)
+            if interrupt_requests:
+                first_request = interrupt_requests[0]
+                tool_call = first_request.get("action", {})
+                tool_args = tool_call.get("args", {}) if isinstance(tool_call, Mapping) else {}
+                yield InterruptEvent(
+                    tool_call_id=str(tool_call.get("id", ""))
+                    if isinstance(tool_call, Mapping)
+                    else "",
+                    tool_name=str(tool_call.get("name", ""))
+                    if isinstance(tool_call, Mapping)
+                    else "",
+                    args=dict(tool_args) if isinstance(tool_args, Mapping) else {},
+                    action_requests=interrupt_requests,
+                )
+                yield StatusEvent(status="waiting_for_approval")
+                return
+            yield ErrorEvent(
+                message="Interrupted without action request metadata", code="INTERRUPT_ERROR"
+            )
 
         except Exception as e:
             yield ErrorEvent(message=str(e), code="RUNTIME_ERROR")
@@ -580,6 +823,7 @@ class DeepAgentRuntime:
                 return {
                     "values": state.values if hasattr(state, "values") else {},
                     "next": state.next if hasattr(state, "next") else [],
+                    "tasks": state.tasks if hasattr(state, "tasks") else [],
                     "thread_id": tid,
                 }
             return None
@@ -652,6 +896,11 @@ def _resolve_middleware(mw_spec: str | dict[str, Any]) -> Any | None:
     }
 
     try:
+        if name == "summarization_tool":
+            from deepagents.middleware.summarization import create_summarization_tool_middleware
+
+            return create_summarization_tool_middleware(**kwargs)
+
         if name in upstream_middleware:
             # Import upstream middleware
             module_path, class_name = upstream_middleware[name]
@@ -813,6 +1062,7 @@ __all__ = [
     "ErrorEvent",
     "StepCompleteEvent",
     "PlanningEvent",
+    "InterruptEvent",
     "UsageEvent",
     "AgentRuntimeType",
 ]

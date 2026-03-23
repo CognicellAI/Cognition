@@ -24,6 +24,7 @@ The documentation is organized into two sections: **Concepts** explain how Cogni
 | Document | Description |
 |---|---|
 | [Getting Started](./guides/getting-started.md) | Install, configure, and send your first message |
+| [Core vs App Layer](./guides/core-vs-app-layer.md) | Builder responsibilities: what belongs in Cognition versus your product |
 | [Configuration](./guides/configuration.md) | Complete reference for all YAML keys and environment variables |
 | [Extending Agents](./guides/extending-agents.md) | Add memory, skills, tools, subagents, middleware, and custom LLM providers |
 | [Deployment](./guides/deployment.md) | Docker Compose stack, PostgreSQL, Alembic migrations, and production hardening |

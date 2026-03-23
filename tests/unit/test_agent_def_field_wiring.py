@@ -256,6 +256,78 @@ class TestInterruptOnWiring:
         assert call_kwargs.get("interrupt_on") is None
 
 
+class TestStructuredOutputAndContextControls:
+    @pytest.mark.asyncio
+    async def test_response_format_passed_to_create_cognition_agent(self):
+        """response_format from AgentDefinition must be forwarded."""
+        from server.app.agent.definition import AgentDefinition
+
+        session = _make_session()
+        mock_runtime = _make_mock_runtime(DoneEvent())
+        patches = _base_patches(mock_runtime, session)
+
+        agent_def = AgentDefinition(
+            name="test-agent",
+            system_prompt="test",
+            response_format="tests.fixtures.schemas.CodeReviewResult",
+        )
+        mock_def_registry = MagicMock()
+        mock_def_registry.get = MagicMock(return_value=agent_def)
+        mock_def_registry.subagents = MagicMock(return_value=[])
+
+        _, create_agent_mock = await _run(patches, session, mock_def_registry=mock_def_registry)
+
+        call_kwargs = create_agent_mock.call_args.kwargs
+        assert call_kwargs.get("response_format") == "tests.fixtures.schemas.CodeReviewResult"
+
+    @pytest.mark.asyncio
+    async def test_session_response_format_overrides_agent_definition(self):
+        """SessionConfig.response_format must take precedence over AgentDefinition."""
+        from server.app.agent.definition import AgentDefinition
+
+        session = _make_session()
+        session.config.response_format = "tests.fixtures.schemas.SessionResult"
+        mock_runtime = _make_mock_runtime(DoneEvent())
+        patches = _base_patches(mock_runtime, session)
+
+        agent_def = AgentDefinition(
+            name="test-agent",
+            system_prompt="test",
+            response_format="tests.fixtures.schemas.AgentResult",
+        )
+        mock_def_registry = MagicMock()
+        mock_def_registry.get = MagicMock(return_value=agent_def)
+        mock_def_registry.subagents = MagicMock(return_value=[])
+
+        _, create_agent_mock = await _run(patches, session, mock_def_registry=mock_def_registry)
+
+        call_kwargs = create_agent_mock.call_args.kwargs
+        assert call_kwargs.get("response_format") == "tests.fixtures.schemas.SessionResult"
+
+    @pytest.mark.asyncio
+    async def test_tool_token_limit_before_evict_passed_to_create_cognition_agent(self):
+        """tool_token_limit_before_evict from AgentConfig must be forwarded."""
+        from server.app.agent.definition import AgentConfig, AgentDefinition
+
+        session = _make_session()
+        mock_runtime = _make_mock_runtime(DoneEvent())
+        patches = _base_patches(mock_runtime, session)
+
+        agent_def = AgentDefinition(
+            name="test-agent",
+            system_prompt="test",
+            config=AgentConfig(tool_token_limit_before_evict=12345),
+        )
+        mock_def_registry = MagicMock()
+        mock_def_registry.get = MagicMock(return_value=agent_def)
+        mock_def_registry.subagents = MagicMock(return_value=[])
+
+        _, create_agent_mock = await _run(patches, session, mock_def_registry=mock_def_registry)
+
+        call_kwargs = create_agent_mock.call_args.kwargs
+        assert call_kwargs.get("tool_token_limit_before_evict") == 12345
+
+
 # ---------------------------------------------------------------------------
 # middleware wiring
 # ---------------------------------------------------------------------------

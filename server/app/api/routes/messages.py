@@ -29,6 +29,7 @@ from server.app.llm.deep_agent_service import (
     DelegationEvent,
     DoneEvent,
     ErrorEvent,
+    InterruptEvent,
     PlanningEvent,
     SessionAgentManager,
     StatusEvent,
@@ -39,6 +40,7 @@ from server.app.llm.deep_agent_service import (
     UsageEvent,
     get_session_agent_manager,
 )
+from server.app.models import SessionStatus
 from server.app.rate_limiter import RateLimiter, get_rate_limiter
 from server.app.settings import Settings, get_settings
 from server.app.storage import get_storage_backend
@@ -166,6 +168,19 @@ async def agent_event_stream(
                     description=event.description,
                 )
 
+            elif isinstance(event, InterruptEvent):
+                await store.update_session(
+                    session_id=session_id,
+                    status=SessionStatus.WAITING_FOR_APPROVAL.value,
+                )
+                yield EventBuilder.interrupt(
+                    tool_call_id=event.tool_call_id,
+                    tool_name=event.tool_name,
+                    args=event.args,
+                    session_id=session_id,
+                    action_requests=event.action_requests,
+                )
+
             elif isinstance(event, DelegationEvent):
                 # ISSUE-010: Emit delegation event for UI visibility
                 yield EventBuilder.delegation(
@@ -193,6 +208,7 @@ async def agent_event_stream(
                 )
 
             elif isinstance(event, DoneEvent):
+                await store.update_session(session_id=session_id, status=SessionStatus.ACTIVE.value)
                 # ISSUE-019: Generate message_id upfront and include in done event
                 # This allows clients to correlate with persisted message without extra API call
                 message_id = event.message_id or str(uuid.uuid4())
@@ -206,6 +222,7 @@ async def agent_event_stream(
                 yield EventBuilder.done(assistant_data=assistant_data, message_id=message_id)
 
             elif isinstance(event, ErrorEvent):
+                await store.update_session(session_id=session_id, status=SessionStatus.ERROR.value)
                 yield EventBuilder.error(event.message, code=event.code)
 
     except Exception as e:

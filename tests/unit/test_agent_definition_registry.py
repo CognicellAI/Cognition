@@ -94,6 +94,7 @@ class TestAgentDefinitionRegistryBuiltins:
 
         assert "default" in names
         assert "readonly" in names
+        assert "hitl_test" in names
 
 
 class TestAgentDefinitionRegistryUserAgents:
@@ -224,9 +225,10 @@ You are a markdown test agent. Your job is to test things.
         registry = AgentDefinitionRegistry(tmp_path)
 
         # Built-ins should be present
-        assert len(registry.get_all()) == 2
+        assert len(registry.get_all()) == 3
         assert registry.get("default") is not None
         assert registry.get("readonly") is not None
+        assert registry.get("hitl_test") is not None
 
     def test_multiple_user_agents_loaded(self, tmp_path: Path):
         """Multiple user agents are loaded from different files."""
@@ -241,8 +243,8 @@ You are a markdown test agent. Your job is to test things.
 
         registry = AgentDefinitionRegistry(tmp_path)
 
-        # Should have 2 built-ins + 3 user agents
-        assert len(registry.get_all()) == 5
+        # Should have 3 built-ins + 3 user agents
+        assert len(registry.get_all()) == 6
         for i in range(3):
             assert registry.get(f"agent-{i}") is not None
 
@@ -280,8 +282,8 @@ class TestAgentDefinitionRegistryLookup:
         visible_list = registry.get_all(include_hidden=False)
         full_list = registry.get_all(include_hidden=True)
 
-        assert len(visible_list) == 3  # 2 built-ins + visible
-        assert len(full_list) == 4  # 2 built-ins + visible + hidden
+        assert len(visible_list) == 4  # 3 built-ins + visible
+        assert len(full_list) == 5  # 3 built-ins + visible + hidden
 
         visible_names = [a.name for a in visible_list]
         assert "hidden" not in visible_names
@@ -467,7 +469,7 @@ class TestAgentDefinitionRegistryReload:
         registry = AgentDefinitionRegistry(tmp_path)
 
         # Initially no user agents
-        assert len(registry.get_all()) == 2
+        assert len(registry.get_all()) == 3
         assert registry.get("new-agent") is None
 
         # Add new file
@@ -510,6 +512,7 @@ class TestAgentDefinitionRegistryReload:
         # Remove built-ins from internal dict (simulating corruption)
         del registry._agents["default"]
         del registry._agents["readonly"]
+        del registry._agents["hitl_test"]
 
         assert registry.get("default") is None
 
@@ -519,6 +522,7 @@ class TestAgentDefinitionRegistryReload:
         # Built-ins should be back
         assert registry.get("default") is not None
         assert registry.get("readonly") is not None
+        assert registry.get("hitl_test") is not None
 
 
 class TestAgentDefinitionToSubagent:

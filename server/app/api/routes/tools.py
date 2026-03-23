@@ -5,7 +5,7 @@ from typing import Any
 from fastapi import APIRouter, HTTPException
 
 from server.app.agent_registry import get_agent_registry
-from server.app.api.models import ToolCreate, ToolList, ToolResponse
+from server.app.api.models import ToolCreate, ToolList, ToolResponse, ToolUpdate
 
 router = APIRouter(prefix="/tools", tags=["tools"])
 
@@ -33,6 +33,7 @@ async def list_tools() -> ToolList:
                     module=t.module,
                     description=None,
                     enabled=True,
+                    interrupt_on=False,
                 )
             )
     except RuntimeError:
@@ -57,6 +58,7 @@ async def list_tools() -> ToolList:
                     module=ct.path,
                     description=ct.description,
                     enabled=ct.enabled,
+                    interrupt_on=ct.interrupt_on,
                 )
             )
     except RuntimeError:
@@ -133,6 +135,7 @@ async def register_tool(body: ToolCreate) -> ToolResponse:
             code=body.code,
             enabled=body.enabled,
             description=body.description,
+            interrupt_on=body.interrupt_on,
             scope=body.scope,
             source="api",
         )
@@ -146,6 +149,7 @@ async def register_tool(body: ToolCreate) -> ToolResponse:
             module=tool.path,
             description=tool.description,
             enabled=tool.enabled,
+            interrupt_on=tool.interrupt_on,
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e)) from e
@@ -185,6 +189,7 @@ async def get_tool(name: str) -> ToolResponse:
                 module=tool.module,
                 description=None,
                 enabled=True,
+                interrupt_on=False,
             )
     except RuntimeError:
         pass
@@ -204,8 +209,50 @@ async def get_tool(name: str) -> ToolResponse:
                 module=api_tool.path,
                 description=api_tool.description,
                 enabled=api_tool.enabled,
+                interrupt_on=api_tool.interrupt_on,
             )
     except RuntimeError:
         pass
 
     raise HTTPException(status_code=404, detail=f"Tool '{name}' not found")
+
+
+@router.patch("/{name}", response_model=ToolResponse)
+async def update_tool(name: str, body: ToolUpdate) -> ToolResponse:
+    """Partially update an API-registered tool in the ConfigRegistry."""
+    try:
+        from server.app.storage.config_models import ToolRegistration
+        from server.app.storage.config_registry import get_config_registry
+
+        reg = get_config_registry()
+        existing = await reg.get_tool(name)
+        if existing is None:
+            raise HTTPException(status_code=404, detail=f"Tool '{name}' not found")
+
+        updates = body.model_dump(exclude_none=True)
+        tool = ToolRegistration(
+            name=existing.name,
+            path=updates.get("path", existing.path),
+            code=updates.get("code", existing.code),
+            enabled=updates.get("enabled", existing.enabled),
+            description=updates.get("description", existing.description),
+            interrupt_on=updates.get("interrupt_on", existing.interrupt_on),
+            scope=existing.scope,
+            source=existing.source,
+        )
+        await reg.upsert_tool(tool)
+
+        source_type = "api_code" if tool.code else "api_path"
+        return ToolResponse(
+            name=tool.name,
+            source_type=source_type,
+            source=source_type,
+            module=tool.path,
+            description=tool.description,
+            enabled=tool.enabled,
+            interrupt_on=tool.interrupt_on,
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e)) from e

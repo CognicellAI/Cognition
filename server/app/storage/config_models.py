@@ -55,6 +55,7 @@ class ProviderConfig(BaseModel):
     enabled: bool = Field(default=True)
     priority: int = Field(default=0)
     max_retries: int = Field(default=2, ge=0)
+    timeout: int | None = Field(default=None, gt=0)
 
     # Credential references — env var names only, not values
     api_key_env: str | None = Field(
@@ -116,6 +117,10 @@ class ToolRegistration(BaseModel):
     code: str | None = Field(default=None)
     enabled: bool = Field(default=True)
     description: str | None = Field(default=None)
+    interrupt_on: bool = Field(
+        default=False,
+        description="Whether this tool should require human approval when used by agents that inherit tool-level interrupt defaults.",
+    )
     scope: dict[str, str] = Field(default_factory=dict)
     source: Literal["file", "api"] = Field(default="file")
 
@@ -310,6 +315,8 @@ class GlobalAgentDefaults(BaseModel):
     skills: list[str] = Field(default_factory=lambda: [".cognition/skills/"])
     subagents: list[dict[str, Any]] = Field(default_factory=list)
     interrupt_on: dict[str, bool] = Field(default_factory=dict)
+    response_format: str | None = Field(default=None)
+    tool_token_limit_before_evict: int | None = Field(default=None, gt=0)
     recursion_limit: int = Field(default=1000, gt=0)
     mcp_servers: dict[str, Any] = Field(default_factory=dict)
 

@@ -28,6 +28,7 @@ from server.app.agent.runtime import (
     DelegationEvent,
     DoneEvent,
     ErrorEvent,
+    InterruptEvent,
     PlanningEvent,
     StatusEvent,
     StepCompleteEvent,  # noqa: F401 — re-exported for consumers of this module
@@ -160,6 +161,8 @@ def _build_model(
     role_arn: str | None,
     settings: Settings,
     temperature: float | None = None,
+    max_retries: int | None = None,
+    timeout: int | None = None,
 ) -> BaseChatModel:
     """Build a LangChain BaseChatModel from resolved provider config.
 
@@ -203,6 +206,10 @@ def _build_model(
                 kwargs["base_url"] = base_url or settings.openai_api_base
             if temperature is not None:
                 kwargs["temperature"] = temperature
+            if max_retries is not None:
+                kwargs["max_retries"] = max_retries
+            if timeout is not None:
+                kwargs["timeout"] = timeout
             return cast(BaseChatModel, init_chat_model(model_id, **kwargs))
 
         elif provider == "anthropic":
@@ -211,6 +218,10 @@ def _build_model(
                 kwargs["api_key"] = api_key
             if temperature is not None:
                 kwargs["temperature"] = temperature
+            if max_retries is not None:
+                kwargs["max_retries"] = max_retries
+            if timeout is not None:
+                kwargs["timeout"] = timeout
             return cast(BaseChatModel, init_chat_model(model_id, **kwargs))
 
         elif provider == "bedrock":
@@ -220,6 +231,8 @@ def _build_model(
                 role_arn=role_arn,
                 settings=settings,
                 temperature=temperature,
+                max_retries=max_retries,
+                timeout=timeout,
             )
 
         elif provider == "openai_compatible":
@@ -244,6 +257,10 @@ def _build_model(
             }
             if temperature is not None:
                 compat_kwargs["temperature"] = temperature
+            if max_retries is not None:
+                compat_kwargs["max_retries"] = max_retries
+            if timeout is not None:
+                compat_kwargs["timeout"] = timeout
             return cast(BaseChatModel, init_chat_model(model_id, **compat_kwargs))
 
         elif provider == "google_genai":
@@ -252,12 +269,20 @@ def _build_model(
                 kwargs["api_key"] = api_key
             if temperature is not None:
                 kwargs["temperature"] = temperature
+            if max_retries is not None:
+                kwargs["max_retries"] = max_retries
+            if timeout is not None:
+                kwargs["timeout"] = timeout
             return cast(BaseChatModel, init_chat_model(model_id, **kwargs))
 
         elif provider == "google_vertexai":
             kwargs = {"model_provider": "google_vertexai"}
             if temperature is not None:
                 kwargs["temperature"] = temperature
+            if max_retries is not None:
+                kwargs["max_retries"] = max_retries
+            if timeout is not None:
+                kwargs["timeout"] = timeout
             return cast(BaseChatModel, init_chat_model(model_id, **kwargs))
 
         else:
@@ -285,6 +310,8 @@ def _build_bedrock_model(
     role_arn: str | None,
     settings: Settings,
     temperature: float | None = None,
+    max_retries: int | None = None,
+    timeout: int | None = None,
 ) -> BaseChatModel:
     """Build a ChatBedrock model, optionally assuming an IAM role via STS.
 
@@ -309,7 +336,13 @@ def _build_bedrock_model(
     from langchain_aws import ChatBedrock
 
     resolved_region = region or settings.aws_region
-    botocore_config = Config(read_timeout=120, connect_timeout=10)
+    botocore_config = Config(
+        read_timeout=timeout or 120,
+        connect_timeout=10,
+        retries={"max_attempts": max_retries + 1, "mode": "standard"}
+        if max_retries is not None
+        else None,
+    )
 
     kwargs: dict[str, Any] = {
         "model_id": model_id,
@@ -426,6 +459,8 @@ class DeepAgentStreamingService:
             agent_memory: list[str] | None = None
             agent_interrupt_on: dict[str, Any] | None = None
             agent_middleware: list[Any] | None = None
+            agent_response_format: str | None = None
+            agent_tool_token_limit_before_evict: int | None = None
             agent_def = None
 
             if registry and session:
@@ -467,6 +502,14 @@ class DeepAgentStreamingService:
                         # interrupt_on — per-agent HITL tool approval config
                         if agent_def.interrupt_on:
                             agent_interrupt_on = dict(agent_def.interrupt_on)
+
+                        if agent_def.response_format:
+                            agent_response_format = agent_def.response_format
+
+                        if agent_def.config.tool_token_limit_before_evict is not None:
+                            agent_tool_token_limit_before_evict = (
+                                agent_def.config.tool_token_limit_before_evict
+                            )
 
                         # middleware — resolve declarative names to middleware instances
                         if agent_def.middleware:
@@ -527,6 +570,11 @@ class DeepAgentStreamingService:
                 subagents=subagents,
                 memory=agent_memory,
                 interrupt_on=agent_interrupt_on,
+                response_format=(
+                    session.config.response_format if session and session.config else None
+                )
+                or agent_response_format,
+                tool_token_limit_before_evict=agent_tool_token_limit_before_evict,
                 middleware=agent_middleware,
                 mcp_configs=mcp_configs or None,
                 scope=scope,
@@ -570,9 +618,11 @@ class DeepAgentStreamingService:
                         yield event
 
                     elif isinstance(event, PlanningEvent) or isinstance(
-                        event, (DelegationEvent, StatusEvent)
+                        event, (DelegationEvent, StatusEvent, StepCompleteEvent, InterruptEvent)
                     ):
                         yield event
+                        if isinstance(event, InterruptEvent):
+                            return
 
                     elif isinstance(event, ErrorEvent):
                         yield event
@@ -605,12 +655,188 @@ class DeepAgentStreamingService:
             logger.error("DeepAgents streaming error", error=str(e), session_id=session_id)
             yield ErrorEvent(message=str(e), code="STREAMING_ERROR")
 
+    async def resume_response(
+        self,
+        session_id: str,
+        thread_id: str,
+        project_path: str,
+        decision: str,
+        tool_name: str,
+        args: dict[str, Any] | None = None,
+        scope: dict[str, str] | None = None,
+    ) -> AsyncGenerator[StreamEvent, None]:
+        """Resume an interrupted Deep Agents run from persisted checkpoint state."""
+        try:
+            storage = get_storage_backend()
+            session = await storage.get_session(session_id)
+            if session is None:
+                yield ErrorEvent(message=f"Session not found: {session_id}", code="NOT_FOUND")
+                return
+
+            custom_tools: list[Any] = []
+            registry = None
+            try:
+                from server.app.agent_registry import get_agent_registry
+
+                registry = get_agent_registry()
+                custom_tools = registry.create_tools()
+            except RuntimeError:
+                pass
+            except Exception:
+                logger.warning(
+                    "Failed to load custom tools from agent registry for resume",
+                    exc_info=True,
+                )
+
+            subagents: list[Any] = []
+            agent_skills: list[str] = []
+            agent_memory: list[str] | None = None
+            agent_interrupt_on: dict[str, Any] | None = None
+            agent_middleware: list[Any] | None = None
+            agent_response_format: str | None = None
+            agent_tool_token_limit_before_evict: int | None = None
+            agent_def = None
+            system_prompt: str | None = None
+
+            if registry:
+                from server.app.agent.agent_definition_registry import get_agent_definition_registry
+
+                def_registry = get_agent_definition_registry()
+                if def_registry:
+                    agent_def = def_registry.get(session.agent_name) or def_registry.get("default")
+                    if agent_def:
+                        system_prompt = agent_def.system_prompt
+                        if agent_def.skills:
+                            agent_skills = list(agent_def.skills)
+                        if "/skills/api/" not in agent_skills:
+                            agent_skills.append("/skills/api/")
+                        all_subagents = def_registry.subagents()
+                        subagents = [
+                            s.to_subagent() for s in all_subagents if s.name != agent_def.name
+                        ]
+                        if agent_def.memory:
+                            agent_memory = list(agent_def.memory)
+                        if agent_def.interrupt_on:
+                            agent_interrupt_on = dict(agent_def.interrupt_on)
+                        if agent_def.response_format:
+                            agent_response_format = agent_def.response_format
+                        if agent_def.config.tool_token_limit_before_evict is not None:
+                            agent_tool_token_limit_before_evict = (
+                                agent_def.config.tool_token_limit_before_evict
+                            )
+                        if agent_def.middleware:
+                            agent_middleware = _resolve_middleware(agent_def.middleware)
+                        if agent_def.tools:
+                            agent_def_tools = agent_def._resolve_tools(base_path=project_path)
+                            if agent_def_tools:
+                                custom_tools = list(custom_tools) + agent_def_tools
+
+            model, provider, model_id, recursion_limit = await self._resolve_model(
+                session=session, scope=scope, agent_def=agent_def
+            )
+            checkpointer = await self.storage_backend.get_checkpointer()
+            config_registry_tools = await _load_config_registry_tools(scope=scope)
+            if config_registry_tools:
+                custom_tools = list(custom_tools) + config_registry_tools
+            store = await self.storage_backend.get_store()
+
+            from server.app.agent.cognition_agent import CognitionContext
+
+            invocation_context = CognitionContext.from_scope(
+                session.scopes if hasattr(session, "scopes") else scope
+            )
+            mcp_configs = await self._resolve_mcp_configs(scope=scope)
+
+            agent = await create_cognition_agent(
+                project_path=project_path,
+                model=model,
+                store=store,
+                checkpointer=checkpointer,
+                settings=self.settings,
+                tools=custom_tools if custom_tools else None,
+                system_prompt=system_prompt,
+                skills=agent_skills if agent_skills else None,
+                subagents=subagents,
+                memory=agent_memory,
+                interrupt_on=agent_interrupt_on,
+                response_format=(session.config.response_format if session.config else None)
+                or agent_response_format,
+                tool_token_limit_before_evict=agent_tool_token_limit_before_evict,
+                middleware=agent_middleware,
+                mcp_configs=mcp_configs or None,
+                scope=scope,
+            )
+
+            resume_decision: dict[str, Any] = {"type": decision}
+            if decision == "edit":
+                resume_decision["edited_action"] = {
+                    "name": tool_name,
+                    "args": args or {},
+                }
+
+            runtime = DeepAgentRuntime(
+                agent=agent,
+                checkpointer=checkpointer,
+                thread_id=thread_id,
+                recursion_limit=recursion_limit,
+                context=invocation_context,
+            )
+
+            output_tokens = 0
+            async for event in runtime.astream_resume_events(
+                decision=decision,
+                tool_name=tool_name,
+                args=args,
+                thread_id=thread_id,
+            ):
+                if isinstance(event, TokenEvent):
+                    output_tokens += len(event.content.split())
+                if isinstance(event, InterruptEvent):
+                    continue
+                if isinstance(event, DoneEvent):
+                    continue
+                if isinstance(
+                    event,
+                    (
+                        TokenEvent,
+                        ToolCallEvent,
+                        ToolResultEvent,
+                        StatusEvent,
+                        ErrorEvent,
+                        UsageEvent,
+                        PlanningEvent,
+                        StepCompleteEvent,
+                        DelegationEvent,
+                    ),
+                ):
+                    yield cast(StreamEvent, event)
+
+            yield UsageEvent(
+                input_tokens=0,
+                output_tokens=output_tokens,
+                estimated_cost=self._estimate_cost(0, output_tokens, provider),
+                provider=provider,
+                model=model_id,
+            )
+            yield DoneEvent()
+
+        except LLMProviderConfigError as e:
+            logger.error(
+                "Provider configuration error on resume", error=str(e), session_id=session_id
+            )
+            yield ErrorEvent(message=str(e), code="PROVIDER_CONFIG_ERROR")
+        except Exception as e:
+            logger.error("DeepAgents resume error", error=str(e), session_id=session_id)
+            yield ErrorEvent(message=str(e), code="RESUME_ERROR")
+
     async def _resolve_provider_config(
         self,
         session: Any,
         scope: dict[str, str] | None,
         agent_def: Any | None = None,
-    ) -> tuple[str, str, str | None, str | None, str | None, str | None, int]:
+    ) -> tuple[
+        str, str, str | None, str | None, str | None, str | None, int, int | None, int | None
+    ]:
         """Resolve provider configuration from ConfigRegistry.
 
         Priority (highest to lowest):
@@ -623,7 +849,7 @@ class DeepAgentStreamingService:
         session.config > agent_def.config > hardcoded default (1000)
 
         Returns:
-            (provider, model_id, api_key, base_url, region, role_arn, recursion_limit)
+            (provider, model_id, api_key, base_url, region, role_arn, recursion_limit, max_retries, timeout)
 
         Raises:
             LLMProviderConfigError: If no provider can be resolved or the
@@ -679,6 +905,8 @@ class DeepAgentStreamingService:
                     provider_config.region,
                     provider_config.role_arn,
                     recursion_limit,
+                    provider_config.max_retries,
+                    provider_config.timeout,
                 )
             except RuntimeError as exc:
                 raise LLMProviderConfigError(
@@ -703,7 +931,7 @@ class DeepAgentStreamingService:
                 provider=prov,
                 model=mod,
             )
-            return prov, mod, None, None, None, None, recursion_limit
+            return prov, mod, None, None, None, None, recursion_limit, None, None
 
         # 3. Individual ProviderConfig entries from ConfigRegistry.
         #    Unscoped providers (scope={}) are visible to all scopes and act as
@@ -755,6 +983,8 @@ class DeepAgentStreamingService:
                     chosen.region,
                     chosen.role_arn,
                     recursion_limit,
+                    chosen.max_retries,
+                    chosen.timeout,
                 )
         except RuntimeError:
             logger.warning("ConfigRegistry not initialized — cannot resolve provider configuration")
@@ -797,6 +1027,8 @@ class DeepAgentStreamingService:
             region,
             role_arn,
             recursion_limit,
+            max_retries,
+            timeout,
         ) = await self._resolve_provider_config(session=session, scope=scope, agent_def=agent_def)
 
         # Guard: refuse to silently use mock in production
@@ -824,6 +1056,8 @@ class DeepAgentStreamingService:
             role_arn=role_arn,
             settings=self.settings,
             temperature=temperature,
+            max_retries=max_retries,
+            timeout=timeout,
         )
 
         # Tool call validation warning — enrichment only, never blocks execution
@@ -966,6 +1200,10 @@ class SessionAgentManager:
     def get_project_path(self, session_id: str) -> str | None:
         """Get the project path for a session."""
         return self._project_paths.get(session_id)
+
+    def get_runtime(self, session_id: str) -> Any | None:
+        """Get the active runtime for a session, if any."""
+        return self._active_runtimes.get(session_id)
 
     def register_runtime(self, session_id: str, runtime: Any) -> None:
         """Register an active runtime for abort tracking."""

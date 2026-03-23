@@ -64,10 +64,11 @@ class TestCreateProvider:
             "enabled": True,
             "priority": 1,
             "max_retries": 3,
+            "timeout": 30,
             "api_key_env": "AWS_ACCESS_KEY_ID",
             "region": "us-east-1",
             "role_arn": "arn:aws:iam::123456789:role/TestRole",
-            "extra": {"timeout": 30},
+            "extra": {},
             "scope": {},
         }
         response = client.post("/models/providers", json=payload)
@@ -76,6 +77,7 @@ class TestCreateProvider:
         assert data["model"] == "claude-3-sonnet"
         assert data["display_name"] == "Claude 3 Sonnet"
         assert data["region"] == "us-east-1"
+        assert data["timeout"] == 30
 
     def test_create_provider_upserts_on_duplicate(self):
         """Creating a provider that already exists overwrites it (upsert semantics)."""

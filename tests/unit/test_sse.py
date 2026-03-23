@@ -425,6 +425,20 @@ class TestEventBuilder:
         assert event["event"] == "status"
         assert event["data"]["status"] == "processing"
 
+    def test_interrupt_event(self) -> None:
+        """Test creating interrupt event."""
+        event = EventBuilder.interrupt(
+            tool_call_id="call-123",
+            tool_name="write_file",
+            args={"path": "foo.py"},
+            session_id="sess-123",
+        )
+        assert event["event"] == "interrupt"
+        assert event["data"]["tool_call_id"] == "call-123"
+        assert event["data"]["tool_name"] == "write_file"
+        assert event["data"]["args"] == {"path": "foo.py"}
+        assert event["data"]["session_id"] == "sess-123"
+
     def test_reconnected_event(self) -> None:
         """Test creating reconnected event."""
         event = EventBuilder.reconnected("event-123")

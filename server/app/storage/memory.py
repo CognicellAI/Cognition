@@ -146,6 +146,9 @@ class MemoryStorageBackend:
                 recursion_limit=config.recursion_limit
                 if config.recursion_limit is not None
                 else existing_config.recursion_limit,
+                response_format=config.response_format
+                if config.response_format is not None
+                else existing_config.response_format,
                 system_prompt=config.system_prompt
                 if config.system_prompt is not None
                 else existing_config.system_prompt,

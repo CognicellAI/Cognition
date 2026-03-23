@@ -194,6 +194,11 @@ The following fallback patterns exist and are tracked for removal. They produce 
 
 | Task | Layer | Status | Acceptance Criteria | Effort | Dependencies |
 |------|-------|--------|---------------------|--------|--------------|
+| **Deep Agents HITL end-to-end (`interrupt` SSE + `POST /sessions/{id}/resume`)** | Layers 4/6 | In Progress | Native `interrupt_on` pauses are surfaced as SSE events; sessions can be resumed via LangGraph `Command(resume=...)`; interrupted sessions expose `waiting_for_approval` status | 1–2 days | P2: astream v2 rewrite |
+| **Emit planning and `step_complete` SSE events from native todo state** | Layer 4/6 | In Progress | `write_todos` state deltas from Deep Agents are translated to `planning` and `step_complete` SSE events without custom planner logic | 1 day | P2: astream v2 rewrite |
+| **Expose and operationalize Deep Agents context controls (`tool_token_limit_before_evict`, summarization tool middleware)** | Layer 4 | In Progress | Agent config can set `tool_token_limit_before_evict`; declarative middleware supports `summarization_tool` via Deep Agents factory; effective config is externally observable; deterministic verification exists for context offloading/summarization behavior | 1–2 days | deepagents >= 0.4.8 |
+| **Expose structured output via Deep Agents `response_format`** | Layers 4/5 | In Progress | AgentDefinition and SessionConfig accept `response_format`; dotted path resolves to Pydantic model class; forwarded directly to `create_deep_agent(response_format=...)` | 1 day | None |
+| **Enforce ProviderConfig `max_retries` and `timeout` in `init_chat_model()`** | Layer 5 | In Progress | Provider registry values are passed directly to LangChain model init; no Cognition-level retry wrapper introduced | 0.5 day | None |
 | **Dynamic ConfigRegistry (hot-reloadable agent config)** | Layers 1–6 | Completed | Agent/model/provider config changeable via API without restart; scoped per user/project; DB-backed with file bootstrap | 5–7 days | P0: Persistence, P1: Scoping |
 | ~~LLM provider fallback~~ | Layer 5 | Cancelled | Superseded — explicit errors replace silent fallback. See Architectural Changes. | - | - |
 | **Remove `GlobalProviderDefaults` from LLM resolution path** | Layer 5 | Completed | `_resolve_provider_config()` no longer calls `get_global_provider_defaults()` as step 3; unscoped `ProviderConfig` entries (scope=`{}`) serve as globals; `LLMProviderConfigError` raised when no providers configured | 0.5 days | None |
@@ -323,7 +328,13 @@ All write endpoints respect `X-Cognition-Scope-{key}` headers for multi-tenant s
 | Skills progressive disclosure | Layer 4 | Pending | Skills loaded on-demand based on context | 2 days | None |
 | GraphQL API | Layer 6 | Pending | Alternative to REST for complex queries | 3 days | P1: Production-Ready |
 | Evaluation framework | Layer 7 | Pending | Automated benchmark runs on agent performance | 5 days | P1: Production-Ready |
+| Builder boundary documentation | Layer 6 | Completed | A builder-facing guide clearly defines Cognition Core vs app-layer responsibilities, gives decision rules, and links from the main docs index and root README | 0.25 days | None |
 | `app = Cognition(agent); app.run()` | All | Pending | Single-line instantiation provides all features | 5 days | All above |
+
+### Explicitly Deferred
+
+- `#45` LangGraph Store memory tools — deferred until memory UX/design is specified (tool vs middleware, namespace, retrieval strategy).
+- `#53` ACP transport layer — deferred until core Deep Agents runtime capabilities are surfaced over existing REST/SSE transport.
 
 ---
 

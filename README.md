@@ -161,6 +161,7 @@ The CLI is one example of what you can build on Cognition. See the [Blueprints](
 |---|---|
 | [Documentation Index](./docs/README.md) | All concepts and guides |
 | [Getting Started](./docs/guides/getting-started.md) | Install, configure, and send your first message |
+| [Core vs App Layer](./docs/guides/core-vs-app-layer.md) | Builder boundaries: what Cognition owns versus what your app owns |
 | [Architecture](./docs/concepts/architecture.md) | 7-layer architecture and design principles |
 | [Extending Agents](./docs/guides/extending-agents.md) | Memory, skills, tools, subagents, and middleware |
 | [Configuration Reference](./docs/guides/configuration.md) | All YAML keys and environment variables |
