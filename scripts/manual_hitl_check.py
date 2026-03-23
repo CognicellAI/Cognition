@@ -7,7 +7,6 @@ from typing import Any, cast
 
 import httpx
 
-
 DEFAULT_PROMPT = (
     "Use the write_file tool to create a file named hitl_test.txt containing exactly "
     "the word approved. Do not answer in prose. Attempt the tool call."

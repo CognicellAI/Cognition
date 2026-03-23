@@ -307,7 +307,7 @@ class TestStructuredOutputAndContextControls:
     @pytest.mark.asyncio
     async def test_tool_token_limit_before_evict_passed_to_create_cognition_agent(self):
         """tool_token_limit_before_evict from AgentConfig must be forwarded."""
-        from server.app.agent.definition import AgentDefinition, AgentConfig
+        from server.app.agent.definition import AgentConfig, AgentDefinition
 
         session = _make_session()
         mock_runtime = _make_mock_runtime(DoneEvent())

@@ -25,24 +25,25 @@ from server.app.api.models import (
     ErrorResponse,
     SessionCreate,
     SessionList,
-    SessionResumeRequest,
     SessionResponse,
+    SessionResumeRequest,
     SessionUpdate,
 )
-from server.app.api.sse import EventBuilder, SSEStream, get_last_event_id
 from server.app.api.scoping import SessionScope
+from server.app.api.sse import EventBuilder, SSEStream, get_last_event_id
 from server.app.llm.deep_agent_service import (
     DeepAgentStreamingService,
     DoneEvent,
-    ErrorEvent as ResumeErrorEvent,
     SessionAgentManager,
     TokenEvent,
     UsageEvent,
     get_session_agent_manager,
 )
+from server.app.llm.deep_agent_service import (
+    ErrorEvent as ResumeErrorEvent,
+)
 from server.app.llm.discovery import DiscoveryEngine
-from server.app.models import SessionConfig
-from server.app.models import SessionStatus
+from server.app.models import SessionConfig, SessionStatus
 from server.app.settings import Settings, get_settings
 from server.app.storage import get_storage_backend
 

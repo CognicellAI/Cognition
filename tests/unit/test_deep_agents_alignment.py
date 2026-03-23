@@ -127,7 +127,7 @@ class TestRuntimeResume:
 
         assert result == {"ok": True}
         command = agent.ainvoke.await_args.args[0]
-        assert getattr(command, "resume") == {"decisions": [{"type": "approve"}]}
+        assert command.resume == {"decisions": [{"type": "approve"}]}
 
     @pytest.mark.asyncio
     async def test_astream_resume_events_uses_command_resume(self) -> None:
