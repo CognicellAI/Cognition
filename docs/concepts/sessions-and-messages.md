@@ -215,6 +215,39 @@ with httpx.stream(
             print(event)
 ```
 
+### Async Completion Callback
+
+If you do not want to keep the SSE connection open until the run completes, you can provide `callback_url` in `POST /sessions/{id}/messages`. Cognition will still stream SSE to the caller, but it will also send a best-effort `POST` to the callback URL when the run finishes.
+
+Example:
+
+```bash
+curl -X POST http://localhost:8000/sessions/{id}/messages \
+  -H "Content-Type: application/json" \
+  -d '{
+    "content": "Review this PR and summarize the key risks.",
+    "callback_url": "https://example.com/cognition-callback"
+  }'
+```
+
+Completion payload shape:
+
+```json
+{
+  "session_id": "sess_abc123",
+  "message_id": "msg_xyz",
+  "status": "done",
+  "output": "The review has been posted to the PR.",
+  "token_usage": { "input": 1840, "output": 412 },
+  "model_used": "claude-3-5-sonnet",
+  "completed_at": "2026-03-21T12:34:56Z"
+}
+```
+
+Current behavior notes:
+- delivery is best-effort and logged on failure
+- retries, signatures, and persistent delivery tracking are not yet implemented
+
 ---
 
 ## Reconnection

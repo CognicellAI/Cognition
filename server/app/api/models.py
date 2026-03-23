@@ -9,7 +9,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import AnyHttpUrl, BaseModel, Field
 
 from server.app.models import Session as CoreSession
 from server.app.models import SessionConfig
@@ -120,6 +120,10 @@ class MessageCreate(BaseModel):
     model: str | None = Field(
         None,
         description="Model to use for this message (e.g., 'gpt-4o', 'claude-3-sonnet'). Uses server default if not specified.",
+    )
+    callback_url: AnyHttpUrl | None = Field(
+        default=None,
+        description="If provided, Cognition POSTs the final completion payload to this URL when the run finishes.",
     )
 
 
