@@ -3,9 +3,10 @@
 Tests for the Phase 5 REST API implementation with workspace-based sessions.
 """
 
+from unittest.mock import AsyncMock, patch
+
 import pytest
 from fastapi.testclient import TestClient
-from unittest.mock import AsyncMock, patch
 
 from server.app.agent.agent_definition_registry import initialize_agent_definition_registry
 from server.app.main import app

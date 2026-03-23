@@ -20,9 +20,9 @@ from collections.abc import AsyncGenerator
 from typing import Any
 
 import httpx
+import structlog
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import StreamingResponse
-import structlog
 
 from server.app.api.models import (
     ErrorResponse,
