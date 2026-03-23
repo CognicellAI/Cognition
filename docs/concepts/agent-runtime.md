@@ -12,22 +12,21 @@ Defined in `server/app/agent/runtime.py`, `AgentRuntime` is a Python `Protocol` 
 class AgentRuntime(Protocol):
     async def astream_events(
         self,
-        message: str,
-        thread_id: str,
-        config: dict[str, Any] | None = None,
+        input_data: str | dict[str, Any],
+        thread_id: str | None = None,
     ) -> AsyncIterator[AgentEvent]: ...
 
     async def ainvoke(
         self,
-        message: str,
-        thread_id: str,
+        input_data: str | dict[str, Any],
+        thread_id: str | None = None,
     ) -> AgentEvent: ...
 
-    async def get_state(self, thread_id: str) -> dict[str, Any]: ...
+    async def get_state(self, thread_id: str | None = None) -> dict[str, Any] | None: ...
 
-    async def abort(self, thread_id: str) -> None: ...
+    async def abort(self, thread_id: str | None = None) -> bool: ...
 
-    def get_checkpointer(self) -> BaseCheckpointSaver: ...
+    async def get_checkpointer(self) -> BaseCheckpointSaver: ...
 ```
 
 `DeepAgentRuntime` is the only production implementation. It wraps Deep Agents, transforms its event stream into the canonical `AgentEvent` types, and handles abort via a thread-ID cancellation set. The protocol boundary exists so the underlying framework can be swapped without touching any Layer 5 or Layer 6 code.
@@ -67,8 +66,16 @@ class StepCompleteEvent:
 
 @dataclass
 class DelegationEvent:
-    target_agent: str
+    from_agent: str
+    to_agent: str
     task: str
+
+@dataclass
+class InterruptEvent:
+    tool_call_id: str
+    tool_name: str
+    args: dict[str, Any]
+    session_id: str | None = None
 
 @dataclass
 class StatusEvent:
@@ -108,6 +115,7 @@ class AgentDefinition(BaseModel):
     skills: list[str] = []          # paths to SKILL.md files or directories
     memory: list[str] = []          # paths to instruction files (AGENTS.md)
     subagents: list[SubagentDefinition] = []
+    interrupt_on: dict[str, bool] = {}
     middleware: list[str | dict] = []
     config: AgentConfig = AgentConfig()
     mode: Literal["primary", "subagent", "all"] = "primary"
@@ -144,7 +152,8 @@ class AgentConfig(BaseModel):
     model: str | None = None
     temperature: float | None = None
     max_tokens: int | None = None
-    timeout: int = 300
+    recursion_limit: int | None = None
+    tool_token_limit_before_evict: int | None = None
 ```
 
 ### Tool Path Resolution
@@ -215,6 +224,7 @@ definition = AgentDefinition(
 |---|---|---|
 | `default` | `primary` | Full-access coding agent; all built-in tools enabled |
 | `readonly` | `primary` | Analysis-only; write and execute tools disabled |
+| `hitl_test` | `primary` | Manual HITL verification agent; attempts protected tool calls immediately |
 
 ### User-Defined Agents
 
@@ -252,7 +262,7 @@ curl http://localhost:8000/agents
 curl http://localhost:8000/agents/readonly
 ```
 
-Response fields include `name`, `description`, `mode`, `hidden`, `native`, `model`, `temperature`, `tools`, `skills`, and a truncated `system_prompt` (max 500 characters).
+Response fields include `name`, `description`, `mode`, `hidden`, `native`, `model`, `temperature`, `response_format`, `interrupt_on`, `tools`, `skills`, and a truncated `system_prompt` (max 500 characters).
 
 ---
 
