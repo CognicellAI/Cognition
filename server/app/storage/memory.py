@@ -17,7 +17,6 @@ from langgraph.store.base import BaseStore
 from langgraph.store.memory import InMemoryStore
 
 from server.app.models import Message, Session, SessionConfig, SessionStatus
-from server.app.storage.backend import StorageBackend
 from server.app.storage.message_projection import project_checkpoint_messages
 
 logger = structlog.get_logger(__name__)
