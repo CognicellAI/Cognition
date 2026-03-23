@@ -35,6 +35,7 @@ Defined in `server/app/models.py:Session`:
 | `agent_name` | `str` | Name of the bound agent (default: `"default"`) |
 | `config` | `SessionConfig` | Per-session LLM overrides (provider, model, temperature) |
 | `scopes` | `dict[str, str]` | Tenant isolation values (e.g. `{"user": "alice"}`) |
+| `metadata` | `dict[str, str]` | Arbitrary builder-defined correlation metadata |
 | `created_at` | `datetime` | Creation timestamp |
 | `updated_at` | `datetime` | Last-modified timestamp |
 | `message_count` | `int` | Running count of messages in the session |
@@ -52,6 +53,18 @@ curl -X POST http://localhost:8000/sessions \
 curl -X POST http://localhost:8000/sessions \
   -H "Content-Type: application/json" \
   -d '{"title": "Code review", "agent_name": "readonly"}'
+
+# Session with orchestration metadata
+curl -X POST http://localhost:8000/sessions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "title": "PR review session",
+    "metadata": {
+      "workflow_id": "pr-review",
+      "repository": "myorg/myrepo",
+      "pr_number": "42"
+    }
+  }'
 ```
 
 ### Per-Session LLM Override
@@ -65,6 +78,40 @@ curl -X PATCH http://localhost:8000/sessions/{id} \
 ```
 
 If only `model` is provided, Cognition resolves the provider from the ConfigRegistry (first enabled provider by priority). Use `provider_id` to pin a specific provider config.
+
+### Session Metadata
+
+Builders can attach arbitrary flat string metadata to a session at creation time or replace it later with `PATCH /sessions/{id}`. Cognition does not interpret these values; they are intended for correlation with external systems such as workflow engines, repositories, tickets, or billing units.
+
+Example patch:
+
+```bash
+curl -X PATCH http://localhost:8000/sessions/{id} \
+  -H "Content-Type: application/json" \
+  -d '{
+    "metadata": {
+      "workflow_id": "pr-review",
+      "repository": "myorg/myrepo",
+      "pr_number": "42"
+    }
+  }'
+```
+
+### Filtering Sessions by Metadata
+
+`GET /sessions` accepts query parameters of the form `metadata.<key>=<value>`.
+
+Examples:
+
+```bash
+# Find sessions for a repository
+curl "http://localhost:8000/sessions?metadata.repository=myorg/myrepo"
+
+# Find a specific orchestration target
+curl "http://localhost:8000/sessions?metadata.repository=myorg/myrepo&metadata.pr_number=42"
+```
+
+All supplied metadata predicates must match for a session to be returned.
 
 ---
 

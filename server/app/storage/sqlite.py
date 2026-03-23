@@ -90,6 +90,14 @@ class SqliteStorageBackend:
             db_path=str(self.db_path),
         )
 
+        async with aiosqlite.connect(self.db_path) as db:
+            try:
+                await db.execute("ALTER TABLE sessions ADD COLUMN metadata JSON DEFAULT '{}' ")
+                await db.commit()
+            except aiosqlite.OperationalError as exc:
+                if "duplicate column name" not in str(exc).lower():
+                    raise
+
         logger.info(
             "SQLite storage initialized",
             db_path=str(self.db_path),
@@ -110,6 +118,7 @@ class SqliteStorageBackend:
         title: str | None = None,
         scopes: dict[str, str] | None = None,
         agent_name: str = "default",
+        metadata: dict[str, str] | None = None,
     ) -> Session:
         """Create a new session."""
         now = datetime.now(UTC).isoformat()
@@ -126,6 +135,7 @@ class SqliteStorageBackend:
             message_count=0,
             agent_name=agent_name,
             scopes=scopes or {},
+            metadata=metadata or {},
         )
 
         config_json = json.dumps(
@@ -141,14 +151,15 @@ class SqliteStorageBackend:
         )
 
         scopes_json = json.dumps(scopes or {})
+        metadata_json = json.dumps(metadata or {})
 
         async with aiosqlite.connect(self.db_path) as db:
             await db.execute(
                 """
                 INSERT INTO sessions (
                     id, workspace_path, title, thread_id, status,
-                    config, scopes, message_count, agent_name, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    config, scopes, metadata, message_count, agent_name, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     session.id,
@@ -158,6 +169,7 @@ class SqliteStorageBackend:
                     session.status.value,
                     config_json,
                     scopes_json,
+                    metadata_json,
                     session.message_count,
                     session.agent_name,
                     session.created_at,
@@ -184,12 +196,29 @@ class SqliteStorageBackend:
                     return self._row_to_session(row)
         return None
 
-    async def list_sessions(self, filter_scopes: dict[str, str] | None = None) -> list[Session]:
+    async def list_sessions(
+        self,
+        filter_scopes: dict[str, str] | None = None,
+        metadata_filters: dict[str, str] | None = None,
+    ) -> list[Session]:
         """List all sessions."""
         sessions = []
         async with aiosqlite.connect(self.db_path) as db:
             db.row_factory = aiosqlite.Row
-            async with db.execute("SELECT * FROM sessions ORDER BY updated_at DESC") as cursor:
+            query = "SELECT * FROM sessions"
+            params: list[str] = []
+            where_clauses: list[str] = []
+
+            if metadata_filters:
+                for key, value in metadata_filters.items():
+                    where_clauses.append("json_extract(metadata, ?) = ?")
+                    params.extend([f"$.{key}", value])
+
+            if where_clauses:
+                query += " WHERE " + " AND ".join(where_clauses)
+            query += " ORDER BY updated_at DESC"
+
+            async with db.execute(query, params) as cursor:
                 async for row in cursor:
                     session = self._row_to_session(row)
                     # Filter by scopes if specified
@@ -207,6 +236,7 @@ class SqliteStorageBackend:
         status: str | None = None,
         config: SessionConfig | None = None,
         agent_name: str | None = None,
+        metadata: dict[str, str] | None = None,
     ) -> Session | None:
         """Update a session."""
         session = await self.get_session(session_id)
@@ -230,6 +260,11 @@ class SqliteStorageBackend:
             updates.append("agent_name = ?")
             params.append(agent_name)
             session.agent_name = agent_name
+
+        if metadata is not None:
+            updates.append("metadata = ?")
+            params.append(json.dumps(metadata))
+            session.metadata = dict(metadata)
 
         if config is not None:
             existing_config = session.config
@@ -580,6 +615,7 @@ class SqliteStorageBackend:
             message_count=row["message_count"],
             agent_name=row["agent_name"] if "agent_name" in row.keys() else "default",
             scopes=scopes_data,
+            metadata=json.loads(row["metadata"]) if row["metadata"] else {},
         )
 
     def _row_to_message(self, row: aiosqlite.Row) -> Message:

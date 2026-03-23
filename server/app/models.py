@@ -131,6 +131,7 @@ class Session:
     message_count: int = 0
     agent_name: str = "default"
     scopes: dict[str, str] = field(default_factory=dict)
+    metadata: dict[str, str] = field(default_factory=dict)
 
     def to_dict(self) -> dict:
         """Convert to dictionary for storage."""
@@ -155,6 +156,7 @@ class Session:
             "message_count": self.message_count,
             "agent_name": self.agent_name,
             "scopes": self.scopes,
+            "metadata": self.metadata,
         }
 
     @classmethod
@@ -182,6 +184,7 @@ class Session:
             message_count=data.get("message_count", 0),
             agent_name=data.get("agent_name", "default"),
             scopes=data.get("scopes", {}),
+            metadata=data.get("metadata", {}),
         )
 
 

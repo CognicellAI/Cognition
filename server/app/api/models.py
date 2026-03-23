@@ -27,6 +27,10 @@ class SessionCreate(BaseModel):
 
     title: str | None = Field(None, max_length=200, description="Optional session title")
     agent_name: str = Field("default", description="Agent to use for this session")
+    metadata: dict[str, str] | None = Field(
+        default=None,
+        description="Arbitrary key-value metadata attached to the session",
+    )
 
 
 class SessionResponse(BaseModel):
@@ -42,6 +46,10 @@ class SessionResponse(BaseModel):
     updated_at: str = Field(..., description="Last activity timestamp (ISO format)")
     message_count: int = Field(0, description="Number of messages in session")
     agent_name: str = Field("default", description="Agent bound to this session")
+    metadata: dict[str, str] = Field(
+        default_factory=dict,
+        description="Arbitrary key-value metadata attached to the session",
+    )
 
     @classmethod
     def from_core(cls, session: CoreSession) -> SessionResponse:
@@ -55,6 +63,7 @@ class SessionResponse(BaseModel):
             updated_at=session.updated_at,
             message_count=session.message_count,
             agent_name=session.agent_name,
+            metadata=session.metadata,
         )
 
 
@@ -73,6 +82,7 @@ class SessionUpdate(BaseModel):
 
     title: str | None = Field(None, max_length=200)
     agent_name: str | None = Field(None, description="Switch agent binding")
+    metadata: dict[str, str] | None = Field(None, description="Replace session metadata")
     config: SessionConfig | None = Field(None, description="Update LLM configuration")
 
 
