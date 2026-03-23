@@ -48,11 +48,13 @@ class TestCreateTool:
             "name": "test-tool-create",
             "path": "server.app.tools.test_tool",
             "enabled": True,
+            "interrupt_on": True,
         }
         response = client.post("/tools", json=payload)
         assert response.status_code == 201
         data = response.json()
         assert data["name"] == "test-tool-create"
+        assert data["interrupt_on"] is True
 
     def test_create_tool_missing_name_returns_422(self):
         response = client.post("/tools", json={"path": "some.path"})
@@ -80,6 +82,16 @@ class TestDeleteTool:
     def test_delete_missing_tool_returns_404(self):
         response = client.delete("/tools/nonexistent-tool-xyz")
         assert response.status_code == 404
+
+
+class TestUpdateTool:
+    def test_patch_tool_updates_interrupt_on(self):
+        client.post(
+            "/tools", json={"name": "test-tool-patch", "path": "a.b", "interrupt_on": False}
+        )
+        response = client.patch("/tools/test-tool-patch", json={"interrupt_on": True})
+        assert response.status_code == 200
+        assert response.json()["interrupt_on"] is True
 
 
 class TestReloadTools:
