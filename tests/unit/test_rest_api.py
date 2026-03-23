@@ -3,6 +3,8 @@
 Tests for the Phase 5 REST API implementation with workspace-based sessions.
 """
 
+from unittest.mock import AsyncMock, patch
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -175,6 +177,28 @@ class TestMessageEndpoints:
         )
         assert response.status_code == 200
         assert "text/event-stream" in response.headers.get("content-type", "")
+
+    def test_send_message_accepts_callback_url(self):
+        """Test sending a message with callback_url returns SSE stream."""
+        session_resp = client.post("/sessions", json={"title": "callback-test"})
+        session_id = session_resp.json()["id"]
+
+        with patch(
+            "server.app.api.routes.messages._post_completion_callback",
+            new=AsyncMock(),
+        ) as mock_callback:
+            response = client.post(
+                f"/sessions/{session_id}/messages",
+                json={
+                    "content": "Hello, world!",
+                    "callback_url": "https://example.com/callback",
+                },
+                headers={"Accept": "text/event-stream"},
+            )
+
+        assert response.status_code == 200
+        assert "text/event-stream" in response.headers.get("content-type", "")
+        assert mock_callback.await_count == 1
 
 
 class TestConfigEndpoints:

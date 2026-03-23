@@ -19,6 +19,8 @@ import uuid
 from collections.abc import AsyncGenerator
 from typing import Any
 
+import httpx
+import structlog
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import StreamingResponse
 
@@ -52,6 +54,7 @@ from server.app.settings import Settings, get_settings
 from server.app.storage import get_storage_backend
 
 router = APIRouter(prefix="/sessions/{session_id}/messages", tags=["messages"])
+logger = structlog.get_logger(__name__)
 
 
 def get_settings_dependency() -> Settings:
@@ -232,9 +235,33 @@ async def agent_event_stream(
                 yield EventBuilder.error(event.message, code=event.code)
 
     except Exception as e:
-        logger = __import__("structlog").get_logger(__name__)
         logger.error("Agent streaming error", error=str(e), session_id=session_id)
         yield EventBuilder.error(str(e), code="AGENT_ERROR")
+
+
+async def _post_completion_callback(
+    callback_url: str,
+    payload: dict[str, Any],
+    session_id: str,
+) -> None:
+    """POST final completion payload to an external callback URL."""
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            response = await client.post(callback_url, json=payload)
+            response.raise_for_status()
+        logger.info(
+            "message_completion_callback_sent",
+            session_id=session_id,
+            callback_url=callback_url,
+            status_code=response.status_code,
+        )
+    except Exception as exc:
+        logger.warning(
+            "message_completion_callback_failed",
+            session_id=session_id,
+            callback_url=callback_url,
+            error=str(exc),
+        )
 
 
 @router.post(
@@ -336,6 +363,8 @@ async def send_message(
     async def wrapped_event_stream() -> AsyncGenerator[dict[str, Any], None]:
         assistant_data = None
         message_id = None
+        completion_status = "error"
+        callback_error: dict[str, Any] | None = None
         async for event in event_stream:
             # Capture assistant data and message_id from done event
             if event.get("event") == "done":
@@ -343,6 +372,9 @@ async def send_message(
                     assistant_data = event["data"]["assistant_data"]
                 # ISSUE-019: Capture message_id from done event
                 message_id = event.get("data", {}).get("message_id")
+                completion_status = "done"
+            elif event.get("event") == "error":
+                callback_error = event.get("data")
             yield event
 
         # Persist assistant message after stream completes
@@ -378,10 +410,32 @@ async def send_message(
                 )
                 await store.update_message_count(session_id, len(messages_for_session))
             except Exception as e:
-                logger = __import__("structlog").get_logger(__name__)
                 logger.error(
                     "Failed to persist assistant message", error=str(e), session_id=session_id
                 )
+
+        if request.callback_url:
+            callback_payload = {
+                "session_id": session_id,
+                "message_id": message_id,
+                "status": completion_status,
+                "output": assistant_data.get("content") if assistant_data else None,
+                "token_usage": {
+                    "input": assistant_data.get("metadata", {}).get("input_tokens", 0)
+                    if assistant_data
+                    else 0,
+                    "output": assistant_data.get("metadata", {}).get("output_tokens", 0)
+                    if assistant_data
+                    else 0,
+                },
+                "model_used": assistant_data.get("model_used") if assistant_data else None,
+                "completed_at": __import__("datetime")
+                .datetime.now(__import__("datetime").UTC)
+                .isoformat(),
+            }
+            if callback_error:
+                callback_payload["error"] = callback_error
+            await _post_completion_callback(str(request.callback_url), callback_payload, session_id)
 
     # Check for Last-Event-ID header for stream resumption
     last_event_id = get_last_event_id(http_request)
