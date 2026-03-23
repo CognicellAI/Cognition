@@ -14,28 +14,30 @@ Defined in `server/app/storage/backend.py`. The protocol is composed of three su
 class SessionStore(Protocol):
     async def create_session(
         self,
-        session_id: str,
-        workspace_path: str,
-        title: str,
         thread_id: str,
-        scopes: dict[str, str],
-        agent_name: str,
+        config: SessionConfig,
+        title: str | None = None,
+        scopes: dict[str, str] | None = None,
+        agent_name: str = "default",
+        metadata: dict[str, str] | None = None,
     ) -> Session: ...
 
     async def get_session(self, session_id: str) -> Session | None: ...
 
     async def list_sessions(
         self,
-        workspace_path: str,
         filter_scopes: dict[str, str] | None = None,
+        metadata_filters: dict[str, str] | None = None,
     ) -> list[Session]: ...
 
     async def update_session(
         self,
         session_id: str,
         title: str | None = None,
-        status: SessionStatus | None = None,
+        status: str | None = None,
+        config: SessionConfig | None = None,
         agent_name: str | None = None,
+        metadata: dict[str, str] | None = None,
     ) -> Session | None: ...
 
     async def update_message_count(self, session_id: str, delta: int) -> None: ...
@@ -92,14 +94,20 @@ The Store is passed to `create_deep_agent()` and available inside agent nodes an
 
 ### Unified StorageBackend
 
-`StorageBackend` combines all three plus lifecycle methods:
+`StorageBackend` combines session, message, checkpoint, and Store operations plus lifecycle methods:
 
 ```python
 class StorageBackend(SessionStore, MessageStore, CheckpointerStore, Protocol):
     async def initialize(self) -> None: ...   # Create tables, pools, migrations
     async def close(self) -> None: ...        # Drain connections, release resources
-    async def health_check(self) -> bool: ...
+    async def health_check(self) -> dict[str, Any]: ...
 ```
+
+### Message Projection Recovery
+
+The LangGraph checkpoint is the authoritative record of runtime conversation state. The `messages` table is a read-optimized projection used by the API. Storage backends therefore support rebuilding the message projection from checkpoint messages when API-visible message rows drift or must be recovered after an interrupted write path.
+
+This lets Cognition repair user-visible session history without treating the messages table as the source of truth for runtime continuity.
 
 ---
 

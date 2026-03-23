@@ -80,7 +80,7 @@ Returns server health status.
 ```json
 {
   "status": "healthy",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "active_sessions": 3,
   "circuit_breakers": [],
   "timestamp": "2026-03-19T12:00:00Z"
@@ -108,7 +108,11 @@ Create a new session.
 ```json
 {
   "title": "My session",
-  "agent_name": "default"
+  "agent_name": "default",
+  "metadata": {
+    "repository": "myorg/myrepo",
+    "pr_number": "42"
+  }
 }
 ```
 
@@ -116,6 +120,7 @@ Create a new session.
 |---|---|---|---|
 | `title` | string (max 200) | No | Human-readable label |
 | `agent_name` | string | No | Agent to bind; must be a known `primary` or `all` agent. Defaults to `"default"`. Returns `422` if name is unknown. |
+| `metadata` | object | No | Arbitrary builder-defined flat key-value metadata attached to the session |
 
 **Headers (when scoping enabled):**
 ```
@@ -131,6 +136,7 @@ X-Cognition-Scope-Project: proj-123
   "thread_id": "7f3e4a12-...",
   "status": "active",
   "agent_name": "default",
+  "metadata": {"repository": "myorg/myrepo", "pr_number": "42"},
   "created_at": "2026-03-02T12:00:00Z",
   "updated_at": "2026-03-02T12:00:00Z",
   "message_count": 0
@@ -142,6 +148,15 @@ X-Cognition-Scope-Project: proj-123
 ### `GET /sessions`
 
 List sessions for the current workspace. Filtered by scope when scoping is enabled.
+
+Metadata filtering is supported with query parameters of the form `metadata.<key>=<value>`.
+
+Examples:
+
+```bash
+curl "http://localhost:8000/sessions?metadata.repository=myorg/myrepo"
+curl "http://localhost:8000/sessions?metadata.repository=myorg/myrepo&metadata.pr_number=42"
+```
 
 **Response `200 OK`:**
 ```json
@@ -167,6 +182,10 @@ Update session metadata or LLM configuration.
 {
   "title": "Updated title",
   "agent_name": "readonly",
+  "metadata": {
+    "repository": "myorg/myrepo",
+    "pr_number": "43"
+  },
   "config": {
     "provider_id": "my-openai-config",
     "model": "gpt-4o-mini",
@@ -212,6 +231,36 @@ Cancel any in-progress agent operation for this session.
 
 **Response `404 Not Found`**
 
+### `POST /sessions/{session_id}/resume`
+
+Resume an interrupted HITL session after an `interrupt` SSE event.
+
+**Request body:**
+```json
+{
+  "decision": "approve",
+  "tool_call_id": "call_abc123",
+  "tool_name": "write_file",
+  "args": null
+}
+```
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `decision` | `approve` \| `edit` \| `reject` | Yes | Human decision for the interrupted tool call |
+| `tool_call_id` | string | Yes | Interrupted tool call identifier |
+| `tool_name` | string | Yes | Interrupted tool name |
+| `args` | object | No | Replacement tool args when `decision="edit"`; may include a rejection message for `reject` |
+
+If `Accept: text/event-stream` is sent, Cognition streams the resumed continuation. Otherwise it returns a simple success response.
+
+**Response `200 OK` (JSON):**
+```json
+{"success": true, "message": "Session resumed"}
+```
+
+**Response `409 Conflict`:** Session is not in `waiting_for_approval` state.
+
 ---
 
 ## Messages
@@ -224,7 +273,8 @@ Send a user message and receive the agent's streaming response via Server-Sent E
 ```json
 {
   "content": "List the files in the workspace.",
-  "model": "gpt-4o-mini"
+  "model": "gpt-4o-mini",
+  "callback_url": "https://example.com/cognition-callback"
 }
 ```
 
@@ -233,6 +283,7 @@ Send a user message and receive the agent's streaming response via Server-Sent E
 | `content` | string (min 1) | Yes | The user's message |
 | `model` | string | No | Override model for this message only |
 | `parent_id` | string | No | Parent message ID for threaded context |
+| `callback_url` | URL | No | Best-effort completion callback URL for a final POST after the run finishes |
 
 **Headers:**
 ```
@@ -347,9 +398,7 @@ Result of a tool invocation. `tool_call_id` matches the `id` in the preceding `t
 
 `exit_code` is `0` for success, non-zero for failure.
 
-### `planning` *(reserved — not currently emitted)*
-
-> **Note:** `PlanningEvent` is defined in the runtime but is not emitted by the current streaming implementation. Do not build UI that depends on receiving this event. Planned for a future release alongside todo streaming.
+### `planning`
 
 The agent has created a task plan.
 
@@ -363,9 +412,7 @@ The agent has created a task plan.
 }
 ```
 
-### `step_complete` *(reserved — not currently emitted)*
-
-> **Note:** `StepCompleteEvent` is defined in the runtime but is not emitted by the current streaming implementation. Do not build UI that depends on receiving this event.
+### `step_complete`
 
 A step in the agent's task plan has been completed.
 
@@ -397,7 +444,29 @@ The agent's status has changed.
 {"status": "thinking"}
 ```
 
-Values: `thinking` (LLM processing), `idle` (between steps or done).
+Values: `thinking`, `idle`, `waiting_for_approval`, `resuming`, `cancelled`.
+
+### `interrupt`
+
+The agent is paused waiting for human approval before executing a protected tool.
+
+```json
+{
+  "tool_call_id": "call_abc123",
+  "tool_name": "write_file",
+  "args": {"file_path": "notes.txt", "content": "hello"},
+  "session_id": "session-uuid",
+  "action_requests": [
+    {
+      "name": "write_file",
+      "args": {"file_path": "notes.txt", "content": "hello"},
+      "review_config": {"action_name": "write_file", "allowed_decisions": ["approve", "edit", "reject"]}
+    }
+  ]
+}
+```
+
+Use this payload with `POST /sessions/{session_id}/resume`.
 
 ### `usage`
 
@@ -463,6 +532,8 @@ List all non-hidden agents available in the registry.
       "native": true,
       "model": null,
       "temperature": null,
+      "response_format": null,
+      "interrupt_on": {},
       "tools": [],
       "skills": [],
       "system_prompt": "You are a coding agent..."
@@ -670,7 +741,8 @@ List all registered tools from both file discovery (AgentRegistry) and API regis
       "source": "file",
       "module": "server.app.agent.tools",
       "description": null,
-      "enabled": true
+      "enabled": true,
+      "interrupt_on": false
     },
     {
       "name": "search-jira",
@@ -678,7 +750,8 @@ List all registered tools from both file discovery (AgentRegistry) and API regis
       "source": "api_code",
       "module": null,
       "description": "Search Jira issues",
-      "enabled": true
+      "enabled": true,
+      "interrupt_on": true
     },
     {
       "name": "run_analysis",
@@ -752,6 +825,7 @@ Register a tool in the ConfigRegistry. Exactly one of `code` or `path` must be p
 | `path` | string | Dotted module path importable by the server process |
 | `enabled` | bool | Whether this tool is active (default `true`) |
 | `description` | string | Optional description |
+| `interrupt_on` | bool | Whether this tool should require approval by default in builders that consume tool metadata |
 | `scope` | dict | Scope restriction; empty `{}` = global |
 
 **Response `201 Created`:** Tool object with `source_type`  

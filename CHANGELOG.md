@@ -7,6 +7,75 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [0.6.0] — 2026-03-23
+
+### Features
+
+- **Human-in-the-loop (HITL) tool approval end-to-end**: Cognition now surfaces native Deep Agents `interrupt_on` behavior through the API and SSE layers. Protected tool calls emit an `interrupt` event containing the tool name, arguments, action requests, and review config. Sessions move to `waiting_for_approval`, and `POST /sessions/{id}/resume` resumes execution using LangGraph `Command(resume=...)`. Approve, edit, and reject flows are covered with docker-compose E2E scenarios and a manual verification script.
+
+- **Rich resume streaming for paused runs**: Resumed HITL sessions now stream live continuation events instead of returning a one-shot final result. After approval, resumed runs emit the same runtime event types as normal execution, including status, token, tool, planning, usage, and `done`.
+
+- **Planning and `step_complete` SSE events from native Deep Agents todo state**: Cognition now translates Deep Agents/LangGraph `write_todos` state updates into first-class `planning` and `step_complete` SSE events. Clients can show plan creation and multi-step progress without parsing model text.
+
+- **Structured output via Deep Agents `response_format`**: `AgentDefinition` and `SessionConfig` now support `response_format`, including dotted-path resolution to Pydantic model classes. Structured-output schemas are forwarded directly to `create_deep_agent(...)` instead of applying custom post-hoc validation in Cognition.
+
+- **Deep Agents context controls exposed**: Cognition now wires through `tool_token_limit_before_evict` and declarative `summarization_tool` middleware support so builders can use upstream Deep Agents context/offloading controls from Cognition config.
+
+- **Async message completion callbacks**: `POST /sessions/{id}/messages` now accepts `callback_url`. When a run finishes, Cognition sends a best-effort async `POST` containing session ID, message ID, status, final output, token usage, model used, and completion timestamp. This lets orchestration backends receive completion notifications without holding the SSE connection open.
+
+- **Session metadata and filtering for orchestration APIs**: Sessions now support arbitrary builder-defined key-value metadata. `GET /sessions` supports filtering by metadata using query params such as `metadata.repository=myorg/myrepo` and `metadata.pr_number=42`, enabling external workflow reconciliation and lookup.
+
+- **Message projection rebuild path from checkpoint state**: Cognition now formalizes the persistence contract that LangGraph checkpoint state is authoritative while the `messages` table is a read-optimized API projection. Storage backends can rebuild that projection from checkpoint messages, improving recovery after interrupted writes or projection drift.
+
+### Enhancements
+
+- **Agent and tool interrupt metadata exposed through API surfaces**: Agent responses now expose `interrupt_on` configuration, and tool CRUD supports `interrupt_on` metadata so builders can inspect or annotate HITL-related configuration more directly.
+
+- **Message persistence contract documented**: Session/message documentation now explicitly explains the distinction between authoritative checkpoint state and the read-optimized message projection, including rebuild semantics.
+
+- **Manual HITL verification workflow**: Added `scripts/manual_hitl_check.py` to verify interrupt -> `waiting_for_approval` -> resume -> completion behavior against a live server or docker-compose environment.
+
+### Bug Fixes
+
+- **Provider retry/timeout config now enforced**: `ProviderConfig.max_retries` and `ProviderConfig.timeout` are now forwarded into `init_chat_model(...)` and related provider construction paths, eliminating previously vestigial provider settings.
+
+- **Stateless resume no longer depends on an in-memory runtime surviving across HTTP requests**: Resume now rebuilds the agent from persisted session/checkpoint state, matching LangGraph's interrupt/resume model and avoiding `409` failures caused by runtime cleanup after the original stream ended.
+
+- **Interrupt extraction fixed for real Deep Agents runtime behavior**: HITL pauses are now detected from the `__interrupt__` update channel used in live Deep Agents execution, rather than relying only on exception-style interrupt handling.
+
+- **Removed vestigial `store` parameter from `create_cognition_agent`**: The old `store` parameter was accepted, used in cache identity, and passed around by callers, but not meaningfully wired in the current agent creation path. It has now been removed to eliminate dead configuration and misleading call sites.
+
+### Testing
+
+- Added docker-compose E2E coverage for:
+  - HITL approve flow
+  - HITL edit flow
+  - HITL reject flow
+  - session metadata create/get/filter flows
+
+- Added unit coverage for:
+  - structured output wiring
+  - context control wiring
+  - resume command payloads
+  - callback URL acceptance and dispatch
+  - provider resolution tuple changes
+  - message projection rebuild behavior
+  - tool CRUD `interrupt_on` metadata
+  - built-in agent registry expectations after adding `hitl_test`
+
+### Documentation
+
+- Updated session/message docs with:
+  - session metadata examples
+  - metadata filtering examples
+  - callback URL behavior and payload shape
+  - explicit projection-vs-checkpoint persistence model
+
+### Deferred / Not Included
+
+- **Per-session sandbox environment variables (#55)**: Investigated and partially prototyped, but intentionally not shipped. The write-only/in-memory API model worked, but the full Deep Agents execute-tool runtime path did not reliably receive injected env vars end-to-end. The issue remains open and documented for future work.
+- **Context compaction observability (#52)**: Core Deep Agents wiring is present, but stronger external observability and deterministic verification remain open as follow-up work.
+
 ## [0.5.0] — 2026-03-22
 
 ### Features
@@ -196,6 +265,7 @@ Initial public release of Cognition — a batteries-included AI backend built on
 - Fixed `DiscoveredModel` attribute access in models route
 - Fixed stale `# type: ignore` comments after adding `types-PyYAML` stubs
 
+[0.6.0]: https://github.com/CognicellAI/Cognition/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/CognicellAI/Cognition/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/CognicellAI/Cognition/releases/tag/v0.4.0
 [0.1.1]: https://github.com/CognicellAI/Cognition/releases/tag/v0.1.1
