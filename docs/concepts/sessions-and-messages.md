@@ -87,12 +87,19 @@ Defined in `server/app/models.py:Message`:
 
 ### Persistence Model
 
-Messages are persisted in two stages:
+Cognition stores conversation history in two related forms:
+
+1. **LangGraph checkpoint state** — the authoritative runtime state for a thread. This is what the agent relies on to resume, continue multi-step execution, and survive reconnects or restarts.
+2. **Messages table** — a read-optimized projection used by the REST API for pagination, timestamps, token/model metadata, and per-message lookups.
+
+Normal writes still happen in two stages:
 
 1. **User message** — Written to the `StorageBackend` immediately when `POST /sessions/{id}/messages` is called, before the agent starts.
-2. **Assistant message** — Accumulated as `token` events stream in. Written to the `StorageBackend` atomically when the `done` event fires.
+2. **Assistant message** — Accumulated as `token` events stream in. Written to the `StorageBackend` when the `done` event fires.
 
-This means a session always has a complete, gap-free history of completed turns in persistent storage. In-progress turns are not written until they complete (or fail with an `error` event, which also triggers persistence).
+The important contract is that the checkpoint is authoritative and the messages table is derived. If a projection write is missed or becomes inconsistent, Cognition can rebuild the API-facing message projection from checkpoint state for that session/thread.
+
+This gives Cognition a recovery path for cases like interrupted writes, projection drift, or future maintenance/migration tasks, while still preserving a query-friendly messages API.
 
 ---
 

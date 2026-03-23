@@ -18,6 +18,7 @@ from langgraph.store.memory import InMemoryStore
 
 from server.app.models import Message, Session, SessionConfig, SessionStatus
 from server.app.storage.backend import StorageBackend
+from server.app.storage.message_projection import project_checkpoint_messages
 
 logger = structlog.get_logger(__name__)
 
@@ -256,6 +257,28 @@ class MemoryStorageBackend:
 
         return len(to_delete)
 
+    async def rebuild_message_projection(
+        self,
+        session_id: str,
+        thread_id: str,
+        checkpoint_messages: list[Any],
+    ) -> int:
+        """Rebuild API message projection from authoritative checkpoint messages."""
+        del thread_id
+
+        await self.delete_messages_for_session(session_id)
+
+        projected_messages = project_checkpoint_messages(session_id, checkpoint_messages)
+        for message in projected_messages:
+            self._messages[message.id] = message
+
+        session = self._sessions.get(session_id)
+        if session is not None:
+            session.message_count = len(projected_messages)
+            session.updated_at = datetime.now(UTC).isoformat()
+
+        return len(projected_messages)
+
     # Checkpointer operations
     async def get_checkpointer(self) -> BaseCheckpointSaver:
         """Get the in-memory checkpointer."""
@@ -282,7 +305,3 @@ class MemoryStorageBackend:
             "sessions": len(self._sessions),
             "messages": len(self._messages),
         }
-
-
-# Register as implementing the protocol
-StorageBackend.register(MemoryStorageBackend)
