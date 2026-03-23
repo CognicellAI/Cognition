@@ -79,6 +79,7 @@ sessions_table = Table(
         default=dict,
     ),
     Column("scopes", JSON, default=dict),
+    Column("metadata", JSON, default=dict),
     Column("message_count", Integer, default=0),
     Column("agent_name", String(100), nullable=False, default="default"),
     Column(

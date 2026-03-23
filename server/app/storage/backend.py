@@ -36,6 +36,7 @@ class SessionStore(Protocol):
         thread_id: str,
         config: SessionConfig,
         title: str | None = None,
+        metadata: dict[str, str] | None = None,
     ) -> Session:
         """Create a new session.
 
@@ -259,6 +260,7 @@ class StorageBackend(Protocol):
         title: str | None = None,
         scopes: dict[str, str] | None = None,
         agent_name: str = "default",
+        metadata: dict[str, str] | None = None,
     ) -> Session:
         """Create a new session."""
         ...
@@ -267,7 +269,11 @@ class StorageBackend(Protocol):
         """Get a session by ID."""
         ...
 
-    async def list_sessions(self, filter_scopes: dict[str, str] | None = None) -> list[Session]:
+    async def list_sessions(
+        self,
+        filter_scopes: dict[str, str] | None = None,
+        metadata_filters: dict[str, str] | None = None,
+    ) -> list[Session]:
         """List all sessions."""
         ...
 
@@ -278,6 +284,7 @@ class StorageBackend(Protocol):
         status: str | None = None,
         config: SessionConfig | None = None,
         agent_name: str | None = None,
+        metadata: dict[str, str] | None = None,
     ) -> Session | None:
         """Update a session.
 

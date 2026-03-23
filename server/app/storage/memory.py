@@ -70,6 +70,7 @@ class MemoryStorageBackend:
         title: str | None = None,
         scopes: dict[str, str] | None = None,
         agent_name: str = "default",
+        metadata: dict[str, str] | None = None,
     ) -> Session:
         """Create a new session."""
         now = datetime.now(UTC).isoformat()
@@ -85,6 +86,7 @@ class MemoryStorageBackend:
             created_at=now,
             updated_at=now,
             message_count=0,
+            metadata=metadata or {},
         )
 
         self._sessions[session_id] = session
@@ -101,7 +103,11 @@ class MemoryStorageBackend:
         """Get a session by ID."""
         return self._sessions.get(session_id)
 
-    async def list_sessions(self, filter_scopes: dict[str, str] | None = None) -> list[Session]:
+    async def list_sessions(
+        self,
+        filter_scopes: dict[str, str] | None = None,
+        metadata_filters: dict[str, str] | None = None,
+    ) -> list[Session]:
         """List all sessions."""
         sessions = sorted(
             self._sessions.values(),
@@ -115,6 +121,13 @@ class MemoryStorageBackend:
                 s for s in sessions if all(s.scopes.get(k) == v for k, v in filter_scopes.items())
             ]
 
+        if metadata_filters:
+            sessions = [
+                s
+                for s in sessions
+                if all(s.metadata.get(k) == v for k, v in metadata_filters.items())
+            ]
+
         return sessions
 
     async def update_session(
@@ -124,6 +137,7 @@ class MemoryStorageBackend:
         status: str | None = None,
         config: SessionConfig | None = None,
         agent_name: str | None = None,
+        metadata: dict[str, str] | None = None,
     ) -> Session | None:
         """Update a session."""
         session = self._sessions.get(session_id)
@@ -154,6 +168,9 @@ class MemoryStorageBackend:
                 if config.system_prompt is not None
                 else existing_config.system_prompt,
             )
+
+        if metadata is not None:
+            session.metadata = dict(metadata)
 
         session.updated_at = datetime.now(UTC).isoformat()
         return session

@@ -16,8 +16,9 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import AsyncGenerator
+from typing import Annotated
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, status
 from fastapi.responses import StreamingResponse
 
 from server.app.agent.agent_definition_registry import get_agent_definition_registry
@@ -138,6 +139,7 @@ async def create_session(
         title=request.title,
         scopes=scope.get_all(),
         agent_name=request.agent_name,
+        metadata=request.metadata,
     )
 
     # Register session with Agent manager
@@ -151,6 +153,8 @@ async def create_session(
     response_model=SessionList,
 )
 async def list_sessions(
+    request: Request,
+    metadata_filters: Annotated[list[str] | None, Query(alias="metadata")] = None,
     settings: Settings = Depends(get_settings_dependency),  # noqa: B008
     scope: SessionScope = Depends(get_scope_dependency),  # noqa: B008
 ) -> SessionList:
@@ -162,10 +166,20 @@ async def list_sessions(
     """
     _ = str(settings.workspace_path)
     store = get_storage_backend()
+    del metadata_filters
+
+    resolved_metadata_filters: dict[str, str] = {
+        key.removeprefix("metadata."): value
+        for key, value in request.query_params.multi_items()
+        if key.startswith("metadata.")
+    }
 
     # Filter by scope if provided
     filter_scopes = scope.get_all() if not scope.is_empty() else None
-    sessions = await store.list_sessions(filter_scopes=filter_scopes)
+    sessions = await store.list_sessions(
+        filter_scopes=filter_scopes,
+        metadata_filters=resolved_metadata_filters or None,
+    )
 
     return SessionList(
         sessions=[SessionResponse.from_core(s) for s in sessions], total=len(sessions)
@@ -268,6 +282,7 @@ async def update_session(
         title=request.title,
         config=request.config,
         agent_name=request.agent_name,
+        metadata=request.metadata,
     )
 
     if session is None:

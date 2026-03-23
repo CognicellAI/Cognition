@@ -53,11 +53,12 @@ class TestSessionEndpoints:
         """Test creating a session."""
         response = client.post(
             "/sessions",
-            json={"title": "Test Session"},
+            json={"title": "Test Session", "metadata": {"workflow": "review", "repo": "acme/app"}},
         )
         assert response.status_code == 201
         data = response.json()
         assert data["title"] == "Test Session"
+        assert data["metadata"] == {"workflow": "review", "repo": "acme/app"}
         assert "id" in data
         assert "thread_id" in data
         # Note: No workspace_path or config in response (server uses global settings)
@@ -71,7 +72,10 @@ class TestSessionEndpoints:
     def test_list_sessions(self):
         """Test listing sessions."""
         # Create a session first
-        client.post("/sessions", json={"title": "list-test-session"})
+        client.post(
+            "/sessions",
+            json={"title": "list-test-session", "metadata": {"repo": "myorg/myrepo"}},
+        )
 
         response = client.get("/sessions")
         assert response.status_code == 200
@@ -79,6 +83,14 @@ class TestSessionEndpoints:
         assert "sessions" in data
         assert "total" in data
         assert isinstance(data["sessions"], list)
+
+        filtered = client.get("/sessions?metadata.repo=myorg/myrepo")
+        assert filtered.status_code == 200
+        filtered_data = filtered.json()
+        assert any(
+            session["metadata"].get("repo") == "myorg/myrepo"
+            for session in filtered_data["sessions"]
+        )
 
     def test_get_session(self):
         """Test getting a session."""
@@ -107,11 +119,12 @@ class TestSessionEndpoints:
         # Update the session
         response = client.patch(
             f"/sessions/{session_id}",
-            json={"title": "updated-title"},
+            json={"title": "updated-title", "metadata": {"ticket": "ABC-123"}},
         )
         assert response.status_code == 200
         data = response.json()
         assert data["title"] == "updated-title"
+        assert data["metadata"] == {"ticket": "ABC-123"}
 
     def test_delete_session(self):
         """Test deleting a session."""

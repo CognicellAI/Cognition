@@ -108,6 +108,14 @@ class PostgresStorageBackend:
 
         # Create tables
         async with self._pool.acquire() as conn:
+            try:
+                await conn.execute(
+                    "ALTER TABLE sessions ADD COLUMN metadata JSONB DEFAULT '{}'::jsonb"
+                )
+            except Exception as exc:
+                if "already exists" not in str(exc).lower():
+                    raise
+
             # Sessions table
             await conn.execute(
                 """
@@ -185,6 +193,7 @@ class PostgresStorageBackend:
         title: str | None = None,
         scopes: dict[str, str] | None = None,
         agent_name: str = "default",
+        metadata: dict[str, str] | None = None,
     ) -> Session:
         """Create a new session."""
         now = datetime.now(UTC)
@@ -201,6 +210,7 @@ class PostgresStorageBackend:
             updated_at=now.isoformat(),
             message_count=0,
             agent_name=agent_name,
+            metadata=metadata or {},
         )
 
         config_json = {
@@ -218,8 +228,8 @@ class PostgresStorageBackend:
                 """
                 INSERT INTO sessions (
                     id, workspace_path, title, thread_id, status,
-                    scopes, config, message_count, agent_name, created_at, updated_at
-                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+                    scopes, metadata, config, message_count, agent_name, created_at, updated_at
+                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
                 """,
                 session.id,
                 session.workspace_path,
@@ -227,6 +237,7 @@ class PostgresStorageBackend:
                 session.thread_id,
                 session.status.value,
                 json.dumps(session.scopes),
+                json.dumps(session.metadata),
                 json.dumps(config_json),
                 session.message_count,
                 session.agent_name,
@@ -253,11 +264,27 @@ class PostgresStorageBackend:
                 return self._row_to_session(row)
         return None
 
-    async def list_sessions(self, filter_scopes: dict[str, str] | None = None) -> list[Session]:
+    async def list_sessions(
+        self,
+        filter_scopes: dict[str, str] | None = None,
+        metadata_filters: dict[str, str] | None = None,
+    ) -> list[Session]:
         """List all sessions."""
         sessions = []
         async with self._pool.acquire() as conn:
-            rows = await conn.fetch("SELECT * FROM sessions ORDER BY updated_at DESC")
+            query = "SELECT * FROM sessions"
+            params: list[str] = []
+            if metadata_filters:
+                predicates = []
+                for index, (key, value) in enumerate(metadata_filters.items(), start=1):
+                    predicates.append(f"metadata->>$${index * 2 - 1} = $${index * 2}")
+                    params.extend([key, value])
+                query += " WHERE " + " AND ".join(
+                    predicate.replace("$$", "$") for predicate in predicates
+                )
+            query += " ORDER BY updated_at DESC"
+
+            rows = await conn.fetch(query, *params)
             for row in rows:
                 session = self._row_to_session(row)
                 # Filter by scopes if specified
@@ -275,6 +302,7 @@ class PostgresStorageBackend:
         status: str | None = None,
         config: SessionConfig | None = None,
         agent_name: str | None = None,
+        metadata: dict[str, str] | None = None,
     ) -> Session | None:
         """Update a session."""
         session = await self.get_session(session_id)
@@ -302,6 +330,12 @@ class PostgresStorageBackend:
             params.append(agent_name)
             param_idx += 1
             session.agent_name = agent_name
+
+        if metadata is not None:
+            updates.append(f"metadata = ${param_idx}")
+            params.append(json.dumps(metadata))
+            param_idx += 1
+            session.metadata = dict(metadata)
 
         if config is not None:
             existing_config = session.config
@@ -667,6 +701,8 @@ class PostgresStorageBackend:
         config_data = json.loads(row["config"])
         scopes_data = row.get("scopes")
         scopes = json.loads(scopes_data) if scopes_data else {}
+        metadata_data = row.get("metadata")
+        metadata = json.loads(metadata_data) if metadata_data else {}
         return Session(
             id=row["id"],
             workspace_path=row["workspace_path"],
@@ -687,6 +723,7 @@ class PostgresStorageBackend:
             updated_at=row["updated_at"].isoformat(),
             message_count=row["message_count"],
             agent_name=row.get("agent_name", "default"),
+            metadata=metadata,
         )
 
     def _row_to_message(self, row: asyncpg.Record) -> Message:
