@@ -35,6 +35,8 @@ class _MockProviderConfig:
         model: str = "google/gemini-3-flash-preview",
         enabled: bool = True,
         priority: int = 0,
+        max_retries: int = 2,
+        timeout: int | None = None,
         api_key_env: str | None = "COGNITION_OPENAI_COMPATIBLE_API_KEY",
         base_url: str | None = "https://openrouter.ai/api/v1",
         region: str | None = None,
@@ -45,6 +47,8 @@ class _MockProviderConfig:
         self.model = model
         self.enabled = enabled
         self.priority = priority
+        self.max_retries = max_retries
+        self.timeout = timeout
         self.api_key_env = api_key_env
         self.base_url = base_url
         self.region = region
@@ -118,6 +122,8 @@ class TestResolveProviderConfig:
             region,
             role_arn,
             _,
+            _,
+            _,
         ) = await service._resolve_provider_config(session=session, scope=None)
 
         assert provider == "openai"
@@ -160,6 +166,8 @@ class TestResolveProviderConfig:
                 base_url,
                 region,
                 role_arn,
+                _,
+                _,
                 _,
             ) = await service._resolve_provider_config(session=session, scope=None)
 
@@ -287,7 +295,7 @@ class TestResolveProviderConfig:
             ),
             patch.dict("os.environ", {"MY_CUSTOM_API_KEY": "resolved-key"}),
         ):
-            *_, api_key, base_url, _, _, _ = await service._resolve_provider_config(
+            _, _, api_key, base_url, _, _, _, _, _ = await service._resolve_provider_config(
                 session=session, scope=None
             )
 
