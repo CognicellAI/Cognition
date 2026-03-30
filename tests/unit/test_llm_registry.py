@@ -203,3 +203,25 @@ class TestBedrockCredentialResolution:
 
         call_kwargs = mock_sts.assume_role.call_args[1]
         assert call_kwargs["RoleArn"] == "arn:aws:iam::123:role/ExplicitRole"
+
+    def test_bedrock_max_tokens_uses_top_level_kwarg(self):
+        """ChatBedrock should receive max_tokens as a top-level kwarg, not in model_kwargs."""
+        settings = TestSettings()
+
+        with patch("langchain_aws.ChatBedrock") as mock_bedrock:
+            mock_bedrock.return_value = MagicMock()
+            from server.app.llm.deep_agent_service import _build_bedrock_model
+
+            _build_bedrock_model(
+                model_id="anthropic.claude-3-sonnet-20240229-v1:0",
+                region=None,
+                role_arn=None,
+                settings=settings,
+                temperature=0.2,
+                max_tokens=16000,
+            )
+
+        _, kwargs = mock_bedrock.call_args
+        assert kwargs["max_tokens"] == 16000
+        assert kwargs["model_kwargs"]["temperature"] == 0.2
+        assert "max_tokens" not in kwargs["model_kwargs"]
