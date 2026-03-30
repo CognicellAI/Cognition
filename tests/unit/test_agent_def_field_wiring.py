@@ -9,6 +9,7 @@ system_prompt, skills, and subagents (the original 3), but also:
   - config.model / config.provider → overrides global provider default
   - config.recursion_limit → overrides default recursion limit
   - config.temperature → passed to _build_model
+  - config.max_tokens → passed to _build_model
 
 These tests exercise the "Code Path A" service layer
 (deep_agent_service.py:stream_response) which was previously only consuming 3
@@ -634,3 +635,103 @@ class TestConfigRecursionLimit:
 
         # result[6] is recursion_limit — session (999) beats agent_def (42)
         assert result[6] == 999
+
+
+class TestConfigMaxTokens:
+    @pytest.mark.asyncio
+    async def test_resolve_model_passes_agent_max_tokens_to_build_model(self):
+        """agent_def.config.max_tokens must be forwarded to _build_model."""
+        from server.app.agent.definition import AgentConfig, AgentDefinition
+        from server.app.llm.deep_agent_service import DeepAgentStreamingService
+        from server.app.settings import Settings
+
+        settings = MagicMock(spec=Settings)
+        service = DeepAgentStreamingService(settings)
+        session = _make_session()
+        agent_def = AgentDefinition(
+            name="test-agent",
+            system_prompt="test",
+            config=AgentConfig(temperature=0.2, max_tokens=16000),
+        )
+
+        with (
+            patch.object(
+                service,
+                "_resolve_provider_config",
+                new=AsyncMock(
+                    return_value=(
+                        "openai",
+                        "gpt-4o",
+                        None,
+                        None,
+                        None,
+                        None,
+                        1000,
+                        2,
+                        30,
+                    )
+                ),
+            ),
+            patch(
+                "server.app.llm.deep_agent_service._build_model",
+                return_value=MagicMock(),
+            ) as build_model,
+            patch.object(service, "_warn_if_no_tool_call_support", new=AsyncMock()),
+        ):
+            await service._resolve_model(session=session, scope=None, agent_def=agent_def)
+
+        kwargs = build_model.call_args.kwargs
+        assert kwargs["temperature"] == 0.2
+        assert kwargs["max_tokens"] == 16000
+
+    def test_build_bedrock_model_adds_max_tokens_to_model_kwargs(self):
+        """Bedrock model kwargs should include max_tokens when configured."""
+        from server.app.llm.deep_agent_service import _build_bedrock_model
+
+        settings = MagicMock()
+        settings.aws_region = "us-east-1"
+        settings.bedrock_role_arn = None
+        settings.aws_access_key_id = None
+        settings.aws_secret_access_key = None
+        settings.aws_session_token = None
+
+        with patch("langchain_aws.ChatBedrock", return_value=MagicMock()) as chat_bedrock:
+            _build_bedrock_model(
+                model_id="anthropic.claude-sonnet-4",
+                region=None,
+                role_arn=None,
+                settings=settings,
+                temperature=0.2,
+                max_tokens=16000,
+                max_retries=2,
+                timeout=30,
+            )
+
+        kwargs = chat_bedrock.call_args.kwargs
+        assert kwargs["model_kwargs"]["temperature"] == 0.2
+        assert kwargs["model_kwargs"]["max_tokens"] == 16000
+
+    def test_openai_compatible_does_not_set_default_max_tokens(self):
+        """OpenAI-compatible models should only receive max_tokens when explicitly set."""
+        from server.app.llm.deep_agent_service import _build_model
+
+        settings = MagicMock()
+        settings.openai_compatible_api_key.get_secret_value.return_value = "token"
+        settings.openai_compatible_base_url = "https://example.com/v1"
+
+        with patch(
+            "server.app.llm.deep_agent_service.init_chat_model",
+            return_value=MagicMock(),
+        ) as init_model:
+            _build_model(
+                provider="openai_compatible",
+                model_id="kimi-k2.5",
+                api_key=None,
+                base_url=None,
+                region=None,
+                role_arn=None,
+                settings=settings,
+            )
+
+        kwargs = init_model.call_args.kwargs
+        assert "max_tokens" not in kwargs

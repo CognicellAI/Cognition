@@ -148,6 +148,12 @@ async def _collect(service: Any, session: Session) -> list[Any]:
     return collected
 
 
+async def _runtime_raises(exc: Exception) -> AsyncGenerator[Any, None]:
+    if False:
+        yield None
+    raise exc
+
+
 # ---------------------------------------------------------------------------
 # Bug 1 — exactly one DoneEvent reaches the caller
 # ---------------------------------------------------------------------------
@@ -316,3 +322,26 @@ class TestUsageEventModelField:
         usage_events = [e for e in collected if isinstance(e, UsageEvent)]
         assert len(usage_events) == 1
         assert usage_events[0].model == "gpt-4o-mini"
+
+
+class TestRuntimeErrorsSurface:
+    """Runtime failures should emit explicit error events instead of silent completion."""
+
+    @pytest.mark.asyncio
+    async def test_runtime_exception_yields_error_event(self):
+        from server.app.llm.deep_agent_service import DeepAgentStreamingService
+
+        session = _make_session()
+        mock_runtime = MagicMock()
+        mock_runtime.astream_events = MagicMock(
+            return_value=_runtime_raises(RuntimeError("graph blew up"))
+        )
+        service = DeepAgentStreamingService(_make_settings())
+
+        p1, p2, p3, p4 = _stream_patches(mock_runtime, session)
+        with p1, p2, p3, p4:
+            collected = await _collect(service, session)
+
+        error_events = [e for e in collected if getattr(e, "code", None) == "STREAMING_ERROR"]
+        assert len(error_events) == 1
+        assert "graph blew up" in error_events[0].message

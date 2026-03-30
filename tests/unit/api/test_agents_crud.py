@@ -61,6 +61,7 @@ class TestGetAgent:
         data = response.json()
         assert data["name"] == "default"
         assert "system_prompt" in data
+        assert "config" in data
 
     def test_get_missing_agent_returns_404(self):
         response = client.get("/agents/does-not-exist")
@@ -82,11 +83,22 @@ class TestCreateAgent:
             "name": "test-create-agent",
             "system_prompt": "You are a test agent.",
             "description": "A test agent",
+            "max_tokens": 16000,
+            "recursion_limit": 500,
+            "provider": "bedrock",
+            "tool_token_limit_before_evict": 2000,
+            "timeout_seconds": 45,
+            "middleware": [{"name": "tool_retry", "max_retries": 2}],
         }
         response = client.post("/agents", json=payload)
         assert response.status_code == 201
         data = response.json()
         assert data["name"] == "test-create-agent"
+        assert data["config"]["max_tokens"] == 16000
+        assert data["config"]["recursion_limit"] == 500
+        assert data["config"]["provider"] == "bedrock"
+        assert data["config"]["tool_token_limit_before_evict"] == 2000
+        assert data["config"]["timeout_seconds"] == 45
 
     def test_create_duplicate_non_native_agent_succeeds(self):
         """Creating an agent that already exists (and is not native) should succeed (upsert)."""
@@ -158,6 +170,38 @@ class TestUpdateAgent:
             json={"description": "updated desc"},
         )
         assert response.status_code == 200
+
+    def test_patch_agent_updates_nested_config_fields(self):
+        client.post(
+            "/agents",
+            json={
+                "name": "test-patch-config-agent",
+                "system_prompt": "original sp",
+                "max_tokens": 4000,
+                "recursion_limit": 100,
+                "provider": "openai",
+            },
+        )
+        response = client.patch(
+            "/agents/test-patch-config-agent",
+            json={"max_tokens": 8000, "timeout_seconds": 30},
+        )
+        assert response.status_code == 200
+        assert response.json()["config"]["max_tokens"] == 8000
+        assert response.json()["config"]["recursion_limit"] == 100
+        assert response.json()["config"]["provider"] == "openai"
+        assert response.json()["config"]["timeout_seconds"] == 30
+
+    def test_system_prompt_is_not_truncated(self):
+        long_prompt = "A" * 1200
+        client.post(
+            "/agents",
+            json={"name": "test-long-prompt-agent", "system_prompt": long_prompt},
+        )
+
+        response = client.get("/agents/test-long-prompt-agent")
+        assert response.status_code == 200
+        assert response.json()["system_prompt"] == long_prompt
 
     def test_patch_missing_agent_returns_404(self):
         response = client.patch(
