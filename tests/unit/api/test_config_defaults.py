@@ -1,0 +1,56 @@
+"""Unit tests for ConfigRegistry global defaults REST endpoints."""
+
+from __future__ import annotations
+
+import pytest
+from fastapi.testclient import TestClient
+
+from server.app.main import app
+
+client = TestClient(app)
+
+
+@pytest.fixture(scope="module", autouse=True)
+def setup_registry():
+    from server.app.storage.config_registry import MemoryConfigRegistry, set_config_registry
+
+    set_config_registry(MemoryConfigRegistry())
+    yield
+
+
+def test_get_provider_defaults() -> None:
+    response = client.get("/config/defaults/provider")
+
+    assert response.status_code == 200
+    assert response.json()["provider"] == "openai_compatible"
+
+
+def test_patch_provider_defaults() -> None:
+    response = client.patch(
+        "/config/defaults/provider",
+        json={"max_tokens": 32000, "model": "gpt-4.1"},
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["max_tokens"] == 32000
+    assert data["model"] == "gpt-4.1"
+
+
+def test_get_agent_defaults() -> None:
+    response = client.get("/config/defaults/agent")
+
+    assert response.status_code == 200
+    assert response.json()["recursion_limit"] == 1000
+
+
+def test_patch_agent_defaults() -> None:
+    response = client.patch(
+        "/config/defaults/agent",
+        json={"recursion_limit": 2000, "memory": ["AGENTS.md", "TEAM.md"]},
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["recursion_limit"] == 2000
+    assert data["memory"] == ["AGENTS.md", "TEAM.md"]

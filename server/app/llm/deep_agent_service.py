@@ -161,6 +161,7 @@ def _build_model(
     role_arn: str | None,
     settings: Settings,
     temperature: float | None = None,
+    max_tokens: int | None = None,
     max_retries: int | None = None,
     timeout: int | None = None,
 ) -> BaseChatModel:
@@ -206,6 +207,8 @@ def _build_model(
                 kwargs["base_url"] = base_url or settings.openai_api_base
             if temperature is not None:
                 kwargs["temperature"] = temperature
+            if max_tokens is not None:
+                kwargs["max_tokens"] = max_tokens
             if max_retries is not None:
                 kwargs["max_retries"] = max_retries
             if timeout is not None:
@@ -218,6 +221,8 @@ def _build_model(
                 kwargs["api_key"] = api_key
             if temperature is not None:
                 kwargs["temperature"] = temperature
+            if max_tokens is not None:
+                kwargs["max_tokens"] = max_tokens
             if max_retries is not None:
                 kwargs["max_retries"] = max_retries
             if timeout is not None:
@@ -231,6 +236,7 @@ def _build_model(
                 role_arn=role_arn,
                 settings=settings,
                 temperature=temperature,
+                max_tokens=max_tokens,
                 max_retries=max_retries,
                 timeout=timeout,
             )
@@ -253,10 +259,11 @@ def _build_model(
                 "model_provider": "openai",
                 "base_url": resolved_base_url,
                 "api_key": resolved_key,
-                "max_tokens": 8000,  # Sane default; keeps free-tier models within limits
             }
             if temperature is not None:
                 compat_kwargs["temperature"] = temperature
+            if max_tokens is not None:
+                compat_kwargs["max_tokens"] = max_tokens
             if max_retries is not None:
                 compat_kwargs["max_retries"] = max_retries
             if timeout is not None:
@@ -269,6 +276,8 @@ def _build_model(
                 kwargs["api_key"] = api_key
             if temperature is not None:
                 kwargs["temperature"] = temperature
+            if max_tokens is not None:
+                kwargs["max_tokens"] = max_tokens
             if max_retries is not None:
                 kwargs["max_retries"] = max_retries
             if timeout is not None:
@@ -279,6 +288,8 @@ def _build_model(
             kwargs = {"model_provider": "google_vertexai"}
             if temperature is not None:
                 kwargs["temperature"] = temperature
+            if max_tokens is not None:
+                kwargs["max_tokens"] = max_tokens
             if max_retries is not None:
                 kwargs["max_retries"] = max_retries
             if timeout is not None:
@@ -310,6 +321,7 @@ def _build_bedrock_model(
     role_arn: str | None,
     settings: Settings,
     temperature: float | None = None,
+    max_tokens: int | None = None,
     max_retries: int | None = None,
     timeout: int | None = None,
 ) -> BaseChatModel:
@@ -349,8 +361,13 @@ def _build_bedrock_model(
         "region_name": resolved_region,
         "config": botocore_config,
     }
+    model_kwargs: dict[str, Any] = {}
     if temperature is not None:
-        kwargs["model_kwargs"] = {"temperature": temperature}
+        model_kwargs["temperature"] = temperature
+    if max_tokens is not None:
+        model_kwargs["max_tokens"] = max_tokens
+    if model_kwargs:
+        kwargs["model_kwargs"] = model_kwargs
 
     # Resolve role_arn: config takes priority over settings
     resolved_role_arn = role_arn or getattr(settings, "bedrock_role_arn", None)
@@ -630,6 +647,15 @@ class DeepAgentStreamingService:
                             return
 
                     # DoneEvent from the runtime is absorbed here; we emit our own below.
+
+            except Exception as exc:
+                logger.error(
+                    "LangGraph execution failed during stream_response",
+                    error=str(exc),
+                    session_id=session_id,
+                    exc_info=True,
+                )
+                yield ErrorEvent(message=f"Agent execution failed: {exc}", code="STREAMING_ERROR")
 
             finally:
                 if manager:
@@ -1069,6 +1095,10 @@ class DeepAgentStreamingService:
         if agent_def and agent_def.config and agent_def.config.temperature is not None:
             temperature = agent_def.config.temperature
 
+        max_tokens: int | None = None
+        if agent_def and agent_def.config and agent_def.config.max_tokens is not None:
+            max_tokens = agent_def.config.max_tokens
+
         model = _build_model(
             provider=provider,
             model_id=model_id,
@@ -1078,6 +1108,7 @@ class DeepAgentStreamingService:
             role_arn=role_arn,
             settings=self.settings,
             temperature=temperature,
+            max_tokens=max_tokens,
             max_retries=max_retries,
             timeout=timeout,
         )

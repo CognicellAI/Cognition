@@ -12,6 +12,8 @@ All configuration mappings are auto-generated from Settings class definitions.
 from __future__ import annotations
 
 import json
+import os
+import re
 from pathlib import Path
 from typing import Any
 
@@ -51,7 +53,11 @@ def get_project_config_path(cwd: Path | None = None) -> Path | None:
 
 
 def load_yaml_file(path: Path) -> dict[str, Any]:
-    """Load YAML file and return dict."""
+    """Load YAML file and return dict.
+
+    Resolves ``${VAR}`` and ``${VAR:-default}`` environment variable references
+    in string values after YAML parsing.
+    """
     if not HAS_YAML:
         raise ImportError(
             "PyYAML is required for YAML config support. Install with: uv pip install pyyaml"
@@ -65,10 +71,33 @@ def load_yaml_file(path: Path) -> dict[str, Any]:
             import yaml
 
             content = yaml.safe_load(f)
-            return content if isinstance(content, dict) else {}
+            if not isinstance(content, dict):
+                return {}
+            resolved = _resolve_env_vars(content)
+            return resolved if isinstance(resolved, dict) else {}
     except Exception as e:
         print(f"Warning: Failed to load config from {path}: {e}")
         return {}
+
+
+def _resolve_env_vars(obj: Any) -> Any:
+    """Recursively resolve ``${VAR}`` and ``${VAR:-default}`` in strings."""
+    if isinstance(obj, str):
+
+        def _replace(match: re.Match[str]) -> str:
+            var_name = match.group(1)
+            default = match.group(3)
+            return os.environ.get(var_name, default if default is not None else match.group(0))
+
+        return re.sub(r"\$\{([A-Za-z_][A-Za-z0-9_]*)(:-(.*?))?\}", _replace, obj)
+
+    if isinstance(obj, dict):
+        return {key: _resolve_env_vars(value) for key, value in obj.items()}
+
+    if isinstance(obj, list):
+        return [_resolve_env_vars(item) for item in obj]
+
+    return obj
 
 
 def deep_merge(base: dict, override: dict) -> dict:

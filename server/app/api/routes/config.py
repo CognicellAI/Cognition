@@ -20,6 +20,10 @@ from server.app.api.models import (
     ConfigRollbackResponse,
     ConfigUpdateRequest,
     ConfigUpdateResponse,
+    GlobalAgentDefaultsResponse,
+    GlobalAgentDefaultsUpdate,
+    GlobalProviderDefaultsResponse,
+    GlobalProviderDefaultsUpdate,
 )
 from server.app.config_loader import load_config
 from server.app.settings import Settings, get_settings
@@ -97,12 +101,35 @@ def save_config(config: dict, config_path: Path) -> None:
         yaml.dump(config, f, default_flow_style=False, sort_keys=False)
 
 
+def _provider_defaults_response(defaults: Any) -> GlobalProviderDefaultsResponse:
+    return GlobalProviderDefaultsResponse(
+        provider=defaults.provider,
+        model=defaults.model,
+        max_tokens=defaults.max_tokens,
+        system_prompt_type=defaults.system_prompt_type,
+        system_prompt_value=defaults.system_prompt_value,
+    )
+
+
+def _agent_defaults_response(defaults: Any) -> GlobalAgentDefaultsResponse:
+    return GlobalAgentDefaultsResponse(
+        memory=list(defaults.memory),
+        skills=list(defaults.skills),
+        subagents=list(defaults.subagents),
+        interrupt_on=dict(defaults.interrupt_on),
+        response_format=defaults.response_format,
+        tool_token_limit_before_evict=defaults.tool_token_limit_before_evict,
+        recursion_limit=defaults.recursion_limit,
+        mcp_servers=dict(defaults.mcp_servers),
+    )
+
+
 @router.get("", response_model=ConfigResponse)
 async def get_config(
     settings: Settings = Depends(get_settings),  # noqa: B008
 ) -> ConfigResponse:
     """Get server configuration."""
-    yaml_config = load_config()
+    yaml_config = load_config(cwd=settings.workspace_root)
 
     # Build available providers list from ConfigRegistry + ModelCatalog
     available_providers: list[dict[str, Any]] = []
@@ -162,7 +189,7 @@ async def patch_config(
     if not changes:
         raise HTTPException(status_code=422, detail="No valid changes provided")
 
-    current_config = load_config()
+    current_config = load_config(cwd=settings.workspace_root)
     config_path = Path(".cognition/config.yaml")
     backup_path = Path(".cognition/config.yaml.backup")
 
@@ -208,3 +235,53 @@ async def rollback_config(
         rolled_back=True,
         timestamp=datetime.now(UTC).isoformat(),
     )
+
+
+@router.get("/defaults/provider", response_model=GlobalProviderDefaultsResponse)
+async def get_provider_defaults() -> GlobalProviderDefaultsResponse:
+    """Return effective global provider defaults from ConfigRegistry."""
+    from server.app.storage.config_registry import get_config_registry
+
+    reg = get_config_registry()
+    defaults = await reg.get_global_provider_defaults()
+    return _provider_defaults_response(defaults)
+
+
+@router.patch("/defaults/provider", response_model=GlobalProviderDefaultsResponse)
+async def patch_provider_defaults(
+    updates: GlobalProviderDefaultsUpdate,
+) -> GlobalProviderDefaultsResponse:
+    """Partially update global provider defaults in ConfigRegistry."""
+    from server.app.storage.config_models import GlobalProviderDefaults
+    from server.app.storage.config_registry import get_config_registry
+
+    reg = get_config_registry()
+    current = await reg.get_global_provider_defaults()
+    merged = current.model_copy(update=updates.model_dump(exclude_none=True))
+    defaults = GlobalProviderDefaults.model_validate(merged.model_dump())
+    await reg.set_global_provider_defaults(defaults)
+    return _provider_defaults_response(defaults)
+
+
+@router.get("/defaults/agent", response_model=GlobalAgentDefaultsResponse)
+async def get_agent_defaults() -> GlobalAgentDefaultsResponse:
+    """Return effective global agent defaults from ConfigRegistry."""
+    from server.app.storage.config_registry import get_config_registry
+
+    reg = get_config_registry()
+    defaults = await reg.get_global_agent_defaults()
+    return _agent_defaults_response(defaults)
+
+
+@router.patch("/defaults/agent", response_model=GlobalAgentDefaultsResponse)
+async def patch_agent_defaults(updates: GlobalAgentDefaultsUpdate) -> GlobalAgentDefaultsResponse:
+    """Partially update global agent defaults in ConfigRegistry."""
+    from server.app.storage.config_models import GlobalAgentDefaults
+    from server.app.storage.config_registry import get_config_registry
+
+    reg = get_config_registry()
+    current = await reg.get_global_agent_defaults()
+    merged = current.model_copy(update=updates.model_dump(exclude_none=True))
+    defaults = GlobalAgentDefaults.model_validate(merged.model_dump())
+    await reg.set_global_agent_defaults(defaults)
+    return _agent_defaults_response(defaults)

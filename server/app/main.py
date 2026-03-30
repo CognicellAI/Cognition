@@ -59,7 +59,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     from server.app.bootstrap import seed_providers_from_config
     from server.app.config_loader import load_config
 
-    yaml_config = load_config()
+    yaml_config = load_config(cwd=settings.workspace_root)
     await seed_providers_from_config(yaml_config)
 
     # Initialize agent definition registry (file-based agents)

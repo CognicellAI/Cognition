@@ -562,6 +562,20 @@ def load_agent_definition_from_markdown(path: str | Path) -> AgentDefinition:
         else:
             config_kwargs["model"] = model_value
 
+    config_block = frontmatter.get("config")
+    if isinstance(config_block, dict):
+        for key in (
+            "temperature",
+            "max_tokens",
+            "recursion_limit",
+            "tool_token_limit_before_evict",
+            "provider",
+            "model",
+            "timeout_seconds",
+        ):
+            if key in config_block:
+                config_kwargs[key] = config_block[key]
+
     definition = AgentDefinition(
         name=name,
         system_prompt=body,

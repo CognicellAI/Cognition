@@ -444,6 +444,52 @@ class ConfigRollbackResponse(BaseModel):
     timestamp: str = Field(..., description="Timestamp of rollback (ISO format)")
 
 
+class GlobalProviderDefaultsResponse(BaseModel):
+    """Global provider defaults exposed by the ConfigRegistry API."""
+
+    provider: str
+    model: str
+    max_tokens: int | None = None
+    system_prompt_type: Literal["file", "inline", "mlflow"]
+    system_prompt_value: str
+
+
+class GlobalProviderDefaultsUpdate(BaseModel):
+    """Partial update model for global provider defaults."""
+
+    provider: str | None = None
+    model: str | None = None
+    max_tokens: int | None = None
+    system_prompt_type: Literal["file", "inline", "mlflow"] | None = None
+    system_prompt_value: str | None = None
+
+
+class GlobalAgentDefaultsResponse(BaseModel):
+    """Global agent defaults exposed by the ConfigRegistry API."""
+
+    memory: list[str] = Field(default_factory=list)
+    skills: list[str] = Field(default_factory=list)
+    subagents: list[dict[str, Any]] = Field(default_factory=list)
+    interrupt_on: dict[str, bool] = Field(default_factory=dict)
+    response_format: str | None = None
+    tool_token_limit_before_evict: int | None = None
+    recursion_limit: int
+    mcp_servers: dict[str, Any] = Field(default_factory=dict)
+
+
+class GlobalAgentDefaultsUpdate(BaseModel):
+    """Partial update model for global agent defaults."""
+
+    memory: list[str] | None = None
+    skills: list[str] | None = None
+    subagents: list[dict[str, Any]] | None = None
+    interrupt_on: dict[str, bool] | None = None
+    response_format: str | None = None
+    tool_token_limit_before_evict: int | None = None
+    recursion_limit: int | None = None
+    mcp_servers: dict[str, Any] | None = None
+
+
 # ============================================================================
 # Agent Models
 # ============================================================================
@@ -457,8 +503,17 @@ class AgentResponse(BaseModel):
     mode: Literal["primary", "subagent", "all"] = Field(..., description="Agent mode")
     hidden: bool = Field(..., description="Whether agent is hidden from listings")
     native: bool = Field(..., description="Whether agent is built-in")
-    model: str | None = Field(None, description="Default model for this agent")
-    temperature: float | None = Field(None, description="Default temperature for this agent")
+    model: str | None = Field(
+        None,
+        description="Deprecated compatibility field. Use config.model instead.",
+    )
+    temperature: float | None = Field(
+        None,
+        description="Deprecated compatibility field. Use config.temperature instead.",
+    )
+    config: AgentConfigResponse | None = Field(
+        None, description="Full runtime config for this agent"
+    )
     response_format: str | None = Field(None, description="Structured output schema path")
     interrupt_on: dict[str, bool] = Field(
         default_factory=dict,
@@ -471,9 +526,19 @@ class AgentResponse(BaseModel):
     skills: list[str] = Field(
         default_factory=list, description="Skill directories this agent can use"
     )
-    system_prompt: str | None = Field(
-        None, description="Agent's system prompt (truncated if very long)"
-    )
+    system_prompt: str | None = Field(None, description="Agent's system prompt")
+
+
+class AgentConfigResponse(BaseModel):
+    """Agent runtime configuration exposed over the API."""
+
+    temperature: float | None = None
+    max_tokens: int | None = None
+    recursion_limit: int | None = None
+    tool_token_limit_before_evict: int | None = None
+    provider: str | None = None
+    model: str | None = None
+    timeout_seconds: float | None = None
 
 
 class AgentList(BaseModel):
@@ -717,6 +782,12 @@ class AgentCreate(BaseModel):
     )
     model: str | None = Field(default=None, description="Default model override")
     temperature: float | None = Field(default=None)
+    max_tokens: int | None = Field(default=None)
+    recursion_limit: int | None = Field(default=None)
+    tool_token_limit_before_evict: int | None = Field(default=None)
+    provider: str | None = Field(default=None)
+    timeout_seconds: float | None = Field(default=None)
+    middleware: list[Any] = Field(default_factory=list)
     scope: dict[str, str] = Field(default_factory=dict)
 
 
@@ -734,6 +805,12 @@ class AgentUpdate(BaseModel):
     response_format: str | None = None
     model: str | None = None
     temperature: float | None = None
+    max_tokens: int | None = None
+    recursion_limit: int | None = None
+    tool_token_limit_before_evict: int | None = None
+    provider: str | None = None
+    timeout_seconds: float | None = None
+    middleware: list[Any] | None = None
 
 
 # ============================================================================

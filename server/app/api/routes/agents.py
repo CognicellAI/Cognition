@@ -6,6 +6,7 @@ from fastapi import APIRouter, HTTPException
 
 from server.app.agent.agent_definition_registry import get_agent_definition_registry
 from server.app.api.models import (
+    AgentConfigResponse,
     AgentCreate,
     AgentList,
     AgentResponse,
@@ -31,13 +32,20 @@ def _agent_to_response(agent: Any) -> AgentResponse:
         native=agent.native,
         model=agent.config.model,
         temperature=agent.config.temperature,
+        config=AgentConfigResponse(
+            temperature=agent.config.temperature,
+            max_tokens=agent.config.max_tokens,
+            recursion_limit=agent.config.recursion_limit,
+            tool_token_limit_before_evict=agent.config.tool_token_limit_before_evict,
+            provider=agent.config.provider,
+            model=agent.config.model,
+            timeout_seconds=agent.config.timeout_seconds,
+        ),
         response_format=getattr(agent, "response_format", None),
         interrupt_on={k: bool(v) for k, v in (agent.interrupt_on or {}).items()},
         tools=agent.tools or [],
         skills=agent.skills or [],
-        system_prompt=agent.system_prompt[:500] + "..."
-        if agent.system_prompt and len(agent.system_prompt) > 500
-        else agent.system_prompt,
+        system_prompt=agent.system_prompt,
     )
 
 
@@ -92,10 +100,15 @@ async def create_agent(body: AgentCreate) -> AgentResponse:
             "subagents": [],
             "interrupt_on": body.interrupt_on,
             "response_format": body.response_format,
-            "middleware": [],
+            "middleware": body.middleware,
             "config": {
                 "model": body.model,
                 "temperature": body.temperature,
+                "max_tokens": body.max_tokens,
+                "recursion_limit": body.recursion_limit,
+                "tool_token_limit_before_evict": body.tool_token_limit_before_evict,
+                "provider": body.provider,
+                "timeout_seconds": body.timeout_seconds,
             },
         }
         await reg.upsert_agent(body.name, body.scope, definition_data, "api")
@@ -151,12 +164,19 @@ async def update_agent(name: str, body: AgentUpdate) -> AgentResponse:
 
         # Apply partial update
         updates = body.model_dump(exclude_none=True)
-        if "model" in updates or "temperature" in updates:
+        config_fields = {
+            "model",
+            "temperature",
+            "max_tokens",
+            "recursion_limit",
+            "tool_token_limit_before_evict",
+            "provider",
+            "timeout_seconds",
+        }
+        config_updates = {key: updates.pop(key) for key in list(updates) if key in config_fields}
+        if config_updates:
             config = data.get("config", {})
-            if "model" in updates:
-                config["model"] = updates.pop("model")
-            if "temperature" in updates:
-                config["temperature"] = updates.pop("temperature")
+            config.update(config_updates)
             data["config"] = config
         if "response_format" in updates:
             data["response_format"] = updates.pop("response_format")
