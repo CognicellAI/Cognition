@@ -73,7 +73,8 @@ def load_yaml_file(path: Path) -> dict[str, Any]:
             content = yaml.safe_load(f)
             if not isinstance(content, dict):
                 return {}
-            return _resolve_env_vars(content)
+            resolved = _resolve_env_vars(content)
+            return resolved if isinstance(resolved, dict) else {}
     except Exception as e:
         print(f"Warning: Failed to load config from {path}: {e}")
         return {}
