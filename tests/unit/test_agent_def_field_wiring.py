@@ -684,8 +684,8 @@ class TestConfigMaxTokens:
         assert kwargs["temperature"] == 0.2
         assert kwargs["max_tokens"] == 16000
 
-    def test_build_bedrock_model_adds_max_tokens_to_model_kwargs(self):
-        """Bedrock model kwargs should include max_tokens when configured."""
+    def test_build_bedrock_model_passes_top_level_max_tokens(self):
+        """Bedrock max_tokens should use the dedicated top-level ChatBedrock kwarg."""
         from server.app.llm.deep_agent_service import _build_bedrock_model
 
         settings = MagicMock()
@@ -709,7 +709,8 @@ class TestConfigMaxTokens:
 
         kwargs = chat_bedrock.call_args.kwargs
         assert kwargs["model_kwargs"]["temperature"] == 0.2
-        assert kwargs["model_kwargs"]["max_tokens"] == 16000
+        assert kwargs["max_tokens"] == 16000
+        assert "max_tokens" not in kwargs["model_kwargs"]
 
     def test_openai_compatible_does_not_set_default_max_tokens(self):
         """OpenAI-compatible models should only receive max_tokens when explicitly set."""

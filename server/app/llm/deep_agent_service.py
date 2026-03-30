@@ -365,7 +365,7 @@ def _build_bedrock_model(
     if temperature is not None:
         model_kwargs["temperature"] = temperature
     if max_tokens is not None:
-        model_kwargs["max_tokens"] = max_tokens
+        kwargs["max_tokens"] = max_tokens
     if model_kwargs:
         kwargs["model_kwargs"] = model_kwargs
 
