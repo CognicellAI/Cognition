@@ -207,6 +207,11 @@ class Settings(BaseSettings):
         """
         return self.workspace_root.resolve()
 
+    @property
+    def session_sandboxes_path(self) -> Path:
+        """Return the root directory for per-session sandbox workspaces."""
+        return self.workspace_path / ".cognition" / "sandboxes"
+
     @field_validator("workspace_root")
     @classmethod
     def validate_workspace_root(cls, v: Path) -> Path:

@@ -37,6 +37,7 @@ class SessionStore(Protocol):
         config: SessionConfig,
         title: str | None = None,
         metadata: dict[str, str] | None = None,
+        workspace_path: str | None = None,
     ) -> Session:
         """Create a new session.
 
@@ -261,6 +262,7 @@ class StorageBackend(Protocol):
         scopes: dict[str, str] | None = None,
         agent_name: str = "default",
         metadata: dict[str, str] | None = None,
+        workspace_path: str | None = None,
     ) -> Session:
         """Create a new session."""
         ...

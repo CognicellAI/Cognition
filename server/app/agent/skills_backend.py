@@ -8,6 +8,7 @@ from deepagents.backends.protocol import (
     FileDownloadResponse,
     FileInfo,
 )
+from typing import Any
 
 from server.app.storage.config_registry import ConfigRegistry
 
@@ -167,6 +168,34 @@ class ConfigRegistrySkillsBackend(BackendProtocol):
 
         except Exception as e:
             return f"Error reading skill {skill_name}: {str(e)}"
+
+    def ls_info(self, path: str) -> list[FileInfo]:
+        """Synchronous wrapper for skill directory listing.
+
+        CompositeBackend uses synchronous file tool methods. Provide a sync wrapper
+        around the async implementation so routed skill paths participate cleanly
+        in mixed backend operations.
+        """
+        import asyncio
+
+        return asyncio.run(self.als_info(path))
+
+    def glob_info(self, pattern: str, path: str = "/") -> list[FileInfo]:
+        """Return no matches for glob over skill routes.
+
+        Skills are only exposed as concrete directories and SKILL.md files. Globbing
+        across the routed skill backend should not raise NotImplementedError because
+        CompositeBackend queries all backends during default-path glob operations.
+        """
+        return []
+
+    def grep_raw(self, pattern: str, path: str | None = None, glob: str | None = None) -> list[Any]:
+        """Return no matches for grep over skill routes.
+
+        This keeps mixed backend grep operations from failing when CompositeBackend
+        fans out across routes that are unrelated to the repo filesystem search.
+        """
+        return []
 
     # Remaining BackendProtocol methods (glob_info, write, edit, upload_files, etc.)
     # are intentionally not implemented. SkillsMiddleware only needs als_info,

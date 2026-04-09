@@ -101,11 +101,13 @@ def create_config_registry(settings: Settings) -> ConfigRegistry:
         from server.app.storage.config_registry import SqliteConfigRegistry
 
         # Resolve DB path the same way SqliteStorageBackend does
-        db_path = Path(uri)
+        normalized_uri = uri.removeprefix("sqlite:///")
+        db_path = Path(normalized_uri)
         if not db_path.is_absolute():
-            db_path = Path(workspace_path) / uri
+            db_path = Path(workspace_path) / normalized_uri
         db_path.parent.mkdir(parents=True, exist_ok=True)
-        return SqliteConfigRegistry(db_path=str(db_path))
+        registry = SqliteConfigRegistry(db_path=str(db_path))
+        return registry
 
     elif backend_type == "postgres":
         from server.app.storage.config_registry import PostgresConfigRegistry

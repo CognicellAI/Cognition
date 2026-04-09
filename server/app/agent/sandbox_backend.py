@@ -10,8 +10,7 @@ kernel-level isolation per session for production.
 
 from __future__ import annotations
 
-import shlex
-import subprocess
+import os
 from pathlib import Path
 from typing import Any
 
@@ -26,19 +25,12 @@ logger = structlog.get_logger(__name__)
 
 
 class CognitionLocalSandboxBackend(LocalShellBackend, SandboxBackendProtocol):
-    """Local sandbox backend combining native file ops with shell execution.
+    """Local sandbox backend built on Deep Agents' default LocalShellBackend.
 
-    Inherits from LocalShellBackend for robust, OS-compatible file operations:
-    - ls_info, read, write, edit, glob_info, grep_raw, upload/download
-
-    Overrides execute() to use shlex.split() + shell=False for security:
-    - Uses shlex.split() to parse command arguments safely
-    - Uses shell=False to prevent shell injection attacks
-    - Inherits virtual_mode support from parent class
-
-    Security features:
-    - Protected paths (e.g., .cognition/) cannot be written to or executed in
-    - Path confinement via virtual_mode (inherited from parent)
+    Cognition keeps the protected-path write guard, but local command execution
+    intentionally uses Deep Agents' default shell semantics. This preserves the
+    behavior that agent prompts and tools already assume for commands that rely
+    on shell parsing, pipes, redirects, and shell builtins.
     """
 
     def __init__(
@@ -56,8 +48,18 @@ class CognitionLocalSandboxBackend(LocalShellBackend, SandboxBackendProtocol):
             protected_paths: List of protected path prefixes (relative to workspace).
                            Defaults to [".cognition"].
         """
-        # Initialize parent LocalShellBackend with virtual_mode=True for security
-        super().__init__(root_dir=root_dir, virtual_mode=True)
+        sandbox_env = {
+            "GH_TOKEN": os.environ.get("GH_TOKEN", ""),
+            "COGNITION_WORKSPACE_ROOT": str(Path(root_dir).resolve()),
+            "HOME": os.environ.get("HOME", "/home/cognition"),
+            "PATH": os.environ.get("PATH", ""),
+        }
+
+        # LocalShellBackend virtual_mode rewrites absolute paths like /workspace/... into
+        # <root>/workspace/... which breaks file tools after repo clone. Keep local shell
+        # semantics and env control, but disable virtual_mode so file tools and execute()
+        # resolve the same concrete paths.
+        super().__init__(root_dir=root_dir, virtual_mode=False, env=sandbox_env, inherit_env=False)
         self._id = sandbox_id or f"cognition-local-{id(self)}"
         self._protected_paths = protected_paths or [".cognition"]
 
@@ -106,90 +108,6 @@ class CognitionLocalSandboxBackend(LocalShellBackend, SandboxBackendProtocol):
         if self._is_protected_path(file_path):
             raise PermissionError(f"Writing to protected path is not allowed: {file_path}")
         return super().write(file_path, content)
-
-    def execute(self, command: str, *, timeout: int | None = None) -> ExecuteResponse:
-        """Execute a command in the sandbox using shell=False for security.
-
-        This overrides the parent class to use shlex.split() + shell=False
-        instead of shell=True, preventing shell injection attacks.
-        Also checks for protected path access in the command.
-
-        Args:
-            command: Shell command to execute.
-            timeout: Optional per-command timeout override in seconds.
-                If not provided, falls back to the backend's configured timeout.
-        """
-        if not command or not isinstance(command, str):
-            return ExecuteResponse(
-                output="Error: Command must be a non-empty string.",
-                exit_code=1,
-                truncated=False,
-            )
-
-        # Check for protected path access in the command
-        for protected in self._protected_paths:
-            if protected in command:
-                return ExecuteResponse(
-                    output=f"Error: Command attempts to access protected path: {protected}",
-                    exit_code=1,
-                    truncated=False,
-                )
-
-        effective_timeout = timeout if timeout is not None else self._default_timeout
-
-        try:
-            # Parse command using shlex for safe argument splitting
-            cmd_args = shlex.split(command)
-
-            result = subprocess.run(
-                cmd_args,
-                shell=False,  # Security: no shell execution, prevents injection
-                capture_output=True,
-                text=True,
-                cwd=str(self.cwd),
-                timeout=effective_timeout,
-                env=self._env,
-            )
-
-            # Combine stdout and stderr
-            output_parts = []
-            if result.stdout:
-                output_parts.append(result.stdout)
-            if result.stderr:
-                stderr_lines = result.stderr.strip().split("\n")
-                output_parts.extend(f"[stderr] {line}" for line in stderr_lines)
-
-            output = "\n".join(output_parts) if output_parts else "<no output>"
-
-            # Check for truncation
-            truncated = False
-            if len(output) > self._max_output_bytes:
-                output = output[: self._max_output_bytes]
-                output += f"\n\n... Output truncated at {self._max_output_bytes} bytes."
-                truncated = True
-
-            # Add exit code info if non-zero
-            if result.returncode != 0:
-                output = f"{output.rstrip()}\n\nExit code: {result.returncode}"
-
-            return ExecuteResponse(
-                output=output,
-                exit_code=result.returncode,
-                truncated=truncated,
-            )
-
-        except subprocess.TimeoutExpired:
-            return ExecuteResponse(
-                output=f"Error: Command timed out after {effective_timeout:.1f} seconds.",
-                exit_code=124,
-                truncated=False,
-            )
-        except Exception as e:
-            return ExecuteResponse(
-                output=f"Error executing command: {e}",
-                exit_code=1,
-                truncated=False,
-            )
 
 
 class CognitionDockerSandboxBackend(FilesystemBackend, SandboxBackendProtocol):

@@ -70,3 +70,6 @@ Thumbs.db
 state.db*
 sessions.json
 mlflow.db
+
+# Local planning docs
+localdocs/

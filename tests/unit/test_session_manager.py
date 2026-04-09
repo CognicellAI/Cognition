@@ -4,6 +4,7 @@ Tests the application-level session management with lifecycle events
 and Deep Agents integration.
 """
 
+from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
@@ -11,6 +12,7 @@ import pytest
 from server.app.models import SessionStatus
 from server.app.session_manager import (
     SessionManager,
+    build_session_workspace_path,
     get_session_manager,
     initialize_session_manager,
     set_session_manager,
@@ -37,6 +39,11 @@ def mock_settings():
     settings = MagicMock(spec=Settings)
     settings.llm_provider = "mock"
     settings.llm_model = "gpt-4"
+    import tempfile
+    from pathlib import Path
+
+    sandbox_root = Path(tempfile.mkdtemp()) / ".cognition" / "sandboxes"
+    settings.session_sandboxes_path = sandbox_root
     return settings
 
 
@@ -57,7 +64,9 @@ class TestSessionManagerBasics:
             title="Test Session",
         )
 
-        assert session.workspace_path == "/workspace"
+        assert session.workspace_path.startswith(
+            str(session_manager._settings.session_sandboxes_path)
+        )
         assert session.title == "Test Session"
         assert session.status == SessionStatus.ACTIVE
         assert session.id is not None
@@ -93,16 +102,21 @@ class TestSessionManagerBasics:
 
         assert len(sessions) == 2
 
-    @pytest.mark.skip(reason="Storage backend overwrites workspace_path - requires design change")
-    async def test_list_sessions_filtered_by_workspace(self, session_manager):
+    @pytest.mark.skip(
+        reason="Storage backend workspace filtering remains global; session isolation is covered by dedicated workspace path tests"
+    )
+    async def test_list_sessions_filtered_by_workspace(self, session_manager, temp_storage):
         """Test filtering sessions by workspace."""
-        await session_manager.create_session(workspace_path="/ws1", title="Session 1")
+        first = await session_manager.create_session(workspace_path="/ws1", title="Session 1")
         await session_manager.create_session(workspace_path="/ws2", title="Session 2")
 
-        sessions = await session_manager.list_sessions(workspace_path="/ws1")
+        stored_first = await temp_storage.get_session(first.id)
+        assert stored_first is not None
+
+        sessions = await session_manager.list_sessions(workspace_path=stored_first.workspace_path)
 
         assert len(sessions) == 1
-        assert sessions[0].workspace_path == "/ws1"
+        assert sessions[0].workspace_path == first.workspace_path
 
     @pytest.mark.asyncio
     async def test_delete_session(self, session_manager):
@@ -253,10 +267,40 @@ class TestSessionManagerContext:
 
         assert context is not None
         assert context.session_id == session.id
-        assert context.workspace_path == "/workspace"
+        assert context.workspace_path.startswith(
+            str(session_manager._settings.session_sandboxes_path)
+        )
         assert context.user_id == "user123"
         assert context.org_id == "org456"
         assert context.scopes == {"user_id": "user123", "project": "proj456"}
+
+
+class TestSessionWorkspaceIsolation:
+    @pytest.mark.asyncio
+    async def test_sessions_get_unique_workspace_paths(self, session_manager):
+        first = await session_manager.create_session(workspace_path="/workspace", title="One")
+        second = await session_manager.create_session(workspace_path="/workspace", title="Two")
+
+        assert first.workspace_path != second.workspace_path
+        assert first.workspace_path.endswith(first.id)
+        assert second.workspace_path.endswith(second.id)
+
+    def test_build_session_workspace_path_uses_settings_root(self):
+        settings = MagicMock(spec=Settings)
+        settings.session_sandboxes_path = Path("/tmp/custom-root/.cognition/sandboxes")
+
+        result = build_session_workspace_path(settings, "session-123")
+
+        assert result == "/tmp/custom-root/.cognition/sandboxes/session-123"
+
+    def test_ensure_session_workspace_path_creates_directory(self, tmp_path):
+        from server.app.session_manager import ensure_session_workspace_path
+
+        path = tmp_path / ".cognition" / "sandboxes" / "session-123"
+        ensure_session_workspace_path(str(path))
+
+        assert path.exists()
+        assert path.is_dir()
 
     def test_create_context_not_found(self, session_manager):
         """Test creating context for non-existent session."""
