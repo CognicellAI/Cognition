@@ -70,13 +70,14 @@ class MemoryStorageBackend:
         scopes: dict[str, str] | None = None,
         agent_name: str = "default",
         metadata: dict[str, str] | None = None,
+        workspace_path: str | None = None,
     ) -> Session:
         """Create a new session."""
         now = datetime.now(UTC).isoformat()
 
         session = Session(
             id=session_id,
-            workspace_path=str(self.workspace_path),
+            workspace_path=workspace_path or str(self.workspace_path),
             title=title,
             thread_id=thread_id,
             status=SessionStatus.ACTIVE,

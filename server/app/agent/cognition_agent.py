@@ -241,9 +241,13 @@ Key capabilities:
 Best practices:
 1. Always check what files exist before making changes
 2. Read relevant files before editing
-3. Use edit_file for precise changes rather than rewriting entire files
-4. Run tests after making changes
-5. Explain your reasoning before taking actions
+3. Use read_file, write_file, and edit_file for repository changes rather than shell-based text editing
+4. The workspace root is the configured session workspace exposed via COGNITION_WORKSPACE_ROOT; use that concrete path instead of hardcoding /workspace or literal shell variables
+5. Inspect the real repository layout before assuming nested paths like gateway/src
+6. If the target repository is not already present, clone it under the session workspace before inspecting or editing files
+7. Use git commands with explicit paths or working directories instead of shell builtins like cd only when you already know the repo root; otherwise inspect the repo first
+8. Run tests after making changes
+9. Explain your reasoning before taking actions
 
 The current working directory is the project root. All file paths are relative to this root."""
 
@@ -379,7 +383,8 @@ async def create_cognition_agent(
         agent_skills = agent_skills + ["/skills/api/"]
 
     # Wrap sandbox backend with CompositeBackend to support DB-backed skills.
-    # Typed as the common BackendProtocol so both branches satisfy the union.
+    # The route is intentionally narrow so normal repo file access under /workspace
+    # still flows to the sandbox backend unchanged.
     from deepagents.backends.protocol import BackendProtocol
 
     backend: BackendProtocol
@@ -388,16 +393,12 @@ async def create_cognition_agent(
 
         from server.app.agent.skills_backend import ConfigRegistrySkillsBackend
 
-        # Create DB-backed skills backend for API-created skills
         db_skills_backend = ConfigRegistrySkillsBackend(registry=reg, scope=scope)
-
-        # CompositeBackend routes skill paths to DB backend, everything else to sandbox
         backend = CompositeBackend(
-            default=sandbox_backend,  # Filesystem for tools, execute(), etc.
-            routes={"/skills/api/": db_skills_backend},  # DB for API-created skills
+            default=sandbox_backend,
+            routes={"/skills/api/": db_skills_backend},
         )
     else:
-        # Fallback to sandbox backend only if ConfigRegistry not available
         backend = sandbox_backend
 
     if subagents is not None:

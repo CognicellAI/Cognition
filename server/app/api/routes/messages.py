@@ -295,8 +295,6 @@ async def send_message(
     - `error`: Error occurred
     - `done`: Stream complete
     """
-    workspace_path = str(settings.workspace_path)
-
     # Check rate limit
     # Use scope-based key if scoping is enabled, otherwise use IP
     if settings.scoping_enabled and not scope.is_empty():
@@ -316,6 +314,8 @@ async def send_message(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Session not found: {session_id}",
         )
+
+    workspace_path = session.workspace_path
 
     # Enforce scoping - check if session scope matches current scope
     if not scope.is_empty() and not scope.matches(session.scopes):

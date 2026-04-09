@@ -184,6 +184,38 @@ An agent definition (tools, prompt, skills, middleware) must be sufficient to ge
 * Multi-user scoping
 * Evaluation
 
+## Recommended Integration Principles
+
+When evaluating ideas from other agent products or codebases, only integrate features that reinforce Cognition's backend mission.
+
+1. **Backend-first, not CLI-first**
+   - Features should strengthen API, streaming, persistence, sandboxing, observability, multi-user scoping, or evaluation.
+   - Terminal-only UX features are not core unless they expose reusable backend primitives.
+
+2. **Definition-driven over hardcoded modes**
+   - Prefer agent definition, middleware, skill, and config-registry fields over bespoke runtime switches.
+   - New behavior should be externally configurable and inspectable.
+
+3. **Scope-aware by default**
+   - New persistence, memory, scheduling, and orchestration features must respect user, org, and project boundaries.
+   - Never introduce features that can silently cross tenant boundaries.
+
+4. **Observable and debuggable**
+   - Long-running jobs, delegation flows, memory processes, and approval paths must emit explicit logs, metrics, and streaming events where appropriate.
+   - Hidden background behavior without attribution is architectural drift.
+
+5. **Deep Agents-native where possible**
+   - Prefer Deep Agents primitives and extension points over parallel custom orchestration systems.
+   - Avoid re-implementing capabilities already supported by the runtime unless there is a concrete gap.
+
+6. **Smallest correct integration**
+   - Import the minimal useful idea, not the full product surface area around it.
+   - Re-express features in Cognition's architecture rather than copying foreign abstractions wholesale.
+
+7. **Respect the 7-layer architecture**
+   - New integrations must preserve layer direction and avoid mixing client, runtime, persistence, and observability concerns.
+   - If a feature requires architectural change, it must be treated as such in ROADMAP.md.
+
 
 ---
 
@@ -406,4 +438,3 @@ And automatically provide:
 * Evaluation pipeline
 
 The roadmap exists to force convergence toward that state.
-

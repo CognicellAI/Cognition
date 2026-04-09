@@ -52,6 +52,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     from server.app.storage.factory import create_config_dispatcher, create_config_registry
 
     config_registry = create_config_registry(settings)
+    if hasattr(config_registry, "initialize_schema"):
+        await config_registry.initialize_schema()
     set_config_registry(config_registry)
     logger.info("ConfigRegistry initialized")
 

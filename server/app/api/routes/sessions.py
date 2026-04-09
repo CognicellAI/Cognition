@@ -45,6 +45,7 @@ from server.app.llm.deep_agent_service import (
 )
 from server.app.llm.discovery import DiscoveryEngine
 from server.app.models import SessionConfig, SessionStatus
+from server.app.session_manager import build_session_workspace_path, ensure_session_workspace_path
 from server.app.settings import Settings, get_settings
 from server.app.storage import get_storage_backend
 
@@ -122,7 +123,8 @@ async def create_session(
 
     session_id = str(uuid.uuid4())
     thread_id = str(uuid.uuid4())  # For LangGraph checkpointing
-    workspace_path = str(settings.workspace_path)
+    workspace_path = build_session_workspace_path(settings, session_id)
+    ensure_session_workspace_path(workspace_path)
 
     # Provider/model/system_prompt are resolved from ConfigRegistry at message-send
     # time (scope-aware). SessionConfig is intentionally sparse at creation.
@@ -140,6 +142,7 @@ async def create_session(
         scopes=scope.get_all(),
         agent_name=request.agent_name,
         metadata=request.metadata,
+        workspace_path=workspace_path,
     )
 
     # Register session with Agent manager

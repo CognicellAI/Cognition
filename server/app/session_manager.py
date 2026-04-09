@@ -18,6 +18,7 @@ import uuid
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
 import structlog
@@ -27,6 +28,21 @@ from server.app.settings import Settings
 from server.app.storage import StorageBackend
 
 logger = structlog.get_logger(__name__)
+
+
+def build_session_workspace_path(settings: Settings, session_id: str) -> str:
+    """Return the isolated workspace path for a session.
+
+    Session sandboxes live under the configured workspace root so git state and
+    repo clones do not leak across sessions. Shared control-plane state remains
+    at the workspace root.
+    """
+    return str(settings.session_sandboxes_path / session_id)
+
+
+def ensure_session_workspace_path(workspace_path: str) -> None:
+    """Ensure the isolated workspace directory exists before agent execution."""
+    Path(workspace_path).mkdir(parents=True, exist_ok=True)
 
 
 # ============================================================================
@@ -211,10 +227,12 @@ class SessionManager:
         session_id = str(uuid.uuid4())
         thread_id = str(uuid.uuid4())
         now = datetime.now(UTC).isoformat()
+        session_workspace_path = build_session_workspace_path(self._settings, session_id)
+        ensure_session_workspace_path(session_workspace_path)
 
         session = Session(
             id=session_id,
-            workspace_path=workspace_path,
+            workspace_path=session_workspace_path,
             title=title,
             thread_id=thread_id,
             status=SessionStatus.ACTIVE,
@@ -241,7 +259,7 @@ class SessionManager:
             "Session created",
             session_id=session_id,
             thread_id=thread_id,
-            workspace=workspace_path,
+            workspace=session_workspace_path,
             user_id=user_id,
             org_id=org_id,
         )

@@ -79,6 +79,12 @@ class LocalSandbox:
             # Parse command into argument list (no shell=True for security)
             cmd_args = self._parse_command(command)
 
+            import os
+
+            merged_env = os.environ.copy()
+            if env:
+                merged_env.update(env)
+
             result = subprocess.run(
                 cmd_args,
                 shell=False,  # Security: no shell execution, prevents injection
@@ -86,7 +92,7 @@ class LocalSandbox:
                 text=True,
                 cwd=self.root_dir,
                 timeout=timeout,
-                env=env,
+                env=merged_env,
             )
 
             # Combine stdout and stderr
