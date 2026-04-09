@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 import structlog
 from deepagents.backends.protocol import (
     BackendProtocol,
     FileDownloadResponse,
     FileInfo,
 )
-from typing import Any
 
 from server.app.storage.config_registry import ConfigRegistry
 
