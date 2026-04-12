@@ -1,0 +1,55 @@
+# SandboxTemplate for Cognition K8s sandbox backend.
+# Apply this before deploying Cognition with config.sandbox.backend=kubernetes.
+#
+# Prerequisites:
+# 1. Install agent-sandbox controller + extensions
+#    kubectl apply -f https://github.com/kubernetes-sigs/agent-sandbox/releases/download/v0.3.10/manifest.yaml
+#    kubectl apply -f https://github.com/kubernetes-sigs/agent-sandbox/releases/download/v0.3.10/extensions.yaml
+# 2. Deploy the sandbox-router (see agent-sandbox docs)
+# 3. Build and push the cognition-sandbox image
+#    docker build -f Dockerfile.sandbox -t cognition-sandbox:latest .
+#    docker push cognition-sandbox:latest
+# 4. Apply this template
+#    kubectl apply -f cognition-sandbox-template.yaml
+
+apiVersion: agents.x-k8s.io/v1alpha1
+kind: SandboxTemplate
+metadata:
+  name: cognition-sandbox
+  labels:
+    app.kubernetes.io/part-of: cognition
+spec:
+  podTemplate:
+    spec:
+      containers:
+      - name: sandbox
+        image: cognition-sandbox:latest
+        ports:
+        - containerPort: 8888
+        resources:
+          limits:
+            memory: "512Mi"
+            cpu: "1"
+          requests:
+            memory: "256Mi"
+            cpu: "0.5"
+        securityContext:
+          readOnlyRootFilesystem: true
+          runAsNonRoot: true
+          runAsUser: 1000
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+              - ALL
+        volumeMounts:
+        - name: tmp
+          mountPath: /tmp
+        - name: workspace
+          mountPath: /workspace
+      volumes:
+      - name: tmp
+        emptyDir:
+          sizeLimit: "128Mi"
+      - name: workspace
+        emptyDir:
+          sizeLimit: "1Gi"

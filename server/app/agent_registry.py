@@ -599,7 +599,7 @@ class AgentRegistry:
 
         # Create the agent
         effective_settings = settings or self._settings
-        agent = create_cognition_agent(
+        result = create_cognition_agent(
             project_path=project_path,
             model=model,
             checkpointer=checkpointer,
@@ -607,8 +607,9 @@ class AgentRegistry:
             tools=tools if tools else None,
             middleware=middleware if middleware else None,
             settings=effective_settings,
-            mcp_configs=None,  # MCP configs resolved from ConfigRegistry in deep_agent_service
+            mcp_configs=None,
         )
+        agent = result.agent
 
         # If session_id provided, associate agent with session
         if session_id and self._session_manager:

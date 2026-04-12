@@ -597,8 +597,11 @@ class DeepAgentStreamingService:
                 scope=scope,
             )
 
+            if manager and agent.sandbox_backend is not None:
+                manager.register_sandbox_backend(session_id, agent.sandbox_backend)
+
             runtime = DeepAgentRuntime(
-                agent=agent,
+                agent=agent.agent,
                 checkpointer=checkpointer,
                 thread_id=thread_id,
                 recursion_limit=recursion_limit,
@@ -801,7 +804,7 @@ class DeepAgentStreamingService:
                 }
 
             runtime = DeepAgentRuntime(
-                agent=agent,
+                agent=agent.agent,
                 checkpointer=checkpointer,
                 thread_id=thread_id,
                 recursion_limit=recursion_limit,
@@ -1221,6 +1224,7 @@ class SessionAgentManager:
         self._services: dict[str, DeepAgentStreamingService] = {}
         self._project_paths: dict[str, str] = {}
         self._active_runtimes: dict[str, Any] = {}
+        self._sandbox_backends: dict[str, Any] = {}
 
     def register_session(
         self,
@@ -1282,11 +1286,35 @@ class SessionAgentManager:
         logger.warning("No active runtime to abort", session_id=session_id)
         return False
 
+    def register_sandbox_backend(self, session_id: str, backend: Any) -> None:
+        """Register a sandbox backend for lifecycle tracking.
+
+        The backend's ``terminate()`` method will be called when the session
+        is unregistered, cleaning up any K8s Sandbox CRs or Docker containers.
+
+        Args:
+            session_id: Unique session identifier.
+            backend: The sandbox backend instance (must have a ``terminate()`` method).
+        """
+        self._sandbox_backends[session_id] = backend
+        logger.debug("Sandbox backend registered", session_id=session_id)
+
     def unregister_session(self, session_id: str) -> None:
         """Unregister a session and clean up resources."""
         self._services.pop(session_id, None)
         self._project_paths.pop(session_id, None)
         self._active_runtimes.pop(session_id, None)
+
+        backend = self._sandbox_backends.pop(session_id, None)
+        if backend is not None and hasattr(backend, "terminate"):
+            try:
+                backend.terminate()
+                logger.info("Sandbox backend terminated", session_id=session_id)
+            except Exception as e:
+                logger.warning(
+                    "Sandbox backend terminate failed", session_id=session_id, error=str(e)
+                )
+
         logger.info("Session unregistered", session_id=session_id)
 
 

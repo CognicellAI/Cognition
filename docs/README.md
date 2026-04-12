@@ -14,6 +14,7 @@ The documentation is organized into two sections: **Concepts** explain how Cogni
 | [Sessions & Messages](./concepts/sessions-and-messages.md) | Session lifecycle, message persistence, SSE streaming, and reconnection |
 | [Agent Runtime](./concepts/agent-runtime.md) | AgentRuntime protocol, AgentDefinition model, and the multi-agent registry |
 | [Storage & Execution](./concepts/storage-and-execution.md) | StorageBackend and ExecutionBackend protocols and their implementations |
+| [Kubernetes Sandbox](./concepts/kubernetes-sandbox.md) | K8s-native sandbox isolation using the agent-sandbox CRD and controller |
 | [Observability](./concepts/observability.md) | OpenTelemetry traces, Prometheus metrics, and MLflow experiment tracking |
 | [Security](./concepts/security.md) | Session scoping, sandbox isolation, tool security, rate limiting, and CORS |
 

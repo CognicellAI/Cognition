@@ -20,12 +20,13 @@ WORKDIR /app
 
 # Copy lockfile and project metadata first for layer caching
 COPY pyproject.toml uv.lock README.md ./
+COPY packages/ ./packages/
 
 # Install production deps only using the frozen lockfile (no test extras)
 # --no-dev: skip dev-only deps (ruff, mypy, pre-commit)
 # --no-install-project: deps only — source code is copied in the next stage
-# --extra openai,bedrock,deploy: include all production extras
-RUN uv sync --frozen --no-dev --no-install-project --extra openai --extra bedrock --extra deploy
+# --extra openai,bedrock,deploy,k8s: include all production extras
+RUN uv sync --frozen --no-dev --no-install-project --extra openai --extra bedrock --extra deploy --extra k8s
 
 # Production stage
 FROM python:3.11-slim AS production
@@ -63,6 +64,7 @@ WORKDIR /app
 COPY server/ ./server/
 COPY client/ ./client/
 COPY shared/ ./shared/
+COPY packages/ ./packages/
 COPY pyproject.toml .
 
 # Create workspace directory and set permissions

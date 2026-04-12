@@ -1022,7 +1022,7 @@ async def create_agent_runtime(
             resolved_middleware.append(mw_instance)
 
     # Create the Deep Agent
-    agent = await create_cognition_agent(
+    result = await create_cognition_agent(
         project_path=workspace_path,
         system_prompt=definition.system_prompt,
         tools=tools if tools else None,
@@ -1039,7 +1039,7 @@ async def create_agent_runtime(
         definition.config.recursion_limit if definition.config.recursion_limit is not None else 1000
     )
     return DeepAgentRuntime(
-        agent=agent,
+        agent=result.agent,
         checkpointer=checkpointer,
         thread_id=thread_id,
         recursion_limit=effective_recursion_limit,

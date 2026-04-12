@@ -150,6 +150,20 @@ spec:
             # Sandbox settings
             - name: COGNITION_SANDBOX_BACKEND
               value: "{{ .Values.config.sandbox.backend }}"
+            {{- if eq .Values.config.sandbox.backend "kubernetes" }}
+            - name: COGNITION_K8S_SANDBOX_TEMPLATE
+              value: "{{ .Values.config.sandbox.k8s.template }}"
+            - name: COGNITION_K8S_SANDBOX_NAMESPACE
+              value: "{{ .Values.config.sandbox.k8s.namespace | default .Release.Namespace }}"
+            - name: COGNITION_K8S_SANDBOX_ROUTER_URL
+              value: "{{ .Values.config.sandbox.k8s.routerUrl | default (printf "http://sandbox-router-svc.%s.svc.cluster.local:8080" (.Values.config.sandbox.k8s.namespace | default .Release.Namespace)) }}"
+            - name: COGNITION_K8S_SANDBOX_TTL
+              value: "{{ .Values.config.sandbox.k8s.ttl }}"
+            {{- if .Values.config.sandbox.k8s.warmPool }}
+            - name: COGNITION_K8S_SANDBOX_WARM_POOL
+              value: "{{ .Values.config.sandbox.k8s.warmPool }}"
+            {{- end }}
+            {{- end }}
             
             # Session scoping
             - name: COGNITION_SCOPING_ENABLED

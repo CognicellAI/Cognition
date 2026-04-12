@@ -7,6 +7,32 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [0.7.0] — 2026-04-11
+
+### Features
+
+- **Kubernetes sandbox backend**: Cognition can now run agent commands in K8s-native sandboxes using the [agent-sandbox](https://github.com/kubernetes-sigs/agent-sandbox) CRD and controller. This is the third sandbox backend (alongside `local` and `docker`) and the only one that works when Cognition itself is deployed on Kubernetes with security hardening (`readOnlyRootFilesystem`, `capabilities.drop: ["ALL"]`, `runAsNonRoot`).
+
+  The implementation follows the `langchain-<provider>` convention with a standalone `langchain-k8s-sandbox` workspace package that has zero Cognition imports. Cognition wraps it in `CognitionKubernetesSandboxBackend` which adds domain policy (protected paths, scoping labels, session lifecycle).
+
+  Key capabilities:
+  - Lazy sandbox creation on first `execute()` (no pod until agent invokes a shell tool)
+  - `sh -c` command wrapping for heredoc/pipe support required by BaseSandbox file operations
+  - TTL-based auto-cleanup via `spec.shutdownTime` patch on Sandbox CR
+  - Scoping labels (`cognition.io/user`, `cognition.io/session`) on SandboxClaim CRs
+  - Session deletion triggers `terminate()` via `SessionAgentManager.unregister_session()`
+  - Startup validation checks CRD existence (fatal) and router health (warning)
+  - Helm chart RBAC (namespace-scoped Role + cluster-scoped ClusterRole for CRD reads)
+  - Optional NetworkPolicy to deny sandbox egress (`config.sandbox.k8s.denyEgress`)
+  - SandboxTemplate example with `/tmp` and `/workspace` emptyDir volumes
+  - 35 unit tests + 13 e2e tests (skip unless `COGNITION_K8S_E2E=1`)
+
+### Bug Fixes
+
+- Fix agent cache returning raw `CompiledStateGraph` instead of `CognitionAgentResult` on cache hit, causing `AttributeError: 'CompiledStateGraph' object has no attribute 'sandbox_backend'` in streaming service.
+
+---
+
 ## [0.6.0] — 2026-03-23
 
 ### Features
