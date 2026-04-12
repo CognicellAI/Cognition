@@ -3,6 +3,7 @@
 This module creates deep agents using settings-driven sandbox backends:
 - Local: CognitionLocalSandboxBackend (development) — shell execution via LocalSandbox
 - Docker: CognitionDockerSandboxBackend (production) — isolated container execution
+- Kubernetes: CognitionKubernetesSandboxBackend (production) — K8s-native sandbox pods
 
 Both backends provide:
 - File operations (ls, read, write, edit) via FilesystemBackend
@@ -10,7 +11,9 @@ Both backends provide:
 - Multi-step ReAct loop with automatic tool chaining
 
 Agent Caching:
-Compiled agents are cached per configuration to avoid recompilation overhead.
+Only the compiled agent graph is cached — it is immutable after compilation and safe
+to share across sessions. The sandbox backend is stateful (holds sandbox CR, connection)
+and must be created fresh per session to prevent cross-session termination bugs.
 Use invalidate_agent_cache() or clear_agent_cache() to force recompilation.
 Cache keys are scope-aware so per-user/per-project config overrides each get
 their own compiled graph.
@@ -320,6 +323,29 @@ async def create_cognition_agent(
     settings = settings or get_settings()
     project_path = Path(project_path).resolve()
 
+    # Sandbox ID and K8s labels are derived from project/scope and needed
+    # before the cache check so that cache hits can create a fresh backend.
+    sandbox_id = f"cognition-{project_path.name}"
+
+    k8s_labels: dict[str, str] | None = None
+    if scope:
+        k8s_labels = {}
+        if "user" in scope:
+            k8s_labels["cognition.io/user"] = scope["user"]
+        if "org" in scope:
+            k8s_labels["cognition.io/org"] = scope["org"]
+        if "project" in scope:
+            k8s_labels["cognition.io/project"] = scope["project"]
+        k8s_labels["cognition.io/session"] = sandbox_id
+
+    # Try to get config registry once - needed for defaults and skills backend
+    try:
+        from server.app.storage.config_registry import get_config_registry
+
+        reg = get_config_registry()
+    except RuntimeError:
+        reg = None
+
     # Generate cache key and check cache
     cache_key = _generate_cache_key(
         project_path=project_path,
@@ -340,25 +366,51 @@ async def create_cognition_agent(
         scope=scope,
     )
 
-    # Check if we have a cached agent for this configuration
+    # Check if we have a cached compiled agent for this configuration.
+    # Only the compiled agent graph is cached — it is immutable and safe to share.
+    # The sandbox backend is stateful and must be created per-session to prevent
+    # cross-session termination bugs (see GH-72).
     cached_agent = get_cached_agent(cache_key)
     if cached_agent is not None:
-        return cast(CognitionAgentResult, cached_agent)
+        # Cached agent graph is reusable (immutable), but sandbox backend must be
+        # fresh per-session to avoid cross-session termination (GH-72).
+        sandbox_backend = create_sandbox_backend(
+            root_dir=project_path,
+            sandbox_id=sandbox_id,
+            sandbox_backend=settings.sandbox_backend,
+            docker_image=settings.docker_image,
+            docker_network=settings.docker_network,
+            docker_memory_limit=settings.docker_memory_limit,
+            docker_cpu_limit=settings.docker_cpu_limit,
+            docker_host_workspace="",
+            k8s_template=settings.k8s_sandbox_template,
+            k8s_namespace=settings.k8s_sandbox_namespace,
+            k8s_router_url=settings.k8s_sandbox_router_url,
+            k8s_ttl=settings.k8s_sandbox_ttl,
+            k8s_warm_pool=settings.k8s_sandbox_warm_pool,
+            labels=k8s_labels or None,
+        )
+
+        # Wrap sandbox backend with CompositeBackend for DB-backed skills
+        from deepagents.backends.protocol import BackendProtocol
+
+        backend: BackendProtocol
+        if reg:
+            from deepagents.backends.composite import CompositeBackend
+
+            from server.app.agent.skills_backend import ConfigRegistrySkillsBackend
+
+            db_skills_backend = ConfigRegistrySkillsBackend(registry=reg, scope=scope)
+            backend = CompositeBackend(
+                default=sandbox_backend,
+                routes={"/skills/api/": db_skills_backend},
+            )
+        else:
+            backend = sandbox_backend
+
+        return CognitionAgentResult(agent=cached_agent, sandbox_backend=sandbox_backend)
 
     # Create the sandbox backend using settings-driven factory
-    sandbox_id = f"cognition-{project_path.name}"
-
-    # Build K8s scoping labels from session scope when available
-    k8s_labels: dict[str, str] | None = None
-    if scope:
-        k8s_labels = {}
-        if "user" in scope:
-            k8s_labels["cognition.io/user"] = scope["user"]
-        if "org" in scope:
-            k8s_labels["cognition.io/org"] = scope["org"]
-        if "project" in scope:
-            k8s_labels["cognition.io/project"] = scope["project"]
-        k8s_labels["cognition.io/session"] = sandbox_id
 
     sandbox_backend = create_sandbox_backend(
         root_dir=project_path,
@@ -384,14 +436,6 @@ async def create_cognition_agent(
     agent_interrupt_on: dict[str, Any]
     agent_response_format: str | type[Any] | None = response_format
     agent_tool_token_limit_before_evict = tool_token_limit_before_evict
-
-    # Try to get config registry once - needed for defaults and skills backend
-    try:
-        from server.app.storage.config_registry import get_config_registry
-
-        reg = get_config_registry()
-    except RuntimeError:
-        reg = None
 
     if memory is not None:
         agent_memory = list(memory)
@@ -557,8 +601,10 @@ async def create_cognition_agent(
 
     result = CognitionAgentResult(agent=agent, sandbox_backend=sandbox_backend)
 
-    # Cache the full result so cache hits return CognitionAgentResult, not raw agent
-    cache_agent(cache_key, result)
+    # Cache only the compiled agent graph — it is immutable and safe to share.
+    # The sandbox backend is NOT cached because it is stateful and must be
+    # created fresh per-session (see GH-72).
+    cache_agent(cache_key, agent)
 
     return result
 
