@@ -391,23 +391,6 @@ async def create_cognition_agent(
             labels=k8s_labels or None,
         )
 
-        # Wrap sandbox backend with CompositeBackend for DB-backed skills
-        from deepagents.backends.protocol import BackendProtocol
-
-        backend: BackendProtocol
-        if reg:
-            from deepagents.backends.composite import CompositeBackend
-
-            from server.app.agent.skills_backend import ConfigRegistrySkillsBackend
-
-            db_skills_backend = ConfigRegistrySkillsBackend(registry=reg, scope=scope)
-            backend = CompositeBackend(
-                default=sandbox_backend,
-                routes={"/skills/api/": db_skills_backend},
-            )
-        else:
-            backend = sandbox_backend
-
         return CognitionAgentResult(agent=cached_agent, sandbox_backend=sandbox_backend)
 
     # Create the sandbox backend using settings-driven factory
