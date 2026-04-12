@@ -343,7 +343,7 @@ async def create_cognition_agent(
     # Check if we have a cached agent for this configuration
     cached_agent = get_cached_agent(cache_key)
     if cached_agent is not None:
-        return cached_agent
+        return cast(CognitionAgentResult, cached_agent)
 
     # Create the sandbox backend using settings-driven factory
     sandbox_id = f"cognition-{project_path.name}"

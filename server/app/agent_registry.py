@@ -599,7 +599,7 @@ class AgentRegistry:
 
         # Create the agent
         effective_settings = settings or self._settings
-        result = create_cognition_agent(
+        result = await create_cognition_agent(
             project_path=project_path,
             model=model,
             checkpointer=checkpointer,

@@ -227,10 +227,16 @@ ignore_missing_imports = true
 module = ["k8s_agent_sandbox", "k8s_agent_sandbox.*"]
 ignore_missing_imports = true
 
+# kubernetes client has no stubs
+[[tool.mypy.overrides]]
+module = ["kubernetes", "kubernetes.*"]
+ignore_missing_imports = true
+
 # langchain-k8s-sandbox workspace package (optional dep, not always installed)
 [[tool.mypy.overrides]]
 module = ["langchain_k8s_sandbox", "langchain_k8s_sandbox.*"]
 ignore_missing_imports = true
+disallow_untyped_defs = false
 
 # boto3 has no bundled stubs (boto3-stubs is optional)
 [[tool.mypy.overrides]]
