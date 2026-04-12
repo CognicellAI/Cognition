@@ -10,7 +10,7 @@ from langchain_k8s_sandbox.sandbox import K8sSandbox
 
 
 class TestK8sSandboxInit:
-    def test_init_stores_config(self):
+    def test_init_stores_config(self) -> None:
         sandbox = K8sSandbox(
             template="test-template",
             namespace="test-ns",
@@ -26,7 +26,7 @@ class TestK8sSandboxInit:
         assert sandbox._ttl == 1800
         assert sandbox._warm_pool == "test-pool"
 
-    def test_init_defaults(self):
+    def test_init_defaults(self) -> None:
         sandbox = K8sSandbox()
         assert sandbox._template == "cognition-sandbox"
         assert sandbox._namespace == "default"
@@ -34,11 +34,11 @@ class TestK8sSandboxInit:
         assert sandbox._warm_pool is None
         assert sandbox._labels == {}
 
-    def test_id_property(self):
+    def test_id_property(self) -> None:
         sandbox = K8sSandbox()
         assert sandbox.id.startswith("k8s-")
 
-    def test_lazy_init_no_sdk_calls(self):
+    def test_lazy_init_no_sdk_calls(self) -> None:
         sandbox = K8sSandbox()
         assert sandbox._sandbox is None
         assert sandbox._client is None
@@ -46,7 +46,7 @@ class TestK8sSandboxInit:
 
 class TestK8sSandboxEnsureSandbox:
     @patch("langchain_k8s_sandbox.sandbox.K8sSandbox._ensure_sandbox")
-    def test_execute_calls_ensure_sandbox(self, mock_ensure):
+    def test_execute_calls_ensure_sandbox(self, mock_ensure: MagicMock) -> None:
         mock_sandbox = MagicMock()
         mock_result = MagicMock()
         mock_result.stdout = "hello"
@@ -59,7 +59,7 @@ class TestK8sSandboxEnsureSandbox:
         sb.execute("echo hello")
         mock_ensure.assert_called_once()
 
-    def test_ensure_sandbox_raises_without_sdk(self):
+    def test_ensure_sandbox_raises_without_sdk(self) -> None:
         sb = K8sSandbox()
         with (
             patch.dict(
@@ -69,7 +69,7 @@ class TestK8sSandboxEnsureSandbox:
         ):
             sb._ensure_sandbox()
 
-    def test_ensure_sandbox_creates_sandbox_once(self):
+    def test_ensure_sandbox_creates_sandbox_once(self) -> None:
         mock_sandbox_obj = MagicMock()
         mock_sandbox_obj.name = "test-sandbox-123"
 
@@ -96,7 +96,7 @@ class TestK8sSandboxEnsureSandbox:
 
 
 class TestK8sSandboxExecute:
-    def test_execute_success(self):
+    def test_execute_success(self) -> None:
         sb = K8sSandbox()
         mock_sandbox = MagicMock()
         mock_result = MagicMock()
@@ -112,7 +112,7 @@ class TestK8sSandboxExecute:
         assert result.exit_code == 0
         assert result.truncated is False
 
-    def test_execute_with_stderr(self):
+    def test_execute_with_stderr(self) -> None:
         sb = K8sSandbox()
         mock_sandbox = MagicMock()
         mock_result = MagicMock()
@@ -128,7 +128,7 @@ class TestK8sSandboxExecute:
         assert "err" in result.output
         assert result.exit_code == 1
 
-    def test_execute_exception_returns_error(self):
+    def test_execute_exception_returns_error(self) -> None:
         sb = K8sSandbox()
         mock_sandbox = MagicMock()
         mock_sandbox.commands.run.side_effect = ConnectionError("sandbox unreachable")
@@ -139,7 +139,7 @@ class TestK8sSandboxExecute:
         assert "Error:" in result.output
         assert result.exit_code == -1
 
-    def test_execute_timeout_forwarded(self):
+    def test_execute_timeout_forwarded(self) -> None:
         sb = K8sSandbox()
         mock_sandbox = MagicMock()
         mock_result = MagicMock()
@@ -155,7 +155,7 @@ class TestK8sSandboxExecute:
 
 
 class TestK8sSandboxTerminate:
-    def test_terminate_calls_sdk(self):
+    def test_terminate_calls_sdk(self) -> None:
         sb = K8sSandbox()
         mock_sandbox = MagicMock()
         sb._sandbox = mock_sandbox
@@ -165,11 +165,11 @@ class TestK8sSandboxTerminate:
         assert sb._sandbox is None
         assert sb._client is None
 
-    def test_terminate_idempotent(self):
+    def test_terminate_idempotent(self) -> None:
         sb = K8sSandbox()
         sb.terminate()
 
-    def test_terminate_failure_does_not_raise(self):
+    def test_terminate_failure_does_not_raise(self) -> None:
         sb = K8sSandbox()
         mock_sandbox = MagicMock()
         mock_sandbox.terminate.side_effect = RuntimeError("cleanup failed")
@@ -178,7 +178,7 @@ class TestK8sSandboxTerminate:
         sb.terminate()
         assert sb._sandbox is None
 
-    def test_execute_after_terminate_creates_new(self):
+    def test_execute_after_terminate_creates_new(self) -> None:
         sb = K8sSandbox()
         mock_sandbox = MagicMock()
         sb._sandbox = mock_sandbox
@@ -188,7 +188,7 @@ class TestK8sSandboxTerminate:
 
 
 class TestK8sSandboxUploadDownload:
-    def test_upload_files_success(self):
+    def test_upload_files_success(self) -> None:
         sb = K8sSandbox()
         mock_sandbox = MagicMock()
         mock_result = MagicMock()
@@ -204,7 +204,7 @@ class TestK8sSandboxUploadDownload:
         assert results[0].path == "/tmp/test.py"
         assert results[0].error is None
 
-    def test_upload_files_failure(self):
+    def test_upload_files_failure(self) -> None:
         sb = K8sSandbox()
         mock_sandbox = MagicMock()
         mock_result = MagicMock()
@@ -219,7 +219,7 @@ class TestK8sSandboxUploadDownload:
         assert len(results) == 1
         assert results[0].error is not None
 
-    def test_download_files_success(self):
+    def test_download_files_success(self) -> None:
         sb = K8sSandbox()
         mock_sandbox = MagicMock()
         import base64
@@ -236,7 +236,7 @@ class TestK8sSandboxUploadDownload:
         assert len(results) == 1
         assert results[0].content == b"file content"
 
-    def test_download_files_not_found(self):
+    def test_download_files_not_found(self) -> None:
         sb = K8sSandbox()
         mock_sandbox = MagicMock()
         mock_result = MagicMock()
