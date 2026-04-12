@@ -15,6 +15,7 @@ import structlog
 import yaml
 from fastapi import APIRouter, Depends, HTTPException
 
+from server.app.api.dependencies import get_config_store
 from server.app.api.models import (
     ConfigResponse,
     ConfigRollbackResponse,
@@ -27,6 +28,7 @@ from server.app.api.models import (
 )
 from server.app.config_loader import load_config
 from server.app.settings import Settings, get_settings
+from server.app.storage.config_store import ConfigStore
 
 router = APIRouter(prefix="/config", tags=["config"])
 
@@ -127,18 +129,17 @@ def _agent_defaults_response(defaults: Any) -> GlobalAgentDefaultsResponse:
 @router.get("", response_model=ConfigResponse)
 async def get_config(
     settings: Settings = Depends(get_settings),  # noqa: B008
+    config_store: ConfigStore = Depends(get_config_store),  # noqa: B008
 ) -> ConfigResponse:
     """Get server configuration."""
     yaml_config = load_config(cwd=settings.workspace_root)
 
-    # Build available providers list from ConfigRegistry + ModelCatalog
+    # Build available providers list from ConfigStore + ModelCatalog
     available_providers: list[dict[str, Any]] = []
     try:
         from server.app.llm.model_catalog import get_model_catalog
-        from server.app.storage.config_registry import get_config_registry
 
-        reg = get_config_registry()
-        providers = await reg.list_providers(scope=None)
+        providers = await config_store.list_providers(scope=None)
         catalog = get_model_catalog()
 
         seen_types: set[str] = set()
@@ -238,50 +239,48 @@ async def rollback_config(
 
 
 @router.get("/defaults/provider", response_model=GlobalProviderDefaultsResponse)
-async def get_provider_defaults() -> GlobalProviderDefaultsResponse:
-    """Return effective global provider defaults from ConfigRegistry."""
-    from server.app.storage.config_registry import get_config_registry
-
-    reg = get_config_registry()
-    defaults = await reg.get_global_provider_defaults()
+async def get_provider_defaults(
+    config_store: ConfigStore = Depends(get_config_store),  # noqa: B008
+) -> GlobalProviderDefaultsResponse:
+    """Return effective global provider defaults from ConfigStore."""
+    defaults = await config_store.get_global_provider_defaults()
     return _provider_defaults_response(defaults)
 
 
 @router.patch("/defaults/provider", response_model=GlobalProviderDefaultsResponse)
 async def patch_provider_defaults(
     updates: GlobalProviderDefaultsUpdate,
+    config_store: ConfigStore = Depends(get_config_store),  # noqa: B008
 ) -> GlobalProviderDefaultsResponse:
-    """Partially update global provider defaults in ConfigRegistry."""
+    """Partially update global provider defaults in ConfigStore."""
     from server.app.storage.config_models import GlobalProviderDefaults
-    from server.app.storage.config_registry import get_config_registry
 
-    reg = get_config_registry()
-    current = await reg.get_global_provider_defaults()
+    current = await config_store.get_global_provider_defaults()
     merged = current.model_copy(update=updates.model_dump(exclude_none=True))
     defaults = GlobalProviderDefaults.model_validate(merged.model_dump())
-    await reg.set_global_provider_defaults(defaults)
+    await config_store.set_global_provider_defaults(defaults)
     return _provider_defaults_response(defaults)
 
 
 @router.get("/defaults/agent", response_model=GlobalAgentDefaultsResponse)
-async def get_agent_defaults() -> GlobalAgentDefaultsResponse:
-    """Return effective global agent defaults from ConfigRegistry."""
-    from server.app.storage.config_registry import get_config_registry
-
-    reg = get_config_registry()
-    defaults = await reg.get_global_agent_defaults()
+async def get_agent_defaults(
+    config_store: ConfigStore = Depends(get_config_store),  # noqa: B008
+) -> GlobalAgentDefaultsResponse:
+    """Return effective global agent defaults from ConfigStore."""
+    defaults = await config_store.get_global_agent_defaults()
     return _agent_defaults_response(defaults)
 
 
 @router.patch("/defaults/agent", response_model=GlobalAgentDefaultsResponse)
-async def patch_agent_defaults(updates: GlobalAgentDefaultsUpdate) -> GlobalAgentDefaultsResponse:
-    """Partially update global agent defaults in ConfigRegistry."""
+async def patch_agent_defaults(
+    updates: GlobalAgentDefaultsUpdate,
+    config_store: ConfigStore = Depends(get_config_store),  # noqa: B008
+) -> GlobalAgentDefaultsResponse:
+    """Partially update global agent defaults in ConfigStore."""
     from server.app.storage.config_models import GlobalAgentDefaults
-    from server.app.storage.config_registry import get_config_registry
 
-    reg = get_config_registry()
-    current = await reg.get_global_agent_defaults()
+    current = await config_store.get_global_agent_defaults()
     merged = current.model_copy(update=updates.model_dump(exclude_none=True))
     defaults = GlobalAgentDefaults.model_validate(merged.model_dump())
-    await reg.set_global_agent_defaults(defaults)
+    await config_store.set_global_agent_defaults(defaults)
     return _agent_defaults_response(defaults)

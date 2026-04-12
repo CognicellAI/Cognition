@@ -14,7 +14,9 @@ from fastapi.responses import JSONResponse
 from server.app.agent.agent_definition_registry import (
     initialize_agent_definition_registry,
 )
+from server.app.agent.resolver import RuntimeResolver
 from server.app.agent_registry import initialize_agent_registry
+from server.app.api.dependencies import set_config_store, set_runtime_resolver
 from server.app.api.middleware import ObservabilityMiddleware, SecurityHeadersMiddleware
 from server.app.api.models import HealthStatus, ReadyStatus
 from server.app.api.routes import agents, config, messages, models, sessions, skills, tools
@@ -26,6 +28,7 @@ from server.app.rate_limiter import RateLimitConfig, get_rate_limiter
 from server.app.session_manager import initialize_session_manager
 from server.app.settings import get_settings
 from server.app.storage import create_storage_backend, get_storage_backend, set_storage_backend
+from server.app.storage.config_store import DefaultConfigStore
 
 logger = structlog.get_logger(__name__)
 
@@ -70,6 +73,19 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
     # Seed ConfigRegistry from file-based agents (insert-if-absent)
     await def_registry.seed_from_registry(config_registry)
+
+    # Initialize ConfigStore (unified interface)
+    config_store = DefaultConfigStore(
+        config_registry=config_registry,
+        agent_definition_registry=def_registry,
+    )
+    set_config_store(config_store)
+    logger.info("ConfigStore initialized")
+
+    # Initialize RuntimeResolver (agent runtime bridge)
+    runtime_resolver = RuntimeResolver(config_store=config_store, settings=settings)
+    set_runtime_resolver(runtime_resolver)
+    logger.info("RuntimeResolver initialized")
 
     # Initialize ConfigChangeDispatcher and wire hot-reload subscribers
     dispatcher = create_config_dispatcher(settings)

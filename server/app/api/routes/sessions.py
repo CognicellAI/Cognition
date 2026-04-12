@@ -21,7 +21,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, status
 from fastapi.responses import StreamingResponse
 
-from server.app.agent.agent_definition_registry import get_agent_definition_registry
+from server.app.api.dependencies import get_config_store
 from server.app.api.models import (
     ErrorResponse,
     SessionCreate,
@@ -48,6 +48,7 @@ from server.app.models import SessionConfig, SessionStatus
 from server.app.session_manager import build_session_workspace_path, ensure_session_workspace_path
 from server.app.settings import Settings, get_settings
 from server.app.storage import get_storage_backend
+from server.app.storage.config_store import ConfigStore
 
 router = APIRouter(prefix="/sessions", tags=["sessions"])
 
@@ -104,6 +105,7 @@ async def create_session(
     settings: Settings = Depends(get_settings_dependency),  # noqa: B008
     agent_manager: SessionAgentManager = Depends(get_agent_manager),  # noqa: B008
     scope: SessionScope = Depends(get_scope_dependency),  # noqa: B008
+    config_store: ConfigStore = Depends(get_config_store),  # noqa: B008
 ) -> SessionResponse:
     """Create a new session.
 
@@ -114,8 +116,7 @@ async def create_session(
     Note: Server uses global settings exclusively. No per-session configuration.
     """
     # Validate agent_name is a valid primary agent
-    registry = get_agent_definition_registry()
-    if registry and not registry.is_valid_primary(request.agent_name):
+    if not await config_store.is_valid_primary(request.agent_name):
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail=f"Invalid or unknown agent: {request.agent_name}",
@@ -238,6 +239,7 @@ async def update_session(
     request: SessionUpdate,
     settings: Settings = Depends(get_settings_dependency),
     scope: SessionScope = Depends(get_scope_dependency),
+    config_store: ConfigStore = Depends(get_config_store),  # noqa: B008
 ) -> SessionResponse:
     """Update a session.
 
@@ -270,15 +272,11 @@ async def update_session(
 
     # Validate agent_name if provided
     if request.agent_name:
-        registry = get_agent_definition_registry()
-        if registry is not None:
-            if not registry.is_valid_primary(request.agent_name):
-                raise HTTPException(
-                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                    detail=f"Invalid or unknown agent: {request.agent_name}",
-                )
-        # If registry is None (e.g., tests), we skip validation
-        # This allows tests to work without a full registry setup
+        if not await config_store.is_valid_primary(request.agent_name):
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"Invalid or unknown agent: {request.agent_name}",
+            )
 
     session = await store.update_session(
         session_id=session_id,

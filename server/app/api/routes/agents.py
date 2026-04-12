@@ -2,9 +2,9 @@
 
 from typing import Any
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 
-from server.app.agent.agent_definition_registry import get_agent_definition_registry
+from server.app.api.dependencies import get_config_store
 from server.app.api.models import (
     AgentConfigResponse,
     AgentCreate,
@@ -12,15 +12,13 @@ from server.app.api.models import (
     AgentResponse,
     AgentUpdate,
 )
+from server.app.storage.config_store import ConfigStore
 
 router = APIRouter(prefix="/agents", tags=["agents"])
 
 
-def _registry_or_503() -> Any:
-    registry = get_agent_definition_registry()
-    if registry is None:
-        raise HTTPException(status_code=503, detail="Agent registry not initialized")
-    return registry
+def _registry_or_503(config_store: ConfigStore = Depends(get_config_store)) -> ConfigStore:  # noqa: B008
+    return config_store
 
 
 def _agent_to_response(agent: Any) -> AgentResponse:
@@ -50,32 +48,36 @@ def _agent_to_response(agent: Any) -> AgentResponse:
 
 
 @router.get("", response_model=AgentList)
-async def list_agents() -> AgentList:
+async def list_agents(
+    config_store: ConfigStore = Depends(get_config_store),  # noqa: B008
+) -> AgentList:
     """List all available agents (excluding hidden ones)."""
-    registry = _registry_or_503()
-    agents = registry.get_all(include_hidden=False)
+    agents = await config_store.list_agent_definitions(include_hidden=False)
     return AgentList(agents=[_agent_to_response(a) for a in agents])
 
 
 @router.get("/{name}", response_model=AgentResponse)
-async def get_agent(name: str) -> AgentResponse:
+async def get_agent(
+    name: str,
+    config_store: ConfigStore = Depends(get_config_store),  # noqa: B008
+) -> AgentResponse:
     """Get a specific agent by name."""
-    registry = _registry_or_503()
-    agent = registry.get(name)
+    agent = await config_store.get_agent_definition(name)
     if agent is None or agent.hidden:
         raise HTTPException(status_code=404, detail=f"Agent '{name}' not found")
     return _agent_to_response(agent)
 
 
 @router.post("", response_model=AgentResponse, status_code=201)
-async def create_agent(body: AgentCreate) -> AgentResponse:
-    """Create or replace an agent definition in the ConfigRegistry.
+async def create_agent(
+    body: AgentCreate,
+    config_store: ConfigStore = Depends(get_config_store),  # noqa: B008
+) -> AgentResponse:
+    """Create or replace an agent definition in the ConfigStore.
 
     Built-in (native) agents cannot be replaced.
     """
-    registry = _registry_or_503()
-
-    existing = registry.get(body.name)
+    existing = await config_store.get_agent_definition(body.name)
     if existing and existing.native:
         raise HTTPException(
             status_code=409,
@@ -84,9 +86,7 @@ async def create_agent(body: AgentCreate) -> AgentResponse:
 
     try:
         from server.app.agent.definition import AgentDefinition
-        from server.app.storage.config_registry import get_config_registry
 
-        reg = get_config_registry()
         definition_data: dict[str, Any] = {
             "name": body.name,
             "system_prompt": body.system_prompt,
@@ -111,12 +111,10 @@ async def create_agent(body: AgentCreate) -> AgentResponse:
                 "timeout_seconds": body.timeout_seconds,
             },
         }
-        await reg.upsert_agent(body.name, body.scope, definition_data, "api")
+        await config_store.upsert_agent(body.name, body.scope, definition_data, "api")
 
-        # Reload into in-memory registry
         agent_def = AgentDefinition.model_validate(definition_data)
         agent_def.native = False
-        registry._agents[body.name] = agent_def
 
         return _agent_to_response(agent_def)
     except Exception as e:
@@ -124,27 +122,31 @@ async def create_agent(body: AgentCreate) -> AgentResponse:
 
 
 @router.put("/{name}", response_model=AgentResponse)
-async def replace_agent(name: str, body: AgentCreate) -> AgentResponse:
+async def replace_agent(
+    name: str,
+    body: AgentCreate,
+    config_store: ConfigStore = Depends(get_config_store),  # noqa: B008
+) -> AgentResponse:
     """Replace an agent definition (full update)."""
-    registry = _registry_or_503()
-
-    existing = registry.get(name)
+    existing = await config_store.get_agent_definition(name)
     if existing and existing.native:
         raise HTTPException(
             status_code=409,
             detail=f"Cannot overwrite built-in agent '{name}'",
         )
 
-    body.name = name  # Ensure name matches path param
-    return await create_agent(body)
+    body.name = name
+    return await create_agent(body, config_store=config_store)
 
 
 @router.patch("/{name}", response_model=AgentResponse)
-async def update_agent(name: str, body: AgentUpdate) -> AgentResponse:
+async def update_agent(
+    name: str,
+    body: AgentUpdate,
+    config_store: ConfigStore = Depends(get_config_store),  # noqa: B008
+) -> AgentResponse:
     """Partially update an agent definition."""
-    registry = _registry_or_503()
-
-    existing = registry.get(name)
+    existing = await config_store.get_agent_definition(name)
     if existing is None:
         raise HTTPException(status_code=404, detail=f"Agent '{name}' not found")
     if existing.native:
@@ -155,14 +157,11 @@ async def update_agent(name: str, body: AgentUpdate) -> AgentResponse:
 
     try:
         from server.app.agent.definition import AgentDefinition
-        from server.app.storage.config_registry import get_config_registry
 
-        reg = get_config_registry()
-        data = await reg.get_agent_raw(name, None)
+        data = await config_store.get_agent_raw(name, None)
         if data is None:
             raise HTTPException(status_code=404, detail=f"Agent '{name}' not found in registry")
 
-        # Apply partial update
         updates = body.model_dump(exclude_none=True)
         config_fields = {
             "model",
@@ -183,11 +182,10 @@ async def update_agent(name: str, body: AgentUpdate) -> AgentResponse:
         data.update(updates)
 
         scope: dict[str, Any] = data.get("scope", {})
-        await reg.upsert_agent(name, scope, data, "api")
+        await config_store.upsert_agent(name, scope, data, "api")
 
         agent_def = AgentDefinition.model_validate(data)
         agent_def.native = False
-        registry._agents[name] = agent_def
 
         return _agent_to_response(agent_def)
     except HTTPException:
@@ -197,11 +195,12 @@ async def update_agent(name: str, body: AgentUpdate) -> AgentResponse:
 
 
 @router.delete("/{name}", status_code=204)
-async def delete_agent(name: str) -> None:
+async def delete_agent(
+    name: str,
+    config_store: ConfigStore = Depends(get_config_store),  # noqa: B008
+) -> None:
     """Delete a user-defined agent definition."""
-    registry = _registry_or_503()
-
-    existing = registry.get(name)
+    existing = await config_store.get_agent_definition(name)
     if existing is None:
         raise HTTPException(status_code=404, detail=f"Agent '{name}' not found")
     if existing.native:
@@ -211,10 +210,6 @@ async def delete_agent(name: str) -> None:
         )
 
     try:
-        from server.app.storage.config_registry import get_config_registry
-
-        reg = get_config_registry()
-        await reg.delete_agent(name, None)
-        registry._agents.pop(name, None)
+        await config_store.delete_agent(name, None)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e)) from e

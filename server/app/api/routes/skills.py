@@ -10,9 +10,10 @@ from __future__ import annotations
 import structlog
 from fastapi import APIRouter, Depends, Header, HTTPException
 
+from server.app.api.dependencies import get_config_store
 from server.app.api.models import SkillCreate, SkillList, SkillResponse, SkillUpdate
 from server.app.storage.config_models import SkillDefinition
-from server.app.storage.config_registry import ConfigRegistry
+from server.app.storage.config_store import ConfigStore
 
 router = APIRouter(prefix="/skills", tags=["skills"])
 
@@ -44,28 +45,17 @@ def _scope_from_headers(
     return scope if scope else None
 
 
-def _get_registry() -> ConfigRegistry:
-    """Resolve the ConfigRegistry or raise 503.
-
-    Centralises the registry-not-initialised error so every route gets the
-    same status code and message instead of the previous inconsistency
-    (list→empty list, others→503).
-    """
-    from server.app.storage.config_registry import get_config_registry
-
-    try:
-        return get_config_registry()
-    except RuntimeError as e:
-        raise HTTPException(status_code=503, detail="ConfigRegistry not available") from e
+def _get_store(config_store: ConfigStore = Depends(get_config_store)) -> ConfigStore:  # noqa: B008
+    return config_store
 
 
 @router.get("", response_model=SkillList)
 async def list_skills(
     scope: dict[str, str] | None = Depends(_scope_from_headers),  # noqa: B008
+    config_store: ConfigStore = Depends(get_config_store),  # noqa: B008
 ) -> SkillList:
     """List all registered skills visible in the given scope."""
-    reg = _get_registry()
-    skills = await reg.list_skills(scope=scope)
+    skills = await config_store.list_skills(scope=scope)
     return SkillList(skills=[_to_response(s) for s in skills], count=len(skills))
 
 
@@ -73,10 +63,10 @@ async def list_skills(
 async def get_skill(
     name: str,
     scope: dict[str, str] | None = Depends(_scope_from_headers),  # noqa: B008
+    config_store: ConfigStore = Depends(get_config_store),  # noqa: B008
 ) -> SkillResponse:
     """Get a skill by name."""
-    reg = _get_registry()
-    skill = await reg.get_skill(name, scope=scope)
+    skill = await config_store.get_skill(name, scope=scope)
     if skill is None:
         raise HTTPException(status_code=404, detail=f"Skill '{name}' not found")
     return _to_response(skill)
@@ -86,11 +76,9 @@ async def get_skill(
 async def create_skill(
     body: SkillCreate,
     scope: dict[str, str] | None = Depends(_scope_from_headers),  # noqa: B008
+    config_store: ConfigStore = Depends(get_config_store),  # noqa: B008
 ) -> SkillResponse:
-    """Create or replace a skill in the ConfigRegistry."""
-    reg = _get_registry()
-
-    # Header scope overrides body scope if provided
+    """Create or replace a skill in the ConfigStore."""
     effective_scope = scope if scope is not None else (body.scope or {})
 
     # Auto-generate path if content is provided, otherwise use provided path
@@ -110,7 +98,7 @@ async def create_skill(
         scope=effective_scope,
         source="api",
     )
-    await reg.upsert_skill(skill)
+    await config_store.upsert_skill(skill)
     logger.info("skill_created", name=skill.name, scope=effective_scope, enabled=skill.enabled)
     return _to_response(skill)
 
@@ -120,10 +108,11 @@ async def replace_skill(
     name: str,
     body: SkillCreate,
     scope: dict[str, str] | None = Depends(_scope_from_headers),  # noqa: B008
+    config_store: ConfigStore = Depends(get_config_store),  # noqa: B008
 ) -> SkillResponse:
     """Replace a skill definition (full update)."""
     body.name = name
-    return await create_skill(body, scope=scope)
+    return await create_skill(body, scope=scope, config_store=config_store)
 
 
 @router.patch("/{name}", response_model=SkillResponse)
@@ -131,21 +120,20 @@ async def update_skill(
     name: str,
     body: SkillUpdate,
     scope: dict[str, str] | None = Depends(_scope_from_headers),  # noqa: B008
+    config_store: ConfigStore = Depends(get_config_store),  # noqa: B008
 ) -> SkillResponse:
     """Partially update a skill definition."""
-    reg = _get_registry()
-    skill = await reg.get_skill(name, scope=scope)
+    skill = await config_store.get_skill(name, scope=scope)
     if skill is None:
         raise HTTPException(status_code=404, detail=f"Skill '{name}' not found")
 
     updates = body.model_dump(exclude_none=True)
 
-    # Auto-generate path if content is being set but path is not provided
     if body.content and "path" not in updates:
         updates["path"] = f"/skills/api/{name}/SKILL.md"
 
     updated = skill.model_copy(update=updates)
-    await reg.upsert_skill(updated)
+    await config_store.upsert_skill(updated)
     logger.info("skill_updated", name=name, scope=scope, fields=list(updates.keys()))
     return _to_response(updated)
 
@@ -154,10 +142,10 @@ async def update_skill(
 async def delete_skill(
     name: str,
     scope: dict[str, str] | None = Depends(_scope_from_headers),  # noqa: B008
+    config_store: ConfigStore = Depends(get_config_store),  # noqa: B008
 ) -> None:
-    """Delete a skill from the ConfigRegistry."""
-    reg = _get_registry()
-    deleted = await reg.delete_skill(name, scope=scope)
+    """Delete a skill from the ConfigStore."""
+    deleted = await config_store.delete_skill(name, scope=scope)
     if not deleted:
         raise HTTPException(status_code=404, detail=f"Skill '{name}' not found")
     logger.info("skill_deleted", name=name, scope=scope)

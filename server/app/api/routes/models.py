@@ -14,6 +14,8 @@ from typing import TYPE_CHECKING
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query
 
+from server.app.agent.resolver import RuntimeResolver
+from server.app.api.dependencies import get_config_store, get_runtime_resolver
 from server.app.api.models import (
     ModelInfo,
     ModelList,
@@ -24,6 +26,7 @@ from server.app.api.models import (
     ProviderUpdate,
 )
 from server.app.settings import Settings, get_settings
+from server.app.storage.config_store import ConfigStore
 
 if TYPE_CHECKING:
     from server.app.llm.model_catalog import CatalogModel
@@ -147,13 +150,11 @@ async def list_models(
 @router.get("/providers", response_model=ProviderConfigList)
 async def list_providers(
     scope: dict[str, str] | None = Depends(_scope_from_headers),  # noqa: B008
+    config_store: ConfigStore = Depends(get_config_store),  # noqa: B008
 ) -> ProviderConfigList:
-    """List all provider configs from the ConfigRegistry visible in the given scope."""
+    """List all provider configs from the ConfigStore visible in the given scope."""
     try:
-        from server.app.storage.config_registry import get_config_registry
-
-        reg = get_config_registry()
-        providers = await reg.list_providers(scope=scope)
+        providers = await config_store.list_providers(scope=scope)
         return ProviderConfigList(
             providers=[
                 ProviderResponse(
@@ -180,7 +181,7 @@ async def list_providers(
     except RuntimeError as e:
         raise HTTPException(
             status_code=503,
-            detail=f"ConfigRegistry unavailable: {e}",
+            detail=f"ConfigStore unavailable: {e}",
         ) from e
 
 
@@ -188,6 +189,7 @@ async def list_providers(
 async def list_models_for_provider(
     provider_id: str,
     scope: dict[str, str] | None = Depends(_scope_from_headers),  # noqa: B008
+    config_store: ConfigStore = Depends(get_config_store),  # noqa: B008
 ) -> ModelList:
     """List catalog models available for a specific provider config.
 
@@ -197,17 +199,7 @@ async def list_models_for_provider(
     For ``openai_compatible`` providers, returns an empty model list since
     the available models depend on the upstream service (OpenRouter, vLLM, etc.).
     """
-    try:
-        from server.app.storage.config_registry import get_config_registry
-
-        reg = get_config_registry()
-    except RuntimeError as e:
-        raise HTTPException(
-            status_code=503,
-            detail=f"ConfigRegistry unavailable: {e}",
-        ) from e
-
-    provider_config = await reg.get_provider(provider_id, scope=scope)
+    provider_config = await config_store.get_provider(provider_id, scope=scope)
     if provider_config is None:
         raise HTTPException(
             status_code=404,
@@ -229,13 +221,12 @@ async def list_models_for_provider(
 async def create_provider(
     body: ProviderCreate,
     scope: dict[str, str] | None = Depends(_scope_from_headers),  # noqa: B008
+    config_store: ConfigStore = Depends(get_config_store),  # noqa: B008
 ) -> ProviderResponse:
-    """Create or replace a provider config in the ConfigRegistry."""
+    """Create or replace a provider config in the ConfigStore."""
     try:
         from server.app.storage.config_models import ProviderConfig
-        from server.app.storage.config_registry import get_config_registry
 
-        reg = get_config_registry()
         # Header scope overrides body scope if provided
         effective_scope = scope if scope is not None else (body.scope or {})
         provider = ProviderConfig(
@@ -255,7 +246,7 @@ async def create_provider(
             scope=effective_scope,
             source="api",
         )
-        await reg.upsert_provider(provider)
+        await config_store.upsert_provider(provider)
         return ProviderResponse(
             id=provider.id,
             provider=provider.provider,
@@ -282,19 +273,17 @@ async def update_provider(
     provider_id: str,
     body: ProviderUpdate,
     scope: dict[str, str] | None = Depends(_scope_from_headers),  # noqa: B008
+    config_store: ConfigStore = Depends(get_config_store),  # noqa: B008
 ) -> ProviderResponse:
     """Partially update a provider config."""
     try:
-        from server.app.storage.config_registry import get_config_registry
-
-        reg = get_config_registry()
-        provider = await reg.get_provider(provider_id, scope=scope)
+        provider = await config_store.get_provider(provider_id, scope=scope)
         if provider is None:
             raise HTTPException(status_code=404, detail=f"Provider '{provider_id}' not found")
 
         updates = body.model_dump(exclude_none=True)
         updated = provider.model_copy(update=updates)
-        await reg.upsert_provider(updated)
+        await config_store.upsert_provider(updated)
 
         return ProviderResponse(
             id=updated.id,
@@ -323,13 +312,11 @@ async def update_provider(
 async def delete_provider(
     provider_id: str,
     scope: dict[str, str] | None = Depends(_scope_from_headers),  # noqa: B008
+    config_store: ConfigStore = Depends(get_config_store),  # noqa: B008
 ) -> None:
-    """Delete a provider config from the ConfigRegistry."""
+    """Delete a provider config from the ConfigStore."""
     try:
-        from server.app.storage.config_registry import get_config_registry
-
-        reg = get_config_registry()
-        deleted = await reg.delete_provider(provider_id, scope=scope)
+        deleted = await config_store.delete_provider(provider_id, scope=scope)
         if not deleted:
             raise HTTPException(status_code=404, detail=f"Provider '{provider_id}' not found")
     except HTTPException:
@@ -343,10 +330,12 @@ async def test_provider(
     provider_id: str,
     scope: dict[str, str] | None = Depends(_scope_from_headers),  # noqa: B008
     settings: Settings = Depends(get_settings),  # noqa: B008
+    config_store: ConfigStore = Depends(get_config_store),  # noqa: B008
+    runtime_resolver: RuntimeResolver = Depends(get_runtime_resolver),  # noqa: B008
 ) -> ProviderTestResponse:
     """Test provider connectivity and credentials.
 
-    Resolves the provider config from the registry, builds a LangChain model,
+    Resolves the provider config from the store, builds a LangChain model,
     and makes a lightweight call to verify credentials and reachability.
     Returns the actual provider error message on failure so GUI settings pages
     can surface actionable diagnostics.
@@ -365,20 +354,9 @@ async def test_provider(
     from langchain_core.messages import HumanMessage
 
     from server.app.exceptions import LLMProviderConfigError
-    from server.app.llm.deep_agent_service import _build_model
 
     # 1. Fetch the provider config
-    try:
-        from server.app.storage.config_registry import get_config_registry
-
-        reg = get_config_registry()
-    except RuntimeError as e:
-        raise HTTPException(
-            status_code=503,
-            detail=f"ConfigRegistry unavailable: {e}",
-        ) from e
-
-    provider_config = await reg.get_provider(provider_id, scope=scope)
+    provider_config = await config_store.get_provider(provider_id, scope=scope)
     if provider_config is None:
         raise HTTPException(status_code=404, detail=f"Provider '{provider_id}' not found")
 
@@ -387,14 +365,13 @@ async def test_provider(
 
     # 3. Build the model — surfaces credential / config errors immediately
     try:
-        model = _build_model(
+        model = runtime_resolver.build_model(
             provider=provider_config.provider,
             model_id=provider_config.model,
             api_key=api_key,
             base_url=provider_config.base_url,
             region=provider_config.region,
             role_arn=provider_config.role_arn,
-            settings=settings,
         )
     except LLMProviderConfigError as e:
         return ProviderTestResponse(
