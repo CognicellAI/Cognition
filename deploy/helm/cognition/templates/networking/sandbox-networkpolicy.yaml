@@ -1,0 +1,16 @@
+{{- if and (eq .Values.config.sandbox.backend "kubernetes") .Values.config.sandbox.k8s.denyEgress }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "cognition.fullname" . }}-sandbox-deny-egress
+  namespace: {{ .Values.config.sandbox.k8s.namespace | default .Release.Namespace }}
+  labels:
+    {{- include "cognition.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      agents.x-k8s.io/sandbox: "true"
+  policyTypes:
+    - Egress
+  egress: []
+{{- end }}

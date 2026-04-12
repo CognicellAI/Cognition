@@ -151,8 +151,22 @@ config:
   
   # Sandbox configuration
   sandbox:
-    # Backend: local, docker
+    # Backend: local, docker, kubernetes
     backend: local
+    # Kubernetes-specific settings (only used when backend=kubernetes)
+    k8s:
+      # SandboxTemplate CR name for sandbox pod spec
+      template: cognition-sandbox
+      # Kubernetes namespace for sandbox CRs (defaults to release namespace)
+      namespace: ""
+      # URL of the sandbox-router service
+      routerUrl: ""
+      # Time-to-live in seconds for sandbox auto-cleanup
+      ttl: 3600
+      # Optional SandboxWarmPool CR name for pre-warmed allocation
+      warmPool: ""
+      # Deny all egress from sandbox pods (K8s equivalent of Docker network_mode: "none")
+      denyEgress: false
   
   # Session scoping configuration
   scoping:

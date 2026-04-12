@@ -430,14 +430,14 @@ class SessionManager:
         storage = get_storage_backend()
         checkpointer = await storage.get_checkpointer()
 
-        agent = await create_cognition_agent(
+        result = await create_cognition_agent(
             project_path=managed.session.workspace_path,
             model=model,
             checkpointer=checkpointer,
             settings=self._settings,
         )
 
-        managed.agent = agent
+        managed.agent = result.agent
         managed.last_accessed = datetime.now(UTC)
 
         logger.info(
@@ -446,7 +446,7 @@ class SessionManager:
             thread_id=managed.session.thread_id,
         )
 
-        return agent
+        return result.agent
 
     def invalidate_agent(self, session_id: str) -> None:
         """Invalidate the cached agent for a session.

@@ -223,15 +223,42 @@ COGNITION_PERSISTENCE_URI=postgresql://user:password@host:5432/dbname
 
 ## Sandbox (Execution)
 
+Cognition ships three sandbox backends:
+
+| Backend | Isolation | Works on K8s? |
+|---|---|---|
+| `local` | None — commands run as server process user | Yes, but no isolation |
+| `docker` | Container per session | No — requires Docker socket + privileged mode |
+| `kubernetes` | Sandbox pod per session | Yes — K8s-native, no special privileges needed |
+
+### Common settings
+
 | YAML key | Environment variable | Default | Description |
 |---|---|---|---|
-| `sandbox.backend` | `COGNITION_SANDBOX_BACKEND` | `local` | `local` or `docker` |
+| `sandbox.backend` | `COGNITION_SANDBOX_BACKEND` | `local` | `local`, `docker`, or `kubernetes` |
+
+### Docker settings (when `sandbox.backend = docker`)
+
+| YAML key | Environment variable | Default | Description |
+|---|---|---|---|
 | `sandbox.docker_image` | `COGNITION_DOCKER_IMAGE` | `cognition-sandbox:latest` | Docker image for the sandbox container |
 | `sandbox.docker_network` | `COGNITION_DOCKER_NETWORK` | `none` | Container network mode |
 | `sandbox.docker_timeout` | `COGNITION_DOCKER_TIMEOUT` | `300` | Command execution timeout in seconds |
 | `sandbox.docker_memory_limit` | `COGNITION_DOCKER_MEMORY_LIMIT` | `512m` | Container memory limit |
 | `sandbox.docker_cpu_limit` | `COGNITION_DOCKER_CPU_LIMIT` | `1.0` | Container CPU limit (cores) |
 | `sandbox.docker_host_workspace` | `COGNITION_DOCKER_HOST_WORKSPACE` | `null` | Host path to mount into the container |
+
+### Kubernetes settings (when `sandbox.backend = kubernetes`)
+
+| YAML key | Environment variable | Default | Description |
+|---|---|---|---|
+| `sandbox.k8s.template` | `COGNITION_K8S_SANDBOX_TEMPLATE` | `cognition-sandbox` | SandboxTemplate CR name defining the sandbox pod spec |
+| `sandbox.k8s.namespace` | `COGNITION_K8S_SANDBOX_NAMESPACE` | `default` | Kubernetes namespace for sandbox CRs |
+| `sandbox.k8s.router_url` | `COGNITION_K8S_SANDBOX_ROUTER_URL` | `http://sandbox-router-svc.default.svc.cluster.local:8080` | sandbox-router service URL |
+| `sandbox.k8s.ttl` | `COGNITION_K8S_SANDBOX_TTL` | `3600` | Auto-cleanup after N seconds (safety net for abandoned sandboxes) |
+| `sandbox.k8s.warm_pool` | `COGNITION_K8S_SANDBOX_WARM_POOL` | (none) | SandboxWarmPool CR name (reserved, not yet implemented) |
+
+See [Kubernetes Sandbox](../concepts/kubernetes-sandbox.md) for architecture, prerequisites, and deployment details.
 
 ---
 
@@ -453,6 +480,42 @@ AWS_ACCESS_KEY_ID=AKIA...
 AWS_SECRET_ACCESS_KEY=...
 ANTHROPIC_API_KEY=sk-ant-...
 COGNITION_PERSISTENCE_URI=postgresql://cognition:secret@postgres:5432/cognition
+```
+
+## Example: Kubernetes Sandbox Setup
+
+```yaml
+# .cognition/config.yaml
+server:
+  host: 0.0.0.0
+  port: 8000
+
+llm:
+  - provider: openai_compatible
+    model: google/gemini-3-flash-preview
+    base_url: https://openrouter.ai/api/v1
+
+persistence:
+  backend: postgres
+
+sandbox:
+  backend: kubernetes
+  k8s:
+    template: cognition-sandbox
+    namespace: cognition
+    router_url: http://sandbox-router-svc.cognition.svc.cluster.local:8080
+    ttl: 3600
+
+scoping:
+  enabled: true
+  scope_keys:
+    - "user"
+```
+
+```bash
+# .env
+COGNITION_OPENAI_COMPATIBLE_API_KEY=sk-or-v1-...
+COGNITION_PERSISTENCE_URI=postgresql+asyncpg://cognition:secret@cognition-db-rw:5432/cognition
 ```
 
 ---

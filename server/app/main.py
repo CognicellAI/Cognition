@@ -85,6 +85,19 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     initialize_agent_registry(settings=settings)
     logger.info("Agent registry initialized")
 
+    # Validate K8s sandbox prerequisites if backend is kubernetes
+    if settings.sandbox_backend == "kubernetes":
+        from server.app.agent.sandbox_backend import validate_k8s_sandbox_config
+
+        try:
+            validate_k8s_sandbox_config(
+                namespace=settings.k8s_sandbox_namespace,
+                router_url=settings.k8s_sandbox_router_url,
+            )
+        except RuntimeError as e:
+            logger.error("K8s sandbox validation failed", error=str(e))
+            raise
+
     # Set up file watcher for hot-reload
     try:
         from server.app.agent_registry import get_agent_registry

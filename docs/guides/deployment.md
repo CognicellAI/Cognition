@@ -296,12 +296,77 @@ spec:
                   key: database-url
 ```
 
-### Docker Sandbox in Kubernetes
+### Kubernetes Sandbox Backend
 
-The Docker sandbox backend requires Docker socket access, which is a security concern in shared clusters. Options:
-- Use `COGNITION_SANDBOX_BACKEND=local` for process-level isolation only
-- Use Docker-in-Docker (DinD) as a sidecar (not recommended for multi-tenant)
-- Implement a custom `ExecutionBackend` that creates Kubernetes `Job` resources
+When deploying Cognition on Kubernetes, the Docker sandbox backend does not work (the server pod runs with `readOnlyRootFilesystem: true`, `capabilities.drop: ["ALL"]`, and `runAsNonRoot: true`). Use the `kubernetes` sandbox backend instead, which creates isolated sandbox pods via the [agent-sandbox](https://github.com/kubernetes-sigs/agent-sandbox) CRD and controller.
+
+**Prerequisites** (install before deploying Cognition):
+
+| Prerequisite | Install | Purpose |
+|---|---|---|
+| agent-sandbox controller (v0.3.10+) | `kubectl apply -f .../v0.3.10/manifest.yaml` | Reconciles Sandbox CRs into pods |
+| agent-sandbox extensions | `kubectl apply -f .../v0.3.10/extensions.yaml` | SandboxTemplate, SandboxClaim CRDs |
+| sandbox-router Deployment + Service | Deploy from [agent-sandbox router](https://github.com/kubernetes-sigs/agent-sandbox) | Proxies commands to sandbox pods |
+
+These are cluster-scoped infrastructure and are **not** bundled in Cognition's Helm chart.
+
+**SandboxTemplate** — create a CR defining the sandbox pod spec:
+
+```yaml
+apiVersion: extensions.agents.x-k8s.io/v1alpha1
+kind: SandboxTemplate
+metadata:
+  name: cognition-sandbox
+  namespace: cognition
+spec:
+  networkPolicyManagement: Managed
+  podTemplate:
+    spec:
+      containers:
+      - name: python-runtime
+        image: us-central1-docker.pkg.dev/k8s-staging-images/agent-sandbox/python-runtime-sandbox:latest-main
+        ports:
+        - containerPort: 8888
+        securityContext:
+          readOnlyRootFilesystem: true
+          runAsNonRoot: true
+          capabilities:
+            drop: ["ALL"]
+        volumeMounts:
+        - name: tmp
+          mountPath: /tmp
+        - name: workspace
+          mountPath: /workspace
+      volumes:
+      - name: tmp
+        emptyDir:
+          sizeLimit: "128Mi"
+      - name: workspace
+        emptyDir:
+          sizeLimit: "1Gi"
+```
+
+> The `/tmp` and `/workspace` emptyDir mounts are required. The runtime image uses `readOnlyRootFilesystem: true`, so without writable mount points, file operations that write temporary data will fail.
+
+**Helm values** — enable the K8s sandbox backend:
+
+```yaml
+config:
+  sandbox:
+    backend: kubernetes
+    k8s:
+      template: cognition-sandbox
+      namespace: cognition
+      routerUrl: http://sandbox-router-svc.cognition.svc.cluster.local:8080
+      ttl: 3600
+      denyEgress: true    # Optional: deny all egress from sandbox pods
+```
+
+The Helm chart automatically creates the required RBAC (namespace-scoped Role for sandbox lifecycle + cluster-scoped ClusterRole for CRD reads) when `backend=kubernetes`.
+
+**Startup validation** — Cognition checks at startup that the agent-sandbox CRDs exist and the router is reachable. If CRDs are missing, the server fails to start with a clear error message.
+
+See [Kubernetes Sandbox](../concepts/kubernetes-sandbox.md) for architecture details, scoping labels, and the two-package design.
 
 ### Health Probes
 

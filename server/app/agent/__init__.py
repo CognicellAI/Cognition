@@ -8,7 +8,7 @@ from server.app.agent.agent_definition_registry import (
     get_agent_definition_registry,
     initialize_agent_definition_registry,
 )
-from server.app.agent.cognition_agent import create_cognition_agent
+from server.app.agent.cognition_agent import CognitionAgentResult, create_cognition_agent
 from server.app.agent.definition import (
     AgentConfig,
     AgentDefinition,
@@ -36,6 +36,7 @@ from server.app.agent.tools import BrowserTool, InspectPackageTool, SearchTool
 __all__ = [
     # Agent creation
     "create_cognition_agent",
+    "CognitionAgentResult",
     "CognitionLocalSandboxBackend",
     # Tools
     "BrowserTool",

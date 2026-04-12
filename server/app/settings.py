@@ -134,7 +134,7 @@ class Settings(BaseSettings):
     )
 
     # Sandbox / Execution backend settings
-    sandbox_backend: Literal["local", "docker"] = Field(
+    sandbox_backend: Literal["local", "docker", "kubernetes"] = Field(
         default="local",
         alias="COGNITION_SANDBOX_BACKEND",
     )
@@ -153,6 +153,33 @@ class Settings(BaseSettings):
     docker_cpu_limit: float = Field(
         default=1.0,
         alias="COGNITION_DOCKER_CPU_LIMIT",
+    )
+
+    # Kubernetes sandbox settings (only used when sandbox_backend="kubernetes")
+    k8s_sandbox_template: str = Field(
+        default="cognition-sandbox",
+        alias="COGNITION_K8S_SANDBOX_TEMPLATE",
+        description="SandboxTemplate CR name for creating K8s sandbox pods.",
+    )
+    k8s_sandbox_namespace: str = Field(
+        default="default",
+        alias="COGNITION_K8S_SANDBOX_NAMESPACE",
+        description="Kubernetes namespace for sandbox CRs.",
+    )
+    k8s_sandbox_router_url: str = Field(
+        default="http://sandbox-router-svc.default.svc.cluster.local:8080",
+        alias="COGNITION_K8S_SANDBOX_ROUTER_URL",
+        description="URL of the sandbox-router service for in-cluster communication.",
+    )
+    k8s_sandbox_ttl: int = Field(
+        default=3600,
+        alias="COGNITION_K8S_SANDBOX_TTL",
+        description="Time-to-live in seconds for K8s sandbox CRs.",
+    )
+    k8s_sandbox_warm_pool: str | None = Field(
+        default=None,
+        alias="COGNITION_K8S_SANDBOX_WARM_POOL",
+        description="Optional SandboxWarmPool CR name for pre-warmed sandbox allocation.",
     )
 
     blocked_tools: list[str] = Field(

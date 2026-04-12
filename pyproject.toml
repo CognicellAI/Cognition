@@ -87,9 +87,14 @@ deploy = [
     "langgraph-checkpoint-postgres>=2.0.0",
 ]
 
+# Kubernetes sandbox backend
+k8s = [
+    "langchain-k8s-sandbox[k8s]",
+]
+
 # All extras
 all = [
-    "cognition[openai,bedrock,test,deploy]",
+    "cognition[openai,bedrock,test,deploy,k8s]",
 ]
 
 [project.scripts]
@@ -102,8 +107,14 @@ cognition-client = "client.tui.app:main"
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
+[tool.uv.workspace]
+members = ["packages/*"]
+
+[tool.uv.sources]
+langchain-k8s-sandbox = { workspace = true }
+
 [tool.hatch.build.targets.wheel]
-packages = ["server", "client", "shared"]
+packages = ["server", "client", "shared", "packages"]
 
 [tool.ruff]
 target-version = "py311"
@@ -157,7 +168,7 @@ line-ending = "auto"
 convention = "google"
 
 [tool.ruff.lint.isort]
-known-first-party = ["server", "client", "shared"]
+known-first-party = ["server", "client", "shared", "langchain_k8s_sandbox"]
 
 [tool.mypy]
 python_version = "3.11"
@@ -210,6 +221,22 @@ ignore_missing_imports = true
 [[tool.mypy.overrides]]
 module = ["asyncpg", "asyncpg.*"]
 ignore_missing_imports = true
+
+# k8s-agent-sandbox SDK has no stubs
+[[tool.mypy.overrides]]
+module = ["k8s_agent_sandbox", "k8s_agent_sandbox.*"]
+ignore_missing_imports = true
+
+# kubernetes client has no stubs
+[[tool.mypy.overrides]]
+module = ["kubernetes", "kubernetes.*"]
+ignore_missing_imports = true
+
+# langchain-k8s-sandbox workspace package (optional dep, not always installed)
+[[tool.mypy.overrides]]
+module = ["langchain_k8s_sandbox", "langchain_k8s_sandbox.*"]
+ignore_missing_imports = true
+disallow_untyped_defs = false
 
 # boto3 has no bundled stubs (boto3-stubs is optional)
 [[tool.mypy.overrides]]

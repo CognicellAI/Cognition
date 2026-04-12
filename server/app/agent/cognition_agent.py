@@ -23,7 +23,7 @@ import importlib
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, NamedTuple, cast
 
 import structlog
 from deepagents import create_deep_agent as _create_deep_agent
@@ -252,11 +252,25 @@ Best practices:
 The current working directory is the project root. All file paths are relative to this root."""
 
 
+class CognitionAgentResult(NamedTuple):
+    """Result of creating a Cognition agent.
+
+    Attributes:
+        agent: The compiled LangGraph agent.
+        sandbox_backend: The sandbox backend used by the agent, if any.
+            Callers should register this with SessionAgentManager for
+            lifecycle tracking (terminate on session deletion).
+    """
+
+    agent: Any
+    sandbox_backend: Any | None = None
+
+
 async def create_cognition_agent(
     project_path: str | Path,
     model: Any = None,
-    store: Any = None,  # LangGraph store
-    checkpointer: Any = None,  # LangGraph checkpointer
+    store: Any = None,
+    checkpointer: Any = None,
     system_prompt: str | None = None,
     memory: Sequence[str] | None = None,
     skills: Sequence[str] | None = None,
@@ -269,7 +283,7 @@ async def create_cognition_agent(
     settings: Settings | None = None,
     mcp_configs: Sequence[McpServerConfig] | None = None,
     scope: dict[str, str] | None = None,
-) -> Any:
+) -> CognitionAgentResult:
     """Create a Deep Agent for the Cognition system.
 
     This factory creates an agent with:
@@ -329,10 +343,23 @@ async def create_cognition_agent(
     # Check if we have a cached agent for this configuration
     cached_agent = get_cached_agent(cache_key)
     if cached_agent is not None:
-        return cached_agent
+        return cast(CognitionAgentResult, cached_agent)
 
     # Create the sandbox backend using settings-driven factory
     sandbox_id = f"cognition-{project_path.name}"
+
+    # Build K8s scoping labels from session scope when available
+    k8s_labels: dict[str, str] | None = None
+    if scope:
+        k8s_labels = {}
+        if "user" in scope:
+            k8s_labels["cognition.io/user"] = scope["user"]
+        if "org" in scope:
+            k8s_labels["cognition.io/org"] = scope["org"]
+        if "project" in scope:
+            k8s_labels["cognition.io/project"] = scope["project"]
+        k8s_labels["cognition.io/session"] = sandbox_id
+
     sandbox_backend = create_sandbox_backend(
         root_dir=project_path,
         sandbox_id=sandbox_id,
@@ -341,7 +368,13 @@ async def create_cognition_agent(
         docker_network=settings.docker_network,
         docker_memory_limit=settings.docker_memory_limit,
         docker_cpu_limit=settings.docker_cpu_limit,
-        docker_host_workspace="",  # docker_host_workspace removed from Settings (niche Docker-in-Docker only)
+        docker_host_workspace="",
+        k8s_template=settings.k8s_sandbox_template,
+        k8s_namespace=settings.k8s_sandbox_namespace,
+        k8s_router_url=settings.k8s_sandbox_router_url,
+        k8s_ttl=settings.k8s_sandbox_ttl,
+        k8s_warm_pool=settings.k8s_sandbox_warm_pool,
+        labels=k8s_labels or None,
     )
 
     # Resolve agent defaults from ConfigRegistry (falls back to hardcoded defaults)
@@ -522,10 +555,12 @@ async def create_cognition_agent(
 
     agent = cast(Any, create_deep_agent)(**create_kwargs)
 
-    # Cache the compiled agent
-    cache_agent(cache_key, agent)
+    result = CognitionAgentResult(agent=agent, sandbox_backend=sandbox_backend)
 
-    return agent
+    # Cache the full result so cache hits return CognitionAgentResult, not raw agent
+    cache_agent(cache_key, result)
+
+    return result
 
 
 def _resolve_response_format(response_format: str | type[Any] | None) -> type[Any] | None:
