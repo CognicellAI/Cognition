@@ -42,7 +42,6 @@ from server.app.agent.runtime import (
 )
 from server.app.exceptions import LLMProviderConfigError
 from server.app.settings import Settings
-from server.app.storage import get_storage_backend
 from server.app.storage.config_store import ConfigStore
 from server.app.storage.factory import create_storage_backend
 
@@ -327,8 +326,7 @@ class DeepAgentStreamingService:
         runtime: DeepAgentRuntime | None = None
         try:
             # Get session for config / agent_name resolution
-            storage = get_storage_backend()
-            session = await storage.get_session(session_id)
+            session = await self.storage_backend.get_session(session_id)
 
             agent_cfg, custom_tools = await self._resolve_agent_config(
                 session=session,
@@ -478,8 +476,7 @@ class DeepAgentStreamingService:
     ) -> AsyncGenerator[StreamEvent, None]:
         """Resume an interrupted Deep Agents run from persisted checkpoint state."""
         try:
-            storage = get_storage_backend()
-            session = await storage.get_session(session_id)
+            session = await self.storage_backend.get_session(session_id)
             if session is None:
                 yield ErrorEvent(message=f"Session not found: {session_id}", code="NOT_FOUND")
                 return

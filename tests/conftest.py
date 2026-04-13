@@ -6,7 +6,6 @@ from pathlib import Path
 import pytest
 
 from server.app.settings import Settings, get_settings
-from server.app.storage import set_storage_backend
 from server.app.storage.sqlite import SqliteStorageBackend
 
 
@@ -30,7 +29,6 @@ async def setup_storage_backend():
         )
         await storage.initialize()
 
-        set_storage_backend(storage)
         set_storage_backend_dep(storage)
 
         settings = get_settings()

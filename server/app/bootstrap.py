@@ -130,7 +130,7 @@ async def seed_providers_from_config(
                 provider=provider_type,
                 model=model,
             )
-        return inserted
+        return bool(inserted)
 
     except Exception as exc:
         logger.warning(

@@ -21,7 +21,7 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime
-from typing import Any, Protocol, runtime_checkable
+from typing import Any, Protocol, cast, runtime_checkable
 
 from server.app.agent.definition import AgentDefinition
 from server.app.storage.config_models import (
@@ -234,10 +234,12 @@ class DefaultConfigStore:
     async def get_provider(
         self, provider_id: str, scope: dict[str, str] | None = None
     ) -> ProviderConfig | None:
-        return await self._config_registry.get_provider(provider_id, scope)
+        return cast(
+            ProviderConfig | None, await self._config_registry.get_provider(provider_id, scope)
+        )
 
     async def list_providers(self, scope: dict[str, str] | None = None) -> list[ProviderConfig]:
-        return await self._config_registry.list_providers(scope)
+        return cast(list[ProviderConfig], await self._config_registry.list_providers(scope))
 
     async def upsert_provider(self, config: ProviderConfig) -> None:
         await self._config_registry.upsert_provider(config)
@@ -247,7 +249,7 @@ class DefaultConfigStore:
         await self._config_registry.upsert_provider(provider)
 
     async def delete_provider(self, provider_id: str, scope: dict[str, str] | None = None) -> bool:
-        return await self._config_registry.delete_provider(provider_id, scope)
+        return bool(await self._config_registry.delete_provider(provider_id, scope))
 
     # ------------------------------------------------------------------
     # Tool CRUD
@@ -256,10 +258,10 @@ class DefaultConfigStore:
     async def get_tool(
         self, name: str, scope: dict[str, str] | None = None
     ) -> ToolRegistration | None:
-        return await self._config_registry.get_tool(name, scope)
+        return cast(ToolRegistration | None, await self._config_registry.get_tool(name, scope))
 
     async def list_tools(self, scope: dict[str, str] | None = None) -> list[ToolRegistration]:
-        return await self._config_registry.list_tools(scope)
+        return cast(list[ToolRegistration], await self._config_registry.list_tools(scope))
 
     async def upsert_tool(self, tool: ToolRegistration) -> None:
         await self._config_registry.upsert_tool(tool)
@@ -269,7 +271,7 @@ class DefaultConfigStore:
         await self._config_registry.upsert_tool(tool)
 
     async def delete_tool(self, name: str, scope: dict[str, str] | None = None) -> bool:
-        return await self._config_registry.delete_tool(name, scope)
+        return bool(await self._config_registry.delete_tool(name, scope))
 
     # ------------------------------------------------------------------
     # Skill CRUD
@@ -278,10 +280,10 @@ class DefaultConfigStore:
     async def get_skill(
         self, name: str, scope: dict[str, str] | None = None
     ) -> SkillDefinition | None:
-        return await self._config_registry.get_skill(name, scope)
+        return cast(SkillDefinition | None, await self._config_registry.get_skill(name, scope))
 
     async def list_skills(self, scope: dict[str, str] | None = None) -> list[SkillDefinition]:
-        return await self._config_registry.list_skills(scope)
+        return cast(list[SkillDefinition], await self._config_registry.list_skills(scope))
 
     async def upsert_skill(self, skill: SkillDefinition) -> None:
         await self._config_registry.upsert_skill(skill)
@@ -291,7 +293,7 @@ class DefaultConfigStore:
         await self._config_registry.upsert_skill(skill)
 
     async def delete_skill(self, name: str, scope: dict[str, str] | None = None) -> bool:
-        return await self._config_registry.delete_skill(name, scope)
+        return bool(await self._config_registry.delete_skill(name, scope))
 
     # ------------------------------------------------------------------
     # Agent CRUD (raw dict for DB)
@@ -318,10 +320,10 @@ class DefaultConfigStore:
     async def get_agent_raw(
         self, name: str, scope: dict[str, str] | None = None
     ) -> dict[str, Any] | None:
-        return await self._config_registry.get_agent_raw(name, scope)
+        return cast(dict[str, Any] | None, await self._config_registry.get_agent_raw(name, scope))
 
     async def delete_agent(self, name: str, scope: dict[str, str] | None = None) -> bool:
-        result = await self._config_registry.delete_agent(name, scope)
+        result = bool(await self._config_registry.delete_agent(name, scope))
         if result and self._agent_definition_registry:
             self._agent_definition_registry.remove(name)
         return result
@@ -334,19 +336,22 @@ class DefaultConfigStore:
         self, name: str, scope: dict[str, str] | None = None
     ) -> AgentDefinition | None:
         if self._agent_definition_registry:
-            return self._agent_definition_registry.get(name)
+            return cast(AgentDefinition | None, self._agent_definition_registry.get(name))
         return None
 
     async def list_agent_definitions(
         self, include_hidden: bool = False, scope: dict[str, str] | None = None
     ) -> list[AgentDefinition]:
         if self._agent_definition_registry:
-            return self._agent_definition_registry.get_all(include_hidden=include_hidden)
+            return cast(
+                list[AgentDefinition],
+                self._agent_definition_registry.get_all(include_hidden=include_hidden),
+            )
         return []
 
     async def is_valid_primary(self, name: str, scope: dict[str, str] | None = None) -> bool:
         if self._agent_definition_registry:
-            return self._agent_definition_registry.is_valid_primary(name)
+            return bool(self._agent_definition_registry.is_valid_primary(name))
         return False
 
     # ------------------------------------------------------------------
@@ -356,13 +361,15 @@ class DefaultConfigStore:
     async def list_mcp_servers(
         self, scope: dict[str, str] | None = None
     ) -> list[McpServerRegistration]:
-        return await self._config_registry.list_mcp_servers(scope)
+        return cast(
+            list[McpServerRegistration], await self._config_registry.list_mcp_servers(scope)
+        )
 
     async def upsert_mcp_server(self, server: McpServerRegistration) -> None:
         await self._config_registry.upsert_mcp_server(server)
 
     async def delete_mcp_server(self, name: str, scope: dict[str, str] | None = None) -> bool:
-        return await self._config_registry.delete_mcp_server(name, scope)
+        return bool(await self._config_registry.delete_mcp_server(name, scope))
 
     # ------------------------------------------------------------------
     # Global defaults
@@ -371,7 +378,10 @@ class DefaultConfigStore:
     async def get_global_provider_defaults(
         self, scope: dict[str, str] | None = None
     ) -> GlobalProviderDefaults:
-        return await self._config_registry.get_global_provider_defaults(scope)
+        return cast(
+            GlobalProviderDefaults,
+            await self._config_registry.get_global_provider_defaults(scope),
+        )
 
     async def set_global_provider_defaults(
         self, defaults: GlobalProviderDefaults, scope: dict[str, str] | None = None
@@ -381,7 +391,9 @@ class DefaultConfigStore:
     async def get_global_agent_defaults(
         self, scope: dict[str, str] | None = None
     ) -> GlobalAgentDefaults:
-        return await self._config_registry.get_global_agent_defaults(scope)
+        return cast(
+            GlobalAgentDefaults, await self._config_registry.get_global_agent_defaults(scope)
+        )
 
     async def set_global_agent_defaults(
         self, defaults: GlobalAgentDefaults, scope: dict[str, str] | None = None
@@ -400,8 +412,8 @@ class DefaultConfigStore:
         definition: dict[str, Any],
         source: str = "file",
     ) -> bool:
-        return await self._config_registry.seed_if_absent(
-            entity_type, name, scope, definition, source
+        return bool(
+            await self._config_registry.seed_if_absent(entity_type, name, scope, definition, source)
         )
 
     # ------------------------------------------------------------------
@@ -409,7 +421,7 @@ class DefaultConfigStore:
     # ------------------------------------------------------------------
 
     async def get_changes_since(self, since: datetime) -> list[ConfigChange]:
-        return await self._config_registry.get_changes_since(since)
+        return cast(list[ConfigChange], await self._config_registry.get_changes_since(since))
 
     async def mark_changes_processed(self, change_ids: list[int]) -> None:
         await self._config_registry.mark_changes_processed(change_ids)

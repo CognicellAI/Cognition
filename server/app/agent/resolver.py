@@ -76,6 +76,8 @@ class RuntimeResolver:
             List of BaseTool instances.
         """
         tools: list[Any] = list(extra_tools) if extra_tools else []
+        if self._store is None:
+            return tools
 
         try:
             registrations = await self._store.list_tools(scope)
@@ -131,10 +133,14 @@ class RuntimeResolver:
         Returns:
             AgentDefinition if found, None otherwise.
         """
+        if self._store is None:
+            return None
         return await self._store.get_agent_definition(name, scope)
 
     async def is_valid_primary(self, name: str, scope: dict[str, str] | None = None) -> bool:
         """Check if an agent name is a valid primary agent."""
+        if self._store is None:
+            return False
         return await self._store.is_valid_primary(name, scope)
 
     # ------------------------------------------------------------------
@@ -168,6 +174,12 @@ class RuntimeResolver:
         Raises:
             LLMProviderConfigError: If no provider can be resolved.
         """
+        if self._store is None:
+            raise LLMProviderConfigError(
+                provider=provider_id or provider_type or "unknown",
+                reason="ConfigStore not initialized.",
+            )
+
         providers = await self._store.list_providers(scope)
 
         if provider_id:
@@ -645,6 +657,12 @@ class RuntimeResolver:
                 model=mod,
             )
             return prov, mod, None, None, None, None, recursion_limit, None, None
+
+        if self._store is None:
+            raise LLMProviderConfigError(
+                provider="unknown",
+                reason="ConfigStore not initialized.",
+            )
 
         try:
             provider_configs: list[Any] = []
