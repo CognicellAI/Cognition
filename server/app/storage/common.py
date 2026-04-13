@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, Literal
 
 from server.app.models import Message, Session, SessionConfig, SessionStatus, ToolCall
 
@@ -79,7 +79,7 @@ def make_message(
     *,
     message_id: str,
     session_id: str,
-    role: str,
+    role: Literal["user", "assistant", "system", "tool"],
     content: str | None,
     parent_id: str | None = None,
     created_at: datetime | None = None,
