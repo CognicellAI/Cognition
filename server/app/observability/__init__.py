@@ -6,6 +6,7 @@ Provides structured logging, OpenTelemetry tracing, and metrics collection.
 from __future__ import annotations
 
 import functools
+import inspect
 import time
 from collections.abc import Callable
 from contextlib import contextmanager
@@ -154,7 +155,24 @@ def setup_tracing(
 
     # Instrument LangChain
     if LangchainInstrumentor:
-        LangchainInstrumentor().instrument(tracer_provider=provider)
+        instrument_signature = inspect.signature(LangchainInstrumentor().instrument)
+        supports_module_kwarg = False
+
+        wrapped = getattr(LangchainInstrumentor, "_instrument", None)
+        if wrapped is not None:
+            try:
+                supports_module_kwarg = "module" in inspect.getsource(wrapped)
+            except (OSError, TypeError):
+                supports_module_kwarg = False
+
+        if supports_module_kwarg:
+            logger.warning(
+                "Skipping LangChain OpenTelemetry instrumentation due to incompatible wrapt API"
+            )
+        elif "tracer_provider" in instrument_signature.parameters:
+            LangchainInstrumentor().instrument(tracer_provider=provider)
+        else:
+            LangchainInstrumentor().instrument()
 
 
 def setup_logging(log_level: str = "info", json_format: bool = False) -> None:
