@@ -3,10 +3,9 @@
 Tests for the generic session scoping via X-Cognition-Scope headers.
 """
 
-from unittest.mock import patch
-
 from fastapi.testclient import TestClient
 
+from server.app.api.dependencies import get_settings_dep
 from server.app.api.scoping import SessionScope, extract_scope_from_headers
 from server.app.main import app
 from server.app.settings import Settings
@@ -87,64 +86,65 @@ class TestScopingIntegration:
 
     def test_session_creation_with_scope(self):
         """Test creating a session with scope headers."""
-        with patch("server.app.api.routes.sessions.get_settings") as mock_get_settings:
-            mock_get_settings.return_value = Settings(
-                scoping_enabled=True,
-                scope_keys=["user"],
-            )
-
+        scoped_settings = Settings(
+            scoping_enabled=True,
+            scope_keys=["user"],
+        )
+        app.dependency_overrides[get_settings_dep] = lambda: scoped_settings
+        try:
             response = client.post(
                 "/sessions",
                 json={"title": "Scoped Session"},
                 headers={"X-Cognition-Scope-User": "alice"},
             )
 
-            # Should succeed with scope header
             assert response.status_code == 201
+        finally:
+            app.dependency_overrides.pop(get_settings_dep, None)
 
     def test_session_creation_without_scope_fail_closed(self):
         """Test that missing scope headers fail when scoping is enabled."""
-        with patch("server.app.api.routes.sessions.get_settings") as mock_get_settings:
-            mock_get_settings.return_value = Settings(
-                scoping_enabled=True,
-                scope_keys=["user"],
-            )
-
+        scoped_settings = Settings(
+            scoping_enabled=True,
+            scope_keys=["user"],
+        )
+        app.dependency_overrides[get_settings_dep] = lambda: scoped_settings
+        try:
             response = client.post(
                 "/sessions",
                 json={"title": "Scoped Session"},
-                # No scope header
             )
 
-            # Should fail with 403
             assert response.status_code == 403
             assert "Missing required scope headers" in response.json()["detail"]
+        finally:
+            app.dependency_overrides.pop(get_settings_dep, None)
 
     def test_session_creation_disabled_scoping(self):
         """Test that sessions work without scope when scoping is disabled."""
-        with patch("server.app.api.routes.sessions.get_settings") as mock_get_settings:
-            mock_get_settings.return_value = Settings(
-                scoping_enabled=False,
-                scope_keys=["user"],
-            )
-
+        disabled_settings = Settings(
+            scoping_enabled=False,
+            scope_keys=["user"],
+        )
+        app.dependency_overrides[get_settings_dep] = lambda: disabled_settings
+        try:
             response = client.post(
                 "/sessions",
                 json={"title": "Unscoped Session"},
-                # No scope header, but scoping is disabled
             )
 
-            # Should succeed
             assert response.status_code == 201
+        finally:
+            app.dependency_overrides.pop(get_settings_dep, None)
 
     def test_multi_dimensional_scoping(self):
         """Test scoping with multiple dimensions."""
-        with patch("server.app.api.routes.sessions.get_settings") as mock_get_settings:
-            mock_get_settings.return_value = Settings(
-                scoping_enabled=True,
-                scope_keys=["user", "project"],
-            )
-
+        scoped_settings = Settings(
+            scoping_enabled=True,
+            scope_keys=["user", "project"],
+        )
+        app.dependency_overrides[get_settings_dep] = lambda: scoped_settings
+        try:
             response = client.post(
                 "/sessions",
                 json={"title": "Multi-scoped Session"},
@@ -154,25 +154,26 @@ class TestScopingIntegration:
                 },
             )
 
-            # Should succeed with both headers
             assert response.status_code == 201
+        finally:
+            app.dependency_overrides.pop(get_settings_dep, None)
 
     def test_multi_dimensional_scoping_partial(self):
         """Test that partial scope fails when all keys are required."""
-        with patch("server.app.api.routes.sessions.get_settings") as mock_get_settings:
-            mock_get_settings.return_value = Settings(
-                scoping_enabled=True,
-                scope_keys=["user", "project"],
-            )
-
+        scoped_settings = Settings(
+            scoping_enabled=True,
+            scope_keys=["user", "project"],
+        )
+        app.dependency_overrides[get_settings_dep] = lambda: scoped_settings
+        try:
             response = client.post(
                 "/sessions",
                 json={"title": "Partially Scoped Session"},
                 headers={
                     "X-Cognition-Scope-User": "alice",
-                    # Missing project header
                 },
             )
 
-            # Should fail because project is missing
             assert response.status_code == 403
+        finally:
+            app.dependency_overrides.pop(get_settings_dep, None)

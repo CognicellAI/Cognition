@@ -6,7 +6,7 @@ built-in agents (hardcoded) and user-defined agents (loaded from .cognition/agen
 The registry supports:
 - Built-in agents: default, readonly (shipped with the server)
 - User-defined agents: YAML files (.cognition/agents/*.yaml) or Markdown files (.cognition/agents/*.md)
-- ConfigRegistry-seeded agents: loaded from the DB via seed_from_registry()
+- ConfigStore-seeded agents: loaded from the DB via seed_from_store()
 
 Agents can be in three modes:
 - primary: user-selectable at session creation
@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from server.app.agent.cognition_agent import SYSTEM_PROMPT
 from server.app.agent.definition import (
@@ -30,7 +30,6 @@ from server.app.agent.definition import (
 
 if TYPE_CHECKING:
     from server.app.storage.config_models import ConfigChangeEvent
-    from server.app.storage.config_registry import ConfigRegistry
 
 logger = logging.getLogger(__name__)
 
@@ -199,23 +198,28 @@ Attempt the exact protected tool call immediately so that human-in-the-loop appr
 
         logger.info(f"Loaded {loaded_count} user-defined agents from {agents_dir}")
 
-    async def seed_from_registry(
-        self, config_registry: ConfigRegistry, scope: dict[str, str] | None = None
-    ) -> None:
-        """Load non-native agent definitions from the ConfigRegistry.
+    async def seed_from_store(self, config_store: Any, scope: dict[str, str] | None = None) -> None:
+        """Load non-native agent definitions from the ConfigStore.
 
         Called during startup (after file-based agents are loaded) and on
         config change events. Built-in (native=True) agents are never
         overwritten by registry rows.
 
         Args:
-            config_registry: The ConfigRegistry instance to query.
+            config_store: The ConfigStore instance to query.
             scope: Optional scope for config resolution (default: global).
         """
         try:
-            rows = await config_registry._list_entities("agent", scope)  # type: ignore[attr-defined]
+            rows = [
+                agent.model_dump(mode="json")
+                for agent in await config_store.list_agent_definitions(
+                    include_hidden=True,
+                    scope=scope,
+                )
+                if not agent.native
+            ]
         except Exception as e:
-            logger.warning(f"Failed to seed agents from ConfigRegistry: {e}")
+            logger.warning(f"Failed to seed agents from ConfigStore: {e}")
             return
 
         loaded = 0
@@ -238,13 +242,13 @@ Attempt the exact protected tool call immediately so that human-in-the-loop appr
             except Exception as e:
                 logger.warning(f"Failed to load agent '{name}' from registry: {e}")
 
-        logger.info(f"Seeded {loaded} agents from ConfigRegistry")
+        logger.info(f"Seeded {loaded} agents from ConfigStore")
 
     async def on_config_change(self, event: ConfigChangeEvent) -> None:
         """Invalidate cached agent definitions when config changes.
 
         Subscribes to the ConfigChangeDispatcher. When an "agent" entity
-        changes, the registry reloads from the ConfigRegistry.
+        changes, the registry reloads from the ConfigStore.
 
         Args:
             event: The config change event describing what changed.
@@ -253,28 +257,28 @@ Attempt the exact protected tool call immediately so that human-in-the-loop appr
             return
 
         name = event.name
-        # Skip sentinel rows
         if name.startswith("__"):
             return
 
         if event.operation == "delete":
-            # Remove from registry unless it's a built-in
-            existing = self._agents.get(name)
-            if existing and not existing.native:
-                del self._agents[name]
-                logger.info(f"Removed agent '{name}' from registry (config delete)")
+            self.remove(name)
+            logger.info(f"Removed agent '{name}' from registry (config delete)")
         else:
-            # Reload this specific agent from ConfigRegistry
             try:
-                from server.app.storage.config_registry import get_config_registry
+                from server.app.storage.config_store import get_default_config_store
 
-                reg = get_config_registry()
-                data = await reg._get_entity("agent", name, event.scope)  # type: ignore[attr-defined]
+                store = get_default_config_store()
+                if store is None:
+                    return
+                data = await store.get_agent_raw(name, event.scope)
                 if data:
                     definition = AgentDefinition.model_validate(data)
                     definition.native = False
-                    self._agents[name] = definition
-                    logger.info(f"Reloaded agent '{name}' from ConfigRegistry")
+                    try:
+                        self.put(name, definition)
+                        logger.info(f"Reloaded agent '{name}' from ConfigStore")
+                    except ValueError:
+                        pass
             except Exception as e:
                 logger.warning(f"Failed to reload agent '{name}' on config change: {e}")
 
@@ -302,6 +306,42 @@ Attempt the exact protected tool call immediately so that human-in-the-loop appr
             AgentDefinition if found, None otherwise.
         """
         return self._agents.get(name)
+
+    def put(self, name: str, definition: AgentDefinition) -> None:
+        """Register or replace an agent definition.
+
+        Built-in (native=True) agents cannot be overwritten.
+
+        Args:
+            name: The agent name.
+            definition: The agent definition to register.
+
+        Raises:
+            ValueError: If a native agent with this name already exists.
+        """
+        existing = self._agents.get(name)
+        if existing and existing.native:
+            raise ValueError(f"Cannot overwrite built-in agent '{name}'")
+        self._agents[name] = definition
+
+    def remove(self, name: str) -> bool:
+        """Remove a non-native agent definition.
+
+        Built-in (native=True) agents cannot be removed.
+
+        Args:
+            name: The agent name to remove.
+
+        Returns:
+            True if the agent was removed, False if not found or native.
+        """
+        existing = self._agents.get(name)
+        if existing is None:
+            return False
+        if existing.native:
+            return False
+        del self._agents[name]
+        return True
 
     def reload(self) -> None:
         """Reload the registry.
@@ -350,25 +390,6 @@ Attempt the exact protected tool call immediately so that human-in-the-loop appr
         if agent.hidden:
             return False
         return agent.mode in ("primary", "all")
-
-
-def get_agent_definition_registry() -> AgentDefinitionRegistry | None:
-    """Get the global agent definition registry instance.
-
-    Returns:
-        The global registry instance, or None if not initialized.
-    """
-    return _registry
-
-
-def set_agent_definition_registry(registry: AgentDefinitionRegistry | None) -> None:
-    """Set the global agent definition registry instance.
-
-    Args:
-        registry: The registry instance to set as global, or None to clear it.
-    """
-    global _registry
-    _registry = registry
 
 
 def initialize_agent_definition_registry(

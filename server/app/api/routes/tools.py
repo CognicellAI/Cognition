@@ -4,8 +4,8 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
 
-from server.app.agent_registry import get_agent_registry
-from server.app.api.dependencies import get_config_store
+from server.app.agent_registry import AgentRegistry
+from server.app.api.dependencies import get_agent_registry_dep, get_config_store
 from server.app.api.models import ToolCreate, ToolList, ToolResponse, ToolUpdate
 from server.app.storage.config_store import ConfigStore
 
@@ -15,6 +15,7 @@ router = APIRouter(prefix="/tools", tags=["tools"])
 @router.get("", response_model=ToolList)
 async def list_tools(
     config_store: ConfigStore = Depends(get_config_store),  # noqa: B008
+    registry: AgentRegistry = Depends(get_agent_registry_dep),  # noqa: B008
 ) -> ToolList:
     """List all registered tools from both AgentRegistry and ConfigStore.
 
@@ -25,25 +26,19 @@ async def list_tools(
     """
     tool_responses: list[ToolResponse] = []
 
-    # File-discovered tools from in-memory AgentRegistry
-    try:
-        registry = get_agent_registry()
-        for t in registry.list_tools():
-            tool_responses.append(
-                ToolResponse(
-                    name=t.name,
-                    source_type="file",
-                    source="file",
-                    module=t.module,
-                    description=None,
-                    enabled=True,
-                    interrupt_on=False,
-                )
+    for t in registry.list_tools():
+        tool_responses.append(
+            ToolResponse(
+                name=t.name,
+                source_type="file",
+                source="file",
+                module=t.module,
+                description=None,
+                enabled=True,
+                interrupt_on=False,
             )
-    except RuntimeError:
-        pass  # Registry not initialized — skip, not an error
+        )
 
-    # API-registered tools from ConfigStore
     try:
         api_tools = await config_store.list_tools()
         known_names = {t.name for t in tool_responses}
@@ -69,36 +64,27 @@ async def list_tools(
 
 
 @router.get("/errors")
-async def get_tool_errors() -> list[dict[str, Any]]:
+async def get_tool_errors(
+    registry: AgentRegistry = Depends(get_agent_registry_dep),  # noqa: B008
+) -> list[dict[str, Any]]:
     """Get accumulated tool load errors.
 
     Returns a list of error records from the most recent tool discovery/reload.
     Errors are cleared when a file is successfully reloaded.
     """
-    try:
-        registry = get_agent_registry()
-    except RuntimeError as e:
-        raise HTTPException(
-            status_code=503,
-            detail=f"Agent registry unavailable: {e}",
-        ) from e
-
     errors = registry.get_load_errors()
     return [e.to_dict() for e in errors]
 
 
 @router.post("/reload")
-async def reload_tools() -> dict[str, Any]:
+async def reload_tools(
+    registry: AgentRegistry = Depends(get_agent_registry_dep),  # noqa: B008
+) -> dict[str, Any]:
     """Trigger a reload of tools from the discovery path.
 
     Clears existing file-based tools and re-discovers them.
     Returns the count of tools loaded and any errors encountered.
     """
-    try:
-        registry = get_agent_registry()
-    except RuntimeError as e:
-        raise HTTPException(status_code=503, detail="Tool registry not initialized") from e
-
     result = registry.reload_tools()
     return result
 
@@ -129,29 +115,27 @@ async def register_tool(
         )
 
     try:
-        from server.app.storage.config_models import ToolRegistration
-
-        tool = ToolRegistration(
-            name=body.name,
-            path=body.path,
-            code=body.code,
-            enabled=body.enabled,
-            description=body.description,
-            interrupt_on=body.interrupt_on,
-            scope=body.scope,
-            source="api",
-        )
-        await config_store.upsert_tool(tool)
+        tool_data: dict[str, Any] = {
+            "name": body.name,
+            "path": body.path,
+            "code": body.code,
+            "enabled": body.enabled,
+            "description": body.description,
+            "interrupt_on": body.interrupt_on,
+            "scope": body.scope,
+            "source": "api",
+        }
+        await config_store.upsert_tool_from_dict(tool_data)
 
         source_type = "api_code" if body.code else "api_path"
         return ToolResponse(
-            name=tool.name,
+            name=body.name,
             source_type=source_type,
             source=source_type,
-            module=tool.path,
-            description=tool.description,
-            enabled=tool.enabled,
-            interrupt_on=tool.interrupt_on,
+            module=body.path,
+            description=body.description,
+            enabled=body.enabled,
+            interrupt_on=body.interrupt_on,
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e)) from e
@@ -177,29 +161,24 @@ async def unregister_tool(
 async def get_tool(
     name: str,
     config_store: ConfigStore = Depends(get_config_store),  # noqa: B008
+    registry: AgentRegistry = Depends(get_agent_registry_dep),  # noqa: B008
 ) -> ToolResponse:
     """Get a specific tool by name.
 
     Checks AgentRegistry (file-discovered) first, then ConfigStore (API-registered).
     """
-    # Check AgentRegistry first
-    try:
-        registry = get_agent_registry()
-        tool = registry.get_tool(name)
-        if tool is not None:
-            return ToolResponse(
-                name=tool.name,
-                source_type="file",
-                source="file",
-                module=tool.module,
-                description=None,
-                enabled=True,
-                interrupt_on=False,
-            )
-    except RuntimeError:
-        pass
+    tool = registry.get_tool(name)
+    if tool is not None:
+        return ToolResponse(
+            name=tool.name,
+            source_type="file",
+            source="file",
+            module=tool.module,
+            description=None,
+            enabled=True,
+            interrupt_on=False,
+        )
 
-    # Fall back to ConfigStore
     try:
         api_tool = await config_store.get_tool(name)
         if api_tool is not None:
@@ -227,34 +206,32 @@ async def update_tool(
 ) -> ToolResponse:
     """Partially update an API-registered tool in the ConfigStore."""
     try:
-        from server.app.storage.config_models import ToolRegistration
-
         existing = await config_store.get_tool(name)
         if existing is None:
             raise HTTPException(status_code=404, detail=f"Tool '{name}' not found")
 
         updates = body.model_dump(exclude_none=True)
-        tool = ToolRegistration(
-            name=existing.name,
-            path=updates.get("path", existing.path),
-            code=updates.get("code", existing.code),
-            enabled=updates.get("enabled", existing.enabled),
-            description=updates.get("description", existing.description),
-            interrupt_on=updates.get("interrupt_on", existing.interrupt_on),
-            scope=existing.scope,
-            source=existing.source,
-        )
-        await config_store.upsert_tool(tool)
+        tool_data: dict[str, Any] = {
+            "name": existing.name,
+            "path": updates.get("path", existing.path),
+            "code": updates.get("code", existing.code),
+            "enabled": updates.get("enabled", existing.enabled),
+            "description": updates.get("description", existing.description),
+            "interrupt_on": updates.get("interrupt_on", existing.interrupt_on),
+            "scope": existing.scope,
+            "source": existing.source,
+        }
+        await config_store.upsert_tool_from_dict(tool_data)
 
-        source_type = "api_code" if tool.code else "api_path"
+        source_type = "api_code" if tool_data["code"] else "api_path"
         return ToolResponse(
-            name=tool.name,
+            name=existing.name,
             source_type=source_type,
             source=source_type,
-            module=tool.path,
-            description=tool.description,
-            enabled=tool.enabled,
-            interrupt_on=tool.interrupt_on,
+            module=tool_data["path"],
+            description=tool_data["description"],
+            enabled=tool_data["enabled"],
+            interrupt_on=tool_data["interrupt_on"],
         )
     except HTTPException:
         raise

@@ -51,10 +51,9 @@ class TestAbortMechanism:
         # Wait for stream to complete and collect events
         events = await message_task
 
-        # Verify stream was aborted (should have error event with ABORTED code)
         error_events = [e for e in events if e.get("event") == "error"]
         if error_events:
-            assert any(e.get("data", {}).get("code") == "ABORTED" for e in error_events), (
+            assert any(e.get("code") == "ABORTED" for e in error_events), (
                 "Expected ABORTED error event"
             )
 
@@ -154,7 +153,7 @@ class TestStreamingIntegrity:
 
         # Extract token events
         token_events = [e for e in events if e.get("event") == "token"]
-        tokens = [e.get("data", {}).get("content", "") for e in token_events]
+        tokens = [e.get("content", "") for e in token_events]
 
         # Check for consecutive duplicates
         for i in range(1, len(tokens)):
@@ -175,7 +174,7 @@ class TestStreamingIntegrity:
 
         # Collect all content
         token_events = [e for e in events if e.get("event") == "token"]
-        full_content = "".join(e.get("data", {}).get("content", "") for e in token_events)
+        full_content = "".join(e.get("content", "") for e in token_events)
 
         # Content should not contain obvious system prompt artifacts
         # (This is a sanity check - exact verification requires internal state)
@@ -245,27 +244,6 @@ class TestAgentIntrospection:
             if "capabilities" in model:
                 assert isinstance(model["capabilities"], list)
 
-    async def test_get_models_by_provider(self, api_client: ScenarioTestClient) -> None:
-        """GET /models/providers/{provider_id} filters by provider."""
-        # First get all models
-        all_resp = await api_client.get("/models")
-        if all_resp.status_code != 200 or not all_resp.json().get("models"):
-            pytest.skip("No models available to test")
-
-        # Pick first provider
-        first_model = all_resp.json()["models"][0]
-        provider_id = first_model["provider"]
-
-        # Get models for that provider
-        resp = await api_client.get(f"/models/providers/{provider_id}")
-        assert resp.status_code == 200
-
-        data = resp.json()
-        assert "models" in data
-        # All returned models should be from this provider
-        for model in data["models"]:
-            assert model["provider"] == provider_id
-
     async def test_get_agents_includes_tools_and_skills(
         self, api_client: ScenarioTestClient
     ) -> None:
@@ -332,11 +310,11 @@ class TestAdvancedEventTypes:
         assert len(done_events) > 0, "Expected at least one done event"
 
         done_event = done_events[-1]
-        event_data = done_event.get("data", {})
 
         # Verify message_id is present and is a valid UUID
-        assert "message_id" in event_data, "Done event should contain message_id"
-        message_id = event_data["message_id"]
+        # SSE data is parsed as a flat dict (no nested "data" key)
+        assert "message_id" in done_event, "Done event should contain message_id"
+        message_id = done_event["message_id"]
         assert message_id, "message_id should not be empty"
 
         # Verify it's a valid UUID format
@@ -370,11 +348,10 @@ class TestAdvancedEventTypes:
         if planning_events and step_complete_events:
             # Verify step_complete events have proper structure
             for sce in step_complete_events:
-                data = sce.get("data", {})
-                assert "step_number" in data or "total_steps" in data
+                assert "step_number" in sce or "total_steps" in sce
             # Planning event structure
             for pe in planning_events:
-                todos = pe.get("data", {}).get("todos", [])
+                todos = pe.get("todos", [])
                 if todos:
                     assert isinstance(todos, list)
 

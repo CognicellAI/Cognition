@@ -424,17 +424,19 @@ class SessionManager:
             return managed.agent
 
         # Create new agent via create_cognition_agent
-        from server.app.agent.cognition_agent import create_cognition_agent
+        from server.app.agent.cognition_agent import CognitionAgentParams, create_cognition_agent
         from server.app.storage import get_storage_backend
 
         storage = get_storage_backend()
         checkpointer = await storage.get_checkpointer()
 
         result = await create_cognition_agent(
-            project_path=managed.session.workspace_path,
-            model=model,
-            checkpointer=checkpointer,
-            settings=self._settings,
+            CognitionAgentParams(
+                project_path=managed.session.workspace_path,
+                model=model,
+                checkpointer=checkpointer,
+                settings=self._settings,
+            )
         )
 
         managed.agent = result.agent

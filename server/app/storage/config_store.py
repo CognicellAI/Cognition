@@ -13,8 +13,8 @@ Design:
   agent definitions).
 - Route handlers and services receive ConfigStore via FastAPI Depends().
 
-The old ``get_config_registry()`` / ``get_agent_definition_registry()`` globals
-are replaced by this single dependency-injected interface.
+The old direct registry globals are replaced by this single
+dependency-injected interface.
 """
 
 from __future__ import annotations
@@ -36,6 +36,19 @@ from server.app.storage.config_models import (
 )
 
 logger = logging.getLogger(__name__)
+
+_default_store: DefaultConfigStore | None = None
+
+
+def set_default_config_store(store: DefaultConfigStore) -> None:
+    """Set the global DefaultConfigStore instance."""
+    global _default_store
+    _default_store = store
+
+
+def get_default_config_store() -> DefaultConfigStore | None:
+    """Get the global DefaultConfigStore instance, or None if not initialized."""
+    return _default_store
 
 
 @runtime_checkable
@@ -61,6 +74,8 @@ class ConfigStore(Protocol):
 
     async def upsert_provider(self, config: ProviderConfig) -> None: ...
 
+    async def upsert_provider_from_dict(self, data: dict[str, Any]) -> None: ...
+
     async def delete_provider(
         self, provider_id: str, scope: dict[str, str] | None = None
     ) -> bool: ...
@@ -77,6 +92,8 @@ class ConfigStore(Protocol):
 
     async def upsert_tool(self, tool: ToolRegistration) -> None: ...
 
+    async def upsert_tool_from_dict(self, data: dict[str, Any]) -> None: ...
+
     async def delete_tool(self, name: str, scope: dict[str, str] | None = None) -> bool: ...
 
     # ------------------------------------------------------------------
@@ -90,6 +107,8 @@ class ConfigStore(Protocol):
     async def list_skills(self, scope: dict[str, str] | None = None) -> list[SkillDefinition]: ...
 
     async def upsert_skill(self, skill: SkillDefinition) -> None: ...
+
+    async def upsert_skill_from_dict(self, data: dict[str, Any]) -> None: ...
 
     async def delete_skill(self, name: str, scope: dict[str, str] | None = None) -> bool: ...
 
@@ -223,6 +242,10 @@ class DefaultConfigStore:
     async def upsert_provider(self, config: ProviderConfig) -> None:
         await self._config_registry.upsert_provider(config)
 
+    async def upsert_provider_from_dict(self, data: dict[str, Any]) -> None:
+        provider = ProviderConfig.model_validate(data)
+        await self._config_registry.upsert_provider(provider)
+
     async def delete_provider(self, provider_id: str, scope: dict[str, str] | None = None) -> bool:
         return await self._config_registry.delete_provider(provider_id, scope)
 
@@ -241,6 +264,10 @@ class DefaultConfigStore:
     async def upsert_tool(self, tool: ToolRegistration) -> None:
         await self._config_registry.upsert_tool(tool)
 
+    async def upsert_tool_from_dict(self, data: dict[str, Any]) -> None:
+        tool = ToolRegistration.model_validate(data)
+        await self._config_registry.upsert_tool(tool)
+
     async def delete_tool(self, name: str, scope: dict[str, str] | None = None) -> bool:
         return await self._config_registry.delete_tool(name, scope)
 
@@ -257,6 +284,10 @@ class DefaultConfigStore:
         return await self._config_registry.list_skills(scope)
 
     async def upsert_skill(self, skill: SkillDefinition) -> None:
+        await self._config_registry.upsert_skill(skill)
+
+    async def upsert_skill_from_dict(self, data: dict[str, Any]) -> None:
+        skill = SkillDefinition.model_validate(data)
         await self._config_registry.upsert_skill(skill)
 
     async def delete_skill(self, name: str, scope: dict[str, str] | None = None) -> bool:
@@ -278,10 +309,9 @@ class DefaultConfigStore:
             try:
                 agent_def = AgentDefinition.model_validate(definition)
                 agent_def.native = False
-                existing = self._agent_definition_registry.get(name)
-                if existing and existing.native:
-                    return
-                self._agent_definition_registry._agents[name] = agent_def
+                self._agent_definition_registry.put(name, agent_def)
+            except ValueError:
+                pass
             except Exception as e:
                 logger.warning(f"Failed to update in-memory agent definition after upsert: {e}")
 
@@ -293,9 +323,7 @@ class DefaultConfigStore:
     async def delete_agent(self, name: str, scope: dict[str, str] | None = None) -> bool:
         result = await self._config_registry.delete_agent(name, scope)
         if result and self._agent_definition_registry:
-            existing = self._agent_definition_registry.get(name)
-            if existing and not existing.native:
-                self._agent_definition_registry._agents.pop(name, None)
+            self._agent_definition_registry.remove(name)
         return result
 
     # ------------------------------------------------------------------
@@ -387,4 +415,9 @@ class DefaultConfigStore:
         await self._config_registry.mark_changes_processed(change_ids)
 
 
-__all__ = ["ConfigStore", "DefaultConfigStore"]
+__all__ = [
+    "ConfigStore",
+    "DefaultConfigStore",
+    "set_default_config_store",
+    "get_default_config_store",
+]

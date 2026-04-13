@@ -340,38 +340,10 @@ class NoopDispatcher:
         pass
 
 
-# ---------------------------------------------------------------------------
-# Global dispatcher instance
-# ---------------------------------------------------------------------------
-
-_dispatcher: ConfigChangeDispatcher | None = None
-
-
-def get_config_dispatcher() -> ConfigChangeDispatcher:
-    """Get the global ConfigChangeDispatcher instance.
-
-    Raises:
-        RuntimeError: If not initialized.
-    """
-    if _dispatcher is None:
-        raise RuntimeError(
-            "ConfigChangeDispatcher not initialized. Call set_config_dispatcher() during startup."
-        )
-    return _dispatcher
-
-
-def set_config_dispatcher(dispatcher: ConfigChangeDispatcher) -> None:
-    """Set the global ConfigChangeDispatcher instance."""
-    global _dispatcher
-    _dispatcher = dispatcher
-
-
 __all__ = [
     "ConfigChangeDispatcher",
     "InProcessDispatcher",
     "NoopDispatcher",
     "PostgresListenDispatcher",
     "Subscriber",
-    "get_config_dispatcher",
-    "set_config_dispatcher",
 ]

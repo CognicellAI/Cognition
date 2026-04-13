@@ -15,7 +15,11 @@ import structlog
 import yaml
 from fastapi import APIRouter, Depends, HTTPException
 
-from server.app.api.dependencies import get_config_store
+from server.app.api.dependencies import (
+    get_config_store,
+    get_model_catalog_dep,
+    get_settings_dep,
+)
 from server.app.api.models import (
     ConfigResponse,
     ConfigRollbackResponse,
@@ -27,7 +31,8 @@ from server.app.api.models import (
     GlobalProviderDefaultsUpdate,
 )
 from server.app.config_loader import load_config
-from server.app.settings import Settings, get_settings
+from server.app.llm.model_catalog import ModelCatalog
+from server.app.settings import Settings
 from server.app.storage.config_store import ConfigStore
 
 router = APIRouter(prefix="/config", tags=["config"])
@@ -35,7 +40,7 @@ router = APIRouter(prefix="/config", tags=["config"])
 logger = structlog.get_logger(__name__)
 
 # Allowed config fields for PATCH
-# Agent/LLM config has moved to ConfigRegistry — only infrastructure fields remain here.
+# Agent/LLM config has moved to ConfigStore-backed endpoints — only infrastructure fields remain here.
 ALLOWED_CONFIG_PATHS = {
     # Rate limiting
     "rate_limit.per_minute",
@@ -53,7 +58,7 @@ def validate_and_extract_changes(
     """Validate request and extract allowed changes.
 
     Only rate_limit and observability fields are accepted here.
-    Agent/LLM configuration has moved to the ConfigRegistry API
+    Agent/LLM configuration has moved to the ConfigStore-backed API
     (PATCH /agents, POST /models/providers, etc.).
     """
     changes = {}
@@ -128,19 +133,16 @@ def _agent_defaults_response(defaults: Any) -> GlobalAgentDefaultsResponse:
 
 @router.get("", response_model=ConfigResponse)
 async def get_config(
-    settings: Settings = Depends(get_settings),  # noqa: B008
+    settings: Settings = Depends(get_settings_dep),  # noqa: B008
     config_store: ConfigStore = Depends(get_config_store),  # noqa: B008
+    catalog: ModelCatalog = Depends(get_model_catalog_dep),  # noqa: B008
 ) -> ConfigResponse:
     """Get server configuration."""
     yaml_config = load_config(cwd=settings.workspace_root)
 
-    # Build available providers list from ConfigStore + ModelCatalog
     available_providers: list[dict[str, Any]] = []
     try:
-        from server.app.llm.model_catalog import get_model_catalog
-
         providers = await config_store.list_providers(scope=None)
-        catalog = get_model_catalog()
 
         seen_types: set[str] = set()
         for p in providers:
@@ -158,7 +160,7 @@ async def get_config(
     except Exception:
         logger.warning("Failed to load providers for config response", exc_info=True)
 
-    # LLM/provider defaults are now in the ConfigRegistry.
+    # LLM/provider defaults are now managed through ConfigStore.
     # GET /config returns infrastructure settings only.
     return ConfigResponse(
         server={
@@ -182,7 +184,7 @@ async def get_config(
 @router.patch("", response_model=ConfigUpdateResponse)
 async def patch_config(
     updates: ConfigUpdateRequest,
-    settings: Settings = Depends(get_settings),  # noqa: B008
+    settings: Settings = Depends(get_settings_dep),  # noqa: B008
 ) -> ConfigUpdateResponse:
     """Update server configuration. Apps handle auth via middleware."""
     changes = validate_and_extract_changes(updates)
@@ -215,7 +217,7 @@ async def patch_config(
 
 @router.post("/rollback", response_model=ConfigRollbackResponse)
 async def rollback_config(
-    settings: Settings = Depends(get_settings),  # noqa: B008
+    settings: Settings = Depends(get_settings_dep),  # noqa: B008
 ) -> ConfigRollbackResponse:
     """Rollback configuration to last backup. Apps handle auth via middleware."""
     backup_path = Path(".cognition/config.yaml.backup")
@@ -253,13 +255,10 @@ async def patch_provider_defaults(
     config_store: ConfigStore = Depends(get_config_store),  # noqa: B008
 ) -> GlobalProviderDefaultsResponse:
     """Partially update global provider defaults in ConfigStore."""
-    from server.app.storage.config_models import GlobalProviderDefaults
-
     current = await config_store.get_global_provider_defaults()
     merged = current.model_copy(update=updates.model_dump(exclude_none=True))
-    defaults = GlobalProviderDefaults.model_validate(merged.model_dump())
-    await config_store.set_global_provider_defaults(defaults)
-    return _provider_defaults_response(defaults)
+    await config_store.set_global_provider_defaults(merged)
+    return _provider_defaults_response(merged)
 
 
 @router.get("/defaults/agent", response_model=GlobalAgentDefaultsResponse)
@@ -277,10 +276,7 @@ async def patch_agent_defaults(
     config_store: ConfigStore = Depends(get_config_store),  # noqa: B008
 ) -> GlobalAgentDefaultsResponse:
     """Partially update global agent defaults in ConfigStore."""
-    from server.app.storage.config_models import GlobalAgentDefaults
-
     current = await config_store.get_global_agent_defaults()
     merged = current.model_copy(update=updates.model_dump(exclude_none=True))
-    defaults = GlobalAgentDefaults.model_validate(merged.model_dump())
-    await config_store.set_global_agent_defaults(defaults)
-    return _agent_defaults_response(defaults)
+    await config_store.set_global_agent_defaults(merged)
+    return _agent_defaults_response(merged)

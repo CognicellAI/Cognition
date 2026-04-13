@@ -309,8 +309,15 @@ class TestAgentRegistryGlobal:
 
     def test_get_agent_registry_before_init(self):
         """Test that get_agent_registry raises before initialization."""
-        with pytest.raises(RuntimeError, match="Agent registry not initialized"):
-            get_agent_registry()
+        import server.app.agent_registry as _mod
+
+        original = _mod._agent_registry
+        _mod._agent_registry = None
+        try:
+            with pytest.raises(RuntimeError, match="Agent registry not initialized"):
+                get_agent_registry()
+        finally:
+            _mod._agent_registry = original
 
     def test_set_agent_registry(self):
         """Test setting global agent registry."""

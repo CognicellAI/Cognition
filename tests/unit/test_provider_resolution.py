@@ -1,7 +1,7 @@
-"""Unit tests for DeepAgentStreamingService._resolve_provider_config().
+"""Unit tests for RuntimeResolver._resolve_provider_config_for_session().
 
 These tests verify that provider configuration is resolved correctly from
-ConfigRegistry and session overrides, and that _build_model() calls
+ConfigStore and session overrides, and that _build_model() calls
 init_chat_model with the right arguments.
 
 The fallback chain (ProviderFallbackChain) was removed. Provider resolution
@@ -17,7 +17,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from server.app.llm.deep_agent_service import DeepAgentStreamingService, _build_model
+from server.app.agent.resolver import RuntimeResolver
+from server.app.llm.deep_agent_service import _build_model
 from server.app.models import Session, SessionConfig, SessionStatus
 
 # ---------------------------------------------------------------------------
@@ -67,7 +68,7 @@ class _MockGlobalDefaults:
         self.model = model
 
 
-def _make_service() -> DeepAgentStreamingService:
+def _make_resolver(store: Any = None) -> RuntimeResolver:
     settings = MagicMock()
     settings.openai_api_key = None
     settings.openai_api_base = None
@@ -79,8 +80,7 @@ def _make_service() -> DeepAgentStreamingService:
     settings.aws_secret_access_key = None
     settings.aws_session_token = None
     settings.bedrock_role_arn = None
-    with patch("server.app.llm.deep_agent_service.create_storage_backend"):
-        return DeepAgentStreamingService(settings=settings)
+    return RuntimeResolver(config_store=store, settings=settings)
 
 
 def _make_session(
@@ -101,17 +101,17 @@ def _make_session(
 
 
 # ---------------------------------------------------------------------------
-# _resolve_provider_config tests
+# _resolve_provider_config_for_session tests
 # ---------------------------------------------------------------------------
 
 
 class TestResolveProviderConfig:
-    """_resolve_provider_config() returns the right (provider, model_id, ...) tuple."""
+    """_resolve_provider_config_for_session() returns the right (provider, model_id, ...) tuple."""
 
     @pytest.mark.asyncio
     async def test_session_override_takes_priority(self) -> None:
-        """Session-level provider/model overrides bypass ConfigRegistry entirely."""
-        service = _make_service()
+        """Session-level provider/model overrides bypass ConfigStore entirely."""
+        resolver = _make_resolver()
         session = _make_session(provider="openai", model="gpt-4o")
 
         (
@@ -124,17 +124,16 @@ class TestResolveProviderConfig:
             _,
             _,
             _,
-        ) = await service._resolve_provider_config(session=session, scope=None)
+        ) = await resolver._resolve_provider_config_for_session(session=session, scope=None)
 
         assert provider == "openai"
         assert model_id == "gpt-4o"
-        # No registry was consulted
+        # No store was consulted
         assert api_key is None
 
     @pytest.mark.asyncio
     async def test_individual_provider_from_registry(self) -> None:
-        """First enabled ProviderConfig from ConfigRegistry is used."""
-        service = _make_service()
+        """First enabled ProviderConfig from ConfigStore is used."""
         session = _make_session()  # no session-level override
 
         mock_reg = MagicMock()
@@ -152,13 +151,9 @@ class TestResolveProviderConfig:
             ]
         )
 
-        with (
-            patch(
-                "server.app.storage.config_registry.get_config_registry",
-                return_value=mock_reg,
-            ),
-            patch.dict("os.environ", {"COGNITION_OPENAI_COMPATIBLE_API_KEY": "sk-test-key"}),
-        ):
+        resolver = _make_resolver(store=mock_reg)
+
+        with patch.dict("os.environ", {"COGNITION_OPENAI_COMPATIBLE_API_KEY": "sk-test-key"}):
             (
                 provider,
                 model_id,
@@ -169,7 +164,7 @@ class TestResolveProviderConfig:
                 _,
                 _,
                 _,
-            ) = await service._resolve_provider_config(session=session, scope=None)
+            ) = await resolver._resolve_provider_config_for_session(session=session, scope=None)
 
         assert provider == "openai_compatible"
         assert model_id == "google/gemini-3-flash-preview"
@@ -179,7 +174,6 @@ class TestResolveProviderConfig:
     @pytest.mark.asyncio
     async def test_priority_ordering(self) -> None:
         """The provider with the lowest priority number is selected."""
-        service = _make_service()
         session = _make_session()
 
         mock_reg = MagicMock()
@@ -191,13 +185,11 @@ class TestResolveProviderConfig:
             ]
         )
 
-        with patch(
-            "server.app.storage.config_registry.get_config_registry",
-            return_value=mock_reg,
-        ):
-            provider, model_id, *_ = await service._resolve_provider_config(
-                session=session, scope=None
-            )
+        resolver = _make_resolver(store=mock_reg)
+
+        provider, model_id, *_ = await resolver._resolve_provider_config_for_session(
+            session=session, scope=None
+        )
 
         assert model_id == "gemini-3-flash-preview", (
             "Should pick the provider with priority=1 (lowest value = highest priority)"
@@ -206,7 +198,6 @@ class TestResolveProviderConfig:
     @pytest.mark.asyncio
     async def test_disabled_providers_are_skipped(self) -> None:
         """Disabled providers are not selected even if they have the lowest priority."""
-        service = _make_service()
         session = _make_session()
 
         mock_reg = MagicMock()
@@ -216,17 +207,12 @@ class TestResolveProviderConfig:
                 _MockProviderConfig(id="active", model="gemini-flash", priority=5, enabled=True),
             ]
         )
-        mock_reg.get_global_provider_defaults = AsyncMock(
-            return_value=_MockGlobalDefaults(model="global-default-model")
-        )
 
-        with patch(
-            "server.app.storage.config_registry.get_config_registry",
-            return_value=mock_reg,
-        ):
-            provider, model_id, *_ = await service._resolve_provider_config(
-                session=session, scope=None
-            )
+        resolver = _make_resolver(store=mock_reg)
+
+        provider, model_id, *_ = await resolver._resolve_provider_config_for_session(
+            session=session, scope=None
+        )
 
         assert model_id == "gemini-flash"
 
@@ -239,44 +225,35 @@ class TestResolveProviderConfig:
         """
         from server.app.exceptions import LLMProviderConfigError
 
-        service = _make_service()
         session = _make_session()
 
         mock_reg = MagicMock()
         mock_reg.list_providers = AsyncMock(return_value=[])
+        resolver = _make_resolver(store=mock_reg)
 
-        with patch(
-            "server.app.storage.config_registry.get_config_registry",
-            return_value=mock_reg,
-        ):
-            with pytest.raises(LLMProviderConfigError, match="No provider configuration found"):
-                await service._resolve_provider_config(session=session, scope=None)
+        with pytest.raises(LLMProviderConfigError, match="No provider configuration found"):
+            await resolver._resolve_provider_config_for_session(session=session, scope=None)
 
     @pytest.mark.asyncio
     async def test_scope_passed_to_registry(self) -> None:
         """Scope dict is forwarded to list_providers()."""
         from server.app.exceptions import LLMProviderConfigError
 
-        service = _make_service()
         session = _make_session()
         scope = {"user": "alice"}
 
         mock_reg = MagicMock()
         mock_reg.list_providers = AsyncMock(return_value=[])
+        resolver = _make_resolver(store=mock_reg)
 
-        with patch(
-            "server.app.storage.config_registry.get_config_registry",
-            return_value=mock_reg,
-        ):
-            with pytest.raises(LLMProviderConfigError):
-                await service._resolve_provider_config(session=session, scope=scope)
+        with pytest.raises(LLMProviderConfigError):
+            await resolver._resolve_provider_config_for_session(session=session, scope=scope)
 
         mock_reg.list_providers.assert_called_once_with(scope=scope)
 
     @pytest.mark.asyncio
     async def test_api_key_env_resolved_from_environment(self) -> None:
         """api_key_env is resolved from the process environment at call time."""
-        service = _make_service()
         session = _make_session()
 
         mock_reg = MagicMock()
@@ -288,33 +265,36 @@ class TestResolveProviderConfig:
             ]
         )
 
-        with (
-            patch(
-                "server.app.storage.config_registry.get_config_registry",
-                return_value=mock_reg,
-            ),
-            patch.dict("os.environ", {"MY_CUSTOM_API_KEY": "resolved-key"}),
-        ):
-            _, _, api_key, base_url, _, _, _, _, _ = await service._resolve_provider_config(
-                session=session, scope=None
-            )
+        resolver = _make_resolver(store=mock_reg)
+
+        with patch.dict("os.environ", {"MY_CUSTOM_API_KEY": "resolved-key"}):
+            (
+                _,
+                _,
+                api_key,
+                base_url,
+                _,
+                _,
+                _,
+                _,
+                _,
+            ) = await resolver._resolve_provider_config_for_session(session=session, scope=None)
 
         assert api_key == "resolved-key"
 
     @pytest.mark.asyncio
     async def test_error_when_no_providers_and_no_registry(self) -> None:
-        """LLMProviderConfigError raised when ConfigRegistry is unavailable."""
+        """LLMProviderConfigError raised when ConfigStore raises RuntimeError."""
         from server.app.exceptions import LLMProviderConfigError
 
-        service = _make_service()
         session = _make_session()
 
-        with patch(
-            "server.app.storage.config_registry.get_config_registry",
-            side_effect=RuntimeError("Registry not initialized"),
-        ):
-            with pytest.raises(LLMProviderConfigError, match="No provider configuration"):
-                await service._resolve_provider_config(session=session, scope=None)
+        mock_reg = MagicMock()
+        mock_reg.list_providers = AsyncMock(side_effect=RuntimeError("Registry not initialized"))
+        resolver = _make_resolver(store=mock_reg)
+
+        with pytest.raises(LLMProviderConfigError, match="No provider configuration"):
+            await resolver._resolve_provider_config_for_session(session=session, scope=None)
 
 
 # ---------------------------------------------------------------------------
@@ -323,14 +303,13 @@ class TestResolveProviderConfig:
 
 
 class TestResolveModelMockGuard:
-    """_resolve_model() must reject the mock provider in production contexts."""
+    """resolve_model_for_session() must reject the mock provider in production contexts."""
 
     @pytest.mark.asyncio
     async def test_mock_provider_in_registry_raises_config_error(self) -> None:
         """If a ProviderConfig with provider='mock' is resolved, LLMProviderConfigError is raised."""
         from server.app.exceptions import LLMProviderConfigError
 
-        service = _make_service()
         session = _make_session()
 
         mock_reg = MagicMock()
@@ -340,12 +319,10 @@ class TestResolveModelMockGuard:
             ]
         )
 
-        with patch(
-            "server.app.storage.config_registry.get_config_registry",
-            return_value=mock_reg,
-        ):
-            with pytest.raises(LLMProviderConfigError, match="reserved for testing"):
-                await service._resolve_model(session=session, scope=None)
+        resolver = _make_resolver(store=mock_reg)
+
+        with pytest.raises(LLMProviderConfigError, match="reserved for testing"):
+            await resolver.resolve_model_for_session(session=session, scope=None)
 
 
 # ---------------------------------------------------------------------------
@@ -376,7 +353,7 @@ class TestBuildModel:
         settings.openai_api_key = MagicMock()
         settings.openai_api_key.get_secret_value.return_value = "sk-openai"
 
-        with patch("server.app.llm.deep_agent_service.init_chat_model") as mock_init:
+        with patch("server.app.agent.resolver.init_chat_model") as mock_init:
             _build_model("openai", "gpt-4o", None, None, None, None, settings)
             mock_init.assert_called_once()
             call_kwargs = mock_init.call_args
@@ -387,7 +364,7 @@ class TestBuildModel:
         """openai_compatible calls init_chat_model with model_provider='openai' + base_url."""
         settings = self._make_settings()
 
-        with patch("server.app.llm.deep_agent_service.init_chat_model") as mock_init:
+        with patch("server.app.agent.resolver.init_chat_model") as mock_init:
             _build_model(
                 "openai_compatible",
                 "google/gemini-3-flash-preview",
@@ -418,7 +395,7 @@ class TestBuildModel:
         """anthropic provider calls init_chat_model with model_provider='anthropic'."""
         settings = self._make_settings()
 
-        with patch("server.app.llm.deep_agent_service.init_chat_model") as mock_init:
+        with patch("server.app.agent.resolver.init_chat_model") as mock_init:
             _build_model("anthropic", "claude-sonnet-4-6", None, None, None, None, settings)
             call_kwargs = mock_init.call_args
             assert call_kwargs[0][0] == "claude-sonnet-4-6"
@@ -440,7 +417,7 @@ class TestBuildModel:
         settings = self._make_settings()
 
         with patch(
-            "server.app.llm.deep_agent_service.init_chat_model",
+            "server.app.agent.resolver.init_chat_model",
             side_effect=ValueError("Bad API key"),
         ):
             with pytest.raises(LLMProviderConfigError, match="Bad API key"):
@@ -453,12 +430,11 @@ class TestBuildModel:
 
 
 class TestProviderIdResolution:
-    """_resolve_provider_config() with session.config.provider_id."""
+    """_resolve_provider_config_for_session() with session.config.provider_id."""
 
     @pytest.mark.asyncio
     async def test_provider_id_takes_priority_over_provider(self) -> None:
         """provider_id overrides provider/model session override."""
-        service = _make_service()
         session = _make_session(
             provider_id="my-openai-config",
             provider="anthropic",
@@ -476,24 +452,20 @@ class TestProviderIdResolution:
             )
         )
 
-        with (
-            patch(
-                "server.app.storage.config_registry.get_config_registry",
-                return_value=mock_reg,
-            ),
-            patch.dict("os.environ", {"OPENAI_API_KEY": "sk-test-key"}),
-        ):
+        resolver = _make_resolver(store=mock_reg)
+
+        with patch.dict("os.environ", {"OPENAI_API_KEY": "sk-test-key"}):
             (
                 provider,
                 model_id,
                 api_key,
                 *_rest,
-            ) = await service._resolve_provider_config(session=session, scope=None)
+            ) = await resolver._resolve_provider_config_for_session(session=session, scope=None)
 
         assert provider == "openai"
         assert model_id == "gpt-4o"
         assert api_key == "sk-test-key"
-        # Registry was queried by ID, not list_providers
+        # Store was queried by ID, not list_providers
         mock_reg.get_provider.assert_called_once_with("my-openai-config", scope=None)
 
     @pytest.mark.asyncio
@@ -501,25 +473,20 @@ class TestProviderIdResolution:
         """Unknown provider_id raises LLMProviderConfigError."""
         from server.app.exceptions import LLMProviderConfigError
 
-        service = _make_service()
         session = _make_session(provider_id="nonexistent-config")
 
         mock_reg = MagicMock()
         mock_reg.get_provider = AsyncMock(return_value=None)
+        resolver = _make_resolver(store=mock_reg)
 
-        with patch(
-            "server.app.storage.config_registry.get_config_registry",
-            return_value=mock_reg,
-        ):
-            with pytest.raises(LLMProviderConfigError, match="not found"):
-                await service._resolve_provider_config(session=session, scope=None)
+        with pytest.raises(LLMProviderConfigError, match="not found"):
+            await resolver._resolve_provider_config_for_session(session=session, scope=None)
 
     @pytest.mark.asyncio
     async def test_disabled_provider_id_raises_error(self) -> None:
         """Disabled provider_id raises LLMProviderConfigError."""
         from server.app.exceptions import LLMProviderConfigError
 
-        service = _make_service()
         session = _make_session(provider_id="disabled-config")
 
         mock_reg = MagicMock()
@@ -531,18 +498,14 @@ class TestProviderIdResolution:
                 enabled=False,
             )
         )
+        resolver = _make_resolver(store=mock_reg)
 
-        with patch(
-            "server.app.storage.config_registry.get_config_registry",
-            return_value=mock_reg,
-        ):
-            with pytest.raises(LLMProviderConfigError, match="disabled"):
-                await service._resolve_provider_config(session=session, scope=None)
+        with pytest.raises(LLMProviderConfigError, match="disabled"):
+            await resolver._resolve_provider_config_for_session(session=session, scope=None)
 
     @pytest.mark.asyncio
     async def test_provider_id_passes_scope(self) -> None:
         """Scope is forwarded to get_provider when using provider_id."""
-        service = _make_service()
         session = _make_session(provider_id="scoped-config")
         scope = {"user": "alice", "project": "myapp"}
 
@@ -554,26 +517,19 @@ class TestProviderIdResolution:
                 model="claude-sonnet-4-6",
             )
         )
+        resolver = _make_resolver(store=mock_reg)
 
-        with patch(
-            "server.app.storage.config_registry.get_config_registry",
-            return_value=mock_reg,
-        ):
-            await service._resolve_provider_config(session=session, scope=scope)
+        await resolver._resolve_provider_config_for_session(session=session, scope=scope)
 
         mock_reg.get_provider.assert_called_once_with("scoped-config", scope=scope)
 
     @pytest.mark.asyncio
     async def test_provider_id_with_unavailable_registry(self) -> None:
-        """provider_id with unavailable ConfigRegistry raises LLMProviderConfigError."""
+        """provider_id with None ConfigStore raises LLMProviderConfigError."""
         from server.app.exceptions import LLMProviderConfigError
 
-        service = _make_service()
         session = _make_session(provider_id="some-config")
+        resolver = _make_resolver(store=None)
 
-        with patch(
-            "server.app.storage.config_registry.get_config_registry",
-            side_effect=RuntimeError("Registry not initialized"),
-        ):
-            with pytest.raises(LLMProviderConfigError, match="ConfigRegistry not initialized"):
-                await service._resolve_provider_config(session=session, scope=None)
+        with pytest.raises(LLMProviderConfigError, match="ConfigStore not initialized"):
+            await resolver._resolve_provider_config_for_session(session=session, scope=None)

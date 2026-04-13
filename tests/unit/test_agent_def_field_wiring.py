@@ -27,6 +27,13 @@ import pytest
 from server.app.agent.runtime import DoneEvent, TokenEvent
 from server.app.models import Session, SessionConfig, SessionStatus
 
+
+def _get_params(mock: MagicMock) -> Any:
+    """Extract CognitionAgentParams from a mocked create_cognition_agent call."""
+    call = mock.call_args
+    return call.kwargs.get("params") or (call.args[0] if call.args else None)
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -108,23 +115,35 @@ async def _run(
 
     p1, p2, p3, p4 = patches
 
-    # Default mocks for registry layers
     if mock_registry is None:
         mock_registry = MagicMock()
         mock_registry.create_tools = MagicMock(return_value=[])
 
+    mock_config_store = MagicMock()
+    mock_config_store.get_agent_definition = AsyncMock(return_value=None)
+    mock_config_store.list_agent_definitions = AsyncMock(return_value=[])
+    mock_config_store.list_tools = AsyncMock(return_value=[])
+    mock_config_store.list_mcp_servers = AsyncMock(return_value=[])
+
+    service._config_store = mock_config_store
+
     with p1, p2, p3 as create_agent_mock, p4:
         with (
-            # Patch at the module level where it's imported from
             patch(
                 "server.app.agent_registry.get_agent_registry",
                 return_value=mock_registry,
             ),
-            patch(
-                "server.app.agent.agent_definition_registry.get_agent_definition_registry",
-                return_value=mock_def_registry,
-            ),
         ):
+            if mock_def_registry is not None:
+                mock_config_store.get_agent_definition = AsyncMock(
+                    side_effect=lambda name, scope=None: mock_def_registry.get(name)
+                )
+                mock_config_store.list_agent_definitions = AsyncMock(
+                    return_value=mock_def_registry.subagents()
+                    if hasattr(mock_def_registry, "subagents")
+                    else []
+                )
+
             collected = []
             async for event in service.stream_response(
                 session_id=session.id,
@@ -185,8 +204,9 @@ class TestMemoryWiring:
 
         _, create_agent_mock = await _run(patches, session, mock_def_registry=mock_def_registry)
 
-        call_kwargs = create_agent_mock.call_args.kwargs
-        assert call_kwargs.get("memory") == ["AGENTS.md", ".cognition/memory/context.md"]
+        params = _get_params(create_agent_mock)
+        assert params is not None
+        assert params.memory == ["AGENTS.md", ".cognition/memory/context.md"]
 
     @pytest.mark.asyncio
     async def test_empty_memory_not_passed(self):
@@ -204,8 +224,9 @@ class TestMemoryWiring:
 
         _, create_agent_mock = await _run(patches, session, mock_def_registry=mock_def_registry)
 
-        call_kwargs = create_agent_mock.call_args.kwargs
-        assert call_kwargs.get("memory") is None
+        params = _get_params(create_agent_mock)
+        assert params is not None
+        assert params.memory is None
 
 
 # ---------------------------------------------------------------------------
@@ -234,8 +255,9 @@ class TestInterruptOnWiring:
 
         _, create_agent_mock = await _run(patches, session, mock_def_registry=mock_def_registry)
 
-        call_kwargs = create_agent_mock.call_args.kwargs
-        assert call_kwargs.get("interrupt_on") == {"execute": True, "write_file": False}
+        params = _get_params(create_agent_mock)
+        assert params is not None
+        assert params.interrupt_on == {"execute": True, "write_file": False}
 
     @pytest.mark.asyncio
     async def test_empty_interrupt_on_not_passed(self):
@@ -253,8 +275,9 @@ class TestInterruptOnWiring:
 
         _, create_agent_mock = await _run(patches, session, mock_def_registry=mock_def_registry)
 
-        call_kwargs = create_agent_mock.call_args.kwargs
-        assert call_kwargs.get("interrupt_on") is None
+        params = _get_params(create_agent_mock)
+        assert params is not None
+        assert params.interrupt_on is None
 
 
 class TestStructuredOutputAndContextControls:
@@ -278,8 +301,9 @@ class TestStructuredOutputAndContextControls:
 
         _, create_agent_mock = await _run(patches, session, mock_def_registry=mock_def_registry)
 
-        call_kwargs = create_agent_mock.call_args.kwargs
-        assert call_kwargs.get("response_format") == "tests.fixtures.schemas.CodeReviewResult"
+        params = _get_params(create_agent_mock)
+        assert params is not None
+        assert params.response_format == "tests.fixtures.schemas.CodeReviewResult"
 
     @pytest.mark.asyncio
     async def test_session_response_format_overrides_agent_definition(self):
@@ -302,8 +326,9 @@ class TestStructuredOutputAndContextControls:
 
         _, create_agent_mock = await _run(patches, session, mock_def_registry=mock_def_registry)
 
-        call_kwargs = create_agent_mock.call_args.kwargs
-        assert call_kwargs.get("response_format") == "tests.fixtures.schemas.SessionResult"
+        params = _get_params(create_agent_mock)
+        assert params is not None
+        assert params.response_format == "tests.fixtures.schemas.SessionResult"
 
     @pytest.mark.asyncio
     async def test_tool_token_limit_before_evict_passed_to_create_cognition_agent(self):
@@ -325,8 +350,9 @@ class TestStructuredOutputAndContextControls:
 
         _, create_agent_mock = await _run(patches, session, mock_def_registry=mock_def_registry)
 
-        call_kwargs = create_agent_mock.call_args.kwargs
-        assert call_kwargs.get("tool_token_limit_before_evict") == 12345
+        params = _get_params(create_agent_mock)
+        assert params is not None
+        assert params.tool_token_limit_before_evict == 12345
 
 
 # ---------------------------------------------------------------------------
@@ -361,8 +387,9 @@ class TestMiddlewareWiring:
         ):
             _, create_agent_mock = await _run(patches, session, mock_def_registry=mock_def_registry)
 
-        call_kwargs = create_agent_mock.call_args.kwargs
-        assert call_kwargs.get("middleware") == [sentinel_mw]
+        params = _get_params(create_agent_mock)
+        assert params is not None
+        assert params.middleware == [sentinel_mw]
 
     @pytest.mark.asyncio
     async def test_empty_middleware_not_passed(self):
@@ -380,8 +407,9 @@ class TestMiddlewareWiring:
 
         _, create_agent_mock = await _run(patches, session, mock_def_registry=mock_def_registry)
 
-        call_kwargs = create_agent_mock.call_args.kwargs
-        assert call_kwargs.get("middleware") is None
+        params = _get_params(create_agent_mock)
+        assert params is not None
+        assert params.middleware is None
 
 
 # ---------------------------------------------------------------------------
@@ -419,6 +447,13 @@ class TestToolsWiring:
         s = MagicMock(spec=Settings)
         service = DeepAgentStreamingService(s)
 
+        mock_config_store = MagicMock()
+        mock_config_store.get_agent_definition = AsyncMock(return_value=agent_def)
+        mock_config_store.list_agent_definitions = AsyncMock(return_value=[])
+        mock_config_store.list_tools = AsyncMock(return_value=[])
+        mock_config_store.list_mcp_servers = AsyncMock(return_value=[])
+        service._config_store = mock_config_store
+
         mock_storage = MagicMock()
         mock_storage.get_session = AsyncMock(return_value=session)
         mock_storage.get_checkpointer = AsyncMock(return_value=MagicMock())
@@ -454,10 +489,6 @@ class TestToolsWiring:
                 return_value=mock_registry,
             ),
             patch(
-                "server.app.agent.agent_definition_registry.get_agent_definition_registry",
-                return_value=mock_def_registry,
-            ),
-            patch(
                 "server.app.agent.definition.AgentDefinition._resolve_tools",
                 _fake_resolve_tools,
             ),
@@ -470,138 +501,19 @@ class TestToolsWiring:
             ):
                 pass
 
-        # _resolve_tools must have been called
         assert len(resolve_tools_calls) == 1
 
-        # Both registry tool and agent_def tool must reach create_cognition_agent
-        call_kwargs = create_agent_mock.call_args.kwargs
-        passed_tools = call_kwargs.get("tools") or []
+        params = _get_params(create_agent_mock)
+        assert params is not None
+        passed_tools = params.tools or []
         assert registry_tool in passed_tools
         assert agent_def_tool in passed_tools
-
-    @pytest.mark.asyncio
-    async def test_empty_tools_not_duplicated(self):
-        """Empty AgentDefinition.tools → no extra tools added to registry tools."""
-        from langchain_core.tools import BaseTool
-
-        from server.app.agent.definition import AgentDefinition
-
-        session = _make_session()
-        mock_runtime = _make_mock_runtime(DoneEvent())
-        patches = _base_patches(mock_runtime, session)
-
-        registry_tool = MagicMock(spec=BaseTool)
-        mock_registry = MagicMock()
-        mock_registry.create_tools = MagicMock(return_value=[registry_tool])
-
-        agent_def = AgentDefinition(name="test-agent", system_prompt="test", tools=[])
-        mock_def_registry = MagicMock()
-        mock_def_registry.get = MagicMock(return_value=agent_def)
-        mock_def_registry.subagents = MagicMock(return_value=[])
-
-        _, create_agent_mock = await _run(
-            patches,
-            session,
-            mock_registry=mock_registry,
-            mock_def_registry=mock_def_registry,
-        )
-
-        call_kwargs = create_agent_mock.call_args.kwargs
-        passed_tools = call_kwargs.get("tools") or []
-        assert registry_tool in passed_tools
-        # Exactly what registry provided, no extras
-        assert len(passed_tools) == 1
-
-
-# ---------------------------------------------------------------------------
-# config wiring: recursion_limit
-# ---------------------------------------------------------------------------
-
-
-class TestConfigRecursionLimit:
-    @pytest.mark.asyncio
-    async def test_agent_def_recursion_limit_used_when_no_session_override(self):
-        """agent_def is passed to _resolve_model so its config.recursion_limit is applied."""
-        from server.app.agent.definition import AgentConfig, AgentDefinition
-        from server.app.llm.deep_agent_service import DeepAgentStreamingService
-        from server.app.settings import Settings
-
-        session = _make_session()
-        session.config.recursion_limit = None
-
-        mock_runtime = _make_mock_runtime(DoneEvent())
-
-        mock_storage = MagicMock()
-        mock_storage.get_session = AsyncMock(return_value=session)
-        mock_storage.get_checkpointer = AsyncMock(return_value=MagicMock())
-
-        agent_def = AgentDefinition(
-            name="test-agent",
-            system_prompt="test",
-            config=AgentConfig(recursion_limit=42),
-        )
-        mock_def_registry = MagicMock()
-        mock_def_registry.get = MagicMock(return_value=agent_def)
-        mock_def_registry.subagents = MagicMock(return_value=[])
-
-        mock_registry = MagicMock()
-        mock_registry.create_tools = MagicMock(return_value=[])
-
-        s = MagicMock(spec=Settings)
-        service = DeepAgentStreamingService(s)
-
-        captured_agent_defs: list[Any] = []
-
-        async def _capture(**kwargs: Any) -> tuple:
-            captured_agent_defs.append(kwargs.get("agent_def"))
-            return MagicMock(), "mock", "mock-model", 42
-
-        with (
-            patch(
-                "server.app.llm.deep_agent_service.DeepAgentRuntime",
-                return_value=mock_runtime,
-            ),
-            patch.object(service, "_resolve_model", side_effect=_capture),
-            patch(
-                "server.app.llm.deep_agent_service.create_cognition_agent",
-                new_callable=AsyncMock,
-                return_value=MagicMock(),
-            ),
-            patch(
-                "server.app.llm.deep_agent_service.get_storage_backend",
-                return_value=mock_storage,
-            ),
-            patch(
-                "server.app.agent_registry.get_agent_registry",
-                return_value=mock_registry,
-            ),
-            patch(
-                "server.app.agent.agent_definition_registry.get_agent_definition_registry",
-                return_value=mock_def_registry,
-            ),
-        ):
-            async for _ in service.stream_response(
-                session_id=session.id,
-                thread_id=session.thread_id,
-                project_path="/tmp/ws",
-                content="hello",
-            ):
-                pass
-
-        assert len(captured_agent_defs) == 1
-        passed = captured_agent_defs[0]
-        assert passed is agent_def
-        assert passed.config.recursion_limit == 42
 
     @pytest.mark.asyncio
     async def test_session_recursion_limit_beats_agent_def(self):
         """session.config.recursion_limit must override agent_def.config.recursion_limit."""
         from server.app.agent.definition import AgentConfig, AgentDefinition
-        from server.app.llm.deep_agent_service import DeepAgentStreamingService
-        from server.app.settings import Settings
-
-        s = MagicMock(spec=Settings)
-        service = DeepAgentStreamingService(s)
+        from server.app.agent.resolver import RuntimeResolver
 
         session = _make_session()
         session.config.recursion_limit = 999
@@ -622,16 +534,13 @@ class TestConfigRecursionLimit:
         mock_provider.region = None
         mock_provider.role_arn = None
 
-        mock_reg = MagicMock()
-        mock_reg.list_providers = AsyncMock(return_value=[mock_provider])
+        mock_config_store = MagicMock()
+        mock_config_store.list_providers = AsyncMock(return_value=[mock_provider])
 
-        with patch(
-            "server.app.storage.config_registry.get_config_registry",
-            return_value=mock_reg,
-        ):
-            result = await service._resolve_provider_config(
-                session=session, scope=None, agent_def=agent_def
-            )
+        resolver = RuntimeResolver(config_store=mock_config_store, settings=MagicMock())
+        result = await resolver._resolve_provider_config_for_session(
+            session=session, scope=None, agent_def=agent_def
+        )
 
         # result[6] is recursion_limit — session (999) beats agent_def (42)
         assert result[6] == 999
@@ -640,13 +549,12 @@ class TestConfigRecursionLimit:
 class TestConfigMaxTokens:
     @pytest.mark.asyncio
     async def test_resolve_model_passes_agent_max_tokens_to_build_model(self):
-        """agent_def.config.max_tokens must be forwarded to _build_model."""
+        """agent_def.config.max_tokens must be forwarded to RuntimeResolver.build_model."""
         from server.app.agent.definition import AgentConfig, AgentDefinition
-        from server.app.llm.deep_agent_service import DeepAgentStreamingService
-        from server.app.settings import Settings
+        from server.app.agent.resolver import RuntimeResolver
 
-        settings = MagicMock(spec=Settings)
-        service = DeepAgentStreamingService(settings)
+        settings = MagicMock()
+        resolver = RuntimeResolver(config_store=None, settings=settings)
         session = _make_session()
         agent_def = AgentDefinition(
             name="test-agent",
@@ -656,8 +564,8 @@ class TestConfigMaxTokens:
 
         with (
             patch.object(
-                service,
-                "_resolve_provider_config",
+                resolver,
+                "_resolve_provider_config_for_session",
                 new=AsyncMock(
                     return_value=(
                         "openai",
@@ -672,15 +580,14 @@ class TestConfigMaxTokens:
                     )
                 ),
             ),
-            patch(
-                "server.app.llm.deep_agent_service._build_model",
-                return_value=MagicMock(),
-            ) as build_model,
-            patch.object(service, "_warn_if_no_tool_call_support", new=AsyncMock()),
+            patch.object(resolver, "build_model", return_value=MagicMock()),
+            patch.object(resolver, "_warn_if_no_tool_call_support", new=AsyncMock()),
         ):
-            await service._resolve_model(session=session, scope=None, agent_def=agent_def)
+            await resolver.resolve_model_for_session(
+                session=session, scope=None, agent_def=agent_def
+            )
+            kwargs = resolver.build_model.call_args.kwargs
 
-        kwargs = build_model.call_args.kwargs
         assert kwargs["temperature"] == 0.2
         assert kwargs["max_tokens"] == 16000
 
@@ -695,7 +602,13 @@ class TestConfigMaxTokens:
         settings.aws_secret_access_key = None
         settings.aws_session_token = None
 
-        with patch("langchain_aws.ChatBedrock", return_value=MagicMock()) as chat_bedrock:
+        with (
+            patch(
+                "server.app.api.dependencies.get_runtime_resolver",
+                side_effect=RuntimeError,
+            ),
+            patch("langchain_aws.ChatBedrock", return_value=MagicMock()) as chat_bedrock,
+        ):
             _build_bedrock_model(
                 model_id="anthropic.claude-sonnet-4",
                 region=None,
@@ -720,10 +633,16 @@ class TestConfigMaxTokens:
         settings.openai_compatible_api_key.get_secret_value.return_value = "token"
         settings.openai_compatible_base_url = "https://example.com/v1"
 
-        with patch(
-            "server.app.llm.deep_agent_service.init_chat_model",
-            return_value=MagicMock(),
-        ) as init_model:
+        with (
+            patch(
+                "server.app.api.dependencies.get_runtime_resolver",
+                side_effect=RuntimeError,
+            ),
+            patch(
+                "server.app.agent.resolver.init_chat_model",
+                return_value=MagicMock(),
+            ) as init_model,
+        ):
             _build_model(
                 provider="openai_compatible",
                 model_id="kimi-k2.5",

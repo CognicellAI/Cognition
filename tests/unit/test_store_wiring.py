@@ -336,10 +336,6 @@ class TestServiceStoreWiring:
                 "server.app.agent_registry.get_agent_registry",
                 side_effect=RuntimeError("not initialized"),
             ),
-            patch(
-                "server.app.agent.agent_definition_registry.get_agent_definition_registry",
-                return_value=None,
-            ),
         ):
             async for _ in service.stream_response(
                 session_id=session.id,

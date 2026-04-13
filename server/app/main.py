@@ -7,7 +7,7 @@ from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 
 import structlog
-from fastapi import FastAPI, Request
+from fastapi import Depends, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
@@ -16,7 +16,15 @@ from server.app.agent.agent_definition_registry import (
 )
 from server.app.agent.resolver import RuntimeResolver
 from server.app.agent_registry import initialize_agent_registry
-from server.app.api.dependencies import set_config_store, set_runtime_resolver
+from server.app.api.dependencies import (
+    get_storage_backend_dep,
+    set_agent_registry_dep,
+    set_config_store,
+    set_model_catalog_dep,
+    set_runtime_resolver,
+    set_session_agent_manager_dep,
+    set_storage_backend_dep,
+)
 from server.app.api.middleware import ObservabilityMiddleware, SecurityHeadersMiddleware
 from server.app.api.models import HealthStatus, ReadyStatus
 from server.app.api.routes import agents, config, messages, models, sessions, skills, tools
@@ -27,8 +35,9 @@ from server.app.observability.mlflow_config import setup_mlflow_tracing
 from server.app.rate_limiter import RateLimitConfig, get_rate_limiter
 from server.app.session_manager import initialize_session_manager
 from server.app.settings import get_settings
-from server.app.storage import create_storage_backend, get_storage_backend, set_storage_backend
-from server.app.storage.config_store import DefaultConfigStore
+from server.app.storage import create_storage_backend, set_storage_backend
+from server.app.storage.backend import StorageBackend
+from server.app.storage.config_store import DefaultConfigStore, set_default_config_store
 
 logger = structlog.get_logger(__name__)
 
@@ -48,6 +57,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     storage_backend = create_storage_backend(settings)
     await storage_backend.initialize()
     set_storage_backend(storage_backend)
+    set_storage_backend_dep(storage_backend)
     logger.info("Storage backend initialized")
 
     # Initialize ConfigRegistry and wire it globally
@@ -60,19 +70,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     set_config_registry(config_registry)
     logger.info("ConfigRegistry initialized")
 
-    # Seed provider config from config.yaml (insert-if-absent)
-    from server.app.bootstrap import seed_providers_from_config
-    from server.app.config_loader import load_config
-
-    yaml_config = load_config(cwd=settings.workspace_root)
-    await seed_providers_from_config(yaml_config)
-
     # Initialize agent definition registry (file-based agents)
     def_registry = initialize_agent_definition_registry(settings.workspace_path)
     logger.info("Agent definition registry initialized")
-
-    # Seed ConfigRegistry from file-based agents (insert-if-absent)
-    await def_registry.seed_from_registry(config_registry)
 
     # Initialize ConfigStore (unified interface)
     config_store = DefaultConfigStore(
@@ -80,7 +80,18 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         agent_definition_registry=def_registry,
     )
     set_config_store(config_store)
+    set_default_config_store(config_store)
     logger.info("ConfigStore initialized")
+
+    # Seed provider config from config.yaml (insert-if-absent)
+    from server.app.bootstrap import seed_providers_from_config
+    from server.app.config_loader import load_config
+
+    yaml_config = load_config(cwd=settings.workspace_root)
+    await seed_providers_from_config(yaml_config, config_store)
+
+    # Seed store-backed agent definitions after ConfigStore is available.
+    await def_registry.seed_from_store(config_store)
 
     # Initialize RuntimeResolver (agent runtime bridge)
     runtime_resolver = RuntimeResolver(config_store=config_store, settings=settings)
@@ -98,8 +109,26 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     logger.info("Session manager initialized")
 
     # Initialize agent registry for tools and middleware
-    initialize_agent_registry(settings=settings)
+    agent_reg = initialize_agent_registry(settings=settings)
+    set_agent_registry_dep(agent_reg)
     logger.info("Agent registry initialized")
+
+    # Initialize SessionAgentManager for DI
+    from server.app.llm.deep_agent_service import SessionAgentManager
+
+    session_agent_manager = SessionAgentManager(settings)
+    set_session_agent_manager_dep(session_agent_manager)
+    logger.info("SessionAgentManager initialized")
+
+    # Initialize ModelCatalog for DI
+    from server.app.llm.model_catalog import ModelCatalog
+
+    model_catalog = ModelCatalog(
+        catalog_url=settings.model_catalog_url,
+        ttl_seconds=settings.model_catalog_ttl_seconds,
+    )
+    set_model_catalog_dep(model_catalog)
+    logger.info("ModelCatalog initialized")
 
     # Validate K8s sandbox prerequisites if backend is kubernetes
     if settings.sandbox_backend == "kubernetes":
@@ -116,10 +145,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
     # Set up file watcher for hot-reload
     try:
-        from server.app.agent_registry import get_agent_registry
-
-        registry = get_agent_registry()
-        file_watcher = WorkspaceWatcher(agent_registry=registry)
+        file_watcher = WorkspaceWatcher(agent_registry=agent_reg)
 
         # Watch tools and middleware directories
         tools_path = settings.workspace_path / ".cognition" / "tools"
@@ -208,9 +234,10 @@ app.include_router(tools.router)
 
 
 @app.get("/health", response_model=HealthStatus, tags=["health"])
-async def health_check() -> HealthStatus:
+async def health_check(
+    storage_backend: StorageBackend = Depends(get_storage_backend_dep),  # noqa: B008
+) -> HealthStatus:
     """Health check endpoint."""
-    storage_backend = get_storage_backend()
     sessions_list = await storage_backend.list_sessions()
 
     return HealthStatus(

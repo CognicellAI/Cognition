@@ -10,9 +10,7 @@ from pathlib import Path
 
 from server.app.agent.agent_definition_registry import (
     AgentDefinitionRegistry,
-    get_agent_definition_registry,
     initialize_agent_definition_registry,
-    set_agent_definition_registry,
 )
 from server.app.agent.definition import AgentDefinition
 
@@ -628,33 +626,14 @@ class TestAgentDefinitionToSubagent:
         assert spec["interrupt_on"] == {"write_file": True, "edit_file": True}
 
 
-class TestAgentDefinitionRegistryGlobal:
-    """Test global registry functions."""
-
-    def test_get_agent_registry_before_init(self):
-        """Get registry before initialization returns None."""
-        # Clear any existing registry via the public setter
-        set_agent_definition_registry(None)
-
-        assert get_agent_definition_registry() is None
-
-    def test_set_agent_registry(self):
-        """Set global agent registry."""
-        registry = AgentDefinitionRegistry()
-
-        set_agent_definition_registry(registry)
-
-        assert get_agent_definition_registry() is registry
+class TestAgentDefinitionRegistryFactory:
+    """Test registry factory behavior."""
 
     def test_initialize_agent_registry(self, tmp_path: Path):
-        """Initialize global agent registry."""
-        # Clear any existing registry
-        set_agent_definition_registry(None)
-
+        """Initialize agent registry."""
         registry = initialize_agent_definition_registry(tmp_path)
 
         assert registry is not None
-        assert get_agent_definition_registry() is registry
         # Should have built-ins
         assert registry.get("default") is not None
         assert registry.get("readonly") is not None

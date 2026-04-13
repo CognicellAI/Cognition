@@ -18,10 +18,16 @@ import uuid
 from collections.abc import AsyncGenerator
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from fastapi.responses import StreamingResponse
 
-from server.app.api.dependencies import get_config_store
+from server.app.api.dependencies import (
+    get_config_store,
+    get_scope_dep,
+    get_session_agent_manager_dep,
+    get_settings_dep,
+    get_storage_backend_dep,
+)
 from server.app.api.models import (
     ErrorResponse,
     SessionCreate,
@@ -38,7 +44,6 @@ from server.app.llm.deep_agent_service import (
     SessionAgentManager,
     TokenEvent,
     UsageEvent,
-    get_session_agent_manager,
 )
 from server.app.llm.deep_agent_service import (
     ErrorEvent as ResumeErrorEvent,
@@ -46,50 +51,11 @@ from server.app.llm.deep_agent_service import (
 from server.app.llm.discovery import DiscoveryEngine
 from server.app.models import SessionConfig, SessionStatus
 from server.app.session_manager import build_session_workspace_path, ensure_session_workspace_path
-from server.app.settings import Settings, get_settings
-from server.app.storage import get_storage_backend
+from server.app.settings import Settings
+from server.app.storage.backend import StorageBackend
 from server.app.storage.config_store import ConfigStore
 
 router = APIRouter(prefix="/sessions", tags=["sessions"])
-
-
-def get_settings_dependency() -> Settings:
-    """Get settings dependency."""
-    return get_settings()
-
-
-def get_agent_manager(settings: Settings = Depends(get_settings_dependency)) -> SessionAgentManager:  # noqa: B008
-    """Get the session agent manager."""
-    return get_session_agent_manager(settings)
-
-
-async def get_scope_dependency(
-    settings: Settings = Depends(get_settings_dependency),  # noqa: B008
-    user: str | None = Header(None, alias="x-cognition-scope-user"),
-    project: str | None = Header(None, alias="x-cognition-scope-project"),
-) -> SessionScope:
-    """Get the session scope from headers."""
-    scopes = {}
-    if user:
-        scopes["user"] = user
-    if project:
-        scopes["project"] = project
-
-    scope = SessionScope(scopes)
-
-    # Fail-closed: if scoping is enabled, require all configured scope keys
-    if settings.scoping_enabled:
-        missing_keys = [key for key in settings.scope_keys if not scope.get(key)]
-        if missing_keys:
-            header_names = [
-                f"X-Cognition-Scope-{k.replace('_', '-').title()}" for k in missing_keys
-            ]
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail=f"Missing required scope headers: {missing_keys}. Expected headers: {header_names}",
-            )
-
-    return scope
 
 
 @router.post(
@@ -102,10 +68,11 @@ async def get_scope_dependency(
 )
 async def create_session(
     request: SessionCreate,
-    settings: Settings = Depends(get_settings_dependency),  # noqa: B008
-    agent_manager: SessionAgentManager = Depends(get_agent_manager),  # noqa: B008
-    scope: SessionScope = Depends(get_scope_dependency),  # noqa: B008
+    agent_manager: SessionAgentManager = Depends(get_session_agent_manager_dep),  # noqa: B008
+    scope: SessionScope = Depends(get_scope_dep),  # noqa: B008
+    settings: Settings = Depends(get_settings_dep),  # noqa: B008
     config_store: ConfigStore = Depends(get_config_store),  # noqa: B008
+    store: StorageBackend = Depends(get_storage_backend_dep),  # noqa: B008
 ) -> SessionResponse:
     """Create a new session.
 
@@ -127,14 +94,10 @@ async def create_session(
     workspace_path = build_session_workspace_path(settings, session_id)
     ensure_session_workspace_path(workspace_path)
 
-    # Provider/model/system_prompt are resolved from ConfigRegistry at message-send
+    # Provider/model/system_prompt are resolved from ConfigStore at message-send
     # time (scope-aware). SessionConfig is intentionally sparse at creation.
     config = SessionConfig()
 
-    # Get session store for this workspace
-    store = get_storage_backend()
-
-    # Create session with scope
     session = await store.create_session(
         session_id=session_id,
         thread_id=thread_id,
@@ -159,8 +122,9 @@ async def create_session(
 async def list_sessions(
     request: Request,
     metadata_filters: Annotated[list[str] | None, Query(alias="metadata")] = None,
-    settings: Settings = Depends(get_settings_dependency),  # noqa: B008
-    scope: SessionScope = Depends(get_scope_dependency),  # noqa: B008
+    settings: Settings = Depends(get_settings_dep),  # noqa: B008
+    scope: SessionScope = Depends(get_scope_dep),  # noqa: B008
+    store: StorageBackend = Depends(get_storage_backend_dep),  # noqa: B008
 ) -> SessionList:
     """List all sessions for the workspace.
 
@@ -169,7 +133,6 @@ async def list_sessions(
     If scoping is enabled, only returns sessions matching the current scope.
     """
     _ = str(settings.workspace_path)
-    store = get_storage_backend()
     del metadata_filters
 
     resolved_metadata_filters: dict[str, str] = {
@@ -199,8 +162,9 @@ async def list_sessions(
 )
 async def get_session(
     session_id: str,
-    settings: Settings = Depends(get_settings_dependency),
-    scope: SessionScope = Depends(get_scope_dependency),
+    settings: Settings = Depends(get_settings_dep),
+    scope: SessionScope = Depends(get_scope_dep),
+    store: StorageBackend = Depends(get_storage_backend_dep),  # noqa: B008
 ) -> SessionResponse:
     """Get session details.
 
@@ -208,7 +172,6 @@ async def get_session(
     Only returns sessions from the server's current workspace.
     """
     _workspace_path = str(settings.workspace_path)
-    store = get_storage_backend()
     session = await store.get_session(session_id)
 
     if session is None:
@@ -217,7 +180,6 @@ async def get_session(
             detail=f"Session not found: {session_id}",
         )
 
-    # Enforce scoping - check if session scope matches current scope
     if not scope.is_empty() and not scope.matches(session.scopes):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -237,18 +199,17 @@ async def get_session(
 async def update_session(
     session_id: str,
     request: SessionUpdate,
-    settings: Settings = Depends(get_settings_dependency),
-    scope: SessionScope = Depends(get_scope_dependency),
+    settings: Settings = Depends(get_settings_dep),
+    scope: SessionScope = Depends(get_scope_dep),
     config_store: ConfigStore = Depends(get_config_store),  # noqa: B008
+    store: StorageBackend = Depends(get_storage_backend_dep),  # noqa: B008
 ) -> SessionResponse:
     """Update a session.
 
     Updates session metadata (title) or configuration (model, temperature, etc.).
     """
     _workspace_path = str(settings.workspace_path)
-    store = get_storage_backend()
 
-    # Check session exists and scope matches
     existing_session = await store.get_session(session_id)
     if existing_session is None:
         raise HTTPException(
@@ -256,21 +217,18 @@ async def update_session(
             detail=f"Session not found: {session_id}",
         )
 
-    # Enforce scoping - check if session scope matches current scope
     if not scope.is_empty() and not scope.matches(existing_session.scopes):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Session not found: {session_id}",
         )
 
-    # If model is updated but provider is missing, try to infer it
     if request.config and request.config.model and not request.config.provider:
         discovery = DiscoveryEngine(settings)
         provider = await discovery.get_provider_for_model(request.config.model)
         if provider:
             request.config.provider = provider  # type: ignore[assignment]
 
-    # Validate agent_name if provided
     if request.agent_name:
         if not await config_store.is_valid_primary(request.agent_name):
             raise HTTPException(
@@ -304,18 +262,17 @@ async def update_session(
 )
 async def delete_session(
     session_id: str,
-    settings: Settings = Depends(get_settings_dependency),
-    agent_manager: SessionAgentManager = Depends(get_agent_manager),
-    scope: SessionScope = Depends(get_scope_dependency),
+    settings: Settings = Depends(get_settings_dep),
+    agent_manager: SessionAgentManager = Depends(get_session_agent_manager_dep),
+    scope: SessionScope = Depends(get_scope_dep),
+    store: StorageBackend = Depends(get_storage_backend_dep),  # noqa: B008
 ) -> None:
     """Delete a session.
 
     Deletes a session and all associated messages.
     """
     _workspace_path = str(settings.workspace_path)
-    store = get_storage_backend()
 
-    # Check if session exists
     session = await store.get_session(session_id)
     if session is None:
         raise HTTPException(
@@ -323,17 +280,14 @@ async def delete_session(
             detail=f"Session not found: {session_id}",
         )
 
-    # Enforce scoping - check if session scope matches current scope
     if not scope.is_empty() and not scope.matches(session.scopes):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Session not found: {session_id}",
         )
 
-    # Unregister from Agent manager
     agent_manager.unregister_session(session_id)
 
-    # Delete session
     await store.delete_session(session_id)
 
 
@@ -346,16 +300,16 @@ async def delete_session(
 )
 async def abort_session(
     session_id: str,
-    settings: Settings = Depends(get_settings_dependency),
-    scope: SessionScope = Depends(get_scope_dependency),
-    agent_manager: SessionAgentManager = Depends(get_agent_manager),
+    settings: Settings = Depends(get_settings_dep),
+    scope: SessionScope = Depends(get_scope_dep),
+    agent_manager: SessionAgentManager = Depends(get_session_agent_manager_dep),
+    store: StorageBackend = Depends(get_storage_backend_dep),  # noqa: B008
 ) -> dict:
     """Abort the current operation in a session.
 
     Cancels any in-progress agent operation.
     """
     _workspace_path = str(settings.workspace_path)
-    store = get_storage_backend()
 
     session = await store.get_session(session_id)
     if session is None:
@@ -364,16 +318,12 @@ async def abort_session(
             detail=f"Session not found: {session_id}",
         )
 
-    # Enforce scoping - check if session scope matches current scope
     if not scope.is_empty() and not scope.matches(session.scopes):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Session not found: {session_id}",
         )
 
-    # Signal the agent to cancel via the SessionAgentManager
-    # Returns True if aborted active operation, False if no active operation
-    # Both cases are considered successful (idempotent)
     await agent_manager.abort_session(session_id, session.thread_id)
 
     return {"success": True, "message": "Operation aborted"}
@@ -392,12 +342,12 @@ async def resume_session(
     session_id: str,
     request: SessionResumeRequest,
     http_request: Request,
-    settings: Settings = Depends(get_settings_dependency),
-    scope: SessionScope = Depends(get_scope_dependency),
+    settings: Settings = Depends(get_settings_dep),
+    scope: SessionScope = Depends(get_scope_dep),
+    store: StorageBackend = Depends(get_storage_backend_dep),  # noqa: B008
 ) -> dict[str, str | bool] | StreamingResponse:
     """Resume an interrupted Deep Agents session using native Command(resume=...)."""
     _workspace_path = str(settings.workspace_path)
-    store = get_storage_backend()
 
     session = await store.get_session(session_id)
     if session is None:

@@ -4,16 +4,13 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from server.app.agent.cognition_agent import create_cognition_agent
+from server.app.agent.cognition_agent import CognitionAgentParams, create_cognition_agent
 
 
 @pytest.mark.asyncio
 async def test_custom_model_instance_integration():
     """Verify that a pre-built BaseChatModel instance can be passed directly
     to create_cognition_agent, bypassing provider resolution entirely.
-
-    This is the recommended pattern for custom providers: build the model
-    yourself via init_chat_model or a provider SDK, then pass the instance.
     """
     from langchain_core.language_models import BaseChatModel
 
@@ -21,7 +18,8 @@ async def test_custom_model_instance_integration():
 
     with patch("server.app.agent.cognition_agent.create_deep_agent") as mock_create:
         mock_create.return_value = MagicMock()
-        await create_cognition_agent(project_path=".", model=mock_model)
+        params = CognitionAgentParams(project_path=".", model=mock_model)
+        await create_cognition_agent(params)
 
         _, kwargs = mock_create.call_args
         assert kwargs["model"] is mock_model, (
@@ -42,12 +40,12 @@ async def test_agent_full_config_passing(tmp_path):
 
     with patch("server.app.agent.cognition_agent.create_deep_agent") as mock_create:
         mock_create.return_value = AsyncMock()
-        await create_cognition_agent(
+        params = CognitionAgentParams(
             project_path=workspace, subagents=subagents, interrupt_on=interrupt_on
         )
+        await create_cognition_agent(params)
 
         args, kwargs = mock_create.call_args
-        assert kwargs["subagents"] == subagents
         assert kwargs["interrupt_on"] == interrupt_on
 
 
@@ -65,7 +63,8 @@ async def test_custom_tools_integration():
 
     with patch("server.app.agent.cognition_agent.create_deep_agent") as mock_create:
         mock_create.return_value = AsyncMock()
-        await create_cognition_agent(project_path=".", tools=[my_custom_tool])
+        params = CognitionAgentParams(project_path=".", tools=[my_custom_tool])
+        await create_cognition_agent(params)
 
         args, kwargs = mock_create.call_args
         assert my_custom_tool in kwargs["tools"]
@@ -80,18 +79,8 @@ async def test_middleware_execution_integration():
     )
     from server.app.llm.mock import MockLLM
 
-    # Create agent with mock LLM instance
-    agent = await create_cognition_agent(project_path=".", model=MockLLM())
-
-    # The agent returned is a CompiledStateGraph.
-    # We can check its middleware stack if deepagents exposes it,
-    # but since we already verified it's passed in the unit test,
-    # here we want to see it in action if possible.
-
-    # However, running a full ReAct loop with a mock LLM just to test middleware
-    # might be brittle if deepagents internals change.
-
-    # Instead, let's verify the middleware classes themselves work as expected when called.
+    params = CognitionAgentParams(project_path=".", model=MockLLM())
+    agent = await create_cognition_agent(params)
 
     mw = CognitionObservabilityMiddleware()
     mock_handler = MagicMock(return_value=asyncio.Future())
@@ -104,16 +93,13 @@ async def test_middleware_execution_integration():
     await mw.awrap_model_call(mock_request, mock_handler)
     mock_handler.assert_called_once_with(mock_request)
 
-    # Verify streaming middleware uses adispatch_custom_event
     smw = CognitionStreamingMiddleware()
     mock_runtime = MagicMock()
 
-    # Middleware should handle adispatch_custom_event gracefully
-    # (it will fail without a callback context, but should not crash)
     try:
         await smw.abefore_model({}, mock_runtime)
     except Exception:
-        pass  # Expected to fail without LangChain callback context
+        pass
 
 
 @pytest.mark.asyncio

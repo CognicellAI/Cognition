@@ -16,12 +16,21 @@ Usage in route handlers:
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from fastapi import Depends, Header
 
 from server.app.agent.resolver import RuntimeResolver
 from server.app.api.scoping import SessionScope, create_scope_dependency
+from server.app.rate_limiter import RateLimiter, get_rate_limiter
 from server.app.settings import Settings, get_settings
 from server.app.storage.config_store import ConfigStore
+
+if TYPE_CHECKING:
+    from server.app.agent_registry import AgentRegistry
+    from server.app.llm.deep_agent_service import SessionAgentManager
+    from server.app.llm.model_catalog import ModelCatalog
+    from server.app.storage.backend import StorageBackend
 
 # ---------------------------------------------------------------------------
 # Global references — set once during lifespan, read via Depends()
@@ -29,6 +38,10 @@ from server.app.storage.config_store import ConfigStore
 
 _config_store: ConfigStore | None = None
 _runtime_resolver: RuntimeResolver | None = None
+_storage_backend: StorageBackend | None = None
+_session_agent_manager: SessionAgentManager | None = None
+_agent_registry: AgentRegistry | None = None
+_model_catalog: ModelCatalog | None = None
 
 
 def set_config_store(store: ConfigStore) -> None:
@@ -39,6 +52,26 @@ def set_config_store(store: ConfigStore) -> None:
 def set_runtime_resolver(resolver: RuntimeResolver) -> None:
     global _runtime_resolver
     _runtime_resolver = resolver
+
+
+def set_storage_backend_dep(backend: StorageBackend) -> None:
+    global _storage_backend
+    _storage_backend = backend
+
+
+def set_session_agent_manager_dep(manager: SessionAgentManager) -> None:
+    global _session_agent_manager
+    _session_agent_manager = manager
+
+
+def set_agent_registry_dep(registry: AgentRegistry) -> None:
+    global _agent_registry
+    _agent_registry = registry
+
+
+def set_model_catalog_dep(catalog: ModelCatalog) -> None:
+    global _model_catalog
+    _model_catalog = catalog
 
 
 # ---------------------------------------------------------------------------
@@ -64,6 +97,42 @@ def get_runtime_resolver() -> RuntimeResolver:
     return _runtime_resolver
 
 
+def get_storage_backend_dep() -> StorageBackend:
+    if _storage_backend is None:
+        raise RuntimeError(
+            "StorageBackend not initialized. Call set_storage_backend_dep() during startup."
+        )
+    return _storage_backend
+
+
+def get_session_agent_manager_dep() -> SessionAgentManager:
+    if _session_agent_manager is None:
+        raise RuntimeError(
+            "SessionAgentManager not initialized. Call set_session_agent_manager_dep() during startup."
+        )
+    return _session_agent_manager
+
+
+def get_agent_registry_dep() -> AgentRegistry:
+    if _agent_registry is None:
+        raise RuntimeError(
+            "AgentRegistry not initialized. Call set_agent_registry_dep() during startup."
+        )
+    return _agent_registry
+
+
+def get_model_catalog_dep() -> ModelCatalog:
+    if _model_catalog is None:
+        raise RuntimeError(
+            "ModelCatalog not initialized. Call set_model_catalog_dep() during startup."
+        )
+    return _model_catalog
+
+
+def get_rate_limiter_dep() -> RateLimiter:
+    return get_rate_limiter()
+
+
 async def get_scope_dep(
     settings: Settings = Depends(get_settings_dep),  # noqa: B008
     user: str | None = Header(None, alias="x-cognition-scope-user"),
@@ -72,13 +141,40 @@ async def get_scope_dep(
     return await create_scope_dependency(settings)(user=user, project=project)
 
 
+def get_scope_headers_dep(
+    user: str | None = Header(None, alias="x-cognition-scope-user"),
+    project: str | None = Header(None, alias="x-cognition-scope-project"),
+) -> dict[str, str] | None:
+    """Extract optional scope dict from request headers.
+
+    Returns None when no scope headers are present, otherwise a dict
+    like {"user": "...", "project": "..."}.
+    """
+    scope: dict[str, str] = {}
+    if user:
+        scope["user"] = user
+    if project:
+        scope["project"] = project
+    return scope if scope else None
+
+
 __all__ = [
     "ConfigStore",
     "RuntimeResolver",
+    "get_agent_registry_dep",
     "get_config_store",
+    "get_model_catalog_dep",
+    "get_rate_limiter_dep",
     "get_runtime_resolver",
     "get_scope_dep",
+    "get_scope_headers_dep",
+    "get_session_agent_manager_dep",
     "get_settings_dep",
+    "get_storage_backend_dep",
+    "set_agent_registry_dep",
     "set_config_store",
+    "set_model_catalog_dep",
     "set_runtime_resolver",
+    "set_session_agent_manager_dep",
+    "set_storage_backend_dep",
 ]

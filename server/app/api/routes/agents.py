@@ -4,6 +4,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
 
+from server.app.agent.definition import AgentDefinition
 from server.app.api.dependencies import get_config_store
 from server.app.api.models import (
     AgentConfigResponse,
@@ -21,7 +22,7 @@ def _registry_or_503(config_store: ConfigStore = Depends(get_config_store)) -> C
     return config_store
 
 
-def _agent_to_response(agent: Any) -> AgentResponse:
+def _agent_to_response(agent: AgentDefinition) -> AgentResponse:
     return AgentResponse(
         name=agent.name,
         description=agent.description,
@@ -85,8 +86,6 @@ async def create_agent(
         )
 
     try:
-        from server.app.agent.definition import AgentDefinition
-
         definition_data: dict[str, Any] = {
             "name": body.name,
             "system_prompt": body.system_prompt,
@@ -113,9 +112,9 @@ async def create_agent(
         }
         await config_store.upsert_agent(body.name, body.scope, definition_data, "api")
 
-        agent_def = AgentDefinition.model_validate(definition_data)
-        agent_def.native = False
-
+        agent_def = await config_store.get_agent_definition(body.name)
+        if agent_def is None:
+            raise HTTPException(status_code=500, detail="Agent not found after creation")
         return _agent_to_response(agent_def)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e)) from e
@@ -156,8 +155,6 @@ async def update_agent(
         )
 
     try:
-        from server.app.agent.definition import AgentDefinition
-
         data = await config_store.get_agent_raw(name, None)
         if data is None:
             raise HTTPException(status_code=404, detail=f"Agent '{name}' not found in registry")
@@ -184,9 +181,9 @@ async def update_agent(
         scope: dict[str, Any] = data.get("scope", {})
         await config_store.upsert_agent(name, scope, data, "api")
 
-        agent_def = AgentDefinition.model_validate(data)
-        agent_def.native = False
-
+        agent_def = await config_store.get_agent_definition(name)
+        if agent_def is None:
+            raise HTTPException(status_code=500, detail="Agent not found after update")
         return _agent_to_response(agent_def)
     except HTTPException:
         raise

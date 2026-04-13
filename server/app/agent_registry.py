@@ -34,6 +34,7 @@ import structlog
 from langchain_core.tools import BaseTool
 
 from server.app.agent.cognition_agent import (
+    CognitionAgentParams,
     clear_agent_cache,
     create_cognition_agent,
 )
@@ -600,14 +601,16 @@ class AgentRegistry:
         # Create the agent
         effective_settings = settings or self._settings
         result = await create_cognition_agent(
-            project_path=project_path,
-            model=model,
-            checkpointer=checkpointer,
-            system_prompt=system_prompt,
-            tools=tools if tools else None,
-            middleware=middleware if middleware else None,
-            settings=effective_settings,
-            mcp_configs=None,
+            CognitionAgentParams(
+                project_path=project_path,
+                model=model,
+                checkpointer=checkpointer,
+                system_prompt=system_prompt,
+                tools=tools if tools else None,
+                middleware=middleware if middleware else None,
+                settings=effective_settings,
+                mcp_configs=None,
+            )
         )
         agent = result.agent
 

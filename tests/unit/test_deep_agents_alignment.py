@@ -92,7 +92,7 @@ class TestProviderModelPlumbing:
         settings.bedrock_role_arn = None
 
         with patch(
-            "server.app.llm.deep_agent_service.init_chat_model", return_value=MagicMock()
+            "server.app.agent.resolver.init_chat_model", return_value=MagicMock()
         ) as init_model:
             _build_model(
                 provider="openai",

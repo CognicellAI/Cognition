@@ -15,13 +15,12 @@ Only the compiled agent graph is cached — it is immutable after compilation an
 to share across sessions. The sandbox backend is stateful (holds sandbox CR, connection)
 and must be created fresh per session to prevent cross-session termination bugs.
 Use invalidate_agent_cache() or clear_agent_cache() to force recompilation.
-Cache keys are scope-aware so per-user/per-project config overrides each get
-their own compiled graph.
+Cache keys are RuntimeContext instances that track which config inputs affect the
+compiled graph, enabling targeted invalidation instead of all-or-nothing clears.
 """
 
 from __future__ import annotations
 
-import hashlib
 import importlib
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
@@ -43,12 +42,10 @@ from server.app.agent.middleware import (  # noqa: E402
 from server.app.agent.sandbox_backend import create_sandbox_backend  # noqa: E402
 from server.app.agent.tools import BrowserTool, InspectPackageTool, SearchTool  # noqa: E402
 from server.app.settings import Settings, get_settings  # noqa: E402
+from server.app.storage.config_store import ConfigStore  # noqa: E402
 
 DeepAgentResponseFormat = Any
 create_deep_agent: Any = _create_deep_agent
-
-# Global agent cache: cache_key -> compiled_agent
-_agent_cache: dict[str, Any] = {}
 
 
 @dataclass
@@ -73,17 +70,6 @@ class CognitionContext:
 
     @classmethod
     def from_scope(cls, scope: dict[str, str] | None) -> CognitionContext:
-        """Build a CognitionContext from a session scope dict.
-
-        Maps well-known keys (``user``, ``org``, ``project``) to typed
-        attributes; all other keys are stored in ``extra``.
-
-        Args:
-            scope: Session scope dict, e.g. ``{"user": "alice", "org": "acme"}``.
-
-        Returns:
-            CognitionContext with scope dimensions filled in.
-        """
         if not scope:
             return cls()
         return cls(
@@ -94,17 +80,80 @@ class CognitionContext:
         )
 
 
-def _model_cache_key(model: Any) -> str:
-    """Return a stable string that identifies the model instance.
+@dataclass(frozen=True)
+class RuntimeContext:
+    """Tracks which config inputs produced a cached agent graph.
 
-    Uses model_name or model_id attributes if available so that two
-    ChatOpenAI instances pointing at different models produce different
-    cache keys (the type name alone is not sufficient).
+    Replaces the MD5 hash approach. Because the dataclass is frozen and
+    contains only hashable fields, it can be used directly as a dict key.
+    Targeted invalidation is now possible: clearing all entries whose
+    ``scope`` matches a given dict, or whose ``agent_name`` matches.
     """
+
+    project_path: str
+    model_key: str
+    store_type: str
+    system_prompt: str
+    memory: tuple[str, ...]
+    skills: tuple[str, ...]
+    subagent_count: int
+    interrupt_on_keys: tuple[str, ...]
+    response_format: str
+    tool_token_limit_before_evict: int | None
+    middleware_count: int
+    tools_count: int
+    sandbox_backend: str
+    scope: tuple[tuple[str, str], ...]
+
+    @classmethod
+    def from_params(
+        cls,
+        project_path: Path,
+        model: Any,
+        store: Any,
+        system_prompt: str | None,
+        memory: Sequence[str] | None,
+        skills: Sequence[str] | None,
+        subagents: Sequence[Any] | None,
+        interrupt_on: Mapping[str, Any] | None,
+        response_format: str | type[Any] | None,
+        tool_token_limit_before_evict: int | None,
+        middleware: Sequence[Any] | None,
+        tools: Sequence[Any] | None,
+        settings: Settings,
+        scope: dict[str, str] | None,
+    ) -> RuntimeContext:
+        return cls(
+            project_path=str(project_path.resolve()),
+            model_key=_model_cache_key(model),
+            store_type=store.__class__.__name__ if store else "None",
+            system_prompt=system_prompt or "default",
+            memory=tuple(sorted(memory)) if memory else (),
+            skills=tuple(sorted(skills)) if skills else (),
+            subagent_count=len(subagents) if subagents else 0,
+            interrupt_on_keys=tuple(sorted(interrupt_on.keys())) if interrupt_on else (),
+            response_format=(
+                response_format
+                if isinstance(response_format, str)
+                else getattr(response_format, "__name__", "None")
+            )
+            if response_format
+            else "None",
+            tool_token_limit_before_evict=tool_token_limit_before_evict,
+            middleware_count=len(middleware) if middleware else 0,
+            tools_count=len(tools) if tools else 0,
+            sandbox_backend=settings.sandbox_backend,
+            scope=tuple(sorted((scope or {}).items())),
+        )
+
+
+_agent_cache: dict[RuntimeContext, Any] = {}
+
+
+def _model_cache_key(model: Any) -> str:
     if model is None:
         return "None"
     type_name = type(model).__name__
-    # LangChain models expose model_name or model_id
     model_id = (
         getattr(model, "model_name", None)
         or getattr(model, "model_id", None)
@@ -115,119 +164,32 @@ def _model_cache_key(model: Any) -> str:
     return type_name
 
 
-def _generate_cache_key(
-    project_path: str | Path,
-    model: Any,
-    store: Any,
-    system_prompt: str | None,
-    memory: Sequence[str] | None,
-    skills: Sequence[str] | None,
-    subagents: Sequence[Any] | None,
-    interrupt_on: Mapping[str, Any] | None,
-    response_format: str | None,
-    tool_token_limit_before_evict: int | None,
-    middleware: Sequence[Any] | None,
-    tools: Sequence[Any] | None,
-    settings: Settings | None,
-    scope: dict[str, str] | None = None,
-) -> str:
-    """Generate a cache key for agent configuration.
-
-    The cache key is a hash of all configuration parameters that affect
-    the compiled agent structure. Includes scope so per-user overrides
-    each get their own entry.
-
-    Args:
-        All parameters passed to create_cognition_agent
-        scope: Optional scope dict for multi-tenant cache isolation.
-
-    Returns:
-        MD5 hash string representing the configuration
-    """
-    # Build a string representation of the configuration
-    config_parts = [
-        str(Path(project_path).resolve()),
-        _model_cache_key(model),
-        str(store.__class__.__name__) if store else "None",
-        str(system_prompt) if system_prompt else "default",
-        str(sorted(memory)) if memory else "None",
-        str(sorted(skills)) if skills else "None",
-        str(len(subagents)) if subagents else "0",
-        str(sorted(interrupt_on.keys())) if interrupt_on else "None",
-        str(response_format) if response_format else "None",
-        str(tool_token_limit_before_evict) if tool_token_limit_before_evict is not None else "None",
-        str(len(middleware)) if middleware else "0",
-        str(len(tools)) if tools else "0",
-        str(settings.sandbox_backend) if settings else "default",
-        # Scope isolation: sort keys so dict order doesn't affect hash
-        str(sorted((scope or {}).items())),
-    ]
-
-    config_str = "|".join(config_parts)
-    return hashlib.md5(config_str.encode()).hexdigest()
+def get_cached_agent(ctx: RuntimeContext) -> Any | None:
+    return _agent_cache.get(ctx)
 
 
-def get_cached_agent(cache_key: str) -> Any | None:
-    """Get a cached agent by cache key.
-
-    Args:
-        cache_key: The configuration hash key
-
-    Returns:
-        Cached compiled agent or None if not found
-    """
-    return _agent_cache.get(cache_key)
+def cache_agent(ctx: RuntimeContext, agent: Any) -> None:
+    _agent_cache[ctx] = agent
 
 
-def cache_agent(cache_key: str, agent: Any) -> None:
-    """Cache a compiled agent.
-
-    Args:
-        cache_key: The configuration hash key
-        agent: The compiled agent to cache
-    """
-    _agent_cache[cache_key] = agent
-
-
-def invalidate_agent_cache(cache_key: str) -> None:
-    """Invalidate a specific cached agent.
-
-    Args:
-        cache_key: The configuration hash key to invalidate
-    """
-    _agent_cache.pop(cache_key, None)
+def invalidate_agent_cache(ctx: RuntimeContext) -> None:
+    _agent_cache.pop(ctx, None)
 
 
 def invalidate_agent_cache_for_scope(scope: dict[str, str]) -> int:
-    """Invalidate all cached agents whose key encodes the given scope.
-
-    Because cache keys are MD5 hashes we cannot reverse them; instead we
-    clear *all* cache entries. This is conservative but safe — agents will
-    be recompiled on next request. Call this from on_config_change handlers.
-
-    Args:
-        scope: Scope that changed (used for logging only).
-
-    Returns:
-        Number of cache entries cleared.
-    """
-    count = len(_agent_cache)
-    _agent_cache.clear()
-    logger.info("Agent cache cleared on config change", scope=scope, cleared=count)
-    return count
+    scope_items = tuple(sorted(scope.items()))
+    to_remove = [ctx for ctx in _agent_cache if ctx.scope == scope_items]
+    for ctx in to_remove:
+        del _agent_cache[ctx]
+    logger.info("Agent cache cleared on config change", scope=scope, cleared=len(to_remove))
+    return len(to_remove)
 
 
 def clear_agent_cache() -> None:
-    """Clear all cached agents."""
     _agent_cache.clear()
 
 
 def get_agent_cache_stats() -> dict[str, int]:
-    """Get cache statistics.
-
-    Returns:
-        Dict with 'size' key indicating number of cached agents
-    """
     return {"size": len(_agent_cache)}
 
 
@@ -256,146 +218,45 @@ The current working directory is the project root. All file paths are relative t
 
 
 class CognitionAgentResult(NamedTuple):
-    """Result of creating a Cognition agent.
-
-    Attributes:
-        agent: The compiled LangGraph agent.
-        sandbox_backend: The sandbox backend used by the agent, if any.
-            Callers should register this with SessionAgentManager for
-            lifecycle tracking (terminate on session deletion).
-    """
-
     agent: Any
     sandbox_backend: Any | None = None
 
 
-async def create_cognition_agent(
-    project_path: str | Path,
-    model: Any = None,
-    store: Any = None,
-    checkpointer: Any = None,
-    system_prompt: str | None = None,
-    memory: Sequence[str] | None = None,
-    skills: Sequence[str] | None = None,
-    subagents: Sequence[Any] | None = None,
-    interrupt_on: Mapping[str, Any] | None = None,
-    response_format: str | type[Any] | None = None,
-    tool_token_limit_before_evict: int | None = None,
-    middleware: Sequence[Any] | None = None,
-    tools: Sequence[Any] | None = None,
-    settings: Settings | None = None,
-    mcp_configs: Sequence[McpServerConfig] | None = None,
-    scope: dict[str, str] | None = None,
-) -> CognitionAgentResult:
-    """Create a Deep Agent for the Cognition system.
+@dataclass
+class CognitionAgentParams:
+    """Parameter object for create_cognition_agent().
 
-    This factory creates an agent with:
-    - Settings-driven sandbox backend (local or Docker) for execution
-    - FilesystemBackend for file operations (shared across both backends)
-    - Multi-step ReAct loop with planning support
-    - State checkpointing via thread_id
-    - Automatic tool chaining
-    - Configurable memory, skills, and subagents
-    - Observability and streaming middleware
-    - Optional custom tools
-
-    Args:
-        project_path: Path to the project workspace directory.
-        model: LLM model to use. If None, uses default from ConfigRegistry.
-        store: Optional LangGraph store.
-        checkpointer: Optional LangGraph checkpoint saver for state persistence.
-        system_prompt: Optional custom system prompt. Uses ConfigRegistry default if not provided.
-        memory: Optional list of memory files (e.g. AGENTS.md).
-        skills: Optional list of skill directory paths.
-        subagents: Optional list of subagent definitions.
-        interrupt_on: Optional dict mapping tool names to human-approval requirement.
-        response_format: Optional dotted path or Pydantic model class for structured output.
-        tool_token_limit_before_evict: Optional Deep Agents offload threshold.
-        middleware: Optional additional middleware to apply.
-        tools: Optional additional tools to register.
-        settings: Optional settings override.
-        mcp_configs: Optional MCP server configurations.
-        scope: Optional scope dict for cache isolation and config resolution.
-
-    Returns:
-        Configured Deep Agent ready to handle coding tasks with multi-step support.
+    Replaces the previous 17-arg signature with a single structured object.
+    Callers construct this explicitly, making it clear what inputs affect the
+    agent graph.
     """
-    settings = settings or get_settings()
-    project_path = Path(project_path).resolve()
 
-    # Sandbox ID and K8s labels are derived from project/scope and needed
-    # before the cache check so that cache hits can create a fresh backend.
-    sandbox_id = f"cognition-{project_path.name}"
+    project_path: str | Path
+    model: Any = None
+    store: Any = None
+    checkpointer: Any = None
+    system_prompt: str | None = None
+    memory: Sequence[str] | None = None
+    skills: Sequence[str] | None = None
+    subagents: Sequence[Any] | None = None
+    interrupt_on: Mapping[str, Any] | None = None
+    response_format: str | type[Any] | None = None
+    tool_token_limit_before_evict: int | None = None
+    middleware: Sequence[Any] | None = None
+    tools: Sequence[Any] | None = None
+    settings: Settings | None = None
+    mcp_configs: Sequence[McpServerConfig] | None = None
+    scope: dict[str, str] | None = None
+    config_store: ConfigStore | None = None
 
-    k8s_labels: dict[str, str] | None = None
-    if scope:
-        k8s_labels = {}
-        if "user" in scope:
-            k8s_labels["cognition.io/user"] = scope["user"]
-        if "org" in scope:
-            k8s_labels["cognition.io/org"] = scope["org"]
-        if "project" in scope:
-            k8s_labels["cognition.io/project"] = scope["project"]
-        k8s_labels["cognition.io/session"] = sandbox_id
 
-    # Try to get config registry once - needed for defaults and skills backend
-    try:
-        from server.app.storage.config_registry import get_config_registry
-
-        reg = get_config_registry()
-    except RuntimeError:
-        reg = None
-
-    # Generate cache key and check cache
-    cache_key = _generate_cache_key(
-        project_path=project_path,
-        model=model,
-        store=store,
-        system_prompt=system_prompt,
-        memory=memory,
-        skills=skills,
-        subagents=subagents,
-        interrupt_on=interrupt_on,
-        response_format=response_format
-        if isinstance(response_format, str)
-        else getattr(response_format, "__name__", None),
-        tool_token_limit_before_evict=tool_token_limit_before_evict,
-        middleware=middleware,
-        tools=tools,
-        settings=settings,
-        scope=scope,
-    )
-
-    # Check if we have a cached compiled agent for this configuration.
-    # Only the compiled agent graph is cached — it is immutable and safe to share.
-    # The sandbox backend is stateful and must be created per-session to prevent
-    # cross-session termination bugs (see GH-72).
-    cached_agent = get_cached_agent(cache_key)
-    if cached_agent is not None:
-        # Cached agent graph is reusable (immutable), but sandbox backend must be
-        # fresh per-session to avoid cross-session termination (GH-72).
-        sandbox_backend = create_sandbox_backend(
-            root_dir=project_path,
-            sandbox_id=sandbox_id,
-            sandbox_backend=settings.sandbox_backend,
-            docker_image=settings.docker_image,
-            docker_network=settings.docker_network,
-            docker_memory_limit=settings.docker_memory_limit,
-            docker_cpu_limit=settings.docker_cpu_limit,
-            docker_host_workspace="",
-            k8s_template=settings.k8s_sandbox_template,
-            k8s_namespace=settings.k8s_sandbox_namespace,
-            k8s_router_url=settings.k8s_sandbox_router_url,
-            k8s_ttl=settings.k8s_sandbox_ttl,
-            k8s_warm_pool=settings.k8s_sandbox_warm_pool,
-            labels=k8s_labels or None,
-        )
-
-        return CognitionAgentResult(agent=cached_agent, sandbox_backend=sandbox_backend)
-
-    # Create the sandbox backend using settings-driven factory
-
-    sandbox_backend = create_sandbox_backend(
+def _create_sandbox(
+    project_path: Path,
+    sandbox_id: str,
+    settings: Settings,
+    k8s_labels: dict[str, str] | None,
+) -> Any:
+    return create_sandbox_backend(
         root_dir=project_path,
         sandbox_id=sandbox_id,
         sandbox_backend=settings.sandbox_backend,
@@ -412,75 +273,152 @@ async def create_cognition_agent(
         labels=k8s_labels or None,
     )
 
-    # Resolve agent defaults from ConfigRegistry (falls back to hardcoded defaults)
-    agent_memory: list[str]
-    agent_skills: list[str]
-    agent_subagents: list[Any]
-    agent_interrupt_on: dict[str, Any]
-    agent_response_format: str | type[Any] | None = response_format
-    agent_tool_token_limit_before_evict = tool_token_limit_before_evict
 
-    if memory is not None:
-        agent_memory = list(memory)
-    else:
-        if reg:
-            defaults = await reg.get_global_agent_defaults(scope)
-            agent_memory = defaults.memory
+def _inject_subagent_middleware(subagents: list[Any], middleware: list[Any]) -> list[Any]:
+    """Inject Cognition security/observability middleware into subagent specs.
+
+    Without this, blocked tools can be called through subagents without audit
+    logging or prevention — a security bypass.
+    """
+    security_middleware = [
+        m
+        for m in middleware
+        if isinstance(m, (ToolSecurityMiddleware, CognitionObservabilityMiddleware))
+    ]
+    if not security_middleware:
+        return subagents
+
+    result: list[Any] = []
+    for s in subagents:
+        if isinstance(s, dict):
+            existing = s.get("middleware") or []
+            existing_types = {type(m).__name__ for m in existing}
+            for m in security_middleware:
+                if type(m).__name__ not in existing_types:
+                    existing = list(existing) + [m]
+            result.append({**s, "middleware": existing})
         else:
-            agent_memory = ["AGENTS.md"]
+            result.append(s)
+    return result
 
-    if skills is not None:
-        agent_skills = list(skills)
+
+async def create_cognition_agent(params: CognitionAgentParams) -> CognitionAgentResult:
+    """Create a Deep Agent for the Cognition system.
+
+    Args:
+        params: Structured agent configuration. See CognitionAgentParams.
+
+    Returns:
+        Configured Deep Agent ready to handle coding tasks with multi-step support.
+    """
+    settings = params.settings or get_settings()
+    project_path = Path(params.project_path).resolve()
+
+    sandbox_id = f"cognition-{project_path.name}"
+    k8s_labels: dict[str, str] | None = None
+    if params.scope:
+        k8s_labels = {}
+        if "user" in params.scope:
+            k8s_labels["cognition.io/user"] = params.scope["user"]
+        if "org" in params.scope:
+            k8s_labels["cognition.io/org"] = params.scope["org"]
+        if "project" in params.scope:
+            k8s_labels["cognition.io/project"] = params.scope["project"]
+        k8s_labels["cognition.io/session"] = sandbox_id
+
+    config_store = params.config_store
+    if config_store is None:
+        try:
+            from server.app.api.dependencies import get_config_store
+
+            config_store = get_config_store()
+        except RuntimeError:
+            config_store = None
+
+    runtime_ctx = RuntimeContext.from_params(
+        project_path=project_path,
+        model=params.model,
+        store=params.store,
+        system_prompt=params.system_prompt,
+        memory=params.memory,
+        skills=params.skills,
+        subagents=params.subagents,
+        interrupt_on=params.interrupt_on,
+        response_format=params.response_format,
+        tool_token_limit_before_evict=params.tool_token_limit_before_evict,
+        middleware=params.middleware,
+        tools=params.tools,
+        settings=settings,
+        scope=params.scope,
+    )
+
+    cached_agent = get_cached_agent(runtime_ctx)
+    if cached_agent is not None:
+        sandbox_backend = _create_sandbox(project_path, sandbox_id, settings, k8s_labels)
+        return CognitionAgentResult(agent=cached_agent, sandbox_backend=sandbox_backend)
+
+    sandbox_backend = _create_sandbox(project_path, sandbox_id, settings, k8s_labels)
+
+    defaults_resolved = False
+    agent_defaults: Any = None
+
+    async def _defaults() -> Any:
+        nonlocal defaults_resolved, agent_defaults
+        if not defaults_resolved and config_store is not None:
+            agent_defaults = await config_store.get_global_agent_defaults(params.scope)
+            defaults_resolved = True
+        return agent_defaults
+
+    if params.memory is not None:
+        agent_memory = list(params.memory)
     else:
-        if reg:
-            defaults = await reg.get_global_agent_defaults(scope)
-            agent_skills = defaults.skills
-        else:
-            agent_skills = [".cognition/skills/"]
+        defaults = await _defaults()
+        agent_memory = defaults.memory if defaults else ["AGENTS.md"]
 
-    # Always include API skills route for ConfigRegistry-backed skills
+    if params.skills is not None:
+        agent_skills = list(params.skills)
+    else:
+        defaults = await _defaults()
+        agent_skills = defaults.skills if defaults else [".cognition/skills/"]
+
     if "/skills/api/" not in agent_skills:
         agent_skills = agent_skills + ["/skills/api/"]
 
-    # Wrap sandbox backend with CompositeBackend to support DB-backed skills.
-    # The route is intentionally narrow so normal repo file access under /workspace
-    # still flows to the sandbox backend unchanged.
     from deepagents.backends.protocol import BackendProtocol
 
     backend: BackendProtocol
-    if reg:
+    if config_store is not None:
         from deepagents.backends.composite import CompositeBackend
 
         from server.app.agent.skills_backend import ConfigRegistrySkillsBackend
 
-        db_skills_backend = ConfigRegistrySkillsBackend(registry=reg, scope=scope)
-        backend = CompositeBackend(
-            default=sandbox_backend,
-            routes={"/skills/api/": db_skills_backend},
-        )
+        reg = getattr(config_store, "config_registry", None)
+        if reg is not None:
+            db_skills_backend = ConfigRegistrySkillsBackend(registry=reg, scope=params.scope)
+            backend = CompositeBackend(
+                default=sandbox_backend,
+                routes={"/skills/api/": db_skills_backend},
+            )
+        else:
+            backend = sandbox_backend
     else:
         backend = sandbox_backend
 
-    if subagents is not None:
-        raw_subagents = list(subagents)
+    if params.subagents is not None:
+        raw_subagents = list(params.subagents)
     else:
-        if reg:
-            defaults = await reg.get_global_agent_defaults(scope)
-            raw_subagents = list(defaults.subagents)
-        else:
-            raw_subagents = []
+        defaults = await _defaults()
+        raw_subagents = list(defaults.subagents) if defaults else []
 
-    # Normalize subagent specs: ensure required 'description' key is present
-    agent_subagents = [
-        {**s, "description": s.get("description", "")} if isinstance(s, dict) else s
-        for s in raw_subagents
-    ]
+    agent_interrupt_on: dict[str, Any]
+    agent_response_format: str | type[Any] | None = params.response_format
+    agent_tool_token_limit_before_evict = params.tool_token_limit_before_evict
 
-    if interrupt_on is not None:
-        agent_interrupt_on = dict(interrupt_on)
+    if params.interrupt_on is not None:
+        agent_interrupt_on = dict(params.interrupt_on)
     else:
-        if reg:
-            defaults = await reg.get_global_agent_defaults(scope)
+        defaults = await _defaults()
+        if defaults:
             agent_interrupt_on = dict(defaults.interrupt_on)
             if agent_response_format is None:
                 agent_response_format = defaults.response_format
@@ -489,12 +427,11 @@ async def create_cognition_agent(
         else:
             agent_interrupt_on = {}
 
-    # Resolve system prompt from ConfigRegistry
-    if system_prompt:
-        prompt = system_prompt
+    if params.system_prompt:
+        prompt = params.system_prompt
     else:
-        if reg:
-            prov_defaults = await reg.get_global_provider_defaults(scope)
+        if config_store is not None:
+            prov_defaults = await config_store.get_global_provider_defaults(params.scope)
             prompt_type = prov_defaults.system_prompt_type
             prompt_value = prov_defaults.system_prompt_value
             from server.app.models import PromptConfig
@@ -506,21 +443,16 @@ async def create_cognition_agent(
         else:
             prompt = SYSTEM_PROMPT
 
-    # Initialize middleware stack
-    agent_middleware = list(middleware) if middleware else []
-
-    # Get blocked tools from settings
+    agent_middleware = list(params.middleware) if params.middleware else []
     blocked_tools = list(settings.blocked_tools) if hasattr(settings, "blocked_tools") else []
 
-    # Initialize built-in tools
     built_in_tools = [BrowserTool(), SearchTool(), InspectPackageTool()]
-    agent_tools = list(tools) if tools else []
+    agent_tools = list(params.tools) if params.tools else []
     agent_tools.extend(built_in_tools)
 
-    # Initialize MCP tools if configurations provided
-    if mcp_configs:
+    if params.mcp_configs:
         mcp_manager = McpManager()
-        for config in mcp_configs:
+        for config in params.mcp_configs:
             if config.enabled:
                 try:
                     mcp_manager.add_server(config)
@@ -536,7 +468,6 @@ async def create_cognition_agent(
                 logger.info("Added MCP tools", server=server_name, count=len(mcp_tools))
         except Exception as e:
             logger.error("Failed to initialize MCP tools", error=str(e))
-            # Continue without MCP tools rather than failing entirely
 
     agent_middleware.extend(
         [
@@ -545,6 +476,13 @@ async def create_cognition_agent(
             ToolSecurityMiddleware(blocked_tools=blocked_tools),
         ]
     )
+
+    agent_subagents = [
+        {**s, "description": s.get("description", "")} if isinstance(s, dict) else s
+        for s in raw_subagents
+    ]
+
+    agent_subagents = _inject_subagent_middleware(agent_subagents, agent_middleware)
 
     logger.debug(
         "creating_deep_agent",
@@ -558,16 +496,15 @@ async def create_cognition_agent(
         agent_response_format
     )
 
-    # Create the agent with multi-step support
     create_kwargs = cast(
         Any,
         {
-            "model": model,
+            "model": params.model,
             "tools": agent_tools,
             "system_prompt": prompt,
             "backend": backend,
-            "checkpointer": checkpointer,
-            "store": store,
+            "checkpointer": params.checkpointer,
+            "store": params.store,
             "context_schema": CognitionContext,
             "memory": agent_memory,
             "skills": agent_skills,
@@ -583,17 +520,12 @@ async def create_cognition_agent(
     agent = cast(Any, create_deep_agent)(**create_kwargs)
 
     result = CognitionAgentResult(agent=agent, sandbox_backend=sandbox_backend)
-
-    # Cache only the compiled agent graph — it is immutable and safe to share.
-    # The sandbox backend is NOT cached because it is stateful and must be
-    # created fresh per-session (see GH-72).
-    cache_agent(cache_key, agent)
+    cache_agent(runtime_ctx, agent)
 
     return result
 
 
 def _resolve_response_format(response_format: str | type[Any] | None) -> type[Any] | None:
-    """Resolve a dotted response format path to a model class."""
     if response_format is None or isinstance(response_format, type):
         return response_format
 

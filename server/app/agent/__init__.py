@@ -5,10 +5,13 @@ Enhanced tool system and agent workflows built on top of the deepagents foundati
 
 from server.app.agent.agent_definition_registry import (
     AgentDefinitionRegistry,
-    get_agent_definition_registry,
     initialize_agent_definition_registry,
 )
-from server.app.agent.cognition_agent import CognitionAgentResult, create_cognition_agent
+from server.app.agent.cognition_agent import (
+    CognitionAgentParams,
+    CognitionAgentResult,
+    create_cognition_agent,
+)
 from server.app.agent.definition import (
     AgentConfig,
     AgentDefinition,
@@ -36,6 +39,7 @@ from server.app.agent.tools import BrowserTool, InspectPackageTool, SearchTool
 __all__ = [
     # Agent creation
     "create_cognition_agent",
+    "CognitionAgentParams",
     "CognitionAgentResult",
     "CognitionLocalSandboxBackend",
     # Tools
@@ -51,7 +55,6 @@ __all__ = [
     "create_default_agent_definition",
     # Registry
     "AgentDefinitionRegistry",
-    "get_agent_definition_registry",
     "initialize_agent_definition_registry",
     # Runtime
     "AgentRuntime",

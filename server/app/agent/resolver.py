@@ -49,7 +49,7 @@ class RuntimeResolver:
     - ``resolve_provider_config()``: Walk the provider resolution priority chain
     """
 
-    def __init__(self, config_store: ConfigStore, settings: Settings) -> None:
+    def __init__(self, config_store: ConfigStore | None, settings: Settings) -> None:
         self._store = config_store
         self._settings = settings
 
@@ -446,6 +446,281 @@ class RuntimeResolver:
                 )
 
         return ChatBedrock(**kwargs)
+
+    async def resolve_mcp_configs(self, scope: dict[str, str] | None = None) -> list[Any]:
+        """Load MCP server registrations from ConfigStore as McpServerConfig objects.
+
+        Args:
+            scope: Scope dict for ConfigStore lookup.
+
+        Returns:
+            List of McpServerConfig instances for enabled servers.
+        """
+        if self._store is None:
+            return []
+        try:
+            from server.app.agent.mcp_client import McpServerConfig
+
+            servers = await self._store.list_mcp_servers(scope)
+            return [
+                McpServerConfig(
+                    name=s.name,
+                    url=s.url,
+                    headers=s.headers,
+                    enabled=s.enabled,
+                )
+                for s in servers
+                if s.enabled
+            ]
+        except RuntimeError:
+            logger.warning("ConfigStore not initialized — MCP servers will not be available")
+            return []
+
+    async def resolve_model_for_session(
+        self,
+        session: Any,
+        scope: dict[str, str] | None = None,
+        agent_def: Any | None = None,
+    ) -> tuple[BaseChatModel, str, str, int]:
+        """Resolve provider config and build a BaseChatModel for a session.
+
+        Combines provider resolution priority chain with model building.
+
+        Args:
+            session: Session object (may be None in tests).
+            scope: Scope dict for ConfigStore lookup.
+            agent_def: Optional AgentDefinition whose config acts as an override
+                tier between GlobalProviderDefaults and SessionConfig.
+
+        Returns:
+            (model, provider_name, model_id, recursion_limit)
+
+        Raises:
+            LLMProviderConfigError: If the provider is misconfigured.
+        """
+        (
+            provider,
+            model_id,
+            api_key,
+            base_url,
+            region,
+            role_arn,
+            recursion_limit,
+            max_retries,
+            timeout,
+        ) = await self._resolve_provider_config_for_session(
+            session=session, scope=scope, agent_def=agent_def
+        )
+
+        if provider in _TEST_ONLY_PROVIDERS:
+            raise LLMProviderConfigError(
+                provider=provider,
+                reason=(
+                    f"Provider '{provider}' is reserved for testing and cannot be used in "
+                    "production. Configure a real provider via POST /models/providers."
+                ),
+            )
+
+        temperature: float | None = None
+        if agent_def and agent_def.config and agent_def.config.temperature is not None:
+            temperature = agent_def.config.temperature
+
+        max_tokens: int | None = None
+        if agent_def and agent_def.config and agent_def.config.max_tokens is not None:
+            max_tokens = agent_def.config.max_tokens
+
+        model = self.build_model(
+            provider=provider,
+            model_id=model_id,
+            api_key=api_key,
+            base_url=base_url,
+            region=region,
+            role_arn=role_arn,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            max_retries=max_retries,
+            timeout=timeout,
+        )
+
+        await self._warn_if_no_tool_call_support(provider, model_id)
+
+        return model, provider, model_id, recursion_limit
+
+    async def _resolve_provider_config_for_session(
+        self,
+        session: Any,
+        scope: dict[str, str] | None,
+        agent_def: Any | None = None,
+    ) -> tuple[
+        str, str, str | None, str | None, str | None, str | None, int, int | None, int | None
+    ]:
+        """Resolve provider configuration for a session with full priority chain.
+
+        Priority (highest to lowest):
+        1. session.config.provider_id — looks up exact ProviderConfig by ID
+        2. session.config.provider + session.config.model — direct override
+        3. agent_def.config.provider + agent_def.config.model — per-agent override
+        4. First enabled ProviderConfig from ConfigStore (global default)
+
+        Returns:
+            (provider, model_id, api_key, base_url, region, role_arn,
+             recursion_limit, max_retries, timeout)
+
+        Raises:
+            LLMProviderConfigError: If no provider can be resolved.
+        """
+        recursion_limit = 1000
+        if agent_def and agent_def.config and agent_def.config.recursion_limit is not None:
+            recursion_limit = agent_def.config.recursion_limit
+        if session and session.config and session.config.recursion_limit is not None:
+            recursion_limit = session.config.recursion_limit
+
+        if session and session.config and session.config.provider_id:
+            provider_id = session.config.provider_id
+            try:
+                if self._store is None:
+                    raise LLMProviderConfigError(
+                        provider=provider_id,
+                        reason="ConfigStore not initialized — cannot resolve provider_id.",
+                    )
+                provider_config = await self._store.get_provider(provider_id, scope=scope)
+                if provider_config is None:
+                    raise LLMProviderConfigError(
+                        provider=provider_id,
+                        reason=(
+                            f"Provider config '{provider_id}' not found in ConfigStore. "
+                            "Check that the provider_id matches an existing provider config ID."
+                        ),
+                    )
+                if not provider_config.enabled:
+                    raise LLMProviderConfigError(
+                        provider=provider_id,
+                        reason=(
+                            f"Provider config '{provider_id}' is disabled. "
+                            "Enable it via PATCH /models/providers/{id} or choose another."
+                        ),
+                    )
+                api_key = (
+                    os.environ.get(provider_config.api_key_env)
+                    if provider_config.api_key_env
+                    else None
+                )
+                logger.debug(
+                    "Provider resolved from session provider_id",
+                    provider_id=provider_id,
+                    provider=provider_config.provider,
+                    model=provider_config.model,
+                )
+                return (
+                    provider_config.provider,
+                    provider_config.model,
+                    api_key,
+                    provider_config.base_url,
+                    provider_config.region,
+                    provider_config.role_arn,
+                    recursion_limit,
+                    provider_config.max_retries,
+                    provider_config.timeout,
+                )
+            except RuntimeError as exc:
+                raise LLMProviderConfigError(
+                    provider=provider_id,
+                    reason="ConfigStore not initialized — cannot resolve provider_id.",
+                ) from exc
+
+        if session and session.config and session.config.provider:
+            prov = session.config.provider
+            mod = session.config.model
+            if not mod:
+                raise LLMProviderConfigError(
+                    provider=prov,
+                    reason=(
+                        "Session config specifies provider but no model. "
+                        "Set SessionConfig.model alongside SessionConfig.provider."
+                    ),
+                )
+            logger.debug(
+                "Using session-level provider override",
+                provider=prov,
+                model=mod,
+            )
+            return prov, mod, None, None, None, None, recursion_limit, None, None
+
+        try:
+            provider_configs: list[Any] = []
+            if self._store is not None:
+                provider_configs = await self._store.list_providers(scope=scope)
+
+            enabled = [pc for pc in provider_configs if pc.enabled]
+            if enabled:
+                enabled.sort(key=lambda pc: pc.priority)
+                chosen = enabled[0]
+                api_key = os.environ.get(chosen.api_key_env) if chosen.api_key_env else None
+
+                resolved_provider = chosen.provider
+                resolved_model = chosen.model
+                if agent_def and agent_def.config:
+                    if agent_def.config.provider:
+                        resolved_provider = agent_def.config.provider
+                    if agent_def.config.model:
+                        resolved_model = agent_def.config.model
+                    if resolved_provider != chosen.provider or resolved_model != chosen.model:
+                        logger.debug(
+                            "Provider/model overridden by agent_def.config",
+                            agent=getattr(agent_def, "name", "unknown"),
+                            base_provider=chosen.provider,
+                            base_model=chosen.model,
+                            override_provider=resolved_provider,
+                            override_model=resolved_model,
+                        )
+
+                    logger.debug(
+                        "Provider resolved from ConfigStore",
+                        provider=resolved_provider,
+                        model=resolved_model,
+                        id=chosen.id,
+                    )
+                return (
+                    resolved_provider,
+                    resolved_model,
+                    api_key,
+                    chosen.base_url,
+                    chosen.region,
+                    chosen.role_arn,
+                    recursion_limit,
+                    chosen.max_retries,
+                    chosen.timeout,
+                )
+        except RuntimeError:
+            logger.warning("ConfigStore not initialized — cannot resolve provider configuration")
+
+        raise LLMProviderConfigError(
+            provider="none",
+            reason=(
+                "No provider configuration found. "
+                "Create a provider via POST /models/providers. "
+                "Providers with an empty scope are visible to all users."
+            ),
+        )
+
+    async def _warn_if_no_tool_call_support(self, provider: str, model_id: str) -> None:
+        """Log a warning if the model catalog says this model lacks tool call support."""
+        try:
+            from server.app.llm.model_catalog import get_model_catalog
+
+            catalog = get_model_catalog()
+            if catalog is not None:
+                entry = await catalog.find_model(provider, model_id)
+            if entry is not None and not entry.tool_call:
+                logger.warning(
+                    "Model does not support tool calls — agent may fail or produce "
+                    "unexpected results. Consider switching to a tool-capable model.",
+                    model=model_id,
+                    provider=provider,
+                    model_family=entry.family,
+                )
+        except Exception:
+            pass
 
     @staticmethod
     def _provider_to_dict(p: Any) -> dict[str, Any]:

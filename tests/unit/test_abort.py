@@ -43,7 +43,7 @@ class TestAbortFunctionality:
     @pytest.mark.asyncio
     async def test_abort_ignored_cancels_streaming_task(self):
         """Test that abort cancels the active streaming task."""
-        with patch("server.app.api.routes.sessions.get_session_agent_manager") as mock_get_manager:
+        with patch("server.app.api.dependencies.get_session_agent_manager_dep") as mock_get_manager:
             # Create mock agent manager
             mock_manager = MagicMock(spec=SessionAgentManager)
             mock_manager.unregister_session = MagicMock()

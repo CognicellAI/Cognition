@@ -2,17 +2,18 @@
 
 Skills are Markdown files that inject domain-specific instructions into an
 agent's context window via progressive disclosure. They are stored in the
-ConfigRegistry and loaded by the agent at runtime.
+ConfigStore and loaded by the agent at runtime.
 """
 
 from __future__ import annotations
 
-import structlog
-from fastapi import APIRouter, Depends, Header, HTTPException
+from typing import Any
 
-from server.app.api.dependencies import get_config_store
+import structlog
+from fastapi import APIRouter, Depends, HTTPException
+
+from server.app.api.dependencies import get_config_store, get_scope_headers_dep
 from server.app.api.models import SkillCreate, SkillList, SkillResponse, SkillUpdate
-from server.app.storage.config_models import SkillDefinition
 from server.app.storage.config_store import ConfigStore
 
 router = APIRouter(prefix="/skills", tags=["skills"])
@@ -20,7 +21,7 @@ router = APIRouter(prefix="/skills", tags=["skills"])
 logger = structlog.get_logger(__name__)
 
 
-def _to_response(skill: SkillDefinition) -> SkillResponse:
+def _to_response(skill: Any) -> SkillResponse:
     return SkillResponse(
         name=skill.name,
         path=skill.path,
@@ -32,26 +33,13 @@ def _to_response(skill: SkillDefinition) -> SkillResponse:
     )
 
 
-def _scope_from_headers(
-    user: str | None = Header(None, alias="x-cognition-scope-user"),
-    project: str | None = Header(None, alias="x-cognition-scope-project"),
-) -> dict[str, str] | None:
-    """Extract optional scope dict from request headers."""
-    scope: dict[str, str] = {}
-    if user:
-        scope["user"] = user
-    if project:
-        scope["project"] = project
-    return scope if scope else None
-
-
 def _get_store(config_store: ConfigStore = Depends(get_config_store)) -> ConfigStore:  # noqa: B008
     return config_store
 
 
 @router.get("", response_model=SkillList)
 async def list_skills(
-    scope: dict[str, str] | None = Depends(_scope_from_headers),  # noqa: B008
+    scope: dict[str, str] | None = Depends(get_scope_headers_dep),  # noqa: B008
     config_store: ConfigStore = Depends(get_config_store),  # noqa: B008
 ) -> SkillList:
     """List all registered skills visible in the given scope."""
@@ -62,7 +50,7 @@ async def list_skills(
 @router.get("/{name}", response_model=SkillResponse)
 async def get_skill(
     name: str,
-    scope: dict[str, str] | None = Depends(_scope_from_headers),  # noqa: B008
+    scope: dict[str, str] | None = Depends(get_scope_headers_dep),  # noqa: B008
     config_store: ConfigStore = Depends(get_config_store),  # noqa: B008
 ) -> SkillResponse:
     """Get a skill by name."""
@@ -75,7 +63,7 @@ async def get_skill(
 @router.post("", response_model=SkillResponse, status_code=201)
 async def create_skill(
     body: SkillCreate,
-    scope: dict[str, str] | None = Depends(_scope_from_headers),  # noqa: B008
+    scope: dict[str, str] | None = Depends(get_scope_headers_dep),  # noqa: B008
     config_store: ConfigStore = Depends(get_config_store),  # noqa: B008
 ) -> SkillResponse:
     """Create or replace a skill in the ConfigStore."""
@@ -89,17 +77,21 @@ async def create_skill(
     else:
         raise HTTPException(status_code=400, detail="path is required when content is not provided")
 
-    skill = SkillDefinition(
-        name=body.name,
-        path=skill_path,
-        enabled=body.enabled,
-        description=body.description,
-        content=body.content,
-        scope=effective_scope,
-        source="api",
-    )
-    await config_store.upsert_skill(skill)
-    logger.info("skill_created", name=skill.name, scope=effective_scope, enabled=skill.enabled)
+    skill_data: dict[str, Any] = {
+        "name": body.name,
+        "path": skill_path,
+        "enabled": body.enabled,
+        "description": body.description,
+        "content": body.content,
+        "scope": effective_scope,
+        "source": "api",
+    }
+    await config_store.upsert_skill_from_dict(skill_data)
+    logger.info("skill_created", name=body.name, scope=effective_scope, enabled=body.enabled)
+
+    skill = await config_store.get_skill(body.name, scope=effective_scope)
+    if skill is None:
+        raise HTTPException(status_code=500, detail="Skill not found after creation")
     return _to_response(skill)
 
 
@@ -107,7 +99,7 @@ async def create_skill(
 async def replace_skill(
     name: str,
     body: SkillCreate,
-    scope: dict[str, str] | None = Depends(_scope_from_headers),  # noqa: B008
+    scope: dict[str, str] | None = Depends(get_scope_headers_dep),  # noqa: B008
     config_store: ConfigStore = Depends(get_config_store),  # noqa: B008
 ) -> SkillResponse:
     """Replace a skill definition (full update)."""
@@ -119,7 +111,7 @@ async def replace_skill(
 async def update_skill(
     name: str,
     body: SkillUpdate,
-    scope: dict[str, str] | None = Depends(_scope_from_headers),  # noqa: B008
+    scope: dict[str, str] | None = Depends(get_scope_headers_dep),  # noqa: B008
     config_store: ConfigStore = Depends(get_config_store),  # noqa: B008
 ) -> SkillResponse:
     """Partially update a skill definition."""
@@ -141,7 +133,7 @@ async def update_skill(
 @router.delete("/{name}", status_code=204)
 async def delete_skill(
     name: str,
-    scope: dict[str, str] | None = Depends(_scope_from_headers),  # noqa: B008
+    scope: dict[str, str] | None = Depends(get_scope_headers_dep),  # noqa: B008
     config_store: ConfigStore = Depends(get_config_store),  # noqa: B008
 ) -> None:
     """Delete a skill from the ConfigStore."""

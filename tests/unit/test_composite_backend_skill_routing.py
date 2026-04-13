@@ -6,6 +6,9 @@ from server.app.agent.sandbox_backend import CognitionLocalSandboxBackend
 
 
 class StubSkillBackend:
+    def ls(self, path: str):
+        return [{"path": "/demo/", "is_dir": True, "size": 0, "modified_at": ""}]
+
     def ls_info(self, path: str):
         return [{"path": "/demo/", "is_dir": True, "size": 0, "modified_at": ""}]
 

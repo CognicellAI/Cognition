@@ -1,9 +1,8 @@
 """Provider bootstrap from config.yaml.
 
-Seeds ``ProviderConfig`` entries into the ConfigRegistry on startup
-from the ``llm:`` section of ``.cognition/config.yaml``.  Uses
-``seed_if_absent`` semantics: YAML provides defaults, API rows always
-win.
+Seeds ``ProviderConfig`` entries into the ConfigStore on startup from the
+``llm:`` section of ``.cognition/config.yaml``. Uses ``seed_if_absent``
+semantics: YAML provides defaults, API rows always win.
 
 Architecture: Layer 1 (Foundation) — startup-only, runs once during
 the ``main.py`` lifespan before the server begins accepting requests.
@@ -44,6 +43,7 @@ def _infer_api_key_env(provider_type: str) -> str | None:
 
 async def seed_providers_from_config(
     config: dict[str, Any],
+    config_store: Any,
 ) -> bool:
     """Seed a ProviderConfig from the ``llm:`` section of config.yaml.
 
@@ -54,6 +54,7 @@ async def seed_providers_from_config(
 
     Args:
         config: The merged YAML config dict from ``load_config()``.
+        config_store: Unified config persistence interface.
 
     Returns:
         True if a provider was seeded, False if skipped (already exists,
@@ -107,10 +108,7 @@ async def seed_providers_from_config(
         definition["role_arn"] = role_arn
 
     try:
-        from server.app.storage.config_registry import get_config_registry
-
-        registry = get_config_registry()
-        inserted = await registry.seed_if_absent(
+        inserted = await config_store.seed_if_absent(
             entity_type="provider",
             name="default",
             scope={},
