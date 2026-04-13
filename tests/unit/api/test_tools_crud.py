@@ -9,11 +9,8 @@ import pytest
 from fastapi.testclient import TestClient
 
 from server.app.agent.agent_definition_registry import initialize_agent_definition_registry
-from server.app.agent_registry import initialize_agent_registry
-from server.app.api.dependencies import set_agent_registry_dep, set_config_store
+from server.app.api.dependencies import set_config_store
 from server.app.main import app
-from server.app.session_manager import initialize_session_manager
-from server.app.storage import set_storage_backend
 from server.app.storage.config_store import DefaultConfigStore
 from server.app.storage.sqlite import SqliteStorageBackend
 
@@ -23,7 +20,7 @@ client = TestClient(app)
 @pytest.fixture(scope="module", autouse=True)
 def setup_registry(tmp_path_factory):
     tmpdir = tmp_path_factory.mktemp("workspace")
-    from server.app.storage.config_registry import MemoryConfigRegistry, set_config_registry
+    from server.app.storage.config_registry import MemoryConfigRegistry
 
     with tempfile.TemporaryDirectory() as db_tmpdir:
         storage = SqliteStorageBackend(
@@ -34,20 +31,14 @@ def setup_registry(tmp_path_factory):
 
         loop = asyncio.new_event_loop()
         loop.run_until_complete(storage.initialize())
-        set_storage_backend(storage)
 
         def_registry = initialize_agent_definition_registry(Path(tmpdir))
         config_registry = MemoryConfigRegistry()
-        set_config_registry(config_registry)
         config_store = DefaultConfigStore(
             config_registry=config_registry,
             agent_definition_registry=def_registry,
         )
         set_config_store(config_store)
-
-        initialize_session_manager(storage, None)
-        registry = initialize_agent_registry(settings=None)
-        set_agent_registry_dep(registry)
         yield
 
         loop.run_until_complete(storage.close())
@@ -117,13 +108,3 @@ class TestUpdateTool:
         response = client.patch("/tools/test-tool-patch", json={"interrupt_on": True})
         assert response.status_code == 200
         assert response.json()["interrupt_on"] is True
-
-
-class TestReloadTools:
-    def test_reload_endpoint_returns_200(self):
-        response = client.post("/tools/reload")
-        assert response.status_code == 200
-
-    def test_errors_endpoint_returns_200(self):
-        response = client.get("/tools/errors")
-        assert response.status_code == 200
