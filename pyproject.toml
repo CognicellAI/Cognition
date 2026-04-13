@@ -1,6 +1,6 @@
 [project]
 name = "cognition"
-version = "0.6.2"
+dynamic = ["version"]
 description = "Local AI coding assistant built on LangGraph Deep Agents"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -115,6 +115,9 @@ langchain-k8s-sandbox = { workspace = true }
 
 [tool.hatch.build.targets.wheel]
 packages = ["server", "client", "shared", "packages"]
+
+[tool.hatch.version]
+path = "server/version.py"
 
 [tool.ruff]
 target-version = "py311"

@@ -7,6 +7,55 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [0.8.0] — 2026-04-13
+
+### Highlights
+
+- Completed the architecture-deepening cleanup train, substantially simplifying Cognition's configuration, runtime, and storage architecture.
+
+### Architecture and Runtime
+
+- Completed the architecture-deepening RFC and follow-up cleanup train.
+- Unified scoping across API routes.
+- Removed dead `ConfigRegistry` globals.
+- Collapsed agent definition management into `DefaultConfigStore`.
+- Removed the `AgentRegistry` runtime.
+- Simplified runtime resolution and removed deprecated streaming shims.
+- Deduplicated shared storage backend logic across memory, SQLite, and PostgreSQL backends.
+
+### Dependencies
+
+- Refreshed core runtime and framework dependencies, including Deep Agents, FastAPI, Starlette, LangGraph, LangChain, OpenAI, Typer, Rich, Uvicorn, and WebSockets.
+- Updated the lockfile and aligned runtime/test seams with the refreshed dependency set.
+
+### Documentation and Examples
+
+- Added a new `examples/` directory.
+- Added an exhaustive `.cognition` reference example.
+- Added focused examples for minimal, Bedrock, and scoped multi-tenant setups.
+- Added sample API payloads for API-managed configuration entities.
+
+### Merged PRs
+
+- `#85` Complete architecture-deepening RFC and refresh core dependencies
+- `#86` refactor: unify scoping API across all routes
+- `#87` refactor: remove dead config registry globals
+- `#88` refactor: collapse agent definition registry into config store
+- `#89` refactor: remove agent registry runtime
+- `#90` refactor: simplify runtime resolution and remove streaming shims
+- `#91` refactor: deduplicate shared storage backend logic and add config examples
+- `#97` docs: add exhaustive configuration examples
+
+### Deferred Follow-up RFCs
+
+Remaining optional architectural follow-ups were captured as issues:
+
+- `#92` extract message send/resume workflow from API routes
+- `#93` extract runtime execution plan from `DeepAgentStreamingService`
+- `#94` separate unit and e2e fixture wiring
+- `#95` remove legacy provider tuple compatibility from `RuntimeResolver`
+- `#96` replace `api.dependencies` globals with a single DI strategy
+
 ## [0.7.0] — 2026-04-11
 
 ### Features
