@@ -86,14 +86,14 @@ class TestLoadCodeTools:
                 return f"Hello, {name}!"
         """)
 
-        mock_reg = MagicMock()
-        mock_reg.list_tools = AsyncMock(
+        mock_store = MagicMock()
+        mock_store.list_tools = AsyncMock(
             return_value=[ToolRegistration(name="say-hello", code=code, enabled=True)]
         )
 
         with patch(
-            "server.app.storage.config_registry.get_config_registry",
-            return_value=mock_reg,
+            "server.app.api.dependencies.get_config_store",
+            return_value=mock_store,
         ):
             tools = await _load_config_registry_tools(scope=None)
 
@@ -121,14 +121,14 @@ class TestLoadCodeTools:
                 return x
         """)
 
-        mock_reg = MagicMock()
-        mock_reg.list_tools = AsyncMock(
+        mock_store = MagicMock()
+        mock_store.list_tools = AsyncMock(
             return_value=[ToolRegistration(name="multi-tools", code=code, enabled=True)]
         )
 
         with patch(
-            "server.app.storage.config_registry.get_config_registry",
-            return_value=mock_reg,
+            "server.app.api.dependencies.get_config_store",
+            return_value=mock_store,
         ):
             tools = await _load_config_registry_tools(scope=None)
 
@@ -151,14 +151,14 @@ class TestLoadCodeTools:
                 return x
         """)
 
-        mock_reg = MagicMock()
-        mock_reg.list_tools = AsyncMock(
+        mock_store = MagicMock()
+        mock_store.list_tools = AsyncMock(
             return_value=[ToolRegistration(name="disabled", code=code, enabled=False)]
         )
 
         with patch(
-            "server.app.storage.config_registry.get_config_registry",
-            return_value=mock_reg,
+            "server.app.api.dependencies.get_config_store",
+            return_value=mock_store,
         ):
             tools = await _load_config_registry_tools(scope=None)
 
@@ -170,8 +170,8 @@ class TestLoadCodeTools:
         from server.app.llm.deep_agent_service import _load_config_registry_tools
         from server.app.storage.config_models import ToolRegistration
 
-        mock_reg = MagicMock()
-        mock_reg.list_tools = AsyncMock(
+        mock_store = MagicMock()
+        mock_store.list_tools = AsyncMock(
             return_value=[
                 ToolRegistration(
                     name="bad-tool",
@@ -182,8 +182,8 @@ class TestLoadCodeTools:
         )
 
         with patch(
-            "server.app.storage.config_registry.get_config_registry",
-            return_value=mock_reg,
+            "server.app.api.dependencies.get_config_store",
+            return_value=mock_store,
         ):
             tools = await _load_config_registry_tools(scope=None)
 
@@ -205,8 +205,8 @@ class TestLoadCodeTools:
                 return x
         """)
 
-        mock_reg = MagicMock()
-        mock_reg.list_tools = AsyncMock(
+        mock_store = MagicMock()
+        mock_store.list_tools = AsyncMock(
             return_value=[
                 ToolRegistration(name="bad-tool", code="def broken(:", enabled=True),
                 ToolRegistration(name="good-tool", code=good_code, enabled=True),
@@ -214,8 +214,8 @@ class TestLoadCodeTools:
         )
 
         with patch(
-            "server.app.storage.config_registry.get_config_registry",
-            return_value=mock_reg,
+            "server.app.api.dependencies.get_config_store",
+            return_value=mock_store,
         ):
             tools = await _load_config_registry_tools(scope=None)
 
@@ -228,7 +228,7 @@ class TestLoadCodeTools:
         from server.app.llm.deep_agent_service import _load_config_registry_tools
 
         with patch(
-            "server.app.storage.config_registry.get_config_registry",
+            "server.app.api.dependencies.get_config_store",
             side_effect=RuntimeError("not initialized"),
         ):
             tools = await _load_config_registry_tools(scope=None)
@@ -260,15 +260,15 @@ class TestLoadPathTools:
         fake_module = types.ModuleType("mypackage.tools")
         fake_module.path_loaded_tool = path_loaded_tool  # type: ignore[attr-defined]
 
-        mock_reg = MagicMock()
-        mock_reg.list_tools = AsyncMock(
+        mock_store = MagicMock()
+        mock_store.list_tools = AsyncMock(
             return_value=[ToolRegistration(name="path-tool", path="mypackage.tools", enabled=True)]
         )
 
         with (
             patch(
-                "server.app.storage.config_registry.get_config_registry",
-                return_value=mock_reg,
+                "server.app.api.dependencies.get_config_store",
+                return_value=mock_store,
             ),
             patch("importlib.import_module", return_value=fake_module),
         ):
@@ -283,16 +283,16 @@ class TestLoadPathTools:
         from server.app.llm.deep_agent_service import _load_config_registry_tools
         from server.app.storage.config_models import ToolRegistration
 
-        mock_reg = MagicMock()
-        mock_reg.list_tools = AsyncMock(
+        mock_store = MagicMock()
+        mock_store.list_tools = AsyncMock(
             return_value=[
                 ToolRegistration(name="missing-module", path="nonexistent.module", enabled=True)
             ]
         )
 
         with patch(
-            "server.app.storage.config_registry.get_config_registry",
-            return_value=mock_reg,
+            "server.app.api.dependencies.get_config_store",
+            return_value=mock_store,
         ):
             tools = await _load_config_registry_tools(scope=None)
 

@@ -23,9 +23,17 @@ def _find_free_port() -> int:
 async def server():
     """Start the Cognition server for E2E tests.
 
-    Spins up a uvicorn process on a random free port, waits for /ready,
-    yields the base URL, then tears down.
+    If COGNITION_E2E_URL is set, use that server directly (e.g. a
+    docker-compose instance) instead of starting a local uvicorn process.
+
+    Otherwise, spins up a uvicorn process on a random free port, waits
+    for /ready, yields the base URL, then tears down.
     """
+    existing = os.environ.get("COGNITION_E2E_URL")
+    if existing:
+        yield existing.rstrip("/")
+        return
+
     port = _find_free_port()
     metrics_port = _find_free_port()
 

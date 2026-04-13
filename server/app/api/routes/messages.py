@@ -24,6 +24,13 @@ import structlog
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import StreamingResponse
 
+from server.app.api.dependencies import (
+    get_rate_limiter_dep,
+    get_scope_dep,
+    get_session_agent_manager_dep,
+    get_settings_dep,
+    get_storage_backend_dep,
+)
 from server.app.api.models import (
     ErrorResponse,
     MessageCreate,
@@ -31,7 +38,7 @@ from server.app.api.models import (
     MessageResponse,
     ToolCallResponse,
 )
-from server.app.api.scoping import SessionScope, create_scope_dependency
+from server.app.api.scoping import SessionScope
 from server.app.api.sse import EventBuilder, SSEStream, get_last_event_id
 from server.app.llm.deep_agent_service import (
     DelegationEvent,
@@ -46,25 +53,14 @@ from server.app.llm.deep_agent_service import (
     ToolCallEvent,
     ToolResultEvent,
     UsageEvent,
-    get_session_agent_manager,
 )
 from server.app.models import SessionStatus
-from server.app.rate_limiter import RateLimiter, get_rate_limiter
-from server.app.settings import Settings, get_settings
-from server.app.storage import get_storage_backend
+from server.app.rate_limiter import RateLimiter
+from server.app.settings import Settings
+from server.app.storage.backend import StorageBackend
 
 router = APIRouter(prefix="/sessions/{session_id}/messages", tags=["messages"])
 logger = structlog.get_logger(__name__)
-
-
-def get_settings_dependency() -> Settings:
-    """Get settings dependency."""
-    return get_settings()
-
-
-def get_agent_manager(settings: Settings = Depends(get_settings_dependency)) -> SessionAgentManager:  # noqa: B008
-    """Get the session agent manager."""
-    return get_session_agent_manager(settings)
 
 
 async def agent_event_stream(
@@ -74,6 +70,7 @@ async def agent_event_stream(
     workspace_path: str,
     settings: Settings,
     agent_manager: SessionAgentManager,
+    store: StorageBackend,
     scope: dict[str, str] | None = None,
 ) -> AsyncGenerator[dict, None]:
     """Generate agent events as SSE using DeepAgents.
@@ -105,12 +102,8 @@ async def agent_event_stream(
         service = agent_manager.get_service(session_id)
 
         if not service:
-            # Session not registered with agent manager yet
-            # Register with workspace path
             service = agent_manager.register_session(session_id, workspace_path)
 
-        # Get session from store
-        store = get_storage_backend()
         session = await store.get_session(session_id)
 
         if not session:
@@ -276,10 +269,11 @@ async def send_message(
     session_id: str,
     request: MessageCreate,
     http_request: Request,
-    settings: Settings = Depends(get_settings_dependency),  # noqa: B008
-    agent_manager: SessionAgentManager = Depends(get_agent_manager),  # noqa: B008
-    rate_limiter: RateLimiter = Depends(lambda: get_rate_limiter()),  # noqa: B008
-    scope: SessionScope = Depends(create_scope_dependency(get_settings())),  # noqa: B008
+    settings: Settings = Depends(get_settings_dep),  # noqa: B008
+    agent_manager: SessionAgentManager = Depends(get_session_agent_manager_dep),  # noqa: B008
+    store: StorageBackend = Depends(get_storage_backend_dep),  # noqa: B008
+    rate_limiter: RateLimiter = Depends(get_rate_limiter_dep),  # noqa: B008
+    scope: SessionScope = Depends(get_scope_dep),  # noqa: B008
 ) -> StreamingResponse:
     """Send a message to the agent.
 
@@ -305,8 +299,6 @@ async def send_message(
 
     await rate_limiter.check_rate_limit(rate_limit_key)
 
-    # Check if session exists using the store
-    store = get_storage_backend()
     session = await store.get_session(session_id)
 
     if session is None:
@@ -332,9 +324,7 @@ async def send_message(
         # Store thread_id on session for persistence
         session.thread_id = thread_id
 
-    # Create user message
-    message_store = get_storage_backend()
-    user_message = await message_store.create_message(
+    user_message = await store.create_message(
         message_id=str(uuid.uuid4()),
         session_id=session_id,
         role="user",
@@ -342,13 +332,9 @@ async def send_message(
         parent_id=request.parent_id,
     )
 
-    # Update session message count in store
-    messages_for_session, _ = await message_store.get_messages_by_session(
-        session_id, limit=-1, offset=0
-    )
+    messages_for_session, _ = await store.get_messages_by_session(session_id, limit=-1, offset=0)
     await store.update_message_count(session_id, len(messages_for_session))
 
-    # Create SSE stream with DeepAgents (multi-step support)
     event_stream = agent_event_stream(
         session_id,
         thread_id,
@@ -356,6 +342,7 @@ async def send_message(
         workspace_path,
         settings,
         agent_manager,
+        store=store,
         scope=scope.get_all() if not scope.is_empty() else None,
     )
 
@@ -390,9 +377,8 @@ async def send_message(
                         for tc in assistant_data["tool_calls"]
                     ]
 
-                # ISSUE-019: Use message_id from done event if available, else generate new one
                 persist_message_id = message_id or str(uuid.uuid4())
-                await message_store.create_message(
+                await store.create_message(
                     message_id=persist_message_id,
                     session_id=session_id,
                     role="assistant",
@@ -404,8 +390,7 @@ async def send_message(
                     metadata=assistant_data.get("metadata"),
                 )
 
-                # Update session message count
-                messages_for_session, _ = await message_store.get_messages_by_session(
+                messages_for_session, _ = await store.get_messages_by_session(
                     session_id, limit=-1, offset=0
                 )
                 await store.update_message_count(session_id, len(messages_for_session))
@@ -451,8 +436,9 @@ async def send_message(
 )
 async def list_messages(
     session_id: str,
-    settings: Settings = Depends(get_settings_dependency),  # noqa: B008
-    scope: SessionScope = Depends(create_scope_dependency(get_settings())),  # noqa: B008
+    settings: Settings = Depends(get_settings_dep),  # noqa: B008
+    store: StorageBackend = Depends(get_storage_backend_dep),  # noqa: B008
+    scope: SessionScope = Depends(get_scope_dep),  # noqa: B008
     limit: int = 50,
     offset: int = 0,
 ) -> MessageList:
@@ -462,8 +448,6 @@ async def list_messages(
     """
     _ = str(settings.workspace_path)
 
-    # Check if session exists and scope matches
-    store = get_storage_backend()
     session = await store.get_session(session_id)
     if session is None:
         raise HTTPException(
@@ -478,9 +462,7 @@ async def list_messages(
             detail=f"Session not found: {session_id}",
         )
 
-    # Get messages for this session from database
-    message_store = get_storage_backend()
-    messages, total = await message_store.get_messages_by_session(session_id, limit, offset)
+    messages, total = await store.get_messages_by_session(session_id, limit, offset)
 
     # Convert domain models to API models
     paginated = [
@@ -523,8 +505,9 @@ async def list_messages(
 async def get_message(
     session_id: str,
     message_id: str,
-    settings: Settings = Depends(get_settings_dependency),  # noqa: B008
-    scope: SessionScope = Depends(create_scope_dependency(get_settings())),  # noqa: B008
+    settings: Settings = Depends(get_settings_dep),  # noqa: B008
+    store: StorageBackend = Depends(get_storage_backend_dep),  # noqa: B008
+    scope: SessionScope = Depends(get_scope_dep),  # noqa: B008
 ) -> MessageResponse:
     """Get a specific message.
 
@@ -532,8 +515,6 @@ async def get_message(
     """
     _ = str(settings.workspace_path)
 
-    # Check if session exists and scope matches
-    store = get_storage_backend()
     session = await store.get_session(session_id)
     if session is None:
         raise HTTPException(
@@ -548,9 +529,7 @@ async def get_message(
             detail=f"Session not found: {session_id}",
         )
 
-    # Find message
-    message_store = get_storage_backend()
-    message = await message_store.get_message(message_id)
+    message = await store.get_message(message_id)
 
     if message and message.session_id == session_id:
         return MessageResponse(

@@ -5,28 +5,41 @@ from pathlib import Path
 
 import pytest
 
-from server.app.settings import Settings
-from server.app.storage import set_storage_backend
+from server.app.settings import Settings, get_settings
 from server.app.storage.sqlite import SqliteStorageBackend
 
 
 @pytest.fixture(autouse=True)
 async def setup_storage_backend():
-    """Automatically set up storage backend for all tests."""
+    """Automatically set up storage backend and DI providers for all tests."""
+    from server.app.agent.agent_definition_registry import AgentDefinitionRegistry
+    from server.app.api.dependencies import (
+        set_config_store,
+        set_session_agent_manager_dep,
+        set_storage_backend_dep,
+    )
+    from server.app.llm.deep_agent_service import SessionAgentManager
+    from server.app.storage.config_registry import MemoryConfigRegistry
+    from server.app.storage.config_store import DefaultConfigStore
+
     with tempfile.TemporaryDirectory() as tmpdir:
-        # Create and initialize storage backend
         storage = SqliteStorageBackend(
             connection_string=f"{tmpdir}/test.db",
             workspace_path=tmpdir,
         )
         await storage.initialize()
 
-        # Set as global storage backend
-        set_storage_backend(storage)
+        set_storage_backend_dep(storage)
+
+        settings = get_settings()
+        set_session_agent_manager_dep(SessionAgentManager(settings))
+
+        config_reg = MemoryConfigRegistry()
+        agent_def_reg = AgentDefinitionRegistry()
+        set_config_store(DefaultConfigStore(config_reg, agent_def_reg))
 
         yield storage
 
-        # Cleanup
         await storage.close()
 
 

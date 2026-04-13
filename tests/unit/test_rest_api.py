@@ -21,9 +21,15 @@ def setup_agent_registry():
     import tempfile
     from pathlib import Path
 
+    from server.app.api.dependencies import set_model_catalog_dep
+    from server.app.llm.model_catalog import ModelCatalog
+    from server.app.settings import get_settings
+
     with tempfile.TemporaryDirectory() as tmpdir:
         # Initialize with temp workspace
         initialize_agent_definition_registry(Path(tmpdir))
+        s = get_settings()
+        set_model_catalog_dep(ModelCatalog(catalog_url=s.model_catalog_url))
         yield
 
 

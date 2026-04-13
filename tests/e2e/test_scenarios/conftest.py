@@ -5,6 +5,7 @@ This module provides shared fixtures and helper functions for all P2 scenario te
 
 from __future__ import annotations
 
+import os
 import time
 from collections.abc import AsyncGenerator
 from typing import Any
@@ -27,8 +28,9 @@ async def setup_storage_backend():
     yield None
 
 
-# Default test configuration
-BASE_URL = "http://localhost:8000"
+# Default test configuration — override with COGNITION_E2E_URL env var
+DEFAULT_BASE_URL = "http://localhost:8000"
+BASE_URL = os.environ.get("COGNITION_E2E_URL", DEFAULT_BASE_URL).rstrip("/")
 TEST_TIMEOUT = httpx.Timeout(30.0, connect=10.0)
 
 

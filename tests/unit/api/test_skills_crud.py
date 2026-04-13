@@ -6,7 +6,9 @@ import pytest
 from fastapi.testclient import TestClient
 
 from server.app.agent.agent_definition_registry import initialize_agent_definition_registry
+from server.app.api.dependencies import set_config_store
 from server.app.main import app
+from server.app.storage.config_store import DefaultConfigStore
 
 client = TestClient(app)
 
@@ -18,8 +20,14 @@ def setup_registry(tmp_path_factory):
 
     from server.app.storage.config_registry import MemoryConfigRegistry, set_config_registry
 
-    initialize_agent_definition_registry(Path(tmpdir))
-    set_config_registry(MemoryConfigRegistry())
+    def_registry = initialize_agent_definition_registry(Path(tmpdir))
+    config_registry = MemoryConfigRegistry()
+    set_config_registry(config_registry)
+    config_store = DefaultConfigStore(
+        config_registry=config_registry,
+        agent_definition_registry=def_registry,
+    )
+    set_config_store(config_store)
     yield
 
 

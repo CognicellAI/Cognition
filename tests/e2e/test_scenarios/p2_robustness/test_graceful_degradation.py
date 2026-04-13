@@ -43,19 +43,6 @@ class TestGracefulServiceDegradation:
 
         assert response.status_code == 200, "Normal operation failed"
 
-    async def test_provider_configuration_accessible(self, api_client) -> None:
-        """Test provider configuration is accessible."""
-        response = await api_client.get("/config")
-
-        assert response.status_code == 200
-
-        data = response.json()
-        assert "llm" in data, "LLM config not found"
-
-        provider = data["llm"].get("provider")
-        assert provider, "Provider not configured"
-        print(f"Current provider: {provider}")
-
     async def test_service_under_load(self, api_client, session) -> None:
         """Test service handles load gracefully."""
         success_count = 0

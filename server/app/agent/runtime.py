@@ -32,7 +32,7 @@ from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.errors import GraphInterrupt
 from langgraph.types import Command
 
-from server.app.agent.cognition_agent import create_cognition_agent
+from server.app.agent.cognition_agent import CognitionAgentParams, create_cognition_agent
 from server.app.agent.definition import AgentDefinition
 from server.app.settings import Settings, get_settings
 from server.app.storage.factory import create_storage_backend
@@ -1023,14 +1023,16 @@ async def create_agent_runtime(
 
     # Create the Deep Agent
     result = await create_cognition_agent(
-        project_path=workspace_path,
-        system_prompt=definition.system_prompt,
-        tools=tools if tools else None,
-        memory=definition.memory,
-        skills=definition.skills,
-        middleware=resolved_middleware if resolved_middleware else None,
-        checkpointer=checkpointer,
-        settings=settings,
+        CognitionAgentParams(
+            project_path=workspace_path,
+            system_prompt=definition.system_prompt,
+            tools=tools if tools else None,
+            memory=definition.memory,
+            skills=definition.skills,
+            middleware=resolved_middleware if resolved_middleware else None,
+            checkpointer=checkpointer,
+            settings=settings,
+        )
     )
 
     # Create and return the runtime

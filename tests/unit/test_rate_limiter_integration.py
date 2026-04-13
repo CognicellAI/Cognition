@@ -4,11 +4,12 @@ Tests that the rate limiter is properly wired to endpoints.
 """
 
 import asyncio
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 from fastapi.testclient import TestClient
 
+from server.app.api.dependencies import get_rate_limiter_dep, get_settings_dep
 from server.app.exceptions import RateLimitError
 from server.app.main import app
 from server.app.rate_limiter import RateLimitConfig, RateLimiter
@@ -22,13 +23,11 @@ class TestRateLimiterIntegration:
     @pytest.mark.asyncio
     async def test_rate_limit_applied_to_messages(self):
         """Test that rate limiting is applied to message creation."""
-        with patch("server.app.api.routes.messages.get_rate_limiter") as mock_get_limiter:
-            # Create mock rate limiter that always allows
-            mock_limiter = MagicMock(spec=RateLimiter)
-            mock_limiter.check_rate_limit = MagicMock(return_value=asyncio.Future())
-            mock_limiter.check_rate_limit.return_value.set_result(None)
-            mock_get_limiter.return_value = mock_limiter
-
+        mock_limiter = MagicMock(spec=RateLimiter)
+        mock_limiter.check_rate_limit = MagicMock(return_value=asyncio.Future())
+        mock_limiter.check_rate_limit.return_value.set_result(None)
+        app.dependency_overrides[get_rate_limiter_dep] = lambda: mock_limiter
+        try:
             # Create a session first
             session_resp = client.post("/sessions", json={"title": "rate-limit-test"})
             session_id = session_resp.json()["id"]
@@ -42,24 +41,24 @@ class TestRateLimiterIntegration:
 
             # Should call rate limiter
             assert mock_limiter.check_rate_limit.called
+        finally:
+            app.dependency_overrides.pop(get_rate_limiter_dep, None)
 
     @pytest.mark.asyncio
     async def test_rate_limit_exceeded_returns_429(self):
         """Test that exceeding rate limit returns 429 status."""
-        with patch("server.app.api.routes.messages.get_rate_limiter") as mock_get_limiter:
-            # Create mock rate limiter that always rejects
-            mock_limiter = MagicMock(spec=RateLimiter)
+        mock_limiter = MagicMock(spec=RateLimiter)
 
-            async def raise_rate_limit(*args, **kwargs):
-                raise RateLimitError(
-                    resource="test-client",
-                    limit=60,
-                    window=60,
-                )
+        async def raise_rate_limit(*args, **kwargs):
+            raise RateLimitError(
+                resource="test-client",
+                limit=60,
+                window=60,
+            )
 
-            mock_limiter.check_rate_limit = raise_rate_limit
-            mock_get_limiter.return_value = mock_limiter
-
+        mock_limiter.check_rate_limit = raise_rate_limit
+        app.dependency_overrides[get_rate_limiter_dep] = lambda: mock_limiter
+        try:
             # Create a session
             session_resp = client.post("/sessions", json={"title": "rate-limit-test"})
             session_id = session_resp.json()["id"]
@@ -74,25 +73,24 @@ class TestRateLimiterIntegration:
             # Should return 429
             assert response.status_code == 429
             assert "rate limit" in response.json()["detail"].lower()
+        finally:
+            app.dependency_overrides.pop(get_rate_limiter_dep, None)
 
     def test_rate_limiter_uses_scope_key(self):
         """Test that rate limiter uses scope key when scoping is enabled."""
-        with (
-            patch("server.app.api.routes.messages.get_settings") as mock_settings,
-            patch("server.app.api.routes.messages.get_rate_limiter") as mock_get_limiter,
-        ):
-            from server.app.settings import Settings
+        from server.app.settings import Settings
 
-            mock_settings.return_value = Settings(
-                scoping_enabled=True,
-                scope_keys=["user"],
-            )
+        scoped_settings = Settings(
+            scoping_enabled=True,
+            scope_keys=["user"],
+        )
+        mock_limiter = MagicMock(spec=RateLimiter)
+        mock_limiter.check_rate_limit = MagicMock(return_value=asyncio.Future())
+        mock_limiter.check_rate_limit.return_value.set_result(None)
 
-            mock_limiter = MagicMock(spec=RateLimiter)
-            mock_limiter.check_rate_limit = MagicMock(return_value=asyncio.Future())
-            mock_limiter.check_rate_limit.return_value.set_result(None)
-            mock_get_limiter.return_value = mock_limiter
-
+        app.dependency_overrides[get_rate_limiter_dep] = lambda: mock_limiter
+        app.dependency_overrides[get_settings_dep] = lambda: scoped_settings
+        try:
             # Create a session with scope header
             session_resp = client.post(
                 "/sessions",
@@ -118,6 +116,9 @@ class TestRateLimiterIntegration:
                 if call_args:
                     key = call_args[0][0]
                     assert "alice" in key or "user" in key.lower()
+        finally:
+            app.dependency_overrides.pop(get_rate_limiter_dep, None)
+            app.dependency_overrides.pop(get_settings_dep, None)
 
 
 class TestRateLimiterConfig:

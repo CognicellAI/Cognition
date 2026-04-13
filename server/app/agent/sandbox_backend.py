@@ -20,6 +20,7 @@ import structlog
 from deepagents.backends import FilesystemBackend, LocalShellBackend
 from deepagents.backends.protocol import (
     ExecuteResponse,
+    ReadResult,
     SandboxBackendProtocol,
 )
 
@@ -356,7 +357,7 @@ class CognitionKubernetesSandboxBackend(SandboxBackendProtocol):
         backend = self._get_backend()
         return backend.write(file_path, content)
 
-    def read(self, file_path: str, offset: int = 0, limit: int = 2000) -> str:
+    def read(self, file_path: str, offset: int = 0, limit: int = 2000) -> ReadResult:
         """Read file content from the sandbox.
 
         Args:
@@ -365,10 +366,10 @@ class CognitionKubernetesSandboxBackend(SandboxBackendProtocol):
             limit: Maximum number of lines to read.
 
         Returns:
-            File content as string.
+            File content wrapped in a backend ReadResult.
         """
         backend = self._get_backend()
-        result: str = backend.read(file_path, offset=offset, limit=limit)
+        result: ReadResult = backend.read(file_path, offset=offset, limit=limit)
         return result
 
     def ls_info(self, path: str) -> Any:

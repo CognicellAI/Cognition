@@ -337,8 +337,17 @@ class TestSessionManagerGlobal:
 
     def test_get_session_manager_before_init(self):
         """Test that get_session_manager raises before initialization."""
-        with pytest.raises(RuntimeError, match="Session manager not initialized"):
-            get_session_manager()
+        from server.app.session_manager import _session_manager as _current
+
+        saved = _current
+        import server.app.session_manager as sm
+
+        sm._session_manager = None
+        try:
+            with pytest.raises(RuntimeError, match="Session manager not initialized"):
+                get_session_manager()
+        finally:
+            sm._session_manager = saved
 
     @pytest.mark.asyncio
     async def test_initialize_session_manager(self, temp_storage, mock_settings):

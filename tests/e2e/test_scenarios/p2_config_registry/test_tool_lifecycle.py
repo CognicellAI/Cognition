@@ -48,7 +48,7 @@ class TestToolLifecycle:
 
         data = create_resp.json()
         assert data["name"] == name
-        assert data["source"] == "api"
+        assert data["source_type"] == "api_path"
 
         # Cleanup
         await api_client.delete(f"/tools/{name}")

@@ -7,8 +7,10 @@ from typing import Any
 import structlog
 from deepagents.backends.protocol import (
     BackendProtocol,
+    FileData,
     FileDownloadResponse,
     FileInfo,
+    ReadResult,
 )
 
 from server.app.storage.config_registry import ConfigRegistry
@@ -111,7 +113,7 @@ class ConfigRegistrySkillsBackend(BackendProtocol):
 
         return responses
 
-    def read(self, file_path: str, offset: int = 0, limit: int = 2000) -> str:
+    def read(self, file_path: str, offset: int = 0, limit: int = 2000) -> ReadResult:
         """Read SKILL.md content for progressive disclosure (sync version).
 
         Note: This backend primarily serves async workloads. Use aread() instead.
@@ -122,11 +124,11 @@ class ConfigRegistrySkillsBackend(BackendProtocol):
             limit: Maximum number of lines to read.
 
         Returns:
-            Error message directing to use async version.
+            Error result directing callers to use the async path.
         """
-        return "Error: Use aread() for ConfigRegistrySkillsBackend"
+        return ReadResult(error="Use aread() for ConfigRegistrySkillsBackend")
 
-    async def aread(self, file_path: str, offset: int = 0, limit: int = 2000) -> str:
+    async def aread(self, file_path: str, offset: int = 0, limit: int = 2000) -> ReadResult:
         """Read SKILL.md content for progressive disclosure (async version).
 
         Called when LLM uses file tools to read the full skill content
@@ -138,18 +140,18 @@ class ConfigRegistrySkillsBackend(BackendProtocol):
             limit: Maximum number of lines to read.
 
         Returns:
-            Formatted file content with line numbers, or error message.
+            Formatted file content with line numbers, or an error result.
         """
         # Reuse the same logic as adownload_files but return formatted string
         if not file_path.startswith("/") or not file_path.endswith("/SKILL.md"):
-            return f"Error: Invalid path {file_path}"
+            return ReadResult(error=f"Invalid path {file_path}")
 
         skill_name = file_path[1 : -len("/SKILL.md")]
 
         try:
             skill = await self._registry.get_skill(skill_name, scope=self._scope)
             if skill is None or not skill.enabled:
-                return f"Error: Skill not found: {skill_name}"
+                return ReadResult(error=f"Skill not found: {skill_name}")
 
             content = skill.content or ""
             lines = content.splitlines()
@@ -165,10 +167,12 @@ class ConfigRegistrySkillsBackend(BackendProtocol):
                 line_num = start + i + 1  # 1-indexed line numbers
                 formatted_lines.append(f"{line_num:6}\t{line}")
 
-            return "\n".join(formatted_lines)
+            return ReadResult(
+                file_data=FileData(content="\n".join(formatted_lines), encoding="utf-8")
+            )
 
         except Exception as e:
-            return f"Error reading skill {skill_name}: {str(e)}"
+            return ReadResult(error=f"Error reading skill {skill_name}: {str(e)}")
 
     def ls_info(self, path: str) -> list[FileInfo]:
         """Synchronous wrapper for skill directory listing.

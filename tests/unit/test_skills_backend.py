@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import pytest
+from deepagents.backends.protocol import ReadResult
 
 from server.app.agent.skills_backend import ConfigRegistrySkillsBackend
 from server.app.storage.config_models import SkillDefinition
@@ -173,6 +174,12 @@ class TestAdownloadFiles:
 class TestAread:
     """Tests for the aread method."""
 
+    @staticmethod
+    def _content(result: ReadResult) -> str:
+        assert result.error is None
+        assert result.file_data is not None
+        return result.file_data["content"]
+
     async def test_reads_skill_content_with_line_numbers(self, registry, backend):
         """Should return content with line numbers."""
         content = "Line 1\nLine 2\nLine 3"
@@ -185,7 +192,7 @@ class TestAread:
         await registry.upsert_skill(skill)
 
         result = await backend.aread("/test-skill/SKILL.md")
-        lines = result.split("\n")
+        lines = self._content(result).split("\n")
         assert len(lines) == 3
         assert lines[0].endswith("\tLine 1")
         assert lines[1].endswith("\tLine 2")
@@ -207,7 +214,7 @@ class TestAread:
         await registry.upsert_skill(skill)
 
         result = await backend.aread("/test-skill/SKILL.md", offset=1, limit=2)
-        lines = result.split("\n")
+        lines = self._content(result).split("\n")
         assert len(lines) == 2
         assert "Line 2" in lines[0]
         assert "Line 3" in lines[1]
@@ -218,7 +225,8 @@ class TestAread:
     async def test_returns_error_for_missing_skill(self, backend):
         """Should return error for non-existent skill."""
         result = await backend.aread("/missing/SKILL.md")
-        assert "Error: Skill not found" in result
+        assert result.error is not None
+        assert "Skill not found" in result.error
 
     async def test_returns_error_for_disabled_skill(self, registry, backend):
         """Should return error for disabled skill."""
@@ -231,12 +239,14 @@ class TestAread:
         await registry.upsert_skill(skill)
 
         result = await backend.aread("/disabled/SKILL.md")
-        assert "Error: Skill not found" in result
+        assert result.error is not None
+        assert "Skill not found" in result.error
 
     async def test_returns_error_for_invalid_path(self, backend):
         """Should return error for malformed path."""
         result = await backend.aread("/invalid/path.txt")
-        assert "Error: Invalid path" in result
+        assert result.error is not None
+        assert "Invalid path" in result.error
 
 
 class TestScopeFiltering:
@@ -289,4 +299,5 @@ class TestReadSync:
     def test_returns_error_message(self, backend):
         """Should return error directing to use async version."""
         result = backend.read("/test/SKILL.md")
-        assert "Use aread()" in result
+        assert result.error is not None
+        assert "Use aread()" in result.error

@@ -2,8 +2,7 @@
 
 Provides a protocol-based storage layer that supports multiple backends
 (SQLite, PostgreSQL) with consistent interfaces for sessions, messages,
-and checkpoint persistence. Also exports the ConfigRegistry and
-ConfigChangeDispatcher globals for app-wide access.
+and checkpoint persistence.
 """
 
 from __future__ import annotations
@@ -13,10 +12,6 @@ from server.app.storage.backend import (
     MessageStore,
     SessionStore,
     StorageBackend,
-)
-from server.app.storage.config_dispatcher import (
-    get_config_dispatcher,
-    set_config_dispatcher,
 )
 from server.app.storage.config_registry import get_config_registry, set_config_registry
 from server.app.storage.factory import (
@@ -65,10 +60,8 @@ __all__ = [
     "create_config_dispatcher",
     "create_config_registry",
     "create_storage_backend",
-    "get_config_dispatcher",
     "get_config_registry",
     "get_storage_backend",
-    "set_config_dispatcher",
     "set_config_registry",
     "set_storage_backend",
 ]
