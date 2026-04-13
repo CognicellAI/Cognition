@@ -93,7 +93,7 @@ def _base_patches(mock_runtime: MagicMock, session: Session) -> tuple:
             return_value=MagicMock(),
         ),
         patch(
-            "server.app.llm.deep_agent_service.get_storage_backend",
+            "server.app.storage.factory.create_storage_backend",
             return_value=mock_storage,
         ),
     )
@@ -111,6 +111,11 @@ async def _run(
     s = MagicMock(spec=Settings)
     s.trusted_tool_namespaces = ["server.app.tools"]
     service = DeepAgentStreamingService(s)
+    mock_storage = MagicMock()
+    mock_storage.get_session = AsyncMock(return_value=session)
+    mock_storage.get_checkpointer = AsyncMock(return_value=MagicMock())
+    mock_storage.get_store = AsyncMock(return_value=MagicMock())
+    service.storage_backend = mock_storage
 
     p1, p2, p3, p4 = patches
 
@@ -442,6 +447,8 @@ class TestToolsWiring:
         mock_storage = MagicMock()
         mock_storage.get_session = AsyncMock(return_value=session)
         mock_storage.get_checkpointer = AsyncMock(return_value=MagicMock())
+        mock_storage.get_store = AsyncMock(return_value=MagicMock())
+        service.storage_backend = mock_storage
 
         resolve_tools_calls: list[Any] = []
 
@@ -466,7 +473,7 @@ class TestToolsWiring:
                 return_value=MagicMock(),
             ) as create_agent_mock,
             patch(
-                "server.app.llm.deep_agent_service.get_storage_backend",
+                "server.app.storage.factory.create_storage_backend",
                 return_value=mock_storage,
             ),
             patch(

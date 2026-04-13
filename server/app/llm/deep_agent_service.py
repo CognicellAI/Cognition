@@ -42,49 +42,10 @@ from server.app.agent.runtime import (
 )
 from server.app.exceptions import LLMProviderConfigError
 from server.app.settings import Settings
-from server.app.storage import StorageBackend
 from server.app.storage.config_store import ConfigStore
 from server.app.storage.factory import create_storage_backend
 
 logger = structlog.get_logger(__name__)
-
-
-def get_storage_backend() -> StorageBackend:
-    """Compatibility shim for older unit tests patching this symbol.
-
-    The service now reads from ``self.storage_backend`` directly. This function
-    remains only so test patches targeting ``server.app.llm.deep_agent_service
-    .get_storage_backend`` do not fail during collection.
-    """
-    raise RuntimeError("Compatibility shim only; patch in tests instead of calling directly")
-
-
-async def _get_session_for_service(
-    storage_backend: Any,
-    session_id: str,
-) -> Any:
-    """Compatibility helper for tests that patch get_storage_backend()."""
-    try:
-        return await storage_backend.get_session(session_id)
-    except Exception:
-        fallback = get_storage_backend()
-        return await fallback.get_session(session_id)
-
-
-async def _load_config_registry_tools(scope: dict[str, str] | None) -> list[Any]:
-    """Load tools registered via POST /tools from ConfigStore.
-
-    .. deprecated:: Use RuntimeResolver.build_tools() instead.
-    """
-    try:
-        from server.app.api.dependencies import get_config_store
-
-        config_store = get_config_store()
-        resolver = RuntimeResolver(config_store=config_store, settings=Settings())
-        return await resolver.build_tools(scope=scope)
-    except RuntimeError:
-        logger.debug("ConfigStore not initialized — skipping API-registered tools")
-        return []
 
 
 def _resolve_middleware(specs: list[str | dict[str, Any]]) -> list[Any]:
@@ -337,7 +298,7 @@ class DeepAgentStreamingService:
         runtime: DeepAgentRuntime | None = None
         try:
             # Get session for config / agent_name resolution
-            session = await _get_session_for_service(self.storage_backend, session_id)
+            session = await self.storage_backend.get_session(session_id)
 
             agent_cfg, custom_tools = await self._resolve_agent_config(
                 session=session,
@@ -487,7 +448,7 @@ class DeepAgentStreamingService:
     ) -> AsyncGenerator[StreamEvent, None]:
         """Resume an interrupted Deep Agents run from persisted checkpoint state."""
         try:
-            session = await _get_session_for_service(self.storage_backend, session_id)
+            session = await self.storage_backend.get_session(session_id)
             if session is None:
                 yield ErrorEvent(message=f"Session not found: {session_id}", code="NOT_FOUND")
                 return

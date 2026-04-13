@@ -129,7 +129,7 @@ def _stream_patches(mock_runtime: MagicMock, session: Any = None) -> tuple:
             return_value=MagicMock(),
         ),
         patch(
-            "server.app.llm.deep_agent_service.get_storage_backend",
+            "server.app.storage.factory.create_storage_backend",
             return_value=mock_storage,
         ),
     )
@@ -170,6 +170,10 @@ class TestExactlyOneDoneEvent:
         session = _make_session()
         mock_runtime = _make_mock_runtime(TokenEvent(content="hello"), DoneEvent())
         service = DeepAgentStreamingService(_make_settings())
+        service.storage_backend = MagicMock()
+        service.storage_backend.get_session = AsyncMock(return_value=session)
+        service.storage_backend.get_checkpointer = AsyncMock(return_value=MagicMock())
+        service.storage_backend.get_store = AsyncMock(return_value=MagicMock())
 
         p1, p2, p3, p4 = _stream_patches(mock_runtime, session)
         with p1, p2, p3, p4:
@@ -189,6 +193,10 @@ class TestExactlyOneDoneEvent:
         session = _make_session()
         mock_runtime = _make_mock_runtime(TokenEvent(content="world"))
         service = DeepAgentStreamingService(_make_settings())
+        service.storage_backend = MagicMock()
+        service.storage_backend.get_session = AsyncMock(return_value=session)
+        service.storage_backend.get_checkpointer = AsyncMock(return_value=MagicMock())
+        service.storage_backend.get_store = AsyncMock(return_value=MagicMock())
 
         p1, p2, p3, p4 = _stream_patches(mock_runtime, session)
         with p1, p2, p3, p4:
@@ -205,6 +213,10 @@ class TestExactlyOneDoneEvent:
         session = _make_session()
         mock_runtime = _make_mock_runtime(TokenEvent(content="hi"), DoneEvent())
         service = DeepAgentStreamingService(_make_settings())
+        service.storage_backend = MagicMock()
+        service.storage_backend.get_session = AsyncMock(return_value=session)
+        service.storage_backend.get_checkpointer = AsyncMock(return_value=MagicMock())
+        service.storage_backend.get_store = AsyncMock(return_value=MagicMock())
 
         p1, p2, p3, p4 = _stream_patches(mock_runtime, session)
         with p1, p2, p3, p4:
@@ -235,6 +247,10 @@ class TestContentNotDoubled:
             DoneEvent(),
         )
         service = DeepAgentStreamingService(_make_settings())
+        service.storage_backend = MagicMock()
+        service.storage_backend.get_session = AsyncMock(return_value=session)
+        service.storage_backend.get_checkpointer = AsyncMock(return_value=MagicMock())
+        service.storage_backend.get_store = AsyncMock(return_value=MagicMock())
 
         p1, p2, p3, p4 = _stream_patches(mock_runtime, session)
         with p1, p2, p3, p4:
@@ -262,6 +278,10 @@ class TestContentNotDoubled:
             DoneEvent(),
         )
         service = DeepAgentStreamingService(_make_settings())
+        service.storage_backend = MagicMock()
+        service.storage_backend.get_session = AsyncMock(return_value=session)
+        service.storage_backend.get_checkpointer = AsyncMock(return_value=MagicMock())
+        service.storage_backend.get_store = AsyncMock(return_value=MagicMock())
 
         p1, p2, p3, p4 = _stream_patches(mock_runtime, session)
         with p1, p2, p3, p4:
@@ -293,6 +313,10 @@ class TestUsageEventModelField:
         session = _make_session(provider="mock", model=custom_model)
         mock_runtime = _make_mock_runtime(TokenEvent(content="hi"), DoneEvent())
         service = DeepAgentStreamingService(settings)
+        service.storage_backend = MagicMock()
+        service.storage_backend.get_session = AsyncMock(return_value=session)
+        service.storage_backend.get_checkpointer = AsyncMock(return_value=MagicMock())
+        service.storage_backend.get_store = AsyncMock(return_value=MagicMock())
 
         p1, p2, p3, p4 = _stream_patches(mock_runtime, session)
         with p1, p2, p3, p4:
@@ -314,6 +338,10 @@ class TestUsageEventModelField:
         session = _make_session(provider="mock", model="gpt-4o-mini")
         mock_runtime = _make_mock_runtime(TokenEvent(content="hi"), DoneEvent())
         service = DeepAgentStreamingService(settings)
+        service.storage_backend = MagicMock()
+        service.storage_backend.get_session = AsyncMock(return_value=session)
+        service.storage_backend.get_checkpointer = AsyncMock(return_value=MagicMock())
+        service.storage_backend.get_store = AsyncMock(return_value=MagicMock())
 
         p1, p2, p3, p4 = _stream_patches(mock_runtime, session)
         with p1, p2, p3, p4:
@@ -337,6 +365,10 @@ class TestRuntimeErrorsSurface:
             return_value=_runtime_raises(RuntimeError("graph blew up"))
         )
         service = DeepAgentStreamingService(_make_settings())
+        service.storage_backend = MagicMock()
+        service.storage_backend.get_session = AsyncMock(return_value=session)
+        service.storage_backend.get_checkpointer = AsyncMock(return_value=MagicMock())
+        service.storage_backend.get_store = AsyncMock(return_value=MagicMock())
 
         p1, p2, p3, p4 = _stream_patches(mock_runtime, session)
         with p1, p2, p3, p4:
