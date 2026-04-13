@@ -185,8 +185,8 @@ async def update_agent(
             data["response_format"] = updates.pop("response_format")
         data.update(updates)
 
-        scope: dict[str, Any] = data.get("scope", {})
-        await config_store.upsert_agent(name, scope, data, "api")
+        agent_scope: dict[str, Any] = data.get("scope", {})
+        await config_store.upsert_agent(name, agent_scope, data, "api")
 
         agent_def = await config_store.get_agent_definition(name)
         if agent_def is None:
