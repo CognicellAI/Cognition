@@ -1,0 +1,7 @@
+{
+  "name": "release-process",
+  "enabled": true,
+  "description": "Release checklist and rollout skill",
+  "content": "---\nname: release-process\ndescription: Release process guidance\n---\n\n# Release Process\n\n- Verify CI\n- Draft release notes\n- Confirm rollback plan\n",
+  "scope": {}
+}

@@ -1,0 +1,8 @@
+{
+  "name": "release_summary",
+  "code": "from langchain_core.tools import tool\n\n@tool\ndef release_summary() -> str:\n    \"\"\"Return a short release summary.\"\"\"\n    return \"Release notes draft ready.\"\n",
+  "enabled": true,
+  "description": "Example API-registered tool",
+  "interrupt_on": false,
+  "scope": {}
+}

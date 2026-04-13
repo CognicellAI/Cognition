@@ -1,0 +1,7 @@
+{
+  "provider": "openai_compatible",
+  "model": "google/gemini-3-flash-preview",
+  "max_tokens": 4000,
+  "system_prompt_type": "file",
+  "system_prompt_value": "system"
+}
