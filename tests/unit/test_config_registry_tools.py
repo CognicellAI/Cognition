@@ -307,16 +307,11 @@ class TestLoadPathTools:
 class TestPostToolsAPI:
     @pytest.fixture(autouse=True)
     def setup(self, tmp_path: Path) -> None:
-        from server.app.agent.agent_definition_registry import (
-            initialize_agent_definition_registry,
-        )
         from server.app.api.dependencies import set_config_store
         from server.app.storage.config_registry import MemoryConfigRegistry
         from server.app.storage.config_store import DefaultConfigStore
 
-        def_registry = initialize_agent_definition_registry(tmp_path)
-        config_registry = MemoryConfigRegistry()
-        set_config_store(DefaultConfigStore(config_registry, def_registry))
+        set_config_store(DefaultConfigStore(MemoryConfigRegistry(), workspace_path=tmp_path))
 
     def _client(self) -> Any:
         from fastapi.testclient import TestClient
@@ -377,16 +372,11 @@ class TestPostToolsAPI:
 class TestGetToolsAPI:
     @pytest.fixture(autouse=True)
     def setup(self, tmp_path: Path) -> None:
-        from server.app.agent.agent_definition_registry import (
-            initialize_agent_definition_registry,
-        )
         from server.app.api.dependencies import set_config_store
         from server.app.storage.config_registry import MemoryConfigRegistry
         from server.app.storage.config_store import DefaultConfigStore
 
-        def_registry = initialize_agent_definition_registry(tmp_path)
-        config_registry = MemoryConfigRegistry()
-        set_config_store(DefaultConfigStore(config_registry, def_registry))
+        set_config_store(DefaultConfigStore(MemoryConfigRegistry(), workspace_path=tmp_path))
 
     def _client(self) -> Any:
         from fastapi.testclient import TestClient

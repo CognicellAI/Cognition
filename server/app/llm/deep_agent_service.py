@@ -59,6 +59,18 @@ def get_storage_backend() -> StorageBackend:
     raise RuntimeError("Compatibility shim only; patch in tests instead of calling directly")
 
 
+async def _get_session_for_service(
+    storage_backend: Any,
+    session_id: str,
+) -> Any:
+    """Compatibility helper for tests that patch get_storage_backend()."""
+    try:
+        return await storage_backend.get_session(session_id)
+    except Exception:
+        fallback = get_storage_backend()
+        return await fallback.get_session(session_id)
+
+
 async def _load_config_registry_tools(scope: dict[str, str] | None) -> list[Any]:
     """Load tools registered via POST /tools from ConfigStore.
 
@@ -337,10 +349,7 @@ class DeepAgentStreamingService:
         runtime: DeepAgentRuntime | None = None
         try:
             # Get session for config / agent_name resolution
-            try:
-                session = await self.storage_backend.get_session(session_id)
-            except Exception:
-                session = await get_storage_backend().get_session(session_id)
+            session = await _get_session_for_service(self.storage_backend, session_id)
 
             agent_cfg, custom_tools = await self._resolve_agent_config(
                 session=session,
@@ -490,10 +499,7 @@ class DeepAgentStreamingService:
     ) -> AsyncGenerator[StreamEvent, None]:
         """Resume an interrupted Deep Agents run from persisted checkpoint state."""
         try:
-            try:
-                session = await self.storage_backend.get_session(session_id)
-            except Exception:
-                session = await get_storage_backend().get_session(session_id)
+            session = await _get_session_for_service(self.storage_backend, session_id)
             if session is None:
                 yield ErrorEvent(message=f"Session not found: {session_id}", code="NOT_FOUND")
                 return

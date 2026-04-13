@@ -11,9 +11,6 @@ from fastapi import Depends, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from server.app.agent.agent_definition_registry import (
-    initialize_agent_definition_registry,
-)
 from server.app.agent.resolver import RuntimeResolver
 from server.app.agent_registry import initialize_agent_registry
 from server.app.api.dependencies import (
@@ -67,14 +64,10 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         await config_registry.initialize_schema()
     logger.info("ConfigRegistry initialized")
 
-    # Initialize agent definition registry (file-based agents)
-    def_registry = initialize_agent_definition_registry(settings.workspace_path)
-    logger.info("Agent definition registry initialized")
-
     # Initialize ConfigStore (unified interface)
     config_store = DefaultConfigStore(
         config_registry=config_registry,
-        agent_definition_registry=def_registry,
+        workspace_path=settings.workspace_path,
     )
     set_config_store(config_store)
     set_default_config_store(config_store)
@@ -88,7 +81,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     await seed_providers_from_config(yaml_config, config_store)
 
     # Seed store-backed agent definitions after ConfigStore is available.
-    await def_registry.seed_from_store(config_store)
+    await config_store.seed_agent_definitions()
 
     # Initialize RuntimeResolver (agent runtime bridge)
     runtime_resolver = RuntimeResolver(config_store=config_store, settings=settings)
@@ -97,7 +90,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
     # Initialize ConfigChangeDispatcher and wire hot-reload subscribers
     dispatcher = create_config_dispatcher(settings)
-    dispatcher.subscribe(def_registry.on_config_change)
+    dispatcher.subscribe(config_store.on_config_change)
     await dispatcher.start()
     logger.info("ConfigChangeDispatcher started")
 

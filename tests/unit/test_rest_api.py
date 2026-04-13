@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 from fastapi.testclient import TestClient
 
-from server.app.agent.agent_definition_registry import initialize_agent_definition_registry
+from server.app.api.dependencies import set_config_store
 from server.app.main import app
 
 # Create test client
@@ -19,15 +19,15 @@ client = TestClient(app)
 def setup_agent_registry():
     """Initialize agent registry for tests."""
     import tempfile
-    from pathlib import Path
 
     from server.app.api.dependencies import set_model_catalog_dep
     from server.app.llm.model_catalog import ModelCatalog
     from server.app.settings import get_settings
+    from server.app.storage.config_registry import MemoryConfigRegistry
+    from server.app.storage.config_store import DefaultConfigStore
 
     with tempfile.TemporaryDirectory() as tmpdir:
-        # Initialize with temp workspace
-        initialize_agent_definition_registry(Path(tmpdir))
+        set_config_store(DefaultConfigStore(MemoryConfigRegistry(), workspace_path=tmpdir))
         s = get_settings()
         set_model_catalog_dep(ModelCatalog(catalog_url=s.model_catalog_url))
         yield
