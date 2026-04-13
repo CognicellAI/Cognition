@@ -1,3 +1,5 @@
 """Cognition server package."""
 
-__version__ = "0.1.0"
+from server.version import VERSION
+
+__version__ = VERSION
