@@ -24,13 +24,19 @@ every mutating operation so the dispatcher can pick up the event.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from datetime import UTC, datetime
 from typing import Any, Protocol, runtime_checkable
 
 import aiosqlite
+import psycopg
+from psycopg.rows import dict_row
+from psycopg.types.json import Json
+from psycopg_pool import AsyncConnectionPool
 
+from server.app.agent.definition import AgentDefinition
 from server.app.storage.config_models import (
     ConfigChange,
     EntityType,
@@ -142,6 +148,10 @@ class ConfigRegistry(Protocol):
         self, name: str, scope: dict[str, str] | None = None
     ) -> dict[str, Any] | None:
         """Return the best-matching agent definition dict, or None."""
+        ...
+
+    async def list_agents(self, scope: dict[str, str] | None = None) -> list[AgentDefinition]:
+        """List all agent definitions visible in the given scope."""
         ...
 
     async def delete_agent(self, name: str, scope: dict[str, str] | None = None) -> bool:
@@ -573,6 +583,10 @@ class SqliteConfigRegistry:
     ) -> dict[str, Any] | None:
         return await self._get_entity("agent", name, scope)
 
+    async def list_agents(self, scope: dict[str, str] | None = None) -> list[AgentDefinition]:
+        rows = await self._list_entities("agent", scope)
+        return [AgentDefinition.model_validate(r) for r in rows]
+
     async def delete_agent(self, name: str, scope: dict[str, str] | None = None) -> bool:
         return await self._delete_entity("agent", name, scope)
 
@@ -714,44 +728,61 @@ class SqliteConfigRegistry:
 
 
 class PostgresConfigRegistry:
-    """Postgres implementation of ConfigRegistry using asyncpg.
+    """Postgres implementation of ConfigRegistry using psycopg pool.
 
     Args:
-        dsn: asyncpg-compatible connection string
+        dsn: Postgres connection string
              (e.g. "postgresql://user:pass@host/db").
     """
 
     def __init__(self, dsn: str) -> None:
         self._dsn = dsn
-        self._pool: Any = None  # asyncpg.Pool
+        self._pool: AsyncConnectionPool[psycopg.AsyncConnection[dict[str, Any]]] | None = None
+        self._pool_lock = asyncio.Lock()
 
-    async def _get_pool(self) -> Any:
+    async def _get_pool(self) -> AsyncConnectionPool[psycopg.AsyncConnection[dict[str, Any]]]:
         if self._pool is None:
-            import asyncpg
-
-            async def _init_conn(conn: Any) -> None:
-                # asyncpg does not decode JSONB/JSON to Python objects by default.
-                # Register codecs so all json/jsonb columns come back as dicts/lists.
-                await conn.set_type_codec(
-                    "jsonb",
-                    encoder=json.dumps,
-                    decoder=json.loads,
-                    schema="pg_catalog",
-                )
-                await conn.set_type_codec(
-                    "json",
-                    encoder=json.dumps,
-                    decoder=json.loads,
-                    schema="pg_catalog",
-                )
-
-            self._pool = await asyncpg.create_pool(self._dsn, init=_init_conn)
+            async with self._pool_lock:
+                if self._pool is None:
+                    self._pool = AsyncConnectionPool(
+                        self._dsn,
+                        open=False,
+                        min_size=1,
+                        kwargs={
+                            "autocommit": True,
+                            "prepare_threshold": 0,
+                            "row_factory": dict_row,
+                        },
+                    )
+                    await self._pool.open()
         return self._pool
 
     async def close(self) -> None:
         if self._pool is not None:
             await self._pool.close()
             self._pool = None
+
+    @staticmethod
+    def _serialize_scope(scope: dict[str, str]) -> Json:
+        return Json(scope)
+
+    @staticmethod
+    def _serialize_definition(definition: dict[str, Any]) -> Json:
+        return Json(definition)
+
+    @staticmethod
+    async def _fetch_all(
+        conn: psycopg.AsyncConnection[dict[str, Any]], query: str, params: tuple[Any, ...]
+    ) -> list[dict[str, Any]]:
+        cursor = await conn.execute(query, params)
+        return list(await cursor.fetchall())
+
+    @staticmethod
+    async def _fetch_one(
+        conn: psycopg.AsyncConnection[dict[str, Any]], query: str, params: tuple[Any, ...]
+    ) -> dict[str, Any] | None:
+        cursor = await conn.execute(query, params)
+        return await cursor.fetchone()
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -766,25 +797,26 @@ class PostgresConfigRegistry:
         source: str,
     ) -> None:
         pool = await self._get_pool()
-        scope_json = json.dumps(scope, sort_keys=True)
-        def_json = json.dumps(definition)
         now = datetime.now(UTC)
-        async with pool.acquire() as conn:
+        async with pool.connection() as conn:
             await conn.execute(
                 """
                 INSERT INTO config_entities (entity_type, name, scope, definition, source, created_at, updated_at)
-                VALUES ($1, $2, $3::jsonb, $4::jsonb, $5, $6, $6)
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT (entity_type, name, scope)
                 DO UPDATE SET definition=EXCLUDED.definition,
                               source=EXCLUDED.source,
                               updated_at=EXCLUDED.updated_at
                 """,
-                entity_type,
-                name,
-                scope_json,
-                def_json,
-                source,
-                now,
+                (
+                    entity_type,
+                    name,
+                    self._serialize_scope(scope),
+                    self._serialize_definition(definition),
+                    source,
+                    now,
+                    now,
+                ),
             )
             await self._record_change(conn, entity_type, name, scope, "upsert")
 
@@ -792,13 +824,10 @@ class PostgresConfigRegistry:
         self, entity_type: str, name: str, scope: dict[str, str] | None
     ) -> bool:
         pool = await self._get_pool()
-        scope_json = json.dumps(scope or {}, sort_keys=True)
-        async with pool.acquire() as conn:
+        async with pool.connection() as conn:
             result = await conn.execute(
-                "DELETE FROM config_entities WHERE entity_type=$1 AND name=$2 AND scope=$3::jsonb",
-                entity_type,
-                name,
-                scope_json,
+                "DELETE FROM config_entities WHERE entity_type=%s AND name=%s AND scope=%s",
+                (entity_type, name, self._serialize_scope(scope or {})),
             )
             deleted = bool(result != "DELETE 0")
             if deleted:
@@ -813,11 +842,11 @@ class PostgresConfigRegistry:
     ) -> dict[str, Any] | None:
         target_scope = scope or {}
         pool = await self._get_pool()
-        async with pool.acquire() as conn:
-            rows = await conn.fetch(
-                "SELECT scope, definition FROM config_entities WHERE entity_type=$1 AND name=$2",
-                entity_type,
-                name,
+        async with pool.connection() as conn:
+            rows = await self._fetch_all(
+                conn,
+                "SELECT scope, definition FROM config_entities WHERE entity_type=%s AND name=%s",
+                (entity_type, name),
             )
         if not rows:
             return None
@@ -839,10 +868,11 @@ class PostgresConfigRegistry:
     ) -> list[dict[str, Any]]:
         target_scope = scope or {}
         pool = await self._get_pool()
-        async with pool.acquire() as conn:
-            rows = await conn.fetch(
-                "SELECT name, scope, definition FROM config_entities WHERE entity_type=$1",
-                entity_type,
+        async with pool.connection() as conn:
+            rows = await self._fetch_all(
+                conn,
+                "SELECT name, scope, definition FROM config_entities WHERE entity_type=%s",
+                (entity_type,),
             )
         best_by_name: dict[str, tuple[int, dict[str, Any]]] = {}
         for row in rows:
@@ -863,18 +893,13 @@ class PostgresConfigRegistry:
         scope: dict[str, str],
         operation: str,
     ) -> None:
-        scope_json = json.dumps(scope, sort_keys=True)
         now = datetime.now(UTC)
         await conn.execute(
             """
             INSERT INTO config_changes (entity_type, name, scope, operation, changed_at, processed)
-            VALUES ($1, $2, $3::jsonb, $4, $5, false)
+            VALUES (%s, %s, %s, %s, %s, false)
             """,
-            entity_type,
-            name,
-            scope_json,
-            operation,
-            now,
+            (entity_type, name, self._serialize_scope(scope), operation, now),
         )
         # NOTIFY for cross-instance invalidation
         await conn.execute("NOTIFY cognition_config_changes")
@@ -959,6 +984,10 @@ class PostgresConfigRegistry:
     ) -> dict[str, Any] | None:
         return await self._get_entity("agent", name, scope)
 
+    async def list_agents(self, scope: dict[str, str] | None = None) -> list[AgentDefinition]:
+        rows = await self._list_entities("agent", scope)
+        return [AgentDefinition.model_validate(r) for r in rows]
+
     async def delete_agent(self, name: str, scope: dict[str, str] | None = None) -> bool:
         return await self._delete_entity("agent", name, scope)
 
@@ -1023,29 +1052,29 @@ class PostgresConfigRegistry:
         source: str = "file",
     ) -> bool:
         pool = await self._get_pool()
-        scope_json = json.dumps(scope, sort_keys=True)
-        def_json = json.dumps(definition)
         now = datetime.now(UTC)
-        async with pool.acquire() as conn:
-            existing = await conn.fetchrow(
-                "SELECT id FROM config_entities WHERE entity_type=$1 AND name=$2 AND scope=$3::jsonb",
-                entity_type,
-                name,
-                scope_json,
+        async with pool.connection() as conn:
+            existing = await self._fetch_one(
+                conn,
+                "SELECT id FROM config_entities WHERE entity_type=%s AND name=%s AND scope=%s",
+                (entity_type, name, self._serialize_scope(scope)),
             )
             if existing:
                 return False
             await conn.execute(
                 """
                 INSERT INTO config_entities (entity_type, name, scope, definition, source, created_at, updated_at)
-                VALUES ($1, $2, $3::jsonb, $4::jsonb, $5, $6, $6)
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
                 """,
-                entity_type,
-                name,
-                scope_json,
-                def_json,
-                source,
-                now,
+                (
+                    entity_type,
+                    name,
+                    self._serialize_scope(scope),
+                    self._serialize_definition(definition),
+                    source,
+                    now,
+                    now,
+                ),
             )
             await self._record_change(conn, entity_type, name, scope, "upsert")
         return True
@@ -1056,11 +1085,12 @@ class PostgresConfigRegistry:
 
     async def get_changes_since(self, since: datetime) -> list[ConfigChange]:
         pool = await self._get_pool()
-        async with pool.acquire() as conn:
-            rows = await conn.fetch(
+        async with pool.connection() as conn:
+            rows = await self._fetch_all(
+                conn,
                 "SELECT id, entity_type, name, scope, operation, changed_at "
-                "FROM config_changes WHERE changed_at > $1 ORDER BY changed_at ASC",
-                since,
+                "FROM config_changes WHERE changed_at > %s ORDER BY changed_at ASC",
+                (since,),
             )
         result = []
         for row in rows:
@@ -1080,10 +1110,10 @@ class PostgresConfigRegistry:
         if not change_ids:
             return
         pool = await self._get_pool()
-        async with pool.acquire() as conn:
+        async with pool.connection() as conn:
             await conn.execute(
-                "UPDATE config_changes SET processed=true WHERE id = ANY($1::int[])",
-                change_ids,
+                "UPDATE config_changes SET processed=true WHERE id = ANY(%s::int[])",
+                (change_ids,),
             )
 
 
@@ -1232,6 +1262,9 @@ class MemoryConfigRegistry:
         self, name: str, scope: dict[str, str] | None = None
     ) -> dict[str, Any] | None:
         return self._get_entity("agent", name, scope)
+
+    async def list_agents(self, scope: dict[str, str] | None = None) -> list[AgentDefinition]:
+        return [AgentDefinition.model_validate(r) for r in self._list_entities("agent", scope)]
 
     async def delete_agent(self, name: str, scope: dict[str, str] | None = None) -> bool:
         return self._delete("agent", name, scope)

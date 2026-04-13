@@ -228,7 +228,7 @@ async def agent_event_stream(
                 yield EventBuilder.error(event.message, code=event.code)
 
     except Exception as e:
-        logger.error("Agent streaming error", error=str(e), session_id=session_id)
+        logger.error("Agent streaming error", error=str(e), session_id=session_id, exc_info=True)
         yield EventBuilder.error(str(e), code="AGENT_ERROR")
 
 

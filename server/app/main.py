@@ -100,7 +100,12 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # Initialize SessionAgentManager for DI
     from server.app.llm.deep_agent_service import SessionAgentManager
 
-    session_agent_manager = SessionAgentManager(settings)
+    session_agent_manager = SessionAgentManager(
+        settings,
+        storage_backend=storage_backend,
+        runtime_resolver=runtime_resolver,
+        config_store=config_store,
+    )
     set_session_agent_manager_dep(session_agent_manager)
     logger.info("SessionAgentManager initialized")
 

@@ -750,6 +750,7 @@ class DeepAgentRuntime:
             )
 
         except Exception as e:
+            logger.error("DeepAgentRuntime stream failed", error=str(e), exc_info=True)
             yield ErrorEvent(message=str(e), code="RUNTIME_ERROR")
 
     async def ainvoke(
