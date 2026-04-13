@@ -27,7 +27,6 @@ from server.app.settings import Settings, get_settings
 from server.app.storage.config_store import ConfigStore
 
 if TYPE_CHECKING:
-    from server.app.agent_registry import AgentRegistry
     from server.app.llm.deep_agent_service import SessionAgentManager
     from server.app.llm.model_catalog import ModelCatalog
     from server.app.storage.backend import StorageBackend
@@ -40,7 +39,6 @@ _config_store: ConfigStore | None = None
 _runtime_resolver: RuntimeResolver | None = None
 _storage_backend: StorageBackend | None = None
 _session_agent_manager: SessionAgentManager | None = None
-_agent_registry: AgentRegistry | None = None
 _model_catalog: ModelCatalog | None = None
 
 
@@ -62,11 +60,6 @@ def set_storage_backend_dep(backend: StorageBackend) -> None:
 def set_session_agent_manager_dep(manager: SessionAgentManager) -> None:
     global _session_agent_manager
     _session_agent_manager = manager
-
-
-def set_agent_registry_dep(registry: AgentRegistry) -> None:
-    global _agent_registry
-    _agent_registry = registry
 
 
 def set_model_catalog_dep(catalog: ModelCatalog) -> None:
@@ -113,14 +106,6 @@ def get_session_agent_manager_dep() -> SessionAgentManager:
     return _session_agent_manager
 
 
-def get_agent_registry_dep() -> AgentRegistry:
-    if _agent_registry is None:
-        raise RuntimeError(
-            "AgentRegistry not initialized. Call set_agent_registry_dep() during startup."
-        )
-    return _agent_registry
-
-
 def get_model_catalog_dep() -> ModelCatalog:
     if _model_catalog is None:
         raise RuntimeError(
@@ -141,14 +126,12 @@ def get_scope_dep(
     for key in settings.scope_keys:
         header_name = f"x-cognition-scope-{key.replace('_', '-')}"
         headers[key] = request.headers.get(header_name)
-
     return create_scope_dependency(settings)(**headers)
 
 
 __all__ = [
     "ConfigStore",
     "RuntimeResolver",
-    "get_agent_registry_dep",
     "get_config_store",
     "get_model_catalog_dep",
     "get_rate_limiter_dep",
@@ -157,7 +140,6 @@ __all__ = [
     "get_session_agent_manager_dep",
     "get_settings_dep",
     "get_storage_backend_dep",
-    "set_agent_registry_dep",
     "set_config_store",
     "set_model_catalog_dep",
     "set_runtime_resolver",

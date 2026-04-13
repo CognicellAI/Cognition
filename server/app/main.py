@@ -12,10 +12,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from server.app.agent.resolver import RuntimeResolver
-from server.app.agent_registry import initialize_agent_registry
 from server.app.api.dependencies import (
     get_storage_backend_dep,
-    set_agent_registry_dep,
     set_config_store,
     set_model_catalog_dep,
     set_runtime_resolver,
@@ -98,11 +96,6 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     initialize_session_manager(storage_backend, settings)
     logger.info("Session manager initialized")
 
-    # Initialize agent registry for tools and middleware
-    agent_reg = initialize_agent_registry(settings=settings)
-    set_agent_registry_dep(agent_reg)
-    logger.info("Agent registry initialized")
-
     # Initialize SessionAgentManager for DI
     from server.app.llm.deep_agent_service import SessionAgentManager
 
@@ -135,7 +128,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
     # Set up file watcher for hot-reload
     try:
-        file_watcher = WorkspaceWatcher(agent_registry=agent_reg)
+        file_watcher = WorkspaceWatcher()
 
         # Watch tools and middleware directories
         tools_path = settings.workspace_path / ".cognition" / "tools"

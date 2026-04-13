@@ -1,9 +1,9 @@
-"""Unit tests for #23: ConfigRegistry tool bridge.
+"""Unit tests for #23: ConfigStore tool bridge.
 
 Covers:
 - ToolRegistration model: path XOR code validation
 - _load_config_registry_tools(): code-based and path-based loading
-- GET /tools: returns tools from both AgentRegistry and ConfigRegistry
+- GET /tools: returns tools from ConfigStore
 - POST /tools: accepts code and path, validates XOR
 - Disabled tools are skipped
 - Scoped tools loaded for matching scope
