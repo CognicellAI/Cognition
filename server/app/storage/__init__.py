@@ -13,44 +13,11 @@ from server.app.storage.backend import (
     SessionStore,
     StorageBackend,
 )
-from server.app.storage.config_registry import get_config_registry, set_config_registry
 from server.app.storage.factory import (
     create_config_dispatcher,
     create_config_registry,
     create_storage_backend,
 )
-
-# Global storage backend instance (initialized in main.py lifespan)
-_storage_backend: StorageBackend | None = None
-
-
-def get_storage_backend() -> StorageBackend:
-    """Get the global storage backend instance.
-
-    Must be initialized by calling initialize_storage_backend() first.
-
-    Returns:
-        Configured StorageBackend instance.
-
-    Raises:
-        RuntimeError: If storage backend has not been initialized.
-    """
-    if _storage_backend is None:
-        raise RuntimeError(
-            "Storage backend not initialized. Call initialize_storage_backend() first."
-        )
-    return _storage_backend
-
-
-def set_storage_backend(backend: StorageBackend) -> None:
-    """Set the global storage backend instance.
-
-    Args:
-        backend: Configured StorageBackend instance.
-    """
-    global _storage_backend
-    _storage_backend = backend
-
 
 __all__ = [
     "CheckpointerStore",
@@ -60,8 +27,4 @@ __all__ = [
     "create_config_dispatcher",
     "create_config_registry",
     "create_storage_backend",
-    "get_config_registry",
-    "get_storage_backend",
-    "set_config_registry",
-    "set_storage_backend",
 ]

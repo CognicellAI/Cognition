@@ -425,10 +425,8 @@ class SessionManager:
 
         # Create new agent via create_cognition_agent
         from server.app.agent.cognition_agent import CognitionAgentParams, create_cognition_agent
-        from server.app.storage import get_storage_backend
 
-        storage = get_storage_backend()
-        checkpointer = await storage.get_checkpointer()
+        checkpointer = await self._storage.get_checkpointer()
 
         result = await create_cognition_agent(
             CognitionAgentParams(
