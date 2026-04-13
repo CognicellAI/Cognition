@@ -33,6 +33,7 @@ from server.app.settings import get_settings
 from server.app.storage import create_storage_backend
 from server.app.storage.backend import StorageBackend
 from server.app.storage.config_store import DefaultConfigStore, set_default_config_store
+from server.version import VERSION
 
 logger = structlog.get_logger(__name__)
 
@@ -190,7 +191,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 app = FastAPI(
     title="Cognition",
     description="AI-powered coding assistant",
-    version="0.5.0",
+    version=VERSION,
     lifespan=lifespan,
 )
 
@@ -225,7 +226,7 @@ async def health_check(
 
     return HealthStatus(
         status="healthy",
-        version="0.5.0",
+        version=VERSION,
         active_sessions=len(sessions_list),
         circuit_breakers=[],
         timestamp=datetime.now(UTC),
