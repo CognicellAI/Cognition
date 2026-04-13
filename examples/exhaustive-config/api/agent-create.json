@@ -1,0 +1,34 @@
+{
+  "name": "release-assistant",
+  "system_prompt": "You prepare release notes, changelogs, and rollout checklists.",
+  "description": "Release-focused assistant",
+  "mode": "primary",
+  "hidden": false,
+  "tools": [
+    ".cognition/tools/repo_health.py"
+  ],
+  "skills": [
+    ".cognition/skills/"
+  ],
+  "memory": [
+    "AGENTS.md"
+  ],
+  "interrupt_on": {
+    "execute": true
+  },
+  "response_format": null,
+  "model": "google/gemini-3-flash-preview",
+  "temperature": 0.2,
+  "max_tokens": 3000,
+  "recursion_limit": 300,
+  "tool_token_limit_before_evict": 8000,
+  "provider": "openai_compatible",
+  "timeout_seconds": 60,
+  "middleware": [
+    {
+      "name": "tool_retry",
+      "max_retries": 2
+    }
+  ],
+  "scope": {}
+}

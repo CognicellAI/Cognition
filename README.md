@@ -165,6 +165,7 @@ The CLI is one example of what you can build on Cognition. See the [Blueprints](
 | [Architecture](./docs/concepts/architecture.md) | 7-layer architecture and design principles |
 | [Extending Agents](./docs/guides/extending-agents.md) | Memory, skills, tools, subagents, and middleware |
 | [Configuration Reference](./docs/guides/configuration.md) | All YAML keys and environment variables |
+| [Examples](./examples/README.md) | Exhaustive `.cognition` examples, `.env` examples, and API payload samples |
 | [Deployment Guide](./docs/guides/deployment.md) | Docker Compose, PostgreSQL, and production hardening |
 | [API Reference](./docs/guides/api-reference.md) | Every REST endpoint and SSE event type |
 
