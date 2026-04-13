@@ -2,7 +2,7 @@
 
 Covers:
 - ToolRegistration model: path XOR code validation
-- _load_config_registry_tools(): code-based and path-based loading
+- RuntimeResolver.build_tools(): code-based and path-based loading
 - GET /tools: returns tools from ConfigStore
 - POST /tools: accepts code and path, validates XOR
 - Disabled tools are skipped
@@ -66,7 +66,7 @@ class TestToolRegistrationModel:
 
 
 # ---------------------------------------------------------------------------
-# _load_config_registry_tools: code-based tools
+# RuntimeResolver.build_tools(): code-based tools
 # ---------------------------------------------------------------------------
 
 
@@ -74,7 +74,7 @@ class TestLoadCodeTools:
     @pytest.mark.asyncio
     async def test_code_tool_loaded_as_base_tool(self):
         """A @tool-decorated function in code is loaded as a BaseTool."""
-        from server.app.llm.deep_agent_service import _load_config_registry_tools
+        from server.app.agent.resolver import RuntimeResolver
         from server.app.storage.config_models import ToolRegistration
 
         code = textwrap.dedent("""\
@@ -91,11 +91,8 @@ class TestLoadCodeTools:
             return_value=[ToolRegistration(name="say-hello", code=code, enabled=True)]
         )
 
-        with patch(
-            "server.app.api.dependencies.get_config_store",
-            return_value=mock_store,
-        ):
-            tools = await _load_config_registry_tools(scope=None)
+        resolver = RuntimeResolver(config_store=mock_store, settings=MagicMock())
+        tools = await resolver.build_tools(scope=None)
 
         assert len(tools) == 1
         assert isinstance(tools[0], BaseTool)
@@ -104,7 +101,7 @@ class TestLoadCodeTools:
     @pytest.mark.asyncio
     async def test_multiple_tools_in_one_code_block(self):
         """Multiple @tool functions in one code block all get loaded."""
-        from server.app.llm.deep_agent_service import _load_config_registry_tools
+        from server.app.agent.resolver import RuntimeResolver
         from server.app.storage.config_models import ToolRegistration
 
         code = textwrap.dedent("""\
@@ -126,11 +123,8 @@ class TestLoadCodeTools:
             return_value=[ToolRegistration(name="multi-tools", code=code, enabled=True)]
         )
 
-        with patch(
-            "server.app.api.dependencies.get_config_store",
-            return_value=mock_store,
-        ):
-            tools = await _load_config_registry_tools(scope=None)
+        resolver = RuntimeResolver(config_store=mock_store, settings=MagicMock())
+        tools = await resolver.build_tools(scope=None)
 
         assert len(tools) == 2
         names = {t.name for t in tools}
@@ -139,7 +133,7 @@ class TestLoadCodeTools:
     @pytest.mark.asyncio
     async def test_disabled_tool_is_skipped(self):
         """Disabled ToolRegistration entries are not loaded."""
-        from server.app.llm.deep_agent_service import _load_config_registry_tools
+        from server.app.agent.resolver import RuntimeResolver
         from server.app.storage.config_models import ToolRegistration
 
         code = textwrap.dedent("""\
@@ -156,18 +150,15 @@ class TestLoadCodeTools:
             return_value=[ToolRegistration(name="disabled", code=code, enabled=False)]
         )
 
-        with patch(
-            "server.app.api.dependencies.get_config_store",
-            return_value=mock_store,
-        ):
-            tools = await _load_config_registry_tools(scope=None)
+        resolver = RuntimeResolver(config_store=mock_store, settings=MagicMock())
+        tools = await resolver.build_tools(scope=None)
 
         assert len(tools) == 0
 
     @pytest.mark.asyncio
     async def test_code_with_syntax_error_is_skipped(self):
         """A tool with invalid Python source is skipped without crashing."""
-        from server.app.llm.deep_agent_service import _load_config_registry_tools
+        from server.app.agent.resolver import RuntimeResolver
         from server.app.storage.config_models import ToolRegistration
 
         mock_store = MagicMock()
@@ -181,11 +172,8 @@ class TestLoadCodeTools:
             ]
         )
 
-        with patch(
-            "server.app.api.dependencies.get_config_store",
-            return_value=mock_store,
-        ):
-            tools = await _load_config_registry_tools(scope=None)
+        resolver = RuntimeResolver(config_store=mock_store, settings=MagicMock())
+        tools = await resolver.build_tools(scope=None)
 
         # Should not raise — just returns empty
         assert len(tools) == 0
@@ -193,7 +181,7 @@ class TestLoadCodeTools:
     @pytest.mark.asyncio
     async def test_one_bad_tool_does_not_block_others(self):
         """An error loading one tool doesn't prevent other tools from loading."""
-        from server.app.llm.deep_agent_service import _load_config_registry_tools
+        from server.app.agent.resolver import RuntimeResolver
         from server.app.storage.config_models import ToolRegistration
 
         good_code = textwrap.dedent("""\
@@ -213,31 +201,25 @@ class TestLoadCodeTools:
             ]
         )
 
-        with patch(
-            "server.app.api.dependencies.get_config_store",
-            return_value=mock_store,
-        ):
-            tools = await _load_config_registry_tools(scope=None)
+        resolver = RuntimeResolver(config_store=mock_store, settings=MagicMock())
+        tools = await resolver.build_tools(scope=None)
 
         assert len(tools) == 1
         assert tools[0].name == "good_tool"
 
     @pytest.mark.asyncio
-    async def test_config_registry_not_initialized_returns_empty(self):
-        """If ConfigRegistry is not initialized, returns empty list gracefully."""
-        from server.app.llm.deep_agent_service import _load_config_registry_tools
+    async def test_missing_config_store_returns_empty(self):
+        """If ConfigStore is not initialized, returns empty list gracefully."""
+        from server.app.agent.resolver import RuntimeResolver
 
-        with patch(
-            "server.app.api.dependencies.get_config_store",
-            side_effect=RuntimeError("not initialized"),
-        ):
-            tools = await _load_config_registry_tools(scope=None)
+        resolver = RuntimeResolver(config_store=None, settings=MagicMock())
+        tools = await resolver.build_tools(scope=None)
 
         assert tools == []
 
 
 # ---------------------------------------------------------------------------
-# _load_config_registry_tools: path-based tools
+# RuntimeResolver.build_tools(): path-based tools
 # ---------------------------------------------------------------------------
 
 
@@ -245,7 +227,7 @@ class TestLoadPathTools:
     @pytest.mark.asyncio
     async def test_path_tool_loaded_via_importlib(self):
         """A path-based tool is loaded via importlib and BaseTool instances collected."""
-        from server.app.llm.deep_agent_service import _load_config_registry_tools
+        from server.app.agent.resolver import RuntimeResolver
         from server.app.storage.config_models import ToolRegistration
 
         # Create a real minimal BaseTool subclass so isinstance() works
@@ -265,14 +247,9 @@ class TestLoadPathTools:
             return_value=[ToolRegistration(name="path-tool", path="mypackage.tools", enabled=True)]
         )
 
-        with (
-            patch(
-                "server.app.api.dependencies.get_config_store",
-                return_value=mock_store,
-            ),
-            patch("importlib.import_module", return_value=fake_module),
-        ):
-            tools = await _load_config_registry_tools(scope=None)
+        resolver = RuntimeResolver(config_store=mock_store, settings=MagicMock())
+        with patch("importlib.import_module", return_value=fake_module):
+            tools = await resolver.build_tools(scope=None)
 
         assert len(tools) == 1
         assert isinstance(tools[0], BaseTool)
@@ -280,7 +257,7 @@ class TestLoadPathTools:
     @pytest.mark.asyncio
     async def test_path_import_error_is_skipped(self):
         """An ImportError on a path-based tool is skipped without crashing."""
-        from server.app.llm.deep_agent_service import _load_config_registry_tools
+        from server.app.agent.resolver import RuntimeResolver
         from server.app.storage.config_models import ToolRegistration
 
         mock_store = MagicMock()
@@ -290,11 +267,8 @@ class TestLoadPathTools:
             ]
         )
 
-        with patch(
-            "server.app.api.dependencies.get_config_store",
-            return_value=mock_store,
-        ):
-            tools = await _load_config_registry_tools(scope=None)
+        resolver = RuntimeResolver(config_store=mock_store, settings=MagicMock())
+        tools = await resolver.build_tools(scope=None)
 
         assert tools == []
 

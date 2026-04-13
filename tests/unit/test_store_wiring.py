@@ -298,11 +298,12 @@ class TestServiceStoreWiring:
         mock_global_storage.get_session = AsyncMock(return_value=session)
 
         # The service has its own storage_backend (from create_storage_backend in __init__)
-        # We patch get_storage_backend for session lookup and patch the service's
-        # storage_backend directly for get_checkpointer and get_store
+        # We patch the service's storage_backend directly for session lookup,
+        # get_checkpointer, and get_store.
         s = MagicMock(spec=Settings)
         service = DeepAgentStreamingService(s)
         service.storage_backend = MagicMock()
+        service.storage_backend.get_session = AsyncMock(return_value=session)
         service.storage_backend.get_checkpointer = AsyncMock(return_value=MagicMock())
         service.storage_backend.get_store = AsyncMock(return_value=mock_store)
 
@@ -327,10 +328,6 @@ class TestServiceStoreWiring:
                 "server.app.llm.deep_agent_service.create_cognition_agent",
                 new_callable=AsyncMock,
                 return_value=MagicMock(),
-            ),
-            patch(
-                "server.app.llm.deep_agent_service.get_storage_backend",
-                return_value=mock_global_storage,
             ),
         ):
             async for _ in service.stream_response(

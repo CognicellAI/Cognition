@@ -21,6 +21,7 @@ from __future__ import annotations
 import importlib
 import inspect
 import os
+from dataclasses import dataclass
 from typing import Any, cast
 
 import structlog
@@ -36,6 +37,35 @@ from server.app.storage.config_store import ConfigStore
 logger = structlog.get_logger(__name__)
 
 _TEST_ONLY_PROVIDERS = {"mock"}
+
+
+@dataclass(frozen=True)
+class ResolvedModelConfig:
+    provider: str
+    model_id: str
+    api_key: str | None = None
+    base_url: str | None = None
+    region: str | None = None
+    role_arn: str | None = None
+    recursion_limit: int = 1000
+    temperature: float | None = None
+    max_tokens: int | None = None
+    max_retries: int | None = None
+    timeout: int | None = None
+
+    def build_model(self, resolver: RuntimeResolver) -> BaseChatModel:
+        return resolver.build_model(
+            provider=self.provider,
+            model_id=self.model_id,
+            api_key=self.api_key,
+            base_url=self.base_url,
+            region=self.region,
+            role_arn=self.role_arn,
+            temperature=self.temperature,
+            max_tokens=self.max_tokens,
+            max_retries=self.max_retries,
+            timeout=self.timeout,
+        )
 
 
 class RuntimeResolver:
@@ -509,55 +539,52 @@ class RuntimeResolver:
         Raises:
             LLMProviderConfigError: If the provider is misconfigured.
         """
-        (
-            provider,
-            model_id,
-            api_key,
-            base_url,
-            region,
-            role_arn,
-            recursion_limit,
-            max_retries,
-            timeout,
-        ) = await self._resolve_provider_config_for_session(
-            session=session, scope=scope, agent_def=agent_def
+        resolved = await self.resolve_model_config_for_session(
+            session=session,
+            scope=scope,
+            agent_def=agent_def,
         )
 
-        if provider in _TEST_ONLY_PROVIDERS:
+        if resolved.provider in _TEST_ONLY_PROVIDERS:
             raise LLMProviderConfigError(
-                provider=provider,
+                provider=resolved.provider,
                 reason=(
-                    f"Provider '{provider}' is reserved for testing and cannot be used in "
+                    f"Provider '{resolved.provider}' is reserved for testing and cannot be used in "
                     "production. Configure a real provider via POST /models/providers."
                 ),
             )
 
-        temperature: float | None = None
-        if agent_def and agent_def.config and agent_def.config.temperature is not None:
-            temperature = agent_def.config.temperature
+        model = resolved.build_model(self)
+        await self._warn_if_no_tool_call_support(resolved.provider, resolved.model_id)
 
-        max_tokens: int | None = None
-        if agent_def and agent_def.config and agent_def.config.max_tokens is not None:
-            max_tokens = agent_def.config.max_tokens
+        return model, resolved.provider, resolved.model_id, resolved.recursion_limit
 
-        model = self.build_model(
-            provider=provider,
-            model_id=model_id,
-            api_key=api_key,
-            base_url=base_url,
-            region=region,
-            role_arn=role_arn,
-            temperature=temperature,
-            max_tokens=max_tokens,
-            max_retries=max_retries,
-            timeout=timeout,
+    async def resolve_model_config_for_session(
+        self,
+        session: Any,
+        scope: dict[str, str] | None = None,
+        agent_def: Any | None = None,
+    ) -> ResolvedModelConfig:
+        raw = await self._resolve_provider_config_for_session(
+            session=session,
+            scope=scope,
+            agent_def=agent_def,
+        )
+        return ResolvedModelConfig(
+            provider=raw[0],
+            model_id=raw[1],
+            api_key=raw[2],
+            base_url=raw[3],
+            region=raw[4],
+            role_arn=raw[5],
+            recursion_limit=raw[6],
+            max_retries=raw[7],
+            timeout=raw[8],
+            temperature=(agent_def.config.temperature if agent_def and agent_def.config else None),
+            max_tokens=(agent_def.config.max_tokens if agent_def and agent_def.config else None),
         )
 
-        await self._warn_if_no_tool_call_support(provider, model_id)
-
-        return model, provider, model_id, recursion_limit
-
-    async def _resolve_provider_config_for_session(
+    async def resolve_provider_tuple_for_session(
         self,
         session: Any,
         scope: dict[str, str] | None,
@@ -574,8 +601,7 @@ class RuntimeResolver:
         4. First enabled ProviderConfig from ConfigStore (global default)
 
         Returns:
-            (provider, model_id, api_key, base_url, region, role_arn,
-             recursion_limit, max_retries, timeout)
+            Legacy provider tuple for compatibility with older tests.
 
         Raises:
             LLMProviderConfigError: If no provider can be resolved.
@@ -718,6 +744,20 @@ class RuntimeResolver:
                 "Create a provider via POST /models/providers. "
                 "Providers with an empty scope are visible to all users."
             ),
+        )
+
+    async def _resolve_provider_config_for_session(
+        self,
+        session: Any,
+        scope: dict[str, str] | None,
+        agent_def: Any | None = None,
+    ) -> tuple[
+        str, str, str | None, str | None, str | None, str | None, int, int | None, int | None
+    ]:
+        return await self.resolve_provider_tuple_for_session(
+            session=session,
+            scope=scope,
+            agent_def=agent_def,
         )
 
     async def _warn_if_no_tool_call_support(self, provider: str, model_id: str) -> None:
