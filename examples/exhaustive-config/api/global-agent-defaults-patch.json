@@ -1,0 +1,16 @@
+{
+  "memory": [
+    "AGENTS.md"
+  ],
+  "skills": [
+    ".cognition/skills/"
+  ],
+  "subagents": [],
+  "interrupt_on": {
+    "execute": true
+  },
+  "response_format": null,
+  "tool_token_limit_before_evict": 10000,
+  "recursion_limit": 1000,
+  "mcp_servers": {}
+}
