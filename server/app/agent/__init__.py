@@ -30,7 +30,7 @@ __all__ = [
 ]
 
 
-def __getattr__(name: str):
+def __getattr__(name: str) -> object:
     if name in {"create_cognition_agent", "CognitionAgentParams", "CognitionAgentResult"}:
         from server.app.agent.cognition_agent import (
             CognitionAgentParams,

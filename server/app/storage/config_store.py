@@ -313,9 +313,7 @@ Attempt the exact protected tool call immediately so that human-in-the-loop appr
                 definition.native = False
                 self._agent_definitions[definition.name] = definition
             except Exception as exc:
-                logger.warning(
-                    "Failed to load agent from YAML", path=str(yaml_path), error=str(exc)
-                )
+                logger.warning("Failed to load agent from YAML %s: %s", yaml_path, exc)
 
         for yml_path in agents_dir.glob("*.yml"):
             try:
@@ -323,16 +321,14 @@ Attempt the exact protected tool call immediately so that human-in-the-loop appr
                 definition.native = False
                 self._agent_definitions[definition.name] = definition
             except Exception as exc:
-                logger.warning("Failed to load agent from YAML", path=str(yml_path), error=str(exc))
+                logger.warning("Failed to load agent from YAML %s: %s", yml_path, exc)
 
         for md_path in agents_dir.glob("*.md"):
             try:
                 definition = load_agent_definition_from_markdown(md_path)
                 self._agent_definitions[definition.name] = definition
             except Exception as exc:
-                logger.warning(
-                    "Failed to load agent from Markdown", path=str(md_path), error=str(exc)
-                )
+                logger.warning("Failed to load agent from Markdown %s: %s", md_path, exc)
 
     async def seed_agent_definitions(self, scope: dict[str, str] | None = None) -> None:
         rows = await self._config_registry.list_agents(scope)
