@@ -256,18 +256,22 @@ def _create_sandbox(
 def _model_for_deepagents(params: CognitionAgentParams) -> Any:
     """Return the model object/string to hand to DeepAgents.
 
-    DeepAgents accepts either a ready BaseChatModel or a provider-prefixed model
-    string. Some runtime paths were passing a provider-prefixed string for
-    ``openai_compatible`` models, which LangChain cannot infer. When we have a
-    resolved model object from RuntimeResolver, prefer that object directly.
+    DeepAgents should receive the resolved BaseChatModel from RuntimeResolver.
+    Reconstructing provider-prefixed model strings here is unsafe because some
+    Cognition providers (notably ``openai_compatible``) are represented to
+    LangChain via explicit kwargs rather than a provider-prefixed model name.
     """
     if params.model is not None:
         return params.model
 
-    if params.provider and params.model_id:
-        return f"{params.provider}:{params.model_id}"
-
-    return params.model_id
+    provider = params.provider or "unknown"
+    model_id = params.model_id or "unknown"
+    raise ValueError(
+        "Resolved model object missing during DeepAgents creation for "
+        f"provider '{provider}' and model '{model_id}'. "
+        "Refusing to construct a provider-prefixed fallback string because it can "
+        "break provider-specific LangChain initialization."
+    )
 
 
 def _inject_subagent_middleware(subagents: list[Any], middleware: list[Any]) -> list[Any]:

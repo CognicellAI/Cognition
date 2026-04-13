@@ -395,6 +395,20 @@ class TestBuildModel:
 
         assert _model_for_deepagents(params) is resolved_model
 
+    def test_deepagents_model_input_raises_without_resolved_model(self) -> None:
+        """Fail fast instead of constructing unsafe provider:model fallbacks."""
+        from server.app.agent.cognition_agent import CognitionAgentParams, _model_for_deepagents
+
+        params = CognitionAgentParams(
+            project_path="/tmp",
+            model=None,
+            provider="openai_compatible",
+            model_id="google/gemini-3-flash-preview",
+        )
+
+        with pytest.raises(ValueError, match="Resolved model object missing"):
+            _model_for_deepagents(params)
+
     def test_openai_compatible_raises_without_base_url(self) -> None:
         """openai_compatible without a base_url raises LLMProviderConfigError."""
         from server.app.exceptions import LLMProviderConfigError
