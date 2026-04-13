@@ -18,7 +18,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from fastapi import Depends, Header
+from fastapi import Depends, Request
 
 from server.app.agent.resolver import RuntimeResolver
 from server.app.api.scoping import SessionScope, create_scope_dependency
@@ -133,29 +133,16 @@ def get_rate_limiter_dep() -> RateLimiter:
     return get_rate_limiter()
 
 
-async def get_scope_dep(
+def get_scope_dep(
+    request: Request,
     settings: Settings = Depends(get_settings_dep),  # noqa: B008
-    user: str | None = Header(None, alias="x-cognition-scope-user"),
-    project: str | None = Header(None, alias="x-cognition-scope-project"),
 ) -> SessionScope:
-    return await create_scope_dependency(settings)(user=user, project=project)
+    headers: dict[str, str | None] = {}
+    for key in settings.scope_keys:
+        header_name = f"x-cognition-scope-{key.replace('_', '-')}"
+        headers[key] = request.headers.get(header_name)
 
-
-def get_scope_headers_dep(
-    user: str | None = Header(None, alias="x-cognition-scope-user"),
-    project: str | None = Header(None, alias="x-cognition-scope-project"),
-) -> dict[str, str] | None:
-    """Extract optional scope dict from request headers.
-
-    Returns None when no scope headers are present, otherwise a dict
-    like {"user": "...", "project": "..."}.
-    """
-    scope: dict[str, str] = {}
-    if user:
-        scope["user"] = user
-    if project:
-        scope["project"] = project
-    return scope if scope else None
+    return create_scope_dependency(settings)(**headers)
 
 
 __all__ = [
@@ -167,7 +154,6 @@ __all__ = [
     "get_rate_limiter_dep",
     "get_runtime_resolver",
     "get_scope_dep",
-    "get_scope_headers_dep",
     "get_session_agent_manager_dep",
     "get_settings_dep",
     "get_storage_backend_dep",

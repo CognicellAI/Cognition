@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import AsyncGenerator
-from typing import Annotated
+from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from fastapi.responses import StreamingResponse
@@ -48,7 +48,6 @@ from server.app.llm.deep_agent_service import (
 from server.app.llm.deep_agent_service import (
     ErrorEvent as ResumeErrorEvent,
 )
-from server.app.llm.discovery import DiscoveryEngine
 from server.app.models import SessionConfig, SessionStatus
 from server.app.session_manager import build_session_workspace_path, ensure_session_workspace_path
 from server.app.settings import Settings
@@ -56,6 +55,20 @@ from server.app.storage.backend import StorageBackend
 from server.app.storage.config_store import ConfigStore
 
 router = APIRouter(prefix="/sessions", tags=["sessions"])
+
+
+async def _get_scoped_session(
+    session_id: str,
+    store: StorageBackend,
+    scope: SessionScope,
+) -> Any:
+    session = await store.get_session(session_id)
+    if session is None or (not scope.is_empty() and not scope.matches(session.scopes)):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Session not found: {session_id}",
+        )
+    return session
 
 
 @router.post(
@@ -132,7 +145,6 @@ async def list_sessions(
     Sessions are isolated per workspace - they don't appear in other workspaces.
     If scoping is enabled, only returns sessions matching the current scope.
     """
-    _ = str(settings.workspace_path)
     del metadata_filters
 
     resolved_metadata_filters: dict[str, str] = {
@@ -171,20 +183,7 @@ async def get_session(
     Returns detailed information about a specific session.
     Only returns sessions from the server's current workspace.
     """
-    _workspace_path = str(settings.workspace_path)
-    session = await store.get_session(session_id)
-
-    if session is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Session not found: {session_id}",
-        )
-
-    if not scope.is_empty() and not scope.matches(session.scopes):
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Session not found: {session_id}",
-        )
+    session = await _get_scoped_session(session_id, store, scope)
 
     return SessionResponse.from_core(session)
 
@@ -208,24 +207,15 @@ async def update_session(
 
     Updates session metadata (title) or configuration (model, temperature, etc.).
     """
-    _workspace_path = str(settings.workspace_path)
-
-    existing_session = await store.get_session(session_id)
-    if existing_session is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Session not found: {session_id}",
-        )
-
-    if not scope.is_empty() and not scope.matches(existing_session.scopes):
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Session not found: {session_id}",
-        )
+    await _get_scoped_session(session_id, store, scope)
 
     if request.config and request.config.model and not request.config.provider:
-        discovery = DiscoveryEngine(settings)
-        provider = await discovery.get_provider_for_model(request.config.model)
+        provider = None
+        providers = await config_store.list_providers(scope=scope.get_all() or None)
+        for config in providers:
+            if config.model == request.config.model:
+                provider = config.provider
+                break
         if provider:
             request.config.provider = provider  # type: ignore[assignment]
 
@@ -271,20 +261,7 @@ async def delete_session(
 
     Deletes a session and all associated messages.
     """
-    _workspace_path = str(settings.workspace_path)
-
-    session = await store.get_session(session_id)
-    if session is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Session not found: {session_id}",
-        )
-
-    if not scope.is_empty() and not scope.matches(session.scopes):
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Session not found: {session_id}",
-        )
+    await _get_scoped_session(session_id, store, scope)
 
     agent_manager.unregister_session(session_id)
 
@@ -309,20 +286,7 @@ async def abort_session(
 
     Cancels any in-progress agent operation.
     """
-    _workspace_path = str(settings.workspace_path)
-
-    session = await store.get_session(session_id)
-    if session is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Session not found: {session_id}",
-        )
-
-    if not scope.is_empty() and not scope.matches(session.scopes):
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Session not found: {session_id}",
-        )
+    session = await _get_scoped_session(session_id, store, scope)
 
     await agent_manager.abort_session(session_id, session.thread_id)
 
@@ -347,20 +311,7 @@ async def resume_session(
     store: StorageBackend = Depends(get_storage_backend_dep),  # noqa: B008
 ) -> dict[str, str | bool] | StreamingResponse:
     """Resume an interrupted Deep Agents session using native Command(resume=...)."""
-    _workspace_path = str(settings.workspace_path)
-
-    session = await store.get_session(session_id)
-    if session is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Session not found: {session_id}",
-        )
-
-    if not scope.is_empty() and not scope.matches(session.scopes):
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Session not found: {session_id}",
-        )
+    session = await _get_scoped_session(session_id, store, scope)
 
     if session.status != SessionStatus.WAITING_FOR_APPROVAL.value:
         raise HTTPException(

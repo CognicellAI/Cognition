@@ -6,7 +6,7 @@ Sessions can be scoped by any number of dimensions (user, project, team, etc.).
 
 from __future__ import annotations
 
-from collections.abc import Callable, Coroutine
+from collections.abc import Callable
 from typing import Any
 
 from fastapi import Header, HTTPException, status
@@ -75,7 +75,7 @@ def extract_scope_from_headers(settings: Settings, **header_values: str | None) 
     return SessionScope(scopes)
 
 
-def create_scope_dependency(settings: Settings) -> Callable[..., Coroutine[Any, Any, SessionScope]]:
+def create_scope_dependency(settings: Settings) -> Callable[..., SessionScope]:
     """Create a FastAPI dependency for extracting session scope.
 
     Returns a dependency function that:
@@ -94,7 +94,7 @@ def create_scope_dependency(settings: Settings) -> Callable[..., Coroutine[Any, 
         header_name = f"x-cognition-scope-{key.replace('_', '-')}"
         header_params[key] = Header(None, alias=header_name)
 
-    async def scope_dependency(**headers: Any) -> SessionScope:
+    def scope_dependency(**headers: Any) -> SessionScope:
         """Extract scope from headers with fail-closed validation."""
         scope = extract_scope_from_headers(settings, **headers)
 
