@@ -210,6 +210,8 @@ class CognitionAgentParams:
 
     project_path: str | Path
     model: Any = None
+    provider: str | None = None
+    model_id: str | None = None
     store: Any = None
     checkpointer: Any = None
     system_prompt: str | None = None
@@ -249,6 +251,23 @@ def _create_sandbox(
         k8s_warm_pool=settings.k8s_sandbox_warm_pool,
         labels=k8s_labels or None,
     )
+
+
+def _model_for_deepagents(params: CognitionAgentParams) -> Any:
+    """Return the model object/string to hand to DeepAgents.
+
+    DeepAgents accepts either a ready BaseChatModel or a provider-prefixed model
+    string. Some runtime paths were passing a provider-prefixed string for
+    ``openai_compatible`` models, which LangChain cannot infer. When we have a
+    resolved model object from RuntimeResolver, prefer that object directly.
+    """
+    if params.model is not None:
+        return params.model
+
+    if params.provider and params.model_id:
+        return f"{params.provider}:{params.model_id}"
+
+    return params.model_id
 
 
 def _inject_subagent_middleware(subagents: list[Any], middleware: list[Any]) -> list[Any]:
@@ -314,7 +333,7 @@ async def create_cognition_agent(params: CognitionAgentParams) -> CognitionAgent
 
     runtime_ctx = RuntimeContext.from_params(
         project_path=project_path,
-        model=params.model,
+        model=params.model_id or getattr(params.model, "model_name", None) or str(params.model),
         store=params.store,
         system_prompt=params.system_prompt,
         memory=params.memory,
@@ -476,7 +495,7 @@ async def create_cognition_agent(params: CognitionAgentParams) -> CognitionAgent
     create_kwargs = cast(
         Any,
         {
-            "model": params.model,
+            "model": _model_for_deepagents(params),
             "tools": agent_tools,
             "system_prompt": prompt,
             "backend": backend,
