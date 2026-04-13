@@ -10,8 +10,7 @@ Layer: 4 (Agent Runtime)
 This replaces the scattered resolution logic that was previously in:
 - ``_load_config_registry_tools()`` in deep_agent_service.py
 - ``_resolve_provider_config()`` / ``_build_model()`` in deep_agent_service.py
-- ``AgentRegistry.create_tools()`` / ``create_middleware()``
-- ``AgentDefinitionRegistry.get()``
+- ``ConfigStore.get_agent_definition()``
 
 Cognition does NOT roll its own agent logic — this is purely a
 configuration bridge from ConfigStore → deepagents primitives.
@@ -65,12 +64,12 @@ class RuntimeResolver:
         """Build BaseTool instances from all sources.
 
         Sources (in priority order):
-        1. extra_tools: Programmatically provided tools (from AgentRegistry, etc.)
+        1. extra_tools: Programmatically provided tools
         2. ConfigStore tools: API-registered tools (code or module path)
 
         Args:
             scope: Scope dict for ConfigStore lookup.
-            extra_tools: Additional tools to include (e.g., from AgentRegistry).
+            extra_tools: Additional tools to include.
 
         Returns:
             List of BaseTool instances.

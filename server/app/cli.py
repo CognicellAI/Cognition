@@ -484,7 +484,7 @@ def create_tool(
 
     Generates a Python file with a properly structured @tool decorator
     and example implementation. The tool can be automatically discovered
-    by the AgentRegistry when placed in .cognition/tools/.
+    by Cognition when placed in .cognition/tools/.
 
     Examples:
         cognition create tool file_reader
@@ -595,7 +595,7 @@ def create_middleware(
 
     Generates a Python file with a properly structured AgentMiddleware
     class and example implementation. The middleware can be automatically
-    discovered by the AgentRegistry when placed in .cognition/middleware/.
+    discovered by Cognition when placed in .cognition/middleware/.
 
     Examples:
         cognition create middleware logging
@@ -732,7 +732,7 @@ class {class_name}(AgentMiddleware):
     console.print("Next steps:")
     console.print(f"  1. Edit {file_path} to implement your middleware logic")
     console.print("  2. The middleware will be auto-discovered from .cognition/middleware/")
-    console.print("  3. Use AgentRegistry to register the middleware for sessions")
+    console.print("  3. Restart or create a new session to pick up the middleware")
     console.print()
     console.print("Note: Middleware changes apply to new sessions only (session-based reload)")
 

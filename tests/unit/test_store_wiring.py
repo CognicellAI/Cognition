@@ -332,10 +332,6 @@ class TestServiceStoreWiring:
                 "server.app.llm.deep_agent_service.get_storage_backend",
                 return_value=mock_global_storage,
             ),
-            patch(
-                "server.app.agent_registry.get_agent_registry",
-                side_effect=RuntimeError("not initialized"),
-            ),
         ):
             async for _ in service.stream_response(
                 session_id=session.id,

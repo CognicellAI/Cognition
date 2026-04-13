@@ -1,4 +1,4 @@
-"""E2E Scenarios: ConfigRegistry tools bridge (Phase 3b — #23).
+"""E2E Scenarios: ConfigStore tools bridge (Phase 3b — #23).
 
 As a builder running Cognition in a container separate from my application,
 I want to register custom Python tools via the REST API — either as source code
@@ -8,8 +8,7 @@ container rebuilds, or server restarts.
 
 Business Value:
 - Tools registered via POST /tools (with code or path) are persisted in the DB
-- GET /tools returns tools from both AgentRegistry (file-discovered) and
-  ConfigRegistry (API-registered), with source_type discrimination
+- GET /tools returns tools from ConfigStore with source_type discrimination
 - Tool validation rejects invalid payloads (neither code nor path; both)
 - Disabled tools appear in the listing but are skipped at runtime
 - Full CRUD lifecycle: register → verify → get by name → delete → gone
@@ -169,7 +168,7 @@ class TestToolValidation:
 @pytest.mark.asyncio
 @pytest.mark.e2e
 class TestUnifiedToolListing:
-    """GET /tools returns tools from both AgentRegistry and ConfigRegistry."""
+    """GET /tools returns tools from ConfigStore."""
 
     async def test_api_registered_tool_appears_in_listing(
         self, api_client: ScenarioTestClient
@@ -215,37 +214,6 @@ class TestUnifiedToolListing:
         finally:
             await api_client.delete(f"/tools/{path_tool}")
             await api_client.delete(f"/tools/{code_tool}")
-
-    async def test_listing_includes_file_discovered_and_api_tools(
-        self, api_client: ScenarioTestClient
-    ) -> None:
-        """GET /tools returns tools from both sources when both are present."""
-        # Trigger file discovery
-        await api_client.post("/tools/reload")
-
-        # Register an API tool
-        api_tool = _unique("api")
-        await api_client.post("/tools", json={"name": api_tool, "path": "test.module"})
-
-        try:
-            response = await api_client.get("/tools")
-            assert response.status_code == 200
-
-            tools = response.json()["tools"]
-            source_types = {t.get("source_type") for t in tools}
-
-            # At minimum, the API tool should be there
-            api_tools = [t for t in tools if t["name"] == api_tool]
-            assert len(api_tools) == 1
-            assert api_tools[0]["source_type"] == "api_path"
-
-            # If there are file-discovered tools, their source_type should be 'file'
-            file_tools = [t for t in tools if t.get("source_type") == "file"]
-            for ft in file_tools:
-                assert ft.get("source_type") == "file"
-
-        finally:
-            await api_client.delete(f"/tools/{api_tool}")
 
 
 @pytest.mark.asyncio

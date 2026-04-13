@@ -5,7 +5,7 @@ system_prompt, skills, and subagents (the original 3), but also:
   - memory → create_cognition_agent(memory=...)
   - interrupt_on → create_cognition_agent(interrupt_on=...)
   - middleware → resolved and passed to create_cognition_agent(middleware=...)
-  - tools → resolved and merged with registry tools
+  - tools → resolved and merged with runtime-resolved tools
   - config.model / config.provider → overrides global provider default
   - config.recursion_limit → overrides default recursion limit
   - config.temperature → passed to _build_model
@@ -102,7 +102,6 @@ def _base_patches(mock_runtime: MagicMock, session: Session) -> tuple:
 async def _run(
     patches: tuple,
     session: Session,
-    mock_registry: Any = None,
     mock_def_registry: Any = None,
 ) -> tuple[list[Any], MagicMock]:
     """Drive stream_response and return (events, create_cognition_agent mock)."""
@@ -115,10 +114,6 @@ async def _run(
 
     p1, p2, p3, p4 = patches
 
-    if mock_registry is None:
-        mock_registry = MagicMock()
-        mock_registry.create_tools = MagicMock(return_value=[])
-
     mock_config_store = MagicMock()
     mock_config_store.get_agent_definition = AsyncMock(return_value=None)
     mock_config_store.list_agent_definitions = AsyncMock(return_value=[])
@@ -128,30 +123,24 @@ async def _run(
     service._config_store = mock_config_store
 
     with p1, p2, p3 as create_agent_mock, p4:
-        with (
-            patch(
-                "server.app.agent_registry.get_agent_registry",
-                return_value=mock_registry,
-            ),
-        ):
-            if mock_def_registry is not None:
-                mock_config_store.get_agent_definition = AsyncMock(
-                    side_effect=lambda name, scope=None: mock_def_registry.get(name)
-                )
-                mock_config_store.list_agent_definitions = AsyncMock(
-                    return_value=mock_def_registry.subagents()
-                    if hasattr(mock_def_registry, "subagents")
-                    else []
-                )
+        if mock_def_registry is not None:
+            mock_config_store.get_agent_definition = AsyncMock(
+                side_effect=lambda name, scope=None: mock_def_registry.get(name)
+            )
+            mock_config_store.list_agent_definitions = AsyncMock(
+                return_value=mock_def_registry.subagents()
+                if hasattr(mock_def_registry, "subagents")
+                else []
+            )
 
-            collected = []
-            async for event in service.stream_response(
-                session_id=session.id,
-                thread_id=session.thread_id,
-                project_path="/tmp/ws",
-                content="hello",
-            ):
-                collected.append(event)
+        collected = []
+        async for event in service.stream_response(
+            session_id=session.id,
+            thread_id=session.thread_id,
+            project_path="/tmp/ws",
+            content="hello",
+        ):
+            collected.append(event)
 
     return collected, create_agent_mock
 
@@ -419,8 +408,8 @@ class TestMiddlewareWiring:
 
 class TestToolsWiring:
     @pytest.mark.asyncio
-    async def test_agent_def_tools_merged_with_registry_tools(self):
-        """Tools from AgentDefinition._resolve_tools() must be merged with registry tools."""
+    async def test_agent_def_tools_added_to_runtime_tools(self):
+        """Tools from AgentDefinition._resolve_tools() are included in runtime tools."""
         from langchain_core.tools import BaseTool
 
         from server.app.agent.definition import AgentDefinition
@@ -429,10 +418,6 @@ class TestToolsWiring:
 
         session = _make_session()
         mock_runtime = _make_mock_runtime(DoneEvent())
-
-        registry_tool = MagicMock(spec=BaseTool)
-        mock_registry = MagicMock()
-        mock_registry.create_tools = MagicMock(return_value=[registry_tool])
 
         agent_def_tool = MagicMock(spec=BaseTool)
         agent_def = AgentDefinition(
@@ -485,10 +470,6 @@ class TestToolsWiring:
                 return_value=mock_storage,
             ),
             patch(
-                "server.app.agent_registry.get_agent_registry",
-                return_value=mock_registry,
-            ),
-            patch(
                 "server.app.agent.definition.AgentDefinition._resolve_tools",
                 _fake_resolve_tools,
             ),
@@ -506,7 +487,6 @@ class TestToolsWiring:
         params = _get_params(create_agent_mock)
         assert params is not None
         passed_tools = params.tools or []
-        assert registry_tool in passed_tools
         assert agent_def_tool in passed_tools
 
     @pytest.mark.asyncio

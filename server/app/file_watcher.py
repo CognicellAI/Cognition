@@ -1,7 +1,6 @@
 """File watcher API for GUI extensibility (P2-10).
 
-Provides hot-reload capabilities for tools, middleware, and configuration files.
-Integrates with AgentRegistry to trigger reloads when files change.
+Provides hot-reload notifications for tools, middleware, and configuration files.
 """
 
 from __future__ import annotations
@@ -11,7 +10,7 @@ import fnmatch
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 import structlog
 from watchdog.events import (
@@ -26,9 +25,6 @@ from watchdog.events import (
     FileSystemEventHandler,
 )
 from watchdog.observers import Observer
-
-if TYPE_CHECKING:
-    from server.app.agent_registry import AgentRegistry
 
 logger = structlog.get_logger(__name__)
 
@@ -154,16 +150,13 @@ class WorkspaceFileHandler(FileSystemEventHandler):
 class WorkspaceWatcher:
     """File system watcher for workspace changes.
 
-    Watches configuration directories and triggers reloads via AgentRegistry.
+    Watches configuration directories and emits change notifications.
     Designed for GUI applications that need to monitor file changes.
 
     Example:
         ```python
         from server.app.file_watcher import WorkspaceWatcher
-        from server.app.agent_registry import AgentRegistry
-
-        registry = AgentRegistry()
-        watcher = WorkspaceWatcher(registry)
+        watcher = WorkspaceWatcher()
 
         # Watch directories
         watcher.watch_tools("/project/.cognition/tools")
@@ -184,16 +177,13 @@ class WorkspaceWatcher:
 
     def __init__(
         self,
-        agent_registry: AgentRegistry | None = None,
         config: FileWatcherConfig | None = None,
     ):
         """Initialize workspace watcher.
 
         Args:
-            agent_registry: Optional AgentRegistry for triggering reloads
             config: Watcher configuration
         """
-        self.agent_registry = agent_registry
         self.config = config or FileWatcherConfig()
 
         self._observer: Any | None = None
@@ -211,8 +201,7 @@ class WorkspaceWatcher:
     def watch_tools(self, tools_dir: str) -> WorkspaceWatcher:
         """Watch the tools directory for changes.
 
-        When tools change, triggers AgentRegistry.reload_tools() and
-        notifies GUI callbacks.
+        When tools change, notifies GUI callbacks.
 
         Args:
             tools_dir: Path to .cognition/tools/ directory
@@ -240,8 +229,7 @@ class WorkspaceWatcher:
     def watch_middleware(self, middleware_dir: str) -> WorkspaceWatcher:
         """Watch the middleware directory for changes.
 
-        When middleware changes, triggers AgentRegistry.mark_middleware_pending()
-        and notifies GUI callbacks.
+        When middleware changes, notifies GUI callbacks.
 
         Args:
             middleware_dir: Path to .cognition/middleware/ directory
@@ -436,12 +424,7 @@ class WorkspaceWatcher:
         )
 
         try:
-            if watch_type == "tools" and self.agent_registry:
-                # Reload tools (immediate for new sessions)
-                self.agent_registry.reload_tools()
-                logger.info("Tools reloaded")
-
-                # Notify GUI callbacks
+            if watch_type == "tools":
                 for callback in self._tools_changed_callbacks:
                     try:
                         if asyncio.iscoroutinefunction(callback):
@@ -451,13 +434,7 @@ class WorkspaceWatcher:
                     except Exception as e:
                         logger.error("Tools changed callback failed", error=str(e))
 
-            elif watch_type == "middleware" and self.agent_registry:
-                # Mark middleware pending (session-based reload)
-                # Set the _middleware_pending flag directly
-                self.agent_registry._middleware_pending = True  # noqa: SLF001
-                logger.info("Middleware marked pending")
-
-                # Notify GUI callbacks
+            elif watch_type == "middleware":
                 for callback in self._middleware_changed_callbacks:
                     try:
                         if asyncio.iscoroutinefunction(callback):
@@ -502,7 +479,7 @@ class SimpleFileWatcher:
     """Simple file watcher for basic use cases.
 
     This is a simplified API for watching a single directory or file
-    without the full AgentRegistry integration.
+    without the full workspace watcher callback flow.
 
     Example:
         ```python

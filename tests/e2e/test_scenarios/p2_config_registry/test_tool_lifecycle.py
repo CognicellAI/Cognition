@@ -89,20 +89,6 @@ class TestToolLifecycle:
         response = await api_client.delete("/tools/no-such-tool-xyz123")
         assert response.status_code == 404
 
-    async def test_tool_errors_endpoint_accessible(self, api_client) -> None:
-        """GET /tools/errors returns a list (may be empty)."""
-        response = await api_client.get("/tools/errors")
-
-        assert response.status_code == 200
-        assert isinstance(response.json(), list)
-
-    async def test_reload_endpoint_responds(self, api_client) -> None:
-        """POST /tools/reload responds without error when registry is up."""
-        response = await api_client.post("/tools/reload")
-
-        # 200 = reload succeeded; 503 = registry not initialized (acceptable in some envs)
-        assert response.status_code in (200, 503), response.text
-
     async def test_multiple_tools_coexist(self, api_client) -> None:
         """Multiple tools can be registered simultaneously."""
         names = [_unique() for _ in range(3)]
@@ -115,9 +101,7 @@ class TestToolLifecycle:
             assert resp.status_code == 201
 
         list_resp = await api_client.get("/tools")
-        # NOTE: GET /tools returns the in-memory agent registry, not the ConfigRegistry DB.
-        # Registered tools appear in GET /tools only after a reload or server restart.
-        # We verify only that the list endpoint remains healthy.
+        # GET /tools reads directly from ConfigStore.
         assert list_resp.status_code == 200
 
         # Cleanup

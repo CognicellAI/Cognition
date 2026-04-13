@@ -267,22 +267,10 @@ class DeepAgentStreamingService:
 
         Returns:
             (ResolvedAgentConfig, custom_tools) tuple. The config holds all
-            agent_def-derived overrides; custom_tools includes both
-            AgentRegistry tools and agent_def-resolved tools.
+            agent_def-derived overrides; custom_tools includes any
+            agent_def-resolved tools.
         """
         custom_tools: list[Any] = []
-        try:
-            from server.app.agent_registry import get_agent_registry
-
-            registry = get_agent_registry()
-            custom_tools = registry.create_tools()
-        except RuntimeError:
-            pass
-        except Exception:
-            logger.warning(
-                "Failed to load custom tools from agent registry — agent will run without them",
-                exc_info=True,
-            )
 
         resolved = ResolvedAgentConfig(system_prompt=system_prompt)
 
