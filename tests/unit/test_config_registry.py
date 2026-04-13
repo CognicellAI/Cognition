@@ -20,12 +20,7 @@ from server.app.storage.config_models import (
     SkillDefinition,
     ToolRegistration,
 )
-from server.app.storage.config_registry import (
-    MemoryConfigRegistry,
-    SqliteConfigRegistry,
-    get_config_registry,
-    set_config_registry,
-)
+from server.app.storage.config_registry import MemoryConfigRegistry, SqliteConfigRegistry
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -458,20 +453,3 @@ class TestSqliteConfigRegistry:
             assert result.model == "claude-3"
         finally:
             await reg.close()
-
-
-# ---------------------------------------------------------------------------
-# Global registry accessor
-# ---------------------------------------------------------------------------
-
-
-class TestGlobalRegistryAccessor:
-    def test_get_config_registry_raises_when_uninitialized(self):
-        set_config_registry(None)  # type: ignore[arg-type]
-        with pytest.raises(RuntimeError, match="ConfigRegistry not initialized"):
-            get_config_registry()
-
-    def test_set_and_get_config_registry(self, mem_reg: MemoryConfigRegistry):
-        set_config_registry(mem_reg)
-        result = get_config_registry()
-        assert result is mem_reg

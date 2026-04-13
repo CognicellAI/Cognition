@@ -310,13 +310,13 @@ class TestPostToolsAPI:
         from server.app.agent.agent_definition_registry import (
             initialize_agent_definition_registry,
         )
-        from server.app.storage.config_registry import (
-            MemoryConfigRegistry,
-            set_config_registry,
-        )
+        from server.app.api.dependencies import set_config_store
+        from server.app.storage.config_registry import MemoryConfigRegistry
+        from server.app.storage.config_store import DefaultConfigStore
 
-        initialize_agent_definition_registry(tmp_path)
-        set_config_registry(MemoryConfigRegistry())
+        def_registry = initialize_agent_definition_registry(tmp_path)
+        config_registry = MemoryConfigRegistry()
+        set_config_store(DefaultConfigStore(config_registry, def_registry))
 
     def _client(self) -> Any:
         from fastapi.testclient import TestClient
@@ -380,13 +380,13 @@ class TestGetToolsAPI:
         from server.app.agent.agent_definition_registry import (
             initialize_agent_definition_registry,
         )
-        from server.app.storage.config_registry import (
-            MemoryConfigRegistry,
-            set_config_registry,
-        )
+        from server.app.api.dependencies import set_config_store
+        from server.app.storage.config_registry import MemoryConfigRegistry
+        from server.app.storage.config_store import DefaultConfigStore
 
-        initialize_agent_definition_registry(tmp_path)
-        set_config_registry(MemoryConfigRegistry())
+        def_registry = initialize_agent_definition_registry(tmp_path)
+        config_registry = MemoryConfigRegistry()
+        set_config_store(DefaultConfigStore(config_registry, def_registry))
 
     def _client(self) -> Any:
         from fastapi.testclient import TestClient

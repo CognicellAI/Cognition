@@ -1296,37 +1296,9 @@ class MemoryConfigRegistry:
         pass  # No-op for in-memory
 
 
-# ---------------------------------------------------------------------------
-# Global registry instance
-# ---------------------------------------------------------------------------
-
-_config_registry: ConfigRegistry | None = None
-
-
-def get_config_registry() -> ConfigRegistry:
-    """Get the global ConfigRegistry instance.
-
-    Raises:
-        RuntimeError: If registry has not been initialized.
-    """
-    if _config_registry is None:
-        raise RuntimeError(
-            "ConfigRegistry not initialized. Call set_config_registry() during startup."
-        )
-    return _config_registry
-
-
-def set_config_registry(registry: ConfigRegistry) -> None:
-    """Set the global ConfigRegistry instance."""
-    global _config_registry
-    _config_registry = registry
-
-
 __all__ = [
     "ConfigRegistry",
     "MemoryConfigRegistry",
     "PostgresConfigRegistry",
     "SqliteConfigRegistry",
-    "get_config_registry",
-    "set_config_registry",
 ]

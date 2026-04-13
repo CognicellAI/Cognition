@@ -22,12 +22,11 @@ def setup_registry(tmp_path_factory):
     """Initialize agent registry and ConfigStore for the test module."""
     from pathlib import Path
 
-    from server.app.storage.config_registry import MemoryConfigRegistry, set_config_registry
+    from server.app.storage.config_registry import MemoryConfigRegistry
 
     tmpdir = tmp_path_factory.mktemp("workspace")
     def_registry = initialize_agent_definition_registry(Path(tmpdir))
     config_registry = MemoryConfigRegistry()
-    set_config_registry(config_registry)
     config_store = DefaultConfigStore(
         config_registry=config_registry,
         agent_definition_registry=def_registry,

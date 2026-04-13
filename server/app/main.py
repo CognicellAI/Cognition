@@ -35,7 +35,7 @@ from server.app.observability.mlflow_config import setup_mlflow_tracing
 from server.app.rate_limiter import RateLimitConfig, get_rate_limiter
 from server.app.session_manager import initialize_session_manager
 from server.app.settings import get_settings
-from server.app.storage import create_storage_backend, set_storage_backend
+from server.app.storage import create_storage_backend
 from server.app.storage.backend import StorageBackend
 from server.app.storage.config_store import DefaultConfigStore, set_default_config_store
 
@@ -56,18 +56,15 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # Initialize storage backend
     storage_backend = create_storage_backend(settings)
     await storage_backend.initialize()
-    set_storage_backend(storage_backend)
     set_storage_backend_dep(storage_backend)
     logger.info("Storage backend initialized")
 
-    # Initialize ConfigRegistry and wire it globally
-    from server.app.storage.config_registry import set_config_registry
+    # Initialize ConfigRegistry
     from server.app.storage.factory import create_config_dispatcher, create_config_registry
 
     config_registry = create_config_registry(settings)
     if hasattr(config_registry, "initialize_schema"):
         await config_registry.initialize_schema()
-    set_config_registry(config_registry)
     logger.info("ConfigRegistry initialized")
 
     # Initialize agent definition registry (file-based agents)
