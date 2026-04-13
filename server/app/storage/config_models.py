@@ -250,7 +250,7 @@ class ConfigChange(BaseModel):
 class ConfigChangeEvent(BaseModel):
     """In-memory change event emitted by the dispatcher to subscribers.
 
-    Subscribers (e.g. AgentDefinitionRegistry, agent cache) receive this
+    Subscribers (e.g. ConfigStore agent cache) receive this
     and decide whether/how to invalidate their local state.
 
     Attributes:

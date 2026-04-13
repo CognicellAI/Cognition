@@ -12,7 +12,6 @@ from server.app.storage.sqlite import SqliteStorageBackend
 @pytest.fixture(autouse=True)
 async def setup_storage_backend():
     """Automatically set up storage backend and DI providers for all tests."""
-    from server.app.agent.agent_definition_registry import AgentDefinitionRegistry
     from server.app.api.dependencies import (
         set_config_store,
         set_session_agent_manager_dep,
@@ -35,8 +34,7 @@ async def setup_storage_backend():
         set_session_agent_manager_dep(SessionAgentManager(settings))
 
         config_reg = MemoryConfigRegistry()
-        agent_def_reg = AgentDefinitionRegistry()
-        set_config_store(DefaultConfigStore(config_reg, agent_def_reg))
+        set_config_store(DefaultConfigStore(config_reg))
 
         yield storage
 

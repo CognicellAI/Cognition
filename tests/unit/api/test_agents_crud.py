@@ -9,7 +9,6 @@ from __future__ import annotations
 import pytest
 from fastapi.testclient import TestClient
 
-from server.app.agent.agent_definition_registry import initialize_agent_definition_registry
 from server.app.api.dependencies import set_config_store
 from server.app.main import app
 from server.app.storage.config_store import DefaultConfigStore
@@ -20,16 +19,13 @@ client = TestClient(app)
 @pytest.fixture(scope="module", autouse=True)
 def setup_registry(tmp_path_factory):
     """Initialize agent registry and ConfigStore for the test module."""
-    from pathlib import Path
-
     from server.app.storage.config_registry import MemoryConfigRegistry
 
     tmpdir = tmp_path_factory.mktemp("workspace")
-    def_registry = initialize_agent_definition_registry(Path(tmpdir))
     config_registry = MemoryConfigRegistry()
     config_store = DefaultConfigStore(
         config_registry=config_registry,
-        agent_definition_registry=def_registry,
+        workspace_path=tmpdir,
     )
     set_config_store(config_store)
     yield

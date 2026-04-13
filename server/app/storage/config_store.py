@@ -1,16 +1,16 @@
 """ConfigStore: unified configuration interface for Cognition.
 
 ConfigStore is the single persistence-facing interface for all hot-reloadable
-agent configuration. It combines the CRUD capabilities of ConfigRegistry with
-the agent definition management of AgentDefinitionRegistry into one Protocol.
+agent configuration. It combines CRUD persistence with built-in, file-backed,
+and DB-backed agent definition resolution.
 
 Layer: 2 (Persistence)
 
 Design:
 - ``ConfigStore`` Protocol defines the unified async interface.
 - ``DefaultConfigStore`` implements it by delegating to a ``ConfigRegistry``
-  (for DB CRUD) and an ``AgentDefinitionRegistry`` (for built-in + file + DB
-  agent definitions).
+  for DB CRUD and maintaining its own in-memory agent definition cache for
+  built-in + file + DB agent definitions.
 - Route handlers and services receive ConfigStore via FastAPI Depends().
 
 The old direct registry globals are replaced by this single
@@ -21,11 +21,19 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime
+from pathlib import Path
 from typing import Any, Protocol, cast, runtime_checkable
 
-from server.app.agent.definition import AgentDefinition
+from server.app.agent.definition import (
+    AgentConfig,
+    AgentDefinition,
+    load_agent_definition,
+    load_agent_definition_from_markdown,
+)
+from server.app.agent.prompts import SYSTEM_PROMPT
 from server.app.storage.config_models import (
     ConfigChange,
+    ConfigChangeEvent,
     EntityType,
     GlobalAgentDefaults,
     GlobalProviderDefaults,
@@ -207,25 +215,155 @@ class ConfigStore(Protocol):
 class DefaultConfigStore:
     """Default ConfigStore implementation.
 
-    Delegates to a ConfigRegistry for DB CRUD and an
-    AgentDefinitionRegistry for agent definition resolution.
+    Delegates to a ConfigRegistry for DB CRUD and keeps an in-memory cache of
+    built-in, file-backed, and DB-backed agent definitions.
     """
 
     def __init__(
         self,
         config_registry: Any,
-        agent_definition_registry: Any | None = None,
+        workspace_path: str | Path | None = None,
     ) -> None:
         self._config_registry = config_registry
-        self._agent_definition_registry = agent_definition_registry
+        self._workspace_path = Path(workspace_path) if workspace_path else Path.cwd()
+        self._agent_definitions: dict[str, AgentDefinition] = {}
+        self._init_builtin_agents()
+        self.reload_file_agents()
 
     @property
     def config_registry(self) -> Any:
         return self._config_registry
 
-    @property
-    def agent_definition_registry(self) -> Any | None:
-        return self._agent_definition_registry
+    def _init_builtin_agents(self) -> None:
+        default_agent = AgentDefinition(
+            name="default",
+            system_prompt=SYSTEM_PROMPT,
+            description="Full-access coding assistant. Can read, write, edit files and execute commands.",
+            mode="primary",
+            hidden=False,
+            native=True,
+            tools=[],
+            skills=[".cognition/skills/"],
+            memory=["AGENTS.md"],
+            subagents=[],
+            interrupt_on={},
+            response_format=None,
+            middleware=[],
+            config=AgentConfig(),
+        )
+        self._agent_definitions["default"] = default_agent
+
+        readonly_agent = AgentDefinition(
+            name="readonly",
+            system_prompt=SYSTEM_PROMPT
+            + """
+
+RESTRICTION: You are in READ-ONLY mode. You cannot write files, edit files, or execute commands.
+You can only read files, search, and provide analysis.""",
+            description="Analysis-only agent. Can read files and search but cannot write or execute.",
+            mode="primary",
+            hidden=False,
+            native=True,
+            tools=[],
+            skills=[".cognition/skills/"],
+            memory=["AGENTS.md"],
+            subagents=[],
+            interrupt_on={"write_file": True, "edit_file": True, "execute": True},
+            response_format=None,
+            middleware=[],
+            config=AgentConfig(),
+        )
+        self._agent_definitions["readonly"] = readonly_agent
+
+        hitl_test_agent = AgentDefinition(
+            name="hitl_test",
+            system_prompt=SYSTEM_PROMPT
+            + """
+
+HITL TESTING MODE: You should actively use tools when a task requires changing files or executing commands.
+If the user asks you to create, edit, or execute something, do not refuse or describe the steps first.
+Attempt the exact protected tool call immediately so that human-in-the-loop approval can be exercised.
+""",
+            description="Manual HITL verification agent. Attempts protected tool calls immediately so interrupt_on can be tested.",
+            mode="primary",
+            hidden=False,
+            native=True,
+            tools=[],
+            skills=[".cognition/skills/"],
+            memory=["AGENTS.md"],
+            subagents=[],
+            interrupt_on={"write_file": True, "edit_file": True, "execute": True},
+            response_format=None,
+            middleware=[],
+            config=AgentConfig(),
+        )
+        self._agent_definitions["hitl_test"] = hitl_test_agent
+
+    def reload_file_agents(self) -> None:
+        self._agent_definitions = {
+            name: agent for name, agent in self._agent_definitions.items() if agent.native
+        }
+        agents_dir = self._workspace_path / ".cognition" / "agents"
+        if not agents_dir.exists():
+            return
+
+        for yaml_path in agents_dir.glob("*.yaml"):
+            try:
+                definition = load_agent_definition(yaml_path)
+                definition.native = False
+                self._agent_definitions[definition.name] = definition
+            except Exception as exc:
+                logger.warning(
+                    "Failed to load agent from YAML", path=str(yaml_path), error=str(exc)
+                )
+
+        for yml_path in agents_dir.glob("*.yml"):
+            try:
+                definition = load_agent_definition(yml_path)
+                definition.native = False
+                self._agent_definitions[definition.name] = definition
+            except Exception as exc:
+                logger.warning("Failed to load agent from YAML", path=str(yml_path), error=str(exc))
+
+        for md_path in agents_dir.glob("*.md"):
+            try:
+                definition = load_agent_definition_from_markdown(md_path)
+                self._agent_definitions[definition.name] = definition
+            except Exception as exc:
+                logger.warning(
+                    "Failed to load agent from Markdown", path=str(md_path), error=str(exc)
+                )
+
+    async def seed_agent_definitions(self, scope: dict[str, str] | None = None) -> None:
+        rows = await self._config_registry.list_agents(scope)
+        for definition in rows:
+            if definition.name.startswith("__"):
+                continue
+            existing = self._agent_definitions.get(definition.name)
+            if existing and existing.native:
+                continue
+            self._agent_definitions[definition.name] = definition
+
+    async def on_config_change(self, event: ConfigChangeEvent) -> None:
+        if event.entity_type != "agent":
+            return
+        if event.name.startswith("__"):
+            return
+        if event.operation == "delete":
+            existing = self._agent_definitions.get(event.name)
+            if existing and not existing.native:
+                del self._agent_definitions[event.name]
+            return
+
+        data = await self._config_registry.get_agent_raw(event.name, event.scope)
+        if not data:
+            return
+        definition = AgentDefinition.model_validate(data)
+        definition.native = False
+        existing = self._agent_definitions.get(event.name)
+        if existing and existing.native:
+            return
+        self._agent_definitions[event.name] = definition
 
     # ------------------------------------------------------------------
     # Provider CRUD
@@ -307,15 +445,15 @@ class DefaultConfigStore:
         source: str = "api",
     ) -> None:
         await self._config_registry.upsert_agent(name, scope, definition, source)
-        if self._agent_definition_registry:
-            try:
-                agent_def = AgentDefinition.model_validate(definition)
-                agent_def.native = False
-                self._agent_definition_registry.put(name, agent_def)
-            except ValueError:
-                pass
-            except Exception as e:
-                logger.warning(f"Failed to update in-memory agent definition after upsert: {e}")
+        try:
+            agent_def = AgentDefinition.model_validate(definition)
+            agent_def.native = False
+            existing = self._agent_definitions.get(name)
+            if existing and existing.native:
+                return
+            self._agent_definitions[name] = agent_def
+        except Exception as e:
+            logger.warning(f"Failed to update in-memory agent definition after upsert: {e}")
 
     async def get_agent_raw(
         self, name: str, scope: dict[str, str] | None = None
@@ -324,8 +462,10 @@ class DefaultConfigStore:
 
     async def delete_agent(self, name: str, scope: dict[str, str] | None = None) -> bool:
         result = bool(await self._config_registry.delete_agent(name, scope))
-        if result and self._agent_definition_registry:
-            self._agent_definition_registry.remove(name)
+        if result:
+            existing = self._agent_definitions.get(name)
+            if existing and not existing.native:
+                del self._agent_definitions[name]
         return result
 
     # ------------------------------------------------------------------
@@ -335,24 +475,21 @@ class DefaultConfigStore:
     async def get_agent_definition(
         self, name: str, scope: dict[str, str] | None = None
     ) -> AgentDefinition | None:
-        if self._agent_definition_registry:
-            return cast(AgentDefinition | None, self._agent_definition_registry.get(name))
-        return None
+        return self._agent_definitions.get(name)
 
     async def list_agent_definitions(
         self, include_hidden: bool = False, scope: dict[str, str] | None = None
     ) -> list[AgentDefinition]:
-        if self._agent_definition_registry:
-            return cast(
-                list[AgentDefinition],
-                self._agent_definition_registry.get_all(include_hidden=include_hidden),
-            )
-        return []
+        agents = list(self._agent_definitions.values())
+        if not include_hidden:
+            agents = [agent for agent in agents if not agent.hidden]
+        return sorted(agents, key=lambda agent: agent.name)
 
     async def is_valid_primary(self, name: str, scope: dict[str, str] | None = None) -> bool:
-        if self._agent_definition_registry:
-            return bool(self._agent_definition_registry.is_valid_primary(name))
-        return False
+        agent = self._agent_definitions.get(name)
+        if agent is None or agent.hidden:
+            return False
+        return agent.mode in ("primary", "all")
 
     # ------------------------------------------------------------------
     # MCP server CRUD
