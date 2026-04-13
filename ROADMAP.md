@@ -111,6 +111,18 @@ The following fallback patterns exist and are tracked for removal. They produce 
 | `deepagents` + `anthropic` + `langchain-anthropic` | deepagents 0.3.12, anthropic 0.79.0, langchain-anthropic 1.3.2 | deepagents 0.4.12, anthropic 0.86.0, langchain-anthropic 1.4.0 | `execute()` in `SandboxBackendProtocol` gained `timeout: int \| None = None` kwarg — updated `CognitionLocalSandboxBackend` and `CognitionDockerSandboxBackend` to match. Also fixed latent `self._timeout` bug (attribute didn't exist; now uses `self._default_timeout` from parent). | Completed |
 | Core runtime and framework refresh | deepagents 0.4.12, fastapi 0.128.6, starlette 0.52.1, langgraph 1.1.3, langchain 1.2.13, langsmith 0.6.9, openai 2.17.0, typer 0.23.0, rich 14.3.2, uvicorn 0.40.0, websockets 15.0.1 | deepagents 0.5.2, fastapi 0.135.3, starlette 1.0.0, langgraph 1.1.6, langchain 1.2.15, langsmith 0.7.30, openai 2.31.0, typer 0.24.1, rich 15.0.0, uvicorn 0.44.0, websockets 16.0 | `deepagents` composite backend now expects routed backends to implement `ls()` in addition to legacy `ls_info()`; test shim updated. Verified with full unit suite after lock refresh. | Completed |
 
+### Post-RFC Cleanup Train
+
+**Release batch**: PRs #86-#91 complete the post-RFC cleanup train started after the architecture-deepening RFC landed.
+
+**Merged cleanup PRs**:
+- `#86` Unify scoping API across all routes
+- `#87` Remove dead `ConfigRegistry` globals
+- `#88` Collapse `AgentDefinitionRegistry` into `DefaultConfigStore`
+- `#89` Remove `AgentRegistry` runtime
+- `#90` Simplify runtime resolution and remove streaming shims
+- `#91` Deduplicate shared storage backend logic
+
 ### CI/CD Docker Image Builds
 
 **Description**: Automated Docker image builds on GitHub releases
