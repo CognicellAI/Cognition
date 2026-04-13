@@ -8,7 +8,7 @@ pooling for high-performance concurrent access.
 from __future__ import annotations
 
 import json
-from datetime import UTC, datetime
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Literal
 
@@ -22,6 +22,7 @@ from langgraph.store.postgres.aio import AsyncPostgresStore
 
 from server.app.models import Message, Session, SessionConfig, SessionStatus, ToolCall
 from server.app.storage.backend import StorageBackend
+from server.app.storage.common import make_message, make_session, merge_session_config, now_utc
 from server.app.storage.message_projection import project_checkpoint_messages
 
 logger = structlog.get_logger(__name__)
@@ -197,21 +198,19 @@ class PostgresStorageBackend:
         workspace_path: str | None = None,
     ) -> Session:
         """Create a new session."""
-        now = datetime.now(UTC)
+        now = now_utc()
 
-        session = Session(
-            id=session_id,
+        session = make_session(
+            session_id=session_id,
             workspace_path=workspace_path or str(self.workspace_path),
             title=title,
             thread_id=thread_id,
-            status=SessionStatus.ACTIVE,
             config=config,
-            scopes=scopes or {},
+            scopes=scopes,
+            agent_name=agent_name,
+            metadata=metadata,
             created_at=now.isoformat(),
             updated_at=now.isoformat(),
-            message_count=0,
-            agent_name=agent_name,
-            metadata=metadata or {},
         )
 
         config_json = {
@@ -339,26 +338,7 @@ class PostgresStorageBackend:
             session.metadata = dict(metadata)
 
         if config is not None:
-            existing_config = session.config
-            new_config = SessionConfig(
-                provider=config.provider or existing_config.provider,
-                model=config.model or existing_config.model,
-                temperature=config.temperature
-                if config.temperature is not None
-                else existing_config.temperature,
-                max_tokens=config.max_tokens
-                if config.max_tokens is not None
-                else existing_config.max_tokens,
-                recursion_limit=config.recursion_limit
-                if config.recursion_limit is not None
-                else existing_config.recursion_limit,
-                response_format=config.response_format
-                if config.response_format is not None
-                else existing_config.response_format,
-                system_prompt=config.system_prompt
-                if config.system_prompt is not None
-                else existing_config.system_prompt,
-            )
+            new_config = merge_session_config(session.config, config)
 
             config_json = {
                 "provider": new_config.provider,
@@ -378,7 +358,7 @@ class PostgresStorageBackend:
             return session
 
         updates.append(f"updated_at = ${param_idx}")
-        now = datetime.now(UTC)
+        now = now_utc()
         params.append(now)
         param_idx += 1
 
@@ -395,7 +375,7 @@ class PostgresStorageBackend:
 
     async def update_message_count(self, session_id: str, count: int) -> None:
         """Update the message count for a session."""
-        now = datetime.now(UTC)
+        now = now_utc()
         async with self._pool.acquire() as conn:
             await conn.execute(
                 """
@@ -441,10 +421,10 @@ class PostgresStorageBackend:
         metadata: dict[str, Any] | None = None,
     ) -> Message:
         """Create a new message."""
-        now = datetime.now(UTC)
+        now = now_utc()
 
-        message = Message(
-            id=message_id,
+        message = make_message(
+            message_id=message_id,
             session_id=session_id,
             role=role,
             content=content,
@@ -529,7 +509,7 @@ class PostgresStorageBackend:
                 await conn.execute(
                     "UPDATE sessions SET message_count = $1, updated_at = $2 WHERE id = $3",
                     len(projected_messages),
-                    datetime.now(UTC),
+                    now_utc(),
                     session_id,
                 )
 
@@ -704,12 +684,11 @@ class PostgresStorageBackend:
         scopes = json.loads(scopes_data) if scopes_data else {}
         metadata_data = row.get("metadata")
         metadata = json.loads(metadata_data) if metadata_data else {}
-        return Session(
-            id=row["id"],
+        return make_session(
+            session_id=row["id"],
             workspace_path=row["workspace_path"],
             title=row["title"],
             thread_id=row["thread_id"],
-            status=SessionStatus(row["status"]),
             config=SessionConfig(
                 provider=config_data.get("provider"),
                 model=config_data.get("model"),
@@ -725,6 +704,7 @@ class PostgresStorageBackend:
             message_count=row["message_count"],
             agent_name=row.get("agent_name", "default"),
             metadata=metadata,
+            status=SessionStatus(row["status"]),
         )
 
     def _row_to_message(self, row: asyncpg.Record) -> Message:
@@ -755,8 +735,8 @@ class PostgresStorageBackend:
             except json.JSONDecodeError:
                 metadata = None
 
-        return Message(
-            id=row["id"],
+        return make_message(
+            message_id=row["id"],
             session_id=row["session_id"],
             role=row["role"],  # type: ignore
             content=row["content"],

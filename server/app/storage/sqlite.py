@@ -7,7 +7,7 @@ database engine. Supports sessions, messages, and checkpoint persistence.
 from __future__ import annotations
 
 import json
-from datetime import UTC, datetime
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Literal
 
@@ -20,6 +20,7 @@ from langgraph.store.sqlite.aio import AsyncSqliteStore
 
 from server.app.models import Message, Session, SessionConfig, SessionStatus, ToolCall
 from server.app.storage.backend import StorageBackend
+from server.app.storage.common import make_message, make_session, merge_session_config, now_utc_iso
 from server.app.storage.message_projection import project_checkpoint_messages
 
 logger = structlog.get_logger(__name__)
@@ -123,21 +124,15 @@ class SqliteStorageBackend:
         workspace_path: str | None = None,
     ) -> Session:
         """Create a new session."""
-        now = datetime.now(UTC).isoformat()
-
-        session = Session(
-            id=session_id,
+        session = make_session(
+            session_id=session_id,
             workspace_path=workspace_path or str(self.workspace_path),
             title=title,
             thread_id=thread_id,
-            status=SessionStatus.ACTIVE,
             config=config,
-            created_at=now,
-            updated_at=now,
-            message_count=0,
+            scopes=scopes,
             agent_name=agent_name,
-            scopes=scopes or {},
-            metadata=metadata or {},
+            metadata=metadata,
         )
 
         config_json = json.dumps(
@@ -269,26 +264,7 @@ class SqliteStorageBackend:
             session.metadata = dict(metadata)
 
         if config is not None:
-            existing_config = session.config
-            new_config = SessionConfig(
-                provider=config.provider or existing_config.provider,
-                model=config.model or existing_config.model,
-                temperature=config.temperature
-                if config.temperature is not None
-                else existing_config.temperature,
-                max_tokens=config.max_tokens
-                if config.max_tokens is not None
-                else existing_config.max_tokens,
-                recursion_limit=config.recursion_limit
-                if config.recursion_limit is not None
-                else existing_config.recursion_limit,
-                response_format=config.response_format
-                if config.response_format is not None
-                else existing_config.response_format,
-                system_prompt=config.system_prompt
-                if config.system_prompt is not None
-                else existing_config.system_prompt,
-            )
+            new_config = merge_session_config(session.config, config)
 
             config_json = json.dumps(
                 {
@@ -309,7 +285,7 @@ class SqliteStorageBackend:
             return session
 
         updates.append("updated_at = ?")
-        now = datetime.now(UTC).isoformat()
+        now = now_utc_iso()
         params.append(now)
         session.updated_at = now
 
@@ -323,7 +299,7 @@ class SqliteStorageBackend:
 
     async def update_message_count(self, session_id: str, count: int) -> None:
         """Update the message count for a session."""
-        now = datetime.now(UTC).isoformat()
+        now = now_utc_iso()
         async with aiosqlite.connect(self.db_path) as db:
             await db.execute(
                 "UPDATE sessions SET message_count = ?, updated_at = ? WHERE id = ?",
@@ -360,21 +336,19 @@ class SqliteStorageBackend:
         metadata: dict[str, Any] | None = None,
     ) -> Message:
         """Create a new message."""
-        now = datetime.now(UTC).isoformat()
-
-        message = Message(
-            id=message_id,
+        message = make_message(
+            message_id=message_id,
             session_id=session_id,
             role=role,
             content=content,
             parent_id=parent_id,
-            created_at=datetime.fromisoformat(now),
             tool_calls=tool_calls,
             tool_call_id=tool_call_id,
             token_count=token_count,
             model_used=model_used,
             metadata=metadata,
         )
+        now = message.created_at.isoformat()
 
         async with aiosqlite.connect(self.db_path) as db:
             await db.execute(
@@ -512,7 +486,7 @@ class SqliteStorageBackend:
                     ),
                 )
 
-            now = datetime.now(UTC).isoformat()
+            now = now_utc_iso()
             await db.execute(
                 "UPDATE sessions SET message_count = ?, updated_at = ? WHERE id = ?",
                 (len(projected_messages), now, session_id),
@@ -642,8 +616,8 @@ class SqliteStorageBackend:
             except json.JSONDecodeError:
                 metadata = None
 
-        return Message(
-            id=row["id"],
+        return make_message(
+            message_id=row["id"],
             session_id=row["session_id"],
             role=row["role"],
             content=row["content"],

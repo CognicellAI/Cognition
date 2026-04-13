@@ -6,7 +6,6 @@ and development purposes. Data is not persisted across restarts.
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal
 
@@ -16,7 +15,14 @@ from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.store.base import BaseStore
 from langgraph.store.memory import InMemoryStore
 
-from server.app.models import Message, Session, SessionConfig, SessionStatus
+from server.app.models import Message, Session, SessionConfig
+from server.app.storage.common import (
+    filter_sessions,
+    make_message,
+    make_session,
+    merge_session_config,
+    now_utc_iso,
+)
 from server.app.storage.message_projection import project_checkpoint_messages
 
 logger = structlog.get_logger(__name__)
@@ -73,20 +79,15 @@ class MemoryStorageBackend:
         workspace_path: str | None = None,
     ) -> Session:
         """Create a new session."""
-        now = datetime.now(UTC).isoformat()
-
-        session = Session(
-            id=session_id,
+        session = make_session(
+            session_id=session_id,
             workspace_path=workspace_path or str(self.workspace_path),
             title=title,
             thread_id=thread_id,
-            status=SessionStatus.ACTIVE,
             config=config,
-            scopes=scopes or {},
-            created_at=now,
-            updated_at=now,
-            message_count=0,
-            metadata=metadata or {},
+            scopes=scopes,
+            agent_name=agent_name,
+            metadata=metadata,
         )
 
         self._sessions[session_id] = session
@@ -109,26 +110,10 @@ class MemoryStorageBackend:
         metadata_filters: dict[str, str] | None = None,
     ) -> list[Session]:
         """List all sessions."""
-        sessions = sorted(
-            self._sessions.values(),
-            key=lambda s: s.updated_at,
-            reverse=True,
+        sessions = sorted(self._sessions.values(), key=lambda s: s.updated_at, reverse=True)
+        return filter_sessions(
+            sessions, filter_scopes=filter_scopes, metadata_filters=metadata_filters
         )
-
-        # Filter by scopes if specified
-        if filter_scopes:
-            sessions = [
-                s for s in sessions if all(s.scopes.get(k) == v for k, v in filter_scopes.items())
-            ]
-
-        if metadata_filters:
-            sessions = [
-                s
-                for s in sessions
-                if all(s.metadata.get(k) == v for k, v in metadata_filters.items())
-            ]
-
-        return sessions
 
     async def update_session(
         self,
@@ -148,31 +133,12 @@ class MemoryStorageBackend:
             session.title = title
 
         if config is not None:
-            existing_config = session.config
-            session.config = SessionConfig(
-                provider=config.provider or existing_config.provider,
-                model=config.model or existing_config.model,
-                temperature=config.temperature
-                if config.temperature is not None
-                else existing_config.temperature,
-                max_tokens=config.max_tokens
-                if config.max_tokens is not None
-                else existing_config.max_tokens,
-                recursion_limit=config.recursion_limit
-                if config.recursion_limit is not None
-                else existing_config.recursion_limit,
-                response_format=config.response_format
-                if config.response_format is not None
-                else existing_config.response_format,
-                system_prompt=config.system_prompt
-                if config.system_prompt is not None
-                else existing_config.system_prompt,
-            )
+            session.config = merge_session_config(session.config, config)
 
         if metadata is not None:
             session.metadata = dict(metadata)
 
-        session.updated_at = datetime.now(UTC).isoformat()
+        session.updated_at = now_utc_iso()
         return session
 
     async def update_message_count(self, session_id: str, count: int) -> None:
@@ -180,7 +146,7 @@ class MemoryStorageBackend:
         session = self._sessions.get(session_id)
         if session:
             session.message_count = count
-            session.updated_at = datetime.now(UTC).isoformat()
+            session.updated_at = now_utc_iso()
 
     async def delete_session(self, session_id: str) -> bool:
         """Delete a session."""
@@ -211,15 +177,12 @@ class MemoryStorageBackend:
         metadata: dict[str, Any] | None = None,
     ) -> Message:
         """Create a new message."""
-        now = datetime.now(UTC)
-
-        message = Message(
-            id=message_id,
+        message = make_message(
+            message_id=message_id,
             session_id=session_id,
             role=role,
             content=content,
             parent_id=parent_id,
-            created_at=now,
             tool_calls=tool_calls,
             tool_call_id=tool_call_id,
             token_count=token_count,
@@ -292,7 +255,7 @@ class MemoryStorageBackend:
         session = self._sessions.get(session_id)
         if session is not None:
             session.message_count = len(projected_messages)
-            session.updated_at = datetime.now(UTC).isoformat()
+            session.updated_at = now_utc_iso()
 
         return len(projected_messages)
 
