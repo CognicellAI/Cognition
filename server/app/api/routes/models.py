@@ -19,7 +19,7 @@ from server.app.api.dependencies import (
     get_config_store,
     get_model_catalog_dep,
     get_runtime_resolver,
-    get_scope_headers_dep,
+    get_scope_dep,
     get_settings_dep,
 )
 from server.app.api.models import (
@@ -31,6 +31,7 @@ from server.app.api.models import (
     ProviderTestResponse,
     ProviderUpdate,
 )
+from server.app.api.scoping import SessionScope
 from server.app.llm.model_catalog import ModelCatalog
 from server.app.settings import Settings
 from server.app.storage.config_store import ConfigStore
@@ -133,12 +134,12 @@ async def list_models(
 
 @router.get("/providers", response_model=ProviderConfigList)
 async def list_providers(
-    scope: dict[str, str] | None = Depends(get_scope_headers_dep),  # noqa: B008
+    scope: SessionScope = Depends(get_scope_dep),  # noqa: B008
     config_store: ConfigStore = Depends(get_config_store),  # noqa: B008
 ) -> ProviderConfigList:
     """List all provider configs from the ConfigStore visible in the given scope."""
     try:
-        providers = await config_store.list_providers(scope=scope)
+        providers = await config_store.list_providers(scope=scope.get_all() or None)
         return ProviderConfigList(
             providers=[
                 ProviderResponse(
@@ -172,7 +173,7 @@ async def list_providers(
 @router.get("/providers/{provider_id}/models", response_model=ModelList)
 async def list_models_for_provider(
     provider_id: str,
-    scope: dict[str, str] | None = Depends(get_scope_headers_dep),  # noqa: B008
+    scope: SessionScope = Depends(get_scope_dep),  # noqa: B008
     config_store: ConfigStore = Depends(get_config_store),  # noqa: B008
     catalog: ModelCatalog = Depends(get_model_catalog_dep),  # noqa: B008
 ) -> ModelList:
@@ -184,7 +185,7 @@ async def list_models_for_provider(
     For ``openai_compatible`` providers, returns an empty model list since
     the available models depend on the upstream service (OpenRouter, vLLM, etc.).
     """
-    provider_config = await config_store.get_provider(provider_id, scope=scope)
+    provider_config = await config_store.get_provider(provider_id, scope=scope.get_all() or None)
     if provider_config is None:
         raise HTTPException(
             status_code=404,
@@ -202,12 +203,12 @@ async def list_models_for_provider(
 @router.post("/providers", response_model=ProviderResponse, status_code=201)
 async def create_provider(
     body: ProviderCreate,
-    scope: dict[str, str] | None = Depends(get_scope_headers_dep),  # noqa: B008
+    scope: SessionScope = Depends(get_scope_dep),  # noqa: B008
     config_store: ConfigStore = Depends(get_config_store),  # noqa: B008
 ) -> ProviderResponse:
     """Create or replace a provider config in the ConfigStore."""
     try:
-        effective_scope = scope if scope is not None else (body.scope or {})
+        effective_scope = scope.get_all() or (body.scope or {})
         provider_data: dict[str, Any] = {
             "id": body.id,
             "provider": body.provider,
@@ -254,12 +255,13 @@ async def create_provider(
 async def update_provider(
     provider_id: str,
     body: ProviderUpdate,
-    scope: dict[str, str] | None = Depends(get_scope_headers_dep),  # noqa: B008
+    scope: SessionScope = Depends(get_scope_dep),  # noqa: B008
     config_store: ConfigStore = Depends(get_config_store),  # noqa: B008
 ) -> ProviderResponse:
     """Partially update a provider config."""
     try:
-        provider = await config_store.get_provider(provider_id, scope=scope)
+        scope_dict = scope.get_all() or None
+        provider = await config_store.get_provider(provider_id, scope=scope_dict)
         if provider is None:
             raise HTTPException(status_code=404, detail=f"Provider '{provider_id}' not found")
 
@@ -293,12 +295,12 @@ async def update_provider(
 @router.delete("/providers/{provider_id}", status_code=204)
 async def delete_provider(
     provider_id: str,
-    scope: dict[str, str] | None = Depends(get_scope_headers_dep),  # noqa: B008
+    scope: SessionScope = Depends(get_scope_dep),  # noqa: B008
     config_store: ConfigStore = Depends(get_config_store),  # noqa: B008
 ) -> None:
     """Delete a provider config from the ConfigStore."""
     try:
-        deleted = await config_store.delete_provider(provider_id, scope=scope)
+        deleted = await config_store.delete_provider(provider_id, scope=scope.get_all() or None)
         if not deleted:
             raise HTTPException(status_code=404, detail=f"Provider '{provider_id}' not found")
     except HTTPException:
@@ -310,7 +312,7 @@ async def delete_provider(
 @router.post("/providers/{provider_id}/test", response_model=ProviderTestResponse)
 async def test_provider(
     provider_id: str,
-    scope: dict[str, str] | None = Depends(get_scope_headers_dep),  # noqa: B008
+    scope: SessionScope = Depends(get_scope_dep),  # noqa: B008
     settings: Settings = Depends(get_settings_dep),  # noqa: B008
     config_store: ConfigStore = Depends(get_config_store),  # noqa: B008
     runtime_resolver: RuntimeResolver = Depends(get_runtime_resolver),  # noqa: B008
@@ -338,7 +340,7 @@ async def test_provider(
     from server.app.exceptions import LLMProviderConfigError
 
     # 1. Fetch the provider config
-    provider_config = await config_store.get_provider(provider_id, scope=scope)
+    provider_config = await config_store.get_provider(provider_id, scope=scope.get_all() or None)
     if provider_config is None:
         raise HTTPException(status_code=404, detail=f"Provider '{provider_id}' not found")
 

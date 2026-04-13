@@ -5,7 +5,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException
 
 from server.app.agent.definition import AgentDefinition
-from server.app.api.dependencies import get_config_store
+from server.app.api.dependencies import get_config_store, get_scope_dep
 from server.app.api.models import (
     AgentConfigResponse,
     AgentCreate,
@@ -13,13 +13,10 @@ from server.app.api.models import (
     AgentResponse,
     AgentUpdate,
 )
+from server.app.api.scoping import SessionScope
 from server.app.storage.config_store import ConfigStore
 
 router = APIRouter(prefix="/agents", tags=["agents"])
-
-
-def _registry_or_503(config_store: ConfigStore = Depends(get_config_store)) -> ConfigStore:  # noqa: B008
-    return config_store
 
 
 def _agent_to_response(agent: AgentDefinition) -> AgentResponse:
@@ -50,20 +47,25 @@ def _agent_to_response(agent: AgentDefinition) -> AgentResponse:
 
 @router.get("", response_model=AgentList)
 async def list_agents(
+    scope: SessionScope = Depends(get_scope_dep),  # noqa: B008
     config_store: ConfigStore = Depends(get_config_store),  # noqa: B008
 ) -> AgentList:
     """List all available agents (excluding hidden ones)."""
-    agents = await config_store.list_agent_definitions(include_hidden=False)
+    agents = await config_store.list_agent_definitions(
+        include_hidden=False,
+        scope=scope.get_all() or None,
+    )
     return AgentList(agents=[_agent_to_response(a) for a in agents])
 
 
 @router.get("/{name}", response_model=AgentResponse)
 async def get_agent(
     name: str,
+    scope: SessionScope = Depends(get_scope_dep),  # noqa: B008
     config_store: ConfigStore = Depends(get_config_store),  # noqa: B008
 ) -> AgentResponse:
     """Get a specific agent by name."""
-    agent = await config_store.get_agent_definition(name)
+    agent = await config_store.get_agent_definition(name, scope.get_all() or None)
     if agent is None or agent.hidden:
         raise HTTPException(status_code=404, detail=f"Agent '{name}' not found")
     return _agent_to_response(agent)
@@ -72,13 +74,14 @@ async def get_agent(
 @router.post("", response_model=AgentResponse, status_code=201)
 async def create_agent(
     body: AgentCreate,
+    scope: SessionScope = Depends(get_scope_dep),  # noqa: B008
     config_store: ConfigStore = Depends(get_config_store),  # noqa: B008
 ) -> AgentResponse:
     """Create or replace an agent definition in the ConfigStore.
 
     Built-in (native) agents cannot be replaced.
     """
-    existing = await config_store.get_agent_definition(body.name)
+    existing = await config_store.get_agent_definition(body.name, scope.get_all() or None)
     if existing and existing.native:
         raise HTTPException(
             status_code=409,
@@ -110,9 +113,10 @@ async def create_agent(
                 "timeout_seconds": body.timeout_seconds,
             },
         }
-        await config_store.upsert_agent(body.name, body.scope, definition_data, "api")
+        effective_scope = scope.get_all() or body.scope
+        await config_store.upsert_agent(body.name, effective_scope, definition_data, "api")
 
-        agent_def = await config_store.get_agent_definition(body.name)
+        agent_def = await config_store.get_agent_definition(body.name, effective_scope or None)
         if agent_def is None:
             raise HTTPException(status_code=500, detail="Agent not found after creation")
         return _agent_to_response(agent_def)
@@ -124,10 +128,11 @@ async def create_agent(
 async def replace_agent(
     name: str,
     body: AgentCreate,
+    scope: SessionScope = Depends(get_scope_dep),  # noqa: B008
     config_store: ConfigStore = Depends(get_config_store),  # noqa: B008
 ) -> AgentResponse:
     """Replace an agent definition (full update)."""
-    existing = await config_store.get_agent_definition(name)
+    existing = await config_store.get_agent_definition(name, scope.get_all() or None)
     if existing and existing.native:
         raise HTTPException(
             status_code=409,
@@ -135,17 +140,19 @@ async def replace_agent(
         )
 
     body.name = name
-    return await create_agent(body, config_store=config_store)
+    return await create_agent(body, scope=scope, config_store=config_store)
 
 
 @router.patch("/{name}", response_model=AgentResponse)
 async def update_agent(
     name: str,
     body: AgentUpdate,
+    scope: SessionScope = Depends(get_scope_dep),  # noqa: B008
     config_store: ConfigStore = Depends(get_config_store),  # noqa: B008
 ) -> AgentResponse:
     """Partially update an agent definition."""
-    existing = await config_store.get_agent_definition(name)
+    scope_dict = scope.get_all() or None
+    existing = await config_store.get_agent_definition(name, scope_dict)
     if existing is None:
         raise HTTPException(status_code=404, detail=f"Agent '{name}' not found")
     if existing.native:
@@ -155,7 +162,7 @@ async def update_agent(
         )
 
     try:
-        data = await config_store.get_agent_raw(name, None)
+        data = await config_store.get_agent_raw(name, scope_dict)
         if data is None:
             raise HTTPException(status_code=404, detail=f"Agent '{name}' not found in registry")
 
@@ -194,10 +201,12 @@ async def update_agent(
 @router.delete("/{name}", status_code=204)
 async def delete_agent(
     name: str,
+    scope: SessionScope = Depends(get_scope_dep),  # noqa: B008
     config_store: ConfigStore = Depends(get_config_store),  # noqa: B008
 ) -> None:
     """Delete a user-defined agent definition."""
-    existing = await config_store.get_agent_definition(name)
+    scope_dict = scope.get_all() or None
+    existing = await config_store.get_agent_definition(name, scope_dict)
     if existing is None:
         raise HTTPException(status_code=404, detail=f"Agent '{name}' not found")
     if existing.native:
@@ -207,6 +216,6 @@ async def delete_agent(
         )
 
     try:
-        await config_store.delete_agent(name, None)
+        await config_store.delete_agent(name, scope_dict)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e)) from e
