@@ -19,6 +19,7 @@ from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from langgraph.store.base import BaseStore
 from langgraph.store.postgres.aio import AsyncPostgresStore
+from psycopg_pool import AsyncConnectionPool
 
 from server.app.models import Message, Session, SessionConfig, SessionStatus, ToolCall
 from server.app.storage.backend import StorageBackend
@@ -65,6 +66,7 @@ class PostgresStorageBackend:
 
         # Store state (LangGraph cross-thread memory)
         self._store: AsyncPostgresStore | None = None
+        self._store_context: Any | None = None
 
         logger.debug(
             "PostgresStorageBackend initialized",
@@ -593,33 +595,34 @@ class PostgresStorageBackend:
         if self._checkpointer:
             return self._checkpointer
 
-        # AsyncPostgresSaver requires psycopg, not asyncpg
-        # Create a psycopg connection for the checkpointer
-        # Convert asyncpg connection string to psycopg format
         conn_string = self.connection_string.replace("postgresql+asyncpg://", "postgresql://")
 
-        # Create async psycopg connection
-        # autocommit=True is required for AsyncPostgresSaver.setup() to work properly
-        # Without it, CREATE INDEX CONCURRENTLY fails inside transaction block
-        conn = await psycopg.AsyncConnection.connect(
+        pool = AsyncConnectionPool(
             conn_string,
-            row_factory=psycopg.rows.dict_row,
-            autocommit=True,
+            open=False,
+            min_size=1,
+            max_size=self.max_pool_size,
+            kwargs={
+                "autocommit": True,
+                "prepare_threshold": 0,
+                "row_factory": psycopg.rows.dict_row,
+            },
         )
-
-        # Create the saver with the connection
-        self._checkpointer = AsyncPostgresSaver(conn)
+        await pool.open()
+        self._checkpointer_context = pool
+        self._checkpointer = AsyncPostgresSaver(pool)
         await self._checkpointer.setup()
 
         return self._checkpointer
 
     async def close_checkpointer(self) -> None:
         """Close the checkpointer connection."""
-        if self._checkpointer:
+        if self._checkpointer_context:
             try:
-                await self._checkpointer.conn.close()
+                await self._checkpointer_context.close()
             except Exception:
                 pass  # Ignore errors during cleanup
+            self._checkpointer_context = None
             self._checkpointer = None
 
     async def get_store(self) -> BaseStore | None:
@@ -627,27 +630,32 @@ class PostgresStorageBackend:
         if self._store:
             return self._store
 
-        import psycopg
-
         conn_string = self.connection_string.replace("postgresql+asyncpg://", "postgresql://")
-        conn = await psycopg.AsyncConnection.connect(
+        pool = AsyncConnectionPool(
             conn_string,
-            row_factory=psycopg.rows.dict_row,
-            autocommit=True,
+            open=False,
+            min_size=1,
+            max_size=self.max_pool_size,
+            kwargs={
+                "autocommit": True,
+                "prepare_threshold": 0,
+                "row_factory": psycopg.rows.dict_row,
+            },
         )
-        store = AsyncPostgresStore(conn)  # type: ignore[arg-type]
-        await store.setup()
-        self._store = store
+        await pool.open()
+        self._store_context = pool
+        self._store = AsyncPostgresStore(pool)
+        await self._store.setup()
         return self._store
 
     async def close_store(self) -> None:
         """Close the store connection."""
-        if self._store:
+        if self._store_context:
             try:
-                if hasattr(self._store, "conn"):
-                    await self._store.conn.close()  # type: ignore[union-attr]
+                await self._store_context.close()
             except Exception:
                 pass
+            self._store_context = None
             self._store = None
 
     # Health check

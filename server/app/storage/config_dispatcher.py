@@ -39,10 +39,12 @@ Usage:
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 from collections.abc import Awaitable, Callable
 from typing import Any, Protocol, runtime_checkable
+
+import psycopg
+from psycopg.rows import dict_row
 
 from server.app.storage.config_models import ConfigChangeEvent
 from server.app.storage.config_registry import _scope_from_json
@@ -147,7 +149,7 @@ class InProcessDispatcher:
 class PostgresListenDispatcher:
     """Cross-instance invalidation via PostgreSQL LISTEN/NOTIFY.
 
-    Maintains a persistent asyncpg connection subscribed to
+    Maintains a persistent psycopg connection subscribed to
     "cognition_config_changes". When a NOTIFY arrives, it queries
     `config_changes` for unprocessed rows since the last poll and
     dispatches a ConfigChangeEvent for each.
@@ -156,7 +158,7 @@ class PostgresListenDispatcher:
     idle-connection timeouts on proxied Postgres deployments (e.g. RDS).
 
     Args:
-        dsn: asyncpg-compatible DSN string.
+        dsn: PostgreSQL DSN string.
         poll_batch_size: Max rows to process per NOTIFY wake-up.
         keepalive_interval: Seconds between ping queries (default 30).
     """
@@ -171,7 +173,7 @@ class PostgresListenDispatcher:
         self._poll_batch_size = poll_batch_size
         self._keepalive_interval = keepalive_interval
         self._subscribers: list[Subscriber] = []
-        self._conn: Any = None  # asyncpg.Connection
+        self._conn: psycopg.AsyncConnection[dict[str, Any]] | None = None
         self._listen_task: asyncio.Task[None] | None = None
         self._running = False
 
@@ -198,26 +200,15 @@ class PostgresListenDispatcher:
 
     async def start(self) -> None:
         """Connect to Postgres and start LISTEN loop."""
-        import asyncpg
-
         self._running = True
-        self._conn = await asyncpg.connect(self._dsn)
-        # asyncpg does not auto-decode JSONB/JSON — register codecs so that
-        # the scope column (jsonb) comes back as a Python dict, not a string.
-        await self._conn.set_type_codec(
-            "jsonb",
-            encoder=json.dumps,
-            decoder=json.loads,
-            schema="pg_catalog",
+        self._conn = await psycopg.AsyncConnection.connect(
+            self._dsn,
+            autocommit=True,
+            prepare_threshold=0,
+            row_factory=dict_row,
         )
-        await self._conn.set_type_codec(
-            "json",
-            encoder=json.dumps,
-            decoder=json.loads,
-            schema="pg_catalog",
-        )
-        await self._conn.add_listener("cognition_config_changes", self._on_notify)
-        self._listen_task = asyncio.create_task(self._keepalive_loop())
+        await self._conn.execute("LISTEN cognition_config_changes")
+        self._listen_task = asyncio.create_task(self._listen_loop())
         logger.info("PostgresListenDispatcher started LISTEN on cognition_config_changes")
 
     async def stop(self) -> None:
@@ -231,49 +222,35 @@ class PostgresListenDispatcher:
                 pass
         if self._conn is not None:
             try:
-                await self._conn.remove_listener("cognition_config_changes", self._on_notify)
+                await self._conn.execute("UNLISTEN cognition_config_changes")
                 await self._conn.close()
             except Exception:
                 pass
             self._conn = None
         logger.info("PostgresListenDispatcher stopped")
 
-    def _on_notify(
-        self,
-        conn: Any,
-        pid: int,
-        channel: str,
-        payload: str,
-    ) -> None:
-        """Called by asyncpg when a NOTIFY arrives. Schedule async processing."""
-        try:
-            loop = asyncio.get_event_loop()
-            if loop.is_running():
-                loop.create_task(self._process_pending())
-        except RuntimeError:
-            pass
-
     async def _process_pending(self) -> None:
         """Query config_changes for unprocessed rows and dispatch events."""
         if self._conn is None:
             return
         try:
-            rows = await self._conn.fetch(
+            rows = await self._conn.execute(
                 """
                 SELECT id, entity_type, name, scope, operation
                 FROM config_changes
                 WHERE processed = false
                 ORDER BY changed_at ASC
-                LIMIT $1
+                LIMIT %s
                 """,
-                self._poll_batch_size,
+                (self._poll_batch_size,),
             )
-            if not rows:
+            records = await rows.fetchall()
+            if not records:
                 return
 
-            change_ids = [row["id"] for row in rows]
+            change_ids = [row["id"] for row in records]
 
-            for row in rows:
+            for row in records:
                 event = ConfigChangeEvent(
                     entity_type=row["entity_type"],
                     name=row["name"],
@@ -282,25 +259,31 @@ class PostgresListenDispatcher:
                 )
                 await self.emit(event)
 
-            # Mark rows processed
             await self._conn.execute(
-                "UPDATE config_changes SET processed = true WHERE id = ANY($1::int[])",
-                change_ids,
+                "UPDATE config_changes SET processed = true WHERE id = ANY(%s::int[])",
+                (change_ids,),
             )
         except Exception:
             logger.exception("PostgresListenDispatcher._process_pending failed")
 
-    async def _keepalive_loop(self) -> None:
-        """Periodically ping Postgres to keep the connection alive."""
+    async def _listen_loop(self) -> None:
+        """Process LISTEN/NOTIFY events on a dedicated psycopg connection."""
+        if self._conn is None:
+            return
+
         while self._running:
             try:
-                await asyncio.sleep(self._keepalive_interval)
-                if self._conn is not None:
+                async for _notify in self._conn.notifies(
+                    timeout=self._keepalive_interval, stop_after=1
+                ):
+                    await self._process_pending()
+                    break
+                else:
                     await self._conn.execute("SELECT 1")
             except asyncio.CancelledError:
                 break
             except Exception:
-                logger.warning("PostgresListenDispatcher keepalive ping failed")
+                logger.warning("PostgresListenDispatcher listen loop failed")
 
 
 # ---------------------------------------------------------------------------

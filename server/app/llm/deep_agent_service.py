@@ -651,13 +651,25 @@ class SessionAgentManager:
     Tracks active streaming operations for abort functionality.
     """
 
-    def __init__(self, settings: Settings) -> None:
+    def __init__(
+        self,
+        settings: Settings,
+        storage_backend: Any | None = None,
+        runtime_resolver: RuntimeResolver | None = None,
+        config_store: ConfigStore | None = None,
+    ) -> None:
         """Initialize the session manager.
 
         Args:
             settings: Application settings.
+            storage_backend: Initialized storage backend shared with the app lifespan.
+            runtime_resolver: Shared runtime resolver instance.
+            config_store: Shared config store instance.
         """
         self.settings = settings
+        self._storage_backend = storage_backend
+        self._runtime_resolver = runtime_resolver
+        self._config_store = config_store
         self._services: dict[str, DeepAgentStreamingService] = {}
         self._project_paths: dict[str, str] = {}
         self._active_runtimes: dict[str, Any] = {}
@@ -677,7 +689,13 @@ class SessionAgentManager:
         Returns:
             Configured DeepAgentStreamingService for the session.
         """
-        service = DeepAgentStreamingService(settings=self.settings)
+        service = DeepAgentStreamingService(
+            settings=self.settings,
+            runtime_resolver=self._runtime_resolver,
+            config_store=self._config_store,
+        )
+        if self._storage_backend is not None:
+            service.storage_backend = self._storage_backend
         self._services[session_id] = service
         self._project_paths[session_id] = project_path
         logger.info(
