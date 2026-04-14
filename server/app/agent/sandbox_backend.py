@@ -433,6 +433,34 @@ class CognitionKubernetesSandboxBackend(SandboxBackendProtocol):
         backend = self._get_backend()
         return backend.edit(file_path, old_string, new_string, replace_all=replace_all)
 
+    def download_files(self, paths: list[str]) -> list[Any]:
+        """Download files from the K8s sandbox pod.
+
+        Delegates to K8sSandbox which uses the sandbox pod HTTP /download API.
+
+        Args:
+            paths: List of file paths to download.
+
+        Returns:
+            List of FileDownloadResponse objects.
+        """
+        backend = self._get_backend()
+        return backend.download_files(paths)
+
+    def upload_files(self, files: list[Any]) -> list[Any]:
+        """Upload files to the K8s sandbox pod.
+
+        Delegates to K8sSandbox which uses the sandbox pod HTTP /upload API.
+
+        Args:
+            files: List of FileUploadRequest objects.
+
+        Returns:
+            List of FileUploadResponse objects.
+        """
+        backend = self._get_backend()
+        return backend.upload_files(files)
+
     def terminate(self) -> None:
         """Terminate the K8s sandbox and clean up resources.
 
