@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import structlog
 from deepagents.backends import FilesystemBackend, LocalShellBackend
@@ -445,7 +445,7 @@ class CognitionKubernetesSandboxBackend(SandboxBackendProtocol):
             List of FileDownloadResponse objects.
         """
         backend = self._get_backend()
-        return backend.download_files(paths)
+        return cast(list[Any], backend.download_files(paths))
 
     def upload_files(self, files: list[Any]) -> list[Any]:
         """Upload files to the K8s sandbox pod.
@@ -459,7 +459,7 @@ class CognitionKubernetesSandboxBackend(SandboxBackendProtocol):
             List of FileUploadResponse objects.
         """
         backend = self._get_backend()
-        return backend.upload_files(files)
+        return cast(list[Any], backend.upload_files(files))
 
     def terminate(self) -> None:
         """Terminate the K8s sandbox and clean up resources.

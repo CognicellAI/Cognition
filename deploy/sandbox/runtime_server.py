@@ -17,9 +17,11 @@
 import os
 import subprocess
 import urllib.parse
+from typing import Any
 
 from fastapi import FastAPI, UploadFile, File
 from fastapi.responses import FileResponse, JSONResponse
+from starlette.responses import Response
 from pydantic import BaseModel
 
 WORKSPACE = os.environ.get("COGNITION_WORKSPACE_ROOT", "/workspace")
@@ -43,12 +45,12 @@ app = FastAPI(
 
 
 @app.get("/", summary="Health check")
-async def health_check():
+async def health_check() -> dict[str, str]:
     return {"status": "ok", "workspace": WORKSPACE}
 
 
 @app.post("/execute", summary="Execute a shell command", response_model=ExecuteResponse)
-async def execute_command(request: ExecuteRequest):
+async def execute_command(request: ExecuteRequest) -> ExecuteResponse:
     try:
         process = subprocess.run(
             ["sh", "-c", request.command],
@@ -67,19 +69,20 @@ async def execute_command(request: ExecuteRequest):
 
 
 @app.post("/upload", summary="Upload a file")
-async def upload_file(file: UploadFile = File(...)):
+async def upload_file(file: UploadFile = File(...)) -> JSONResponse:
     try:
-        dest = os.path.join(WORKSPACE, file.filename)
+        filename = file.filename or "uploaded-file"
+        dest = os.path.join(WORKSPACE, filename)
         os.makedirs(os.path.dirname(dest), exist_ok=True)
         with open(dest, "wb") as f:
             f.write(await file.read())
-        return JSONResponse(status_code=200, content={"message": f"Uploaded {file.filename}"})
+        return JSONResponse(status_code=200, content={"message": f"Uploaded {filename}"})
     except Exception as e:
         return JSONResponse(status_code=500, content={"message": str(e)})
 
 
 @app.get("/download/{encoded_path:path}", summary="Download a file")
-async def download_file(encoded_path: str):
+async def download_file(encoded_path: str) -> Response:
     path = urllib.parse.unquote(encoded_path)
     full = os.path.join(WORKSPACE, path.lstrip("/")) if not os.path.isabs(path) else path
     if os.path.isfile(full):
@@ -88,13 +91,13 @@ async def download_file(encoded_path: str):
 
 
 @app.get("/list/{encoded_path:path}", summary="List directory")
-async def list_files(encoded_path: str):
+async def list_files(encoded_path: str) -> JSONResponse:
     path = urllib.parse.unquote(encoded_path)
     full = os.path.join(WORKSPACE, path.lstrip("/")) if not os.path.isabs(path) else path
     if not os.path.isdir(full):
         return JSONResponse(status_code=404, content={"message": "Not a directory"})
     try:
-        entries = []
+        entries: list[dict[str, Any]] = []
         with os.scandir(full) as it:
             for entry in it:
                 s = entry.stat()
@@ -110,7 +113,7 @@ async def list_files(encoded_path: str):
 
 
 @app.get("/exists/{encoded_path:path}", summary="Check path exists")
-async def exists(encoded_path: str):
+async def exists(encoded_path: str) -> JSONResponse:
     path = urllib.parse.unquote(encoded_path)
     full = os.path.join(WORKSPACE, path.lstrip("/")) if not os.path.isabs(path) else path
     return JSONResponse(status_code=200, content={"path": path, "exists": os.path.exists(full)})
