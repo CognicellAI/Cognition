@@ -1,58 +1,93 @@
-# Lightweight sandbox container for per-session code execution
+# Cognition K8s Sandbox image
 #
-# This image is used by DockerExecutionBackend to provide isolated
-# execution environments for each agent session.
+# Extends the base sandbox with:
+#   - agent-sandbox python runtime server (FastAPI on :8888)
+#   - gh CLI for GitHub operations
+#   - Node.js LTS + npm for JS/Node development
+#   - git, curl, jq, make and common dev tools
+#
+# Used by the Cognition kubernetes sandbox backend.
+# Each agent session gets its own isolated pod from this image.
 #
 # Build:
-#   docker build -f Dockerfile.sandbox -t cognition-sandbox:latest .
+#   docker buildx build --platform linux/amd64 \
+#     -f Dockerfile.sandbox \
+#     -t ghcr.io/cognicellai/cognition-sandbox:test-k8s-runtime --push .
 #
-# Features:
-#   - Python 3.11 with common dev tools
-#   - Non-root user for security
-#   - /workspace mount point for project files
-#   - Minimal footprint (~150MB)
+# Non-root user: sandbox (uid 1000)
+# Runtime port:  8888 (agent-sandbox HTTP API)
+# Workspace:     /workspace (emptyDir mount)
+# Tmp:           /tmp       (emptyDir mount)
 
-ARG VERSION=dev
-ARG BUILD_DATE
-ARG VCS_REF
+ARG GH_CLI_VERSION=2.66.1
+ARG NODE_MAJOR=22
 
 FROM python:3.11-slim
 
-# OCI Annotations / Labels
-LABEL org.opencontainers.image.title="Cognition Sandbox"
-LABEL org.opencontainers.image.description="Isolated execution environment for Cognition agent sessions"
-LABEL org.opencontainers.image.url="https://github.com/CognicellAI/Cognition"
+# OCI Labels
+LABEL org.opencontainers.image.title="Cognition K8s Sandbox"
+LABEL org.opencontainers.image.description="K8s sandbox runtime for Cognition agent sessions"
 LABEL org.opencontainers.image.source="https://github.com/CognicellAI/Cognition"
-LABEL org.opencontainers.image.version="${VERSION}"
-LABEL org.opencontainers.image.created="${BUILD_DATE}"
-LABEL org.opencontainers.image.revision="${VCS_REF}"
 LABEL org.opencontainers.image.licenses="MIT"
 
-# Install common development tools agents may need
+# ── System packages ──────────────────────────────────────────────────────────
 RUN apt-get update && apt-get install -y --no-install-recommends \
     git \
     curl \
+    ca-certificates \
+    gnupg \
     jq \
+    make \
+    unzip \
     tree \
     ripgrep \
-    && rm -rf /var/lib/apt/lists/* \
-    && apt-get clean
+    openssh-client \
+    && rm -rf /var/lib/apt/lists/*
 
-# Install common Python tools
+# ── gh CLI ───────────────────────────────────────────────────────────────────
+ARG GH_CLI_VERSION
+RUN curl -fsSL \
+    "https://github.com/cli/cli/releases/download/v${GH_CLI_VERSION}/gh_${GH_CLI_VERSION}_linux_amd64.tar.gz" \
+    | tar -xz -C /usr/local/bin --strip-components=2 \
+    "gh_${GH_CLI_VERSION}_linux_amd64/bin/gh" \
+    && gh --version
+
+# ── Node.js LTS ──────────────────────────────────────────────────────────────
+ARG NODE_MAJOR
+RUN curl -fsSL https://deb.nodesource.com/setup_${NODE_MAJOR}.x | bash - \
+    && apt-get install -y --no-install-recommends nodejs \
+    && rm -rf /var/lib/apt/lists/* \
+    && node --version && npm --version
+
+# ── Python dev tools + sandbox runtime server ────────────────────────────────
 RUN pip install --no-cache-dir \
+    fastapi \
+    uvicorn \
+    python-multipart \
     ruff \
     mypy \
     pytest \
-    black
+    black \
+    uv
 
-# Security: run as non-root
+# ── Non-root sandbox user ─────────────────────────────────────────────────────
 RUN groupadd -r sandbox && useradd -r -g sandbox -u 1000 -m sandbox
 
-# Create workspace directory
-RUN mkdir -p /workspace && chown sandbox:sandbox /workspace
+# ── Writable mount points (readOnlyRootFilesystem: true in SandboxTemplate) ──
+RUN mkdir -p /workspace /tmp && chown sandbox:sandbox /workspace /tmp
+
+# ── Runtime server (agent-sandbox python-runtime protocol) ───────────────────
+COPY deploy/sandbox/runtime_server.py /app/runtime_server.py
+RUN chown sandbox:sandbox /app/runtime_server.py
 
 WORKDIR /workspace
 USER sandbox
 
-# Keep container running so exec_run works
-CMD ["sleep", "infinity"]
+# Git defaults so agents can commit without extra config
+RUN git config --global user.email "sandbox@cognition.local" \
+    && git config --global user.name "Cognition Sandbox" \
+    && git config --global credential.helper "store"
+
+EXPOSE 8888
+
+CMD ["uvicorn", "runtime_server:app", "--app-dir", "/app", "--host", "0.0.0.0", "--port", "8888", "--log-level", "info"]

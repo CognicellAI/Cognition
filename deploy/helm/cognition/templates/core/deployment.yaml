@@ -34,7 +34,6 @@ spec:
       securityContext:
         {{- toYaml .Values.podSecurityContext | nindent 8 }}
       initContainers:
-        # Wait for database to be ready
         - name: wait-for-db
           image: busybox:1.36
           command:
@@ -52,6 +51,42 @@ spec:
             readOnlyRootFilesystem: true
             runAsNonRoot: true
             runAsUser: 1000
+        - name: init-workspace
+          image: busybox:1.36
+          command:
+            - sh
+            - -c
+            - |
+              WS="/home/cognition"
+              echo "Initializing workspace at ${WS}..."
+              mkdir -p "${WS}/.cognition/skills"
+              mkdir -p "${WS}/.cognition/tools"
+              mkdir -p "${WS}/.cognition/middleware"
+              mkdir -p "${WS}/.cognition/agents"
+              mkdir -p "${WS}/.cognition/sandboxes"
+              if [ ! -f "${WS}/AGENTS.md" ]; then
+                if [ -f "/etc/cognition-config/AGENTS.md" ]; then
+                  cp /etc/cognition-config/AGENTS.md "${WS}/AGENTS.md"
+                  echo "Copied AGENTS.md from ConfigMap"
+                else
+                  echo "# Cognition Agent Configuration" > "${WS}/AGENTS.md"
+                  echo "No custom AGENTS.md provided." >> "${WS}/AGENTS.md"
+                  echo "Created default AGENTS.md"
+                fi
+              fi
+              chown -R 1000:1000 "${WS}"
+              echo "Workspace initialized"
+          volumeMounts:
+            - name: workspace
+              mountPath: /home/cognition
+            - name: config
+              mountPath: /etc/cognition-config
+              readOnly: true
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: false
+            runAsUser: 0
       containers:
         - name: {{ .Chart.Name }}
           securityContext:
@@ -59,13 +94,14 @@ spec:
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           env:
-            # Server settings
+            - name: HOME
+              value: "/home/cognition"
             - name: COGNITION_HOST
               value: "0.0.0.0"
             - name: COGNITION_PORT
               value: "{{ .Values.service.port }}"
             - name: COGNITION_WORKSPACE_ROOT
-              value: "/workspace"
+              value: "/home/cognition"
             - name: COGNITION_LOG_LEVEL
               value: "{{ .Values.config.logLevel }}"
             
@@ -82,9 +118,7 @@ spec:
               value: "postgresql+asyncpg://{{ .Values.database.user }}:$(DB_PASSWORD)@{{ .Values.database.host }}:5432/{{ .Values.database.name }}"
               {{- end }}
             
-            # Credentials (API keys remain as env vars in v0.3.0)
-            # Configuration moved to .cognition/config.yaml via ConfigMap
-            # Testing if env vars still work in v0.3.0
+            # Provider settings
             - name: COGNITION_LLM_PROVIDER
               value: "{{ .Values.config.llm.provider }}"
             - name: COGNITION_LLM_MODEL
@@ -215,17 +249,14 @@ spec:
             {{- toYaml .Values.resources | nindent 12 }}
           volumeMounts:
             - name: workspace
-              mountPath: /workspace
-            - name: config
-              mountPath: /app/.cognition
-              readOnly: true
+              mountPath: /home/cognition
             - name: tmp
               mountPath: /tmp
       volumes:
         - name: workspace
-          {{- if .Values.persistence.workspace.enabled }}
+          {{- if .Values.workspace.persistence.enabled }}
           persistentVolumeClaim:
-            claimName: {{ .Values.persistence.workspace.existingClaim | default (printf "%s-workspace" (include "cognition.fullname" .)) }}
+            claimName: {{ .Values.workspace.persistence.existingClaim | default (printf "%s-workspace" (include "cognition.fullname" .)) }}
           {{- else }}
           emptyDir: {}
           {{- end }}
