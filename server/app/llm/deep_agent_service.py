@@ -333,6 +333,8 @@ class DeepAgentStreamingService:
             agent_params = CognitionAgentParams(
                 project_path=project_path,
                 model=model,
+                provider=provider,
+                model_id=model_id,
                 store=store,
                 checkpointer=checkpointer,
                 settings=self.settings,
@@ -479,6 +481,8 @@ class DeepAgentStreamingService:
             agent_params = CognitionAgentParams(
                 project_path=project_path,
                 model=model,
+                provider=provider,
+                model_id=model_id,
                 store=store,
                 checkpointer=checkpointer,
                 settings=self.settings,

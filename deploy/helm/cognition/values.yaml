@@ -85,11 +85,14 @@ database:
   existingSecretName: ""
   existingSecretKey: "uri"
 
-# Persistence configuration
-persistence:
-  workspace:
-    enabled: true
-    # Storage class for the workspace PVC
+# Workspace configuration
+# The workspace serves as both HOME and COGNITION_WORKSPACE_ROOT.
+# By default, an emptyDir is used (ephemeral — state lives in Postgres).
+# Enable persistence if you need custom tools/skills/agents to survive pod restarts.
+workspace:
+  persistence:
+    enabled: false
+    # Storage class for the workspace PVC (required when enabled)
     storageClass: longhorn
     # Access mode - ReadWriteMany allows multiple pods to share the workspace
     accessMode: ReadWriteMany

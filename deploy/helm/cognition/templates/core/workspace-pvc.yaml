@@ -1,4 +1,4 @@
-{{- if .Values.persistence.workspace.enabled }}
+{{- if .Values.workspace.persistence.enabled }}
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
@@ -8,9 +8,9 @@ metadata:
     {{- include "cognition.labels" . | nindent 4 }}
 spec:
   accessModes:
-    - {{ .Values.persistence.workspace.accessMode }}
-  storageClassName: {{ .Values.persistence.workspace.storageClass }}
+    - {{ .Values.workspace.persistence.accessMode }}
+  storageClassName: {{ .Values.workspace.persistence.storageClass }}
   resources:
     requests:
-      storage: {{ .Values.persistence.workspace.size }}
+      storage: {{ .Values.workspace.persistence.size }}
 {{- end }}

@@ -381,6 +381,34 @@ class TestBuildModel:
             assert call_kwargs[1]["base_url"] == "https://openrouter.ai/api/v1"
             assert call_kwargs[1]["api_key"] == "sk-or-key"
 
+    def test_deepagents_model_input_preserves_resolved_model_instance(self) -> None:
+        """Do not reconstruct provider-prefixed strings from resolved models."""
+        from server.app.agent.cognition_agent import CognitionAgentParams, _model_for_deepagents
+
+        resolved_model = object()
+        params = CognitionAgentParams(
+            project_path="/tmp",
+            model=resolved_model,
+            provider="openai_compatible",
+            model_id="google/gemini-3-flash-preview",
+        )
+
+        assert _model_for_deepagents(params) is resolved_model
+
+    def test_deepagents_model_input_raises_without_resolved_model(self) -> None:
+        """Fail fast instead of constructing unsafe provider:model fallbacks."""
+        from server.app.agent.cognition_agent import CognitionAgentParams, _model_for_deepagents
+
+        params = CognitionAgentParams(
+            project_path="/tmp",
+            model=None,
+            provider="openai_compatible",
+            model_id="google/gemini-3-flash-preview",
+        )
+
+        with pytest.raises(ValueError, match="Resolved model object missing"):
+            _model_for_deepagents(params)
+
     def test_openai_compatible_raises_without_base_url(self) -> None:
         """openai_compatible without a base_url raises LLMProviderConfigError."""
         from server.app.exceptions import LLMProviderConfigError

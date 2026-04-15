@@ -771,6 +771,10 @@ class PostgresConfigRegistry:
         return Json(definition)
 
     @staticmethod
+    def _jsonb_param(value: Json) -> psycopg.types.json.Jsonb:
+        return psycopg.types.json.Jsonb(value.obj)
+
+    @staticmethod
     async def _fetch_all(
         conn: psycopg.AsyncConnection[dict[str, Any]], query: str, params: tuple[Any, ...]
     ) -> list[dict[str, Any]]:
@@ -811,8 +815,8 @@ class PostgresConfigRegistry:
                 (
                     entity_type,
                     name,
-                    self._serialize_scope(scope),
-                    self._serialize_definition(definition),
+                    self._jsonb_param(self._serialize_scope(scope)),
+                    self._jsonb_param(self._serialize_definition(definition)),
                     source,
                     now,
                     now,
@@ -827,7 +831,7 @@ class PostgresConfigRegistry:
         async with pool.connection() as conn:
             result = await conn.execute(
                 "DELETE FROM config_entities WHERE entity_type=%s AND name=%s AND scope=%s",
-                (entity_type, name, self._serialize_scope(scope or {})),
+                (entity_type, name, self._jsonb_param(self._serialize_scope(scope or {}))),
             )
             deleted = bool(result != "DELETE 0")
             if deleted:
@@ -899,7 +903,7 @@ class PostgresConfigRegistry:
             INSERT INTO config_changes (entity_type, name, scope, operation, changed_at, processed)
             VALUES (%s, %s, %s, %s, %s, false)
             """,
-            (entity_type, name, self._serialize_scope(scope), operation, now),
+            (entity_type, name, self._jsonb_param(self._serialize_scope(scope)), operation, now),
         )
         # NOTIFY for cross-instance invalidation
         await conn.execute("NOTIFY cognition_config_changes")
@@ -1057,7 +1061,7 @@ class PostgresConfigRegistry:
             existing = await self._fetch_one(
                 conn,
                 "SELECT id FROM config_entities WHERE entity_type=%s AND name=%s AND scope=%s",
-                (entity_type, name, self._serialize_scope(scope)),
+                (entity_type, name, self._jsonb_param(self._serialize_scope(scope))),
             )
             if existing:
                 return False
@@ -1069,8 +1073,8 @@ class PostgresConfigRegistry:
                 (
                     entity_type,
                     name,
-                    self._serialize_scope(scope),
-                    self._serialize_definition(definition),
+                    self._jsonb_param(self._serialize_scope(scope)),
+                    self._jsonb_param(self._serialize_definition(definition)),
                     source,
                     now,
                     now,

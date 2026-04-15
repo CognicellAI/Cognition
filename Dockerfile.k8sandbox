@@ -1,0 +1,175 @@
+# Cognition K8s sandbox image
+#
+# Extends the base Cognition sandbox (Dockerfile.sandbox) with:
+#   - gh CLI for GitHub operations (clone, PR create, issue ops)
+#   - Node.js LTS + npm for JS/Node app development
+#   - agent-sandbox HTTP runtime server on port 8888
+#
+# The runtime server implements the k8s-agent-sandbox SDK protocol:
+#   POST /execute   - run a shell command, returns stdout/stderr/exit_code
+#   POST /upload    - upload a file into the sandbox workspace
+#   GET  /download  - download a file from the sandbox workspace
+#   GET  /list      - list a directory
+#   GET  /exists    - check if a path exists
+#
+# Workspace is /home/cognition (emptyDir mount from SandboxTemplate).
+# COGNITION_WORKSPACE_ROOT=/home/cognition is set in the SandboxTemplate env.
+#
+# Build:
+#   docker buildx build --platform linux/amd64 \
+#     -f Dockerfile.k8sandbox \
+#     -t ghcr.io/cognicellai/cognition-k8sandbox:test-k8s-runtime --push .
+
+ARG VERSION=dev
+ARG BUILD_DATE
+ARG VCS_REF
+ARG GH_CLI_VERSION=2.66.1
+ARG NODE_MAJOR=22
+
+FROM python:3.11-slim
+
+LABEL org.opencontainers.image.title="Cognition K8s Sandbox"
+LABEL org.opencontainers.image.description="K8s sandbox runtime for Cognition agent sessions"
+LABEL org.opencontainers.image.source="https://github.com/CognicellAI/Cognition"
+LABEL org.opencontainers.image.version="${VERSION}"
+LABEL org.opencontainers.image.created="${BUILD_DATE}"
+LABEL org.opencontainers.image.revision="${VCS_REF}"
+LABEL org.opencontainers.image.licenses="MIT"
+
+# ── System packages ───────────────────────────────────────────────────────────
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    git \
+    curl \
+    ca-certificates \
+    gnupg \
+    jq \
+    make \
+    tree \
+    ripgrep \
+    openssh-client \
+    && rm -rf /var/lib/apt/lists/*
+
+# ── gh CLI ────────────────────────────────────────────────────────────────────
+ARG GH_CLI_VERSION
+RUN curl -fsSL \
+    "https://github.com/cli/cli/releases/download/v${GH_CLI_VERSION}/gh_${GH_CLI_VERSION}_linux_amd64.tar.gz" \
+    | tar -xz -C /usr/local/bin --strip-components=2 \
+    "gh_${GH_CLI_VERSION}_linux_amd64/bin/gh" \
+    && gh --version
+
+# ── Node.js LTS ───────────────────────────────────────────────────────────────
+ARG NODE_MAJOR
+RUN curl -fsSL https://deb.nodesource.com/setup_${NODE_MAJOR}.x | bash - \
+    && apt-get install -y --no-install-recommends nodejs \
+    && rm -rf /var/lib/apt/lists/* \
+    && node --version && npm --version
+
+# ── Python dev tools + runtime server deps ────────────────────────────────────
+RUN pip install --no-cache-dir \
+    fastapi \
+    "uvicorn[standard]" \
+    python-multipart \
+    ruff \
+    mypy \
+    pytest \
+    black \
+    uv
+
+# ── Non-root user ─────────────────────────────────────────────────────────────
+RUN groupadd -r sandbox && useradd -r -g sandbox -u 1000 -m sandbox
+
+# ── Directories: workspace + tmp must be writable (readOnlyRootFilesystem=true)
+RUN mkdir -p /home/cognition /tmp /app && chown sandbox:sandbox /home/cognition /tmp /app
+
+# ── Runtime server ────────────────────────────────────────────────────────────
+# Implements the agent-sandbox HTTP protocol the k8s-agent-sandbox SDK calls.
+# All commands run via sh -c so shell features (pipes, redirects) work correctly.
+RUN cat > /app/runtime_server.py << 'PYEOF'
+import os
+import subprocess
+import urllib.parse
+from fastapi import FastAPI, UploadFile, File
+from fastapi.responses import FileResponse, JSONResponse
+from pydantic import BaseModel
+
+WORKSPACE = os.environ.get("COGNITION_WORKSPACE_ROOT", "/home/cognition")
+
+class ExecuteRequest(BaseModel):
+    command: str
+
+class ExecuteResponse(BaseModel):
+    stdout: str
+    stderr: str
+    exit_code: int
+
+app = FastAPI(title="Cognition K8s Sandbox Runtime", version="1.0.0")
+
+@app.get("/")
+async def health():
+    return {"status": "ok", "workspace": WORKSPACE}
+
+@app.post("/execute", response_model=ExecuteResponse)
+async def execute(req: ExecuteRequest):
+    try:
+        p = subprocess.run(
+            ["sh", "-c", req.command],
+            capture_output=True, text=True, cwd=WORKSPACE,
+            env={**os.environ, "HOME": "/home/sandbox", "COGNITION_WORKSPACE_ROOT": WORKSPACE},
+        )
+        return ExecuteResponse(stdout=p.stdout, stderr=p.stderr, exit_code=p.returncode)
+    except Exception as e:
+        return ExecuteResponse(stdout="", stderr=str(e), exit_code=1)
+
+@app.post("/upload")
+async def upload(file: UploadFile = File(...)):
+    try:
+        dest = os.path.join(WORKSPACE, file.filename.lstrip("/"))
+        os.makedirs(os.path.dirname(dest) or WORKSPACE, exist_ok=True)
+        with open(dest, "wb") as f:
+            f.write(await file.read())
+        return JSONResponse(200, {"message": f"Uploaded {file.filename}"})
+    except Exception as e:
+        return JSONResponse(500, {"message": str(e)})
+
+@app.get("/download/{path:path}")
+async def download(path: str):
+    p = urllib.parse.unquote(path)
+    full = p if os.path.isabs(p) else os.path.join(WORKSPACE, p.lstrip("/"))
+    if os.path.isfile(full):
+        return FileResponse(full, media_type="application/octet-stream", filename=os.path.basename(full))
+    return JSONResponse(404, {"message": "Not found"})
+
+@app.get("/list/{path:path}")
+async def list_dir(path: str):
+    p = urllib.parse.unquote(path)
+    full = p if os.path.isabs(p) else os.path.join(WORKSPACE, p.lstrip("/"))
+    if not os.path.isdir(full):
+        return JSONResponse(404, {"message": "Not a directory"})
+    entries = [
+        {"name": e.name, "size": e.stat().st_size,
+         "type": "directory" if e.is_dir() else "file",
+         "mod_time": e.stat().st_mtime}
+        for e in os.scandir(full)
+    ]
+    return JSONResponse(200, entries)
+
+@app.get("/exists/{path:path}")
+async def exists(path: str):
+    p = urllib.parse.unquote(path)
+    full = p if os.path.isabs(p) else os.path.join(WORKSPACE, p.lstrip("/"))
+    return JSONResponse(200, {"path": p, "exists": os.path.exists(full)})
+PYEOF
+
+RUN chown sandbox:sandbox /app/runtime_server.py
+
+WORKDIR /home/cognition
+USER sandbox
+
+# Default git identity for sandbox commits
+RUN git config --global user.email "sandbox@cognition.local" \
+    && git config --global user.name "Cognition Sandbox" \
+    && git config --global credential.helper store
+
+EXPOSE 8888
+
+CMD ["uvicorn", "runtime_server:app", "--app-dir", "/app", "--host", "0.0.0.0", "--port", "8888"]

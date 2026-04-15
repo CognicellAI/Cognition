@@ -29,6 +29,15 @@ from server.app.storage.message_projection import project_checkpoint_messages
 logger = structlog.get_logger(__name__)
 
 
+def _normalize_sqlalchemy_async_dsn(connection_string: str) -> str:
+    """Normalize Postgres DSNs for SQLAlchemy async usage."""
+    if connection_string.startswith("postgresql+asyncpg://"):
+        return connection_string
+    if connection_string.startswith("postgresql://"):
+        return connection_string.replace("postgresql://", "postgresql+asyncpg://", 1)
+    return connection_string
+
+
 class PostgresStorageBackend:
     """PostgreSQL-based unified storage backend.
 
@@ -81,9 +90,11 @@ class PostgresStorageBackend:
 
         from server.app.storage.schema import metadata
 
+        sqlalchemy_dsn = _normalize_sqlalchemy_async_dsn(self.connection_string)
+
         # Create async SQLAlchemy engine
         async_engine = create_async_engine(
-            self.connection_string,
+            sqlalchemy_dsn,
             pool_size=self.min_pool_size,
             max_overflow=self.max_pool_size - self.min_pool_size,
         )

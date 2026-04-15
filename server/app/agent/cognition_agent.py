@@ -210,6 +210,8 @@ class CognitionAgentParams:
 
     project_path: str | Path
     model: Any = None
+    provider: str | None = None
+    model_id: str | None = None
     store: Any = None
     checkpointer: Any = None
     system_prompt: str | None = None
@@ -248,6 +250,38 @@ def _create_sandbox(
         k8s_ttl=settings.k8s_sandbox_ttl,
         k8s_warm_pool=settings.k8s_sandbox_warm_pool,
         labels=k8s_labels or None,
+    )
+
+
+def _model_for_deepagents(params: CognitionAgentParams) -> Any:
+    """Return the model object/string to hand to DeepAgents.
+
+    DeepAgents should receive the resolved BaseChatModel from RuntimeResolver.
+    Reconstructing provider-prefixed model strings here is unsafe because some
+    Cognition providers (notably ``openai_compatible``) are represented to
+    LangChain via explicit kwargs rather than a provider-prefixed model name.
+    """
+    # Unit tests and some integration paths construct agents without a resolved
+    # provider-backed model object. Preserve the pre-fix behavior for that case
+    # by falling back to the string/default model that DeepAgents accepted before,
+    # while still avoiding the unsafe provider-prefixed reconstruction when we do
+    # know a provider and model_id pair.
+    if params.model is not None:
+        return params.model
+
+    if params.provider is None and params.model_id is None:
+        return None
+
+    if params.provider is None and params.model_id is not None:
+        return params.model_id
+
+    provider = params.provider or "unknown"
+    model_id = params.model_id or "unknown"
+    raise ValueError(
+        "Resolved model object missing during DeepAgents creation for "
+        f"provider '{provider}' and model '{model_id}'. "
+        "Refusing to construct a provider-prefixed fallback string because it can "
+        "break provider-specific LangChain initialization."
     )
 
 
@@ -314,7 +348,7 @@ async def create_cognition_agent(params: CognitionAgentParams) -> CognitionAgent
 
     runtime_ctx = RuntimeContext.from_params(
         project_path=project_path,
-        model=params.model,
+        model=params.model_id or getattr(params.model, "model_name", None) or str(params.model),
         store=params.store,
         system_prompt=params.system_prompt,
         memory=params.memory,
@@ -476,7 +510,7 @@ async def create_cognition_agent(params: CognitionAgentParams) -> CognitionAgent
     create_kwargs = cast(
         Any,
         {
-            "model": params.model,
+            "model": _model_for_deepagents(params),
             "tools": agent_tools,
             "system_prompt": prompt,
             "backend": backend,
