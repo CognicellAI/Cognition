@@ -261,8 +261,19 @@ def _model_for_deepagents(params: CognitionAgentParams) -> Any:
     Cognition providers (notably ``openai_compatible``) are represented to
     LangChain via explicit kwargs rather than a provider-prefixed model name.
     """
+    # Unit tests and some integration paths construct agents without a resolved
+    # provider-backed model object. Preserve the pre-fix behavior for that case
+    # by falling back to the string/default model that DeepAgents accepted before,
+    # while still avoiding the unsafe provider-prefixed reconstruction when we do
+    # know a provider and model_id pair.
     if params.model is not None:
         return params.model
+
+    if params.provider is None and params.model_id is None:
+        return None
+
+    if params.provider is None and params.model_id is not None:
+        return params.model_id
 
     provider = params.provider or "unknown"
     model_id = params.model_id or "unknown"
