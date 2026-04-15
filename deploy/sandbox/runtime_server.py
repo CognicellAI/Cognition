@@ -19,10 +19,10 @@ import subprocess
 import urllib.parse
 from typing import Any
 
-from fastapi import FastAPI, UploadFile, File
+from fastapi import FastAPI, File, UploadFile
 from fastapi.responses import FileResponse, JSONResponse
-from starlette.responses import Response
 from pydantic import BaseModel
+from starlette.responses import Response
 
 WORKSPACE = os.environ.get("COGNITION_WORKSPACE_ROOT", "/workspace")
 
