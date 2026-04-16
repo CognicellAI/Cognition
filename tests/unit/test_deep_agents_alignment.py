@@ -6,13 +6,13 @@ import pytest
 from langchain_core.messages import AIMessageChunk
 
 from server.app.agent.cognition_agent import _resolve_response_format
+from server.app.agent.resolver import RuntimeResolver
 from server.app.agent.runtime import (
     DeepAgentRuntime,
     PlanningEvent,
     StepCompleteEvent,
     _resolve_middleware,
 )
-from server.app.llm.deep_agent_service import _build_model
 from server.app.settings import Settings
 
 
@@ -90,18 +90,18 @@ class TestProviderModelPlumbing:
         settings.aws_secret_access_key = None
         settings.aws_session_token = None
         settings.bedrock_role_arn = None
+        resolver = RuntimeResolver(config_store=None, settings=settings)
 
         with patch(
             "server.app.agent.resolver.init_chat_model", return_value=MagicMock()
         ) as init_model:
-            _build_model(
+            resolver.build_model(
                 provider="openai",
                 model_id="gpt-4o",
                 api_key="key",
                 base_url=None,
                 region=None,
                 role_arn=None,
-                settings=settings,
                 temperature=0.1,
                 max_retries=5,
                 timeout=60,

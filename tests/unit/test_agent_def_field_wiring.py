@@ -525,12 +525,11 @@ class TestToolsWiring:
         mock_config_store.list_providers = AsyncMock(return_value=[mock_provider])
 
         resolver = RuntimeResolver(config_store=mock_config_store, settings=MagicMock())
-        result = await resolver._resolve_provider_config_for_session(
+        result = await resolver.resolve_model_config_for_session(
             session=session, scope=None, agent_def=agent_def
         )
 
-        # result[6] is recursion_limit — session (999) beats agent_def (42)
-        assert result[6] == 999
+        assert result.recursion_limit == 999
 
 
 class TestConfigMaxTokens:
@@ -552,18 +551,17 @@ class TestConfigMaxTokens:
         with (
             patch.object(
                 resolver,
-                "_resolve_provider_config_for_session",
+                "select_model_target_for_session",
                 new=AsyncMock(
-                    return_value=(
-                        "openai",
-                        "gpt-4o",
-                        None,
-                        None,
-                        None,
-                        None,
-                        1000,
-                        2,
-                        30,
+                    return_value=MagicMock(
+                        provider="openai",
+                        model_id="gpt-4o",
+                        api_key_env=None,
+                        base_url=None,
+                        region=None,
+                        role_arn=None,
+                        max_retries=2,
+                        timeout=30,
                     )
                 ),
             ),
@@ -580,7 +578,7 @@ class TestConfigMaxTokens:
 
     def test_build_bedrock_model_passes_top_level_max_tokens(self):
         """Bedrock max_tokens should use the dedicated top-level ChatBedrock kwarg."""
-        from server.app.llm.deep_agent_service import _build_bedrock_model
+        from server.app.agent.resolver import RuntimeResolver
 
         settings = MagicMock()
         settings.aws_region = "us-east-1"
@@ -588,19 +586,13 @@ class TestConfigMaxTokens:
         settings.aws_access_key_id = None
         settings.aws_secret_access_key = None
         settings.aws_session_token = None
+        resolver = RuntimeResolver(config_store=None, settings=settings)
 
-        with (
-            patch(
-                "server.app.api.dependencies.get_runtime_resolver",
-                side_effect=RuntimeError,
-            ),
-            patch("langchain_aws.ChatBedrock", return_value=MagicMock()) as chat_bedrock,
-        ):
-            _build_bedrock_model(
+        with patch("langchain_aws.ChatBedrock", return_value=MagicMock()) as chat_bedrock:
+            resolver._build_bedrock_model(
                 model_id="anthropic.claude-sonnet-4",
                 region=None,
                 role_arn=None,
-                settings=settings,
                 temperature=0.2,
                 max_tokens=16000,
                 max_retries=2,
@@ -614,30 +606,21 @@ class TestConfigMaxTokens:
 
     def test_openai_compatible_does_not_set_default_max_tokens(self):
         """OpenAI-compatible models should only receive max_tokens when explicitly set."""
-        from server.app.llm.deep_agent_service import _build_model
+        from server.app.agent.resolver import RuntimeResolver
 
         settings = MagicMock()
         settings.openai_compatible_api_key.get_secret_value.return_value = "token"
         settings.openai_compatible_base_url = "https://example.com/v1"
+        resolver = RuntimeResolver(config_store=None, settings=settings)
 
-        with (
-            patch(
-                "server.app.api.dependencies.get_runtime_resolver",
-                side_effect=RuntimeError,
-            ),
-            patch(
-                "server.app.agent.resolver.init_chat_model",
-                return_value=MagicMock(),
-            ) as init_model,
-        ):
-            _build_model(
+        with patch(
+            "server.app.agent.resolver.init_chat_model", return_value=MagicMock()
+        ) as init_model:
+            resolver.build_model(
                 provider="openai_compatible",
                 model_id="kimi-k2.5",
                 api_key=None,
                 base_url=None,
-                region=None,
-                role_arn=None,
-                settings=settings,
             )
 
         kwargs = init_model.call_args.kwargs

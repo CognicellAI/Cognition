@@ -210,6 +210,14 @@ Update session metadata or LLM configuration.
 
 **Provider resolution priority** (highest to lowest): `provider_id` → `provider`+`model` → `AgentDefinition.config` → first enabled ProviderConfig from ConfigRegistry.
 
+**Validation rules:**
+
+- `config.provider_id` selects an exact configured provider row.
+- `config.provider` requires `config.model`.
+- `config.model` without `config.provider` or `config.provider_id` is only accepted when exactly one enabled provider type matches that model.
+- If no enabled provider matches the model, Cognition returns `422`.
+- If multiple enabled provider types match the model, Cognition returns `422` and asks the caller to specify `provider` or `provider_id`.
+
 **Response `200 OK`:** Updated session object  
 **Response `404 Not Found`**
 
@@ -853,9 +861,33 @@ Trigger a manual reload of file-discovered tools from `.cognition/tools/`.
 
 ## Models
 
+Provider configs are the canonical model selection surface in Cognition. Cognition validates the provider config, resolves credentials and transport settings, builds a concrete LangChain chat model, and passes that model into Deep Agents.
+
+### Provider Types And Validation
+
+| Provider type | Required fields | Notes |
+|---|---|---|
+| `openai` | `id`, `provider`, `model` | Uses `OPENAI_API_KEY` unless `api_key_env` overrides it |
+| `anthropic` | `id`, `provider`, `model` | Uses `ANTHROPIC_API_KEY` unless `api_key_env` overrides it |
+| `bedrock` | `id`, `provider`, `model`, `region` | `role_arn` is allowed only for `bedrock` |
+| `openai_compatible` | `id`, `provider`, `model`, `base_url` | Covers OpenRouter, Ollama, vLLM, LiteLLM, LM Studio, and similar endpoints |
+| `google_genai` | `id`, `provider`, `model` | Uses `GOOGLE_API_KEY` unless `api_key_env` overrides it |
+| `google_vertexai` | `id`, `provider`, `model` | Vertex runtime details come from ADC and project config |
+| `mock` | `id`, `provider`, `model` | Test-only provider |
+
+Validation rules enforced by Cognition:
+
+- `base_url` is required for `openai_compatible`
+- `base_url` is rejected for non-`openai_compatible` providers
+- `region` is required for `bedrock`
+- `region` is rejected for non-`bedrock` providers
+- `role_arn` is rejected for non-`bedrock` providers
+
 ### `GET /models`
 
 List models from the models.dev catalog with optional filtering.
+
+This endpoint returns catalog metadata only for provider types that have at least one enabled provider config visible in the current scope. It does not expose the full global models.dev catalog.
 
 **Query parameters:**
 
@@ -864,6 +896,12 @@ List models from the models.dev catalog with optional filtering.
 | `provider` | string | Filter by Cognition provider type (e.g. `openai`, `anthropic`) |
 | `tool_call` | bool | Filter by tool call support |
 | `q` | string | Search by model name or ID |
+
+Notes:
+
+- if no enabled providers are configured in scope, the response is empty
+- if `provider` is requested but no matching enabled provider config exists in scope, the response is empty
+- `openai_compatible` providers do not contribute catalog entries unless Cognition has an explicit catalog mapping for the upstream service
 
 **Response `200 OK`:**
 ```json
@@ -891,6 +929,8 @@ List models from the models.dev catalog with optional filtering.
 ### `GET /models/providers`
 
 List all provider configs from the ConfigRegistry.
+
+Use this endpoint to inspect the effective provider registry before binding sessions by `provider_id`.
 
 **Response `200 OK`:**
 ```json
@@ -920,6 +960,8 @@ List all provider configs from the ConfigRegistry.
 ### `GET /models/providers/{provider_id}/models`
 
 List catalog models available for a specific provider config.
+
+For `openai_compatible` providers, the catalog may be incomplete because available models depend on the upstream service.
 
 **Response `200 OK`:** Same schema as `GET /models`
 
@@ -961,9 +1003,23 @@ Create a provider config in the ConfigRegistry. Takes effect immediately — no 
 **Response `201 Created`:** Provider config object  
 **Response `422 Unprocessable Entity`:** Validation error
 
+Preferred usage:
+
+- use the returned `id` as `SessionConfig.provider_id`
+- prefer `provider_id` over model-only session selection
+
+Common invalid configs:
+
+- `openai_compatible` without `base_url`
+- `bedrock` without `region`
+- `region` or `role_arn` on non-`bedrock` providers
+- `base_url` on non-`openai_compatible` providers
+
 ### `PATCH /models/providers/{provider_id}`
 
 Partially update a provider config.
+
+Updates are fully revalidated, so an invalid partial update is rejected instead of leaving the provider in a broken state.
 
 **Request body (all fields optional):**
 ```json
@@ -985,6 +1041,10 @@ Delete a provider config.
 **Response `404 Not Found`**
 
 ### `POST /models/providers/{provider_id}/test`
+
+Validate that the configured provider can be resolved and instantiated successfully.
+
+Use this endpoint during onboarding before binding sessions to a new `provider_id`.
 
 Test provider connectivity and credentials.
 

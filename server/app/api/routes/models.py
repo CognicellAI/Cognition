@@ -90,6 +90,8 @@ def _catalog_model_to_info(
 
 @router.get("", response_model=ModelList)
 async def list_models(
+    scope: SessionScope = Depends(get_scope_dep),  # noqa: B008
+    config_store: ConfigStore = Depends(get_config_store),  # noqa: B008
     catalog: ModelCatalog = Depends(get_model_catalog_dep),  # noqa: B008
     provider: str | None = Query(
         None,
@@ -98,30 +100,35 @@ async def list_models(
     tool_call: bool | None = Query(None, description="Filter by tool call support"),
     q: str | None = Query(None, description="Search by model name or ID"),
 ) -> ModelList:
-    """List models from the catalog, optionally filtered.
+    """List catalog models for configured provider types visible in scope.
 
-    Returns models from the models.dev catalog for all known provider types.
-    Use query parameters to filter by provider, tool call support, or search.
+    Returns models from the models.dev catalog only for enabled provider types that
+    have at least one configured provider row visible in the current scope. Use
+    query parameters to filter by provider, tool call support, or search.
 
     If the catalog is unreachable, returns an empty list.
     """
-    if provider:
-        catalog_models = await catalog.get_models_for_cognition_provider(provider)
-        if q or tool_call is not None:
-            catalog_models = [
-                m
-                for m in catalog_models
-                if (q is None or q.lower() in m.id.lower() or q.lower() in m.name.lower())
-                and (tool_call is None or m.tool_call == tool_call)
-            ]
-    elif q or tool_call is not None:
-        catalog_models = await catalog.search(query=q, tool_call=tool_call)
-    else:
-        from server.app.llm.model_catalog import PROVIDER_TYPE_TO_CATALOG_SLUGS
+    try:
+        provider_configs = await config_store.list_providers(scope=scope.get_all() or None)
+    except RuntimeError as e:
+        raise HTTPException(status_code=503, detail=f"ConfigStore unavailable: {e}") from e
 
-        catalog_models = []
-        for ptype in PROVIDER_TYPE_TO_CATALOG_SLUGS:
-            catalog_models.extend(await catalog.get_models_for_cognition_provider(ptype))
+    configured_provider_types = {p.provider for p in provider_configs if p.enabled}
+    if provider is not None:
+        configured_provider_types &= {provider}
+
+    catalog_models = []
+    for provider_type in sorted(configured_provider_types):
+        catalog_models.extend(await catalog.get_models_for_cognition_provider(provider_type))
+
+    if q or tool_call is not None:
+        query = q.lower() if q else None
+        catalog_models = [
+            m
+            for m in catalog_models
+            if (query is None or query in m.id.lower() or query in m.name.lower())
+            and (tool_call is None or m.tool_call == tool_call)
+        ]
 
     models = [_catalog_model_to_info(m) for m in catalog_models]
     return ModelList(models=models)
@@ -266,7 +273,7 @@ async def update_provider(
             raise HTTPException(status_code=404, detail=f"Provider '{provider_id}' not found")
 
         updates = body.model_dump(exclude_none=True)
-        updated = provider.model_copy(update=updates)
+        updated = provider.__class__.model_validate(provider.model_dump() | updates)
         await config_store.upsert_provider(updated)
 
         return ProviderResponse(

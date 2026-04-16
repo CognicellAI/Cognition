@@ -65,6 +65,7 @@ class TestGetAgent:
         assert data["name"] == "default"
         assert "system_prompt" in data
         assert "config" in data
+        assert "provider" in data
 
     def test_get_missing_agent_returns_404(self):
         response = client.get("/agents/does-not-exist")
@@ -97,11 +98,31 @@ class TestCreateAgent:
         assert response.status_code == 201
         data = response.json()
         assert data["name"] == "test-create-agent"
+        assert data["provider"] == "bedrock"
         assert data["config"]["max_tokens"] == 16000
         assert data["config"]["recursion_limit"] == 500
         assert data["config"]["provider"] == "bedrock"
         assert data["config"]["tool_token_limit_before_evict"] == 2000
         assert data["config"]["timeout_seconds"] == 45
+
+    def test_get_preserves_top_level_provider(self):
+        client.post(
+            "/agents",
+            json={
+                "name": "test-get-provider-agent",
+                "system_prompt": "provider test",
+                "provider": "openai_compatible",
+                "model": "google/gemini-3-flash-preview",
+            },
+        )
+
+        response = client.get("/agents/test-get-provider-agent")
+        assert response.status_code == 200
+        data = response.json()
+        assert data["provider"] == "openai_compatible"
+        assert data["model"] == "google/gemini-3-flash-preview"
+        assert data["config"]["provider"] == "openai_compatible"
+        assert data["config"]["model"] == "google/gemini-3-flash-preview"
 
     def test_create_duplicate_non_native_agent_succeeds(self):
         """Creating an agent that already exists (and is not native) should succeed (upsert)."""
@@ -136,16 +157,28 @@ class TestUpdateAgent:
         # Create
         client.post(
             "/agents",
-            json={"name": "test-put-agent", "system_prompt": "original"},
+            json={
+                "name": "test-put-agent",
+                "system_prompt": "original",
+                "provider": "openai_compatible",
+                "model": "google/gemini-3-flash-preview",
+            },
         )
         # Replace
         response = client.put(
             "/agents/test-put-agent",
-            json={"name": "test-put-agent", "system_prompt": "replaced"},
+            json={
+                "name": "test-put-agent",
+                "system_prompt": "replaced",
+                "provider": "openai_compatible",
+                "model": "google/gemini-3-flash-preview",
+            },
         )
         assert response.status_code == 200
         data = response.json()
         assert "replaced" in (data.get("system_prompt") or "")
+        assert data["provider"] == "openai_compatible"
+        assert data["config"]["provider"] == "openai_compatible"
 
     def test_put_missing_agent_returns_404(self):
         # PUT on a missing agent still goes through create_agent, which upserts
@@ -190,10 +223,34 @@ class TestUpdateAgent:
             json={"max_tokens": 8000, "timeout_seconds": 30},
         )
         assert response.status_code == 200
+        assert response.json()["provider"] == "openai"
         assert response.json()["config"]["max_tokens"] == 8000
         assert response.json()["config"]["recursion_limit"] == 100
         assert response.json()["config"]["provider"] == "openai"
         assert response.json()["config"]["timeout_seconds"] == 30
+
+    def test_patch_unrelated_field_preserves_top_level_provider(self):
+        client.post(
+            "/agents",
+            json={
+                "name": "test-patch-provider-agent",
+                "system_prompt": "original sp",
+                "description": "old desc",
+                "provider": "openai_compatible",
+                "model": "google/gemini-3-flash-preview",
+            },
+        )
+        response = client.patch(
+            "/agents/test-patch-provider-agent",
+            json={"description": "updated desc"},
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert data["description"] == "updated desc"
+        assert data["provider"] == "openai_compatible"
+        assert data["model"] == "google/gemini-3-flash-preview"
+        assert data["config"]["provider"] == "openai_compatible"
+        assert data["config"]["model"] == "google/gemini-3-flash-preview"
 
     def test_system_prompt_is_not_truncated(self):
         long_prompt = "A" * 1200

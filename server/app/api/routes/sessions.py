@@ -21,6 +21,7 @@ from typing import Annotated, Any
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from fastapi.responses import StreamingResponse
 
+from server.app.agent.resolver import RuntimeResolver
 from server.app.api.dependencies import (
     get_config_store,
     get_scope_dep,
@@ -55,6 +56,67 @@ from server.app.storage.backend import StorageBackend
 from server.app.storage.config_store import ConfigStore
 
 router = APIRouter(prefix="/sessions", tags=["sessions"])
+
+
+def _unprocessable_entity(detail: str) -> HTTPException:
+    return HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=detail)
+
+
+async def _normalize_session_config(
+    request: SessionUpdate,
+    scope: SessionScope,
+    config_store: ConfigStore,
+    settings: Settings,
+) -> None:
+    """Validate and normalize session config via the canonical model selector."""
+    if request.config is None:
+        return
+
+    if request.config.provider and not request.config.model:
+        raise _unprocessable_entity(
+            "Session config specifies provider but no model. Set config.model alongside config.provider."
+        )
+
+    if request.config.model is None:
+        return
+
+    if request.config.provider is None and request.config.provider_id is None:
+        providers = await config_store.list_providers(scope=scope.get_all() or None)
+        matches = [
+            config
+            for config in providers
+            if config.enabled and config.model == request.config.model
+        ]
+        if not matches:
+            raise _unprocessable_entity(
+                f"Model '{request.config.model}' is not configured on any enabled provider. "
+                "Set config.provider_id or config.provider alongside config.model."
+            )
+
+        provider_types = {config.provider for config in matches}
+        if len(provider_types) > 1:
+            raise _unprocessable_entity(
+                f"Model '{request.config.model}' is configured on multiple provider types. "
+                "Set config.provider_id or config.provider explicitly."
+            )
+
+    resolver = RuntimeResolver(config_store=config_store, settings=settings)
+    probe_session = type("ProbeSession", (), {"config": request.config})()
+    try:
+        target = await resolver.select_model_target_for_session(
+            session=probe_session,
+            scope=scope.get_all() or None,
+            agent_def=None,
+        )
+    except Exception as exc:
+        from server.app.exceptions import LLMProviderConfigError
+
+        if isinstance(exc, LLMProviderConfigError):
+            raise _unprocessable_entity(str(exc)) from exc
+        raise
+
+    if request.config.provider is None:
+        request.config.provider = target.provider
 
 
 async def _get_scoped_session(
@@ -97,10 +159,7 @@ async def create_session(
     """
     # Validate agent_name is a valid primary agent
     if not await config_store.is_valid_primary(request.agent_name):
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail=f"Invalid or unknown agent: {request.agent_name}",
-        )
+        raise _unprocessable_entity(f"Invalid or unknown agent: {request.agent_name}")
 
     session_id = str(uuid.uuid4())
     thread_id = str(uuid.uuid4())  # For LangGraph checkpointing
@@ -209,22 +268,16 @@ async def update_session(
     """
     await _get_scoped_session(session_id, store, scope)
 
-    if request.config and request.config.model and not request.config.provider:
-        provider = None
-        providers = await config_store.list_providers(scope=scope.get_all() or None)
-        for config in providers:
-            if config.model == request.config.model:
-                provider = config.provider
-                break
-        if provider:
-            request.config.provider = provider  # type: ignore[assignment]
+    await _normalize_session_config(
+        request=request,
+        scope=scope,
+        config_store=config_store,
+        settings=settings,
+    )
 
     if request.agent_name:
         if not await config_store.is_valid_primary(request.agent_name):
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail=f"Invalid or unknown agent: {request.agent_name}",
-            )
+            raise _unprocessable_entity(f"Invalid or unknown agent: {request.agent_name}")
 
     session = await store.update_session(
         session_id=session_id,

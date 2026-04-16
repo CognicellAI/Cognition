@@ -47,9 +47,11 @@ Then configure the provider in `.cognition/config.yaml` (create the file if it d
 ```yaml
 # .cognition/config.yaml
 llm:
-  provider: openai_compatible
-  model: google/gemini-2.5-flash-preview
-  base_url: https://openrouter.ai/api/v1
+  - id: openrouter
+    provider: openai_compatible
+    model: google/gemini-2.5-flash-preview
+    base_url: https://openrouter.ai/api/v1
+    api_key_env: COGNITION_OPENAI_COMPATIBLE_API_KEY
 ```
 
 Start the server:
@@ -72,6 +74,8 @@ curl -s http://localhost:8000/health
 ## 2. Connect your first LLM provider
 
 The `llm:` section in `.cognition/config.yaml` seeds the ConfigRegistry on first startup. You can also manage providers live via the API — changes take effect immediately, no restart required.
+
+Cognition resolves provider configuration into a concrete LangChain model before the run starts, then hands that model to Deep Agents. The safest way to refer to a configured provider later is by `provider_id`.
 
 ### Supported providers
 
@@ -110,6 +114,22 @@ curl http://localhost:8000/models/providers
 ```
 
 The `priority` field controls which provider is used when a session doesn't specify one — lower number means higher priority.
+
+### Recommended binding pattern
+
+When you later update a session, prefer:
+
+```json
+{
+  "config": {
+    "provider_id": "claude"
+  }
+}
+```
+
+Instead of relying on `model` alone.
+
+If you send only `config.model`, Cognition accepts it only when exactly one enabled provider type matches that model. Ambiguous or unknown model-only selection returns `422`.
 
 ---
 

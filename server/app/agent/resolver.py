@@ -1,20 +1,4 @@
-"""RuntimeResolver: builds live Python objects from ConfigStore.
-
-RuntimeResolver is the CQRS "read" side optimized for the Agent Runtime.
-It takes a ConfigStore as a dependency and produces the live Python objects
-that deepagents expects: BaseTool instances, middleware objects, BaseChatModel
-instances, and AgentDefinition lookups.
-
-Layer: 4 (Agent Runtime)
-
-This replaces the scattered resolution logic that was previously in:
-- ``_load_config_registry_tools()`` in deep_agent_service.py
-- ``_resolve_provider_config()`` / ``_build_model()`` in deep_agent_service.py
-- ``ConfigStore.get_agent_definition()``
-
-Cognition does NOT roll its own agent logic — this is purely a
-configuration bridge from ConfigStore → deepagents primitives.
-"""
+"""RuntimeResolver bridges ConfigStore configuration into Deep Agents primitives."""
 
 from __future__ import annotations
 
@@ -37,6 +21,19 @@ from server.app.storage.config_store import ConfigStore
 logger = structlog.get_logger(__name__)
 
 _TEST_ONLY_PROVIDERS = {"mock"}
+
+
+@dataclass(frozen=True)
+class SelectedModelTarget:
+    provider: str
+    model_id: str
+    provider_id: str | None = None
+    base_url: str | None = None
+    region: str | None = None
+    role_arn: str | None = None
+    api_key_env: str | None = None
+    max_retries: int | None = None
+    timeout: int | None = None
 
 
 @dataclass(frozen=True)
@@ -69,14 +66,7 @@ class ResolvedModelConfig:
 
 
 class RuntimeResolver:
-    """Resolves ConfigStore data into live Python objects for the agent runtime.
-
-    Takes ConfigStore as a dependency and provides:
-    - ``build_tools()``: Load BaseTool instances from all sources
-    - ``build_model()``: Build a BaseChatModel from resolved provider config
-    - ``get_agent_definition()``: Look up an AgentDefinition by name
-    - ``resolve_provider_config()``: Walk the provider resolution priority chain
-    """
+    """Resolves ConfigStore data into live Python objects for the agent runtime."""
 
     def __init__(self, config_store: ConfigStore | None, settings: Settings) -> None:
         self._store = config_store
@@ -176,89 +166,6 @@ class RuntimeResolver:
     # Provider / model resolution
     # ------------------------------------------------------------------
 
-    async def resolve_provider_config(
-        self,
-        provider_id: str | None = None,
-        provider_type: str | None = None,
-        model_id: str | None = None,
-        scope: dict[str, str] | None = None,
-    ) -> dict[str, Any]:
-        """Walk the provider resolution priority chain.
-
-        Priority:
-        1. provider_id: Exact match from ConfigStore
-        2. provider_type + model_id: Filter ConfigStore by type/model
-        3. List all providers from ConfigStore, pick highest priority
-        4. Global defaults from ConfigStore
-
-        Args:
-            provider_id: Exact provider config ID from SessionConfig.
-            provider_type: Provider type (e.g., "openai", "anthropic").
-            model_id: Model identifier to match.
-            scope: Scope dict for ConfigStore lookup.
-
-        Returns:
-            Dict with resolved provider config fields.
-
-        Raises:
-            LLMProviderConfigError: If no provider can be resolved.
-        """
-        if self._store is None:
-            raise LLMProviderConfigError(
-                provider=provider_id or provider_type or "unknown",
-                reason="ConfigStore not initialized.",
-            )
-
-        providers = await self._store.list_providers(scope)
-
-        if provider_id:
-            for p in providers:
-                if p.id == provider_id:
-                    return self._provider_to_dict(p)
-            raise LLMProviderConfigError(
-                provider=provider_id,
-                reason=f"Provider config '{provider_id}' not found in scope",
-            )
-
-        if provider_type or model_id:
-            candidates = []
-            for p in providers:
-                if provider_type and p.provider != provider_type:
-                    continue
-                if model_id and p.model and p.model != model_id:
-                    continue
-                if not p.enabled:
-                    continue
-                candidates.append(p)
-
-            if candidates:
-                candidates.sort(key=lambda p: p.priority or 0, reverse=True)
-                return self._provider_to_dict(candidates[0])
-
-        if providers:
-            enabled = [p for p in providers if p.enabled]
-            if enabled:
-                enabled.sort(key=lambda p: p.priority or 0, reverse=True)
-                return self._provider_to_dict(enabled[0])
-
-        defaults = await self._store.get_global_provider_defaults(scope)
-        if defaults.provider or defaults.model:
-            return {
-                "provider": defaults.provider,
-                "model": defaults.model,
-                "max_tokens": defaults.max_tokens,
-                "api_key": None,
-                "api_key_env": None,
-                "base_url": None,
-                "region": None,
-                "role_arn": None,
-            }
-
-        raise LLMProviderConfigError(
-            provider="unknown",
-            reason="No providers configured. Use POST /models/providers or set COGNITION_LLM_PROVIDER.",
-        )
-
     def build_model(
         self,
         provider: str,
@@ -272,28 +179,7 @@ class RuntimeResolver:
         max_retries: int | None = None,
         timeout: int | None = None,
     ) -> BaseChatModel:
-        """Build a LangChain BaseChatModel from resolved provider config.
-
-        Uses LangChain's init_chat_model for native provider support.
-
-        Args:
-            provider: Provider type.
-            model_id: Model identifier.
-            api_key: Optional explicit API key.
-            base_url: Optional base URL override.
-            region: AWS region (Bedrock only).
-            role_arn: IAM role ARN for STS AssumeRole (Bedrock only).
-            temperature: Optional temperature override.
-            max_tokens: Optional max_tokens override.
-            max_retries: Optional max_retries override.
-            timeout: Optional timeout override.
-
-        Returns:
-            Configured BaseChatModel.
-
-        Raises:
-            LLMProviderConfigError: If provider is unknown or construction fails.
-        """
+        """Build a LangChain BaseChatModel from a resolved provider target."""
         if provider == "mock":
             from server.app.llm.mock import MockLLM
 
@@ -565,105 +451,45 @@ class RuntimeResolver:
         scope: dict[str, str] | None = None,
         agent_def: Any | None = None,
     ) -> ResolvedModelConfig:
-        raw = await self._resolve_provider_config_for_session(
+        target = await self.select_model_target_for_session(
             session=session,
             scope=scope,
             agent_def=agent_def,
         )
+        recursion_limit = self._resolve_recursion_limit(session=session, agent_def=agent_def)
         return ResolvedModelConfig(
-            provider=raw[0],
-            model_id=raw[1],
-            api_key=raw[2],
-            base_url=raw[3],
-            region=raw[4],
-            role_arn=raw[5],
-            recursion_limit=raw[6],
-            max_retries=raw[7],
-            timeout=raw[8],
-            temperature=(agent_def.config.temperature if agent_def and agent_def.config else None),
-            max_tokens=(agent_def.config.max_tokens if agent_def and agent_def.config else None),
+            provider=target.provider,
+            model_id=target.model_id,
+            api_key=os.environ.get(target.api_key_env) if target.api_key_env else None,
+            base_url=target.base_url,
+            region=target.region,
+            role_arn=target.role_arn,
+            recursion_limit=recursion_limit,
+            max_retries=target.max_retries,
+            timeout=target.timeout,
+            temperature=self._resolve_temperature(session=session, agent_def=agent_def),
+            max_tokens=self._resolve_max_tokens(session=session, agent_def=agent_def),
         )
 
-    async def resolve_provider_tuple_for_session(
+    async def select_model_target_for_session(
         self,
         session: Any,
         scope: dict[str, str] | None,
         agent_def: Any | None = None,
-    ) -> tuple[
-        str, str, str | None, str | None, str | None, str | None, int, int | None, int | None
-    ]:
-        """Resolve provider configuration for a session with full priority chain.
+    ) -> SelectedModelTarget:
+        """Select the canonical model target for a session.
 
-        Priority (highest to lowest):
-        1. session.config.provider_id — looks up exact ProviderConfig by ID
-        2. session.config.provider + session.config.model — direct override
-        3. agent_def.config.provider + agent_def.config.model — per-agent override
-        4. First enabled ProviderConfig from ConfigStore (global default)
-
-        Returns:
-            Legacy provider tuple for compatibility with older tests.
-
-        Raises:
-            LLMProviderConfigError: If no provider can be resolved.
+        Priority:
+        1. ``session.config.provider_id``
+        2. ``session.config.provider`` + ``session.config.model``
+        3. ``agent_def.config.provider`` + ``agent_def.config.model``
+        4. First enabled provider config by ascending priority
         """
-        recursion_limit = 1000
-        if agent_def and agent_def.config and agent_def.config.recursion_limit is not None:
-            recursion_limit = agent_def.config.recursion_limit
-        if session and session.config and session.config.recursion_limit is not None:
-            recursion_limit = session.config.recursion_limit
-
         if session and session.config and session.config.provider_id:
-            provider_id = session.config.provider_id
-            try:
-                if self._store is None:
-                    raise LLMProviderConfigError(
-                        provider=provider_id,
-                        reason="ConfigStore not initialized — cannot resolve provider_id.",
-                    )
-                provider_config = await self._store.get_provider(provider_id, scope=scope)
-                if provider_config is None:
-                    raise LLMProviderConfigError(
-                        provider=provider_id,
-                        reason=(
-                            f"Provider config '{provider_id}' not found in ConfigStore. "
-                            "Check that the provider_id matches an existing provider config ID."
-                        ),
-                    )
-                if not provider_config.enabled:
-                    raise LLMProviderConfigError(
-                        provider=provider_id,
-                        reason=(
-                            f"Provider config '{provider_id}' is disabled. "
-                            "Enable it via PATCH /models/providers/{id} or choose another."
-                        ),
-                    )
-                api_key = (
-                    os.environ.get(provider_config.api_key_env)
-                    if provider_config.api_key_env
-                    else None
-                )
-                logger.debug(
-                    "Provider resolved from session provider_id",
-                    provider_id=provider_id,
-                    provider=provider_config.provider,
-                    model=provider_config.model,
-                )
-                return (
-                    provider_config.provider,
-                    provider_config.model,
-                    api_key,
-                    provider_config.base_url,
-                    provider_config.region,
-                    provider_config.role_arn,
-                    recursion_limit,
-                    provider_config.max_retries,
-                    provider_config.timeout,
-                )
-            except RuntimeError as exc:
-                raise LLMProviderConfigError(
-                    provider=provider_id,
-                    reason="ConfigStore not initialized — cannot resolve provider_id.",
-                ) from exc
+            return await self._select_provider_row_by_id(
+                provider_id=session.config.provider_id,
+                scope=scope,
+            )
 
         if session and session.config and session.config.provider:
             prov = session.config.provider
@@ -676,12 +502,28 @@ class RuntimeResolver:
                         "Set SessionConfig.model alongside SessionConfig.provider."
                     ),
                 )
-            logger.debug(
-                "Using session-level provider override",
+            return SelectedModelTarget(
                 provider=prov,
-                model=mod,
+                model_id=mod,
             )
-            return prov, mod, None, None, None, None, recursion_limit, None, None
+
+        if agent_def and agent_def.config and agent_def.config.provider:
+            provider = agent_def.config.provider
+            model_id = agent_def.config.model
+            if not model_id:
+                raise LLMProviderConfigError(
+                    provider=provider,
+                    reason=(
+                        "Agent config specifies provider but no model. "
+                        "Set AgentConfig.model alongside AgentConfig.provider."
+                    ),
+                )
+            logger.debug(
+                "Using agent-level provider override",
+                provider=provider,
+                model=model_id,
+            )
+            return SelectedModelTarget(provider=provider, model_id=model_id)
 
         if self._store is None:
             raise LLMProviderConfigError(
@@ -690,49 +532,27 @@ class RuntimeResolver:
             )
 
         try:
-            provider_configs: list[Any] = []
-            if self._store is not None:
-                provider_configs = await self._store.list_providers(scope=scope)
-
+            provider_configs = await self._store.list_providers(scope=scope)
             enabled = [pc for pc in provider_configs if pc.enabled]
             if enabled:
                 enabled.sort(key=lambda pc: pc.priority)
                 chosen = enabled[0]
-                api_key = os.environ.get(chosen.api_key_env) if chosen.api_key_env else None
-
-                resolved_provider = chosen.provider
-                resolved_model = chosen.model
-                if agent_def and agent_def.config:
-                    if agent_def.config.provider:
-                        resolved_provider = agent_def.config.provider
-                    if agent_def.config.model:
-                        resolved_model = agent_def.config.model
-                    if resolved_provider != chosen.provider or resolved_model != chosen.model:
-                        logger.debug(
-                            "Provider/model overridden by agent_def.config",
-                            agent=getattr(agent_def, "name", "unknown"),
-                            base_provider=chosen.provider,
-                            base_model=chosen.model,
-                            override_provider=resolved_provider,
-                            override_model=resolved_model,
-                        )
-
-                    logger.debug(
-                        "Provider resolved from ConfigStore",
-                        provider=resolved_provider,
-                        model=resolved_model,
-                        id=chosen.id,
-                    )
-                return (
-                    resolved_provider,
-                    resolved_model,
-                    api_key,
-                    chosen.base_url,
-                    chosen.region,
-                    chosen.role_arn,
-                    recursion_limit,
-                    chosen.max_retries,
-                    chosen.timeout,
+                logger.debug(
+                    "Provider resolved from ConfigStore",
+                    provider=chosen.provider,
+                    model=chosen.model,
+                    id=chosen.id,
+                )
+                return SelectedModelTarget(
+                    provider=chosen.provider,
+                    model_id=chosen.model,
+                    provider_id=chosen.id,
+                    base_url=chosen.base_url,
+                    region=chosen.region,
+                    role_arn=chosen.role_arn,
+                    api_key_env=chosen.api_key_env,
+                    max_retries=chosen.max_retries,
+                    timeout=chosen.timeout,
                 )
         except RuntimeError:
             logger.warning("ConfigStore not initialized — cannot resolve provider configuration")
@@ -746,19 +566,84 @@ class RuntimeResolver:
             ),
         )
 
-    async def _resolve_provider_config_for_session(
+    async def _select_provider_row_by_id(
         self,
-        session: Any,
+        provider_id: str,
         scope: dict[str, str] | None,
-        agent_def: Any | None = None,
-    ) -> tuple[
-        str, str, str | None, str | None, str | None, str | None, int, int | None, int | None
-    ]:
-        return await self.resolve_provider_tuple_for_session(
-            session=session,
-            scope=scope,
-            agent_def=agent_def,
+    ) -> SelectedModelTarget:
+        if self._store is None:
+            raise LLMProviderConfigError(
+                provider=provider_id,
+                reason="ConfigStore not initialized — cannot resolve provider_id.",
+            )
+
+        try:
+            provider_config = await self._store.get_provider(provider_id, scope=scope)
+        except RuntimeError as exc:
+            raise LLMProviderConfigError(
+                provider=provider_id,
+                reason="ConfigStore not initialized — cannot resolve provider_id.",
+            ) from exc
+
+        if provider_config is None:
+            raise LLMProviderConfigError(
+                provider=provider_id,
+                reason=(
+                    f"Provider config '{provider_id}' not found in ConfigStore. "
+                    "Check that the provider_id matches an existing provider config ID."
+                ),
+            )
+        if not provider_config.enabled:
+            raise LLMProviderConfigError(
+                provider=provider_id,
+                reason=(
+                    f"Provider config '{provider_id}' is disabled. "
+                    "Enable it via PATCH /models/providers/{id} or choose another."
+                ),
+            )
+
+        logger.debug(
+            "Provider resolved from session provider_id",
+            provider_id=provider_id,
+            provider=provider_config.provider,
+            model=provider_config.model,
         )
+        return SelectedModelTarget(
+            provider=provider_config.provider,
+            model_id=provider_config.model,
+            provider_id=provider_config.id,
+            base_url=provider_config.base_url,
+            region=provider_config.region,
+            role_arn=provider_config.role_arn,
+            api_key_env=provider_config.api_key_env,
+            max_retries=provider_config.max_retries,
+            timeout=provider_config.timeout,
+        )
+
+    @staticmethod
+    def _resolve_recursion_limit(session: Any, agent_def: Any | None) -> int:
+        recursion_limit = 1000
+        if agent_def and agent_def.config and agent_def.config.recursion_limit is not None:
+            recursion_limit = agent_def.config.recursion_limit
+        if session and session.config and session.config.recursion_limit is not None:
+            recursion_limit = session.config.recursion_limit
+        return recursion_limit
+
+    @staticmethod
+    def _resolve_temperature(session: Any, agent_def: Any | None) -> float | None:
+        if agent_def and agent_def.config and agent_def.config.temperature is not None:
+            return agent_def.config.temperature
+        if session and session.config and session.config.temperature is not None:
+            return session.config.temperature
+        return None
+
+    @staticmethod
+    def _resolve_max_tokens(session: Any, agent_def: Any | None) -> int | None:
+        if agent_def and agent_def.config and agent_def.config.max_tokens is not None:
+            return agent_def.config.max_tokens
+        if session and session.config and session.config.max_tokens is not None:
+            return session.config.max_tokens
+        return None
 
     async def _warn_if_no_tool_call_support(self, provider: str, model_id: str) -> None:
         """Log a warning if the model catalog says this model lacks tool call support."""
@@ -778,22 +663,6 @@ class RuntimeResolver:
                 )
         except Exception:
             pass
-
-    @staticmethod
-    def _provider_to_dict(p: Any) -> dict[str, Any]:
-        api_key = None
-        if p.api_key_env:
-            api_key = os.environ.get(p.api_key_env)
-        return {
-            "provider": p.provider,
-            "model": p.model,
-            "max_tokens": p.max_tokens,
-            "api_key": api_key,
-            "api_key_env": p.api_key_env,
-            "base_url": p.base_url,
-            "region": p.region,
-            "role_arn": p.role_arn,
-        }
 
 
 __all__ = ["RuntimeResolver"]

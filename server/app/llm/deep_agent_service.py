@@ -108,73 +108,6 @@ class StreamAccumulator:
         return self._current_tool_call is not None
 
 
-def _build_model(
-    provider: str,
-    model_id: str,
-    api_key: str | None,
-    base_url: str | None,
-    region: str | None,
-    role_arn: str | None,
-    settings: Settings,
-    temperature: float | None = None,
-    max_tokens: int | None = None,
-    max_retries: int | None = None,
-    timeout: int | None = None,
-) -> BaseChatModel:
-    """Build a LangChain BaseChatModel. Delegates to RuntimeResolver.build_model().
-
-    .. deprecated:: Use RuntimeResolver.build_model() directly.
-    """
-    try:
-        from server.app.api.dependencies import get_runtime_resolver
-
-        resolver = get_runtime_resolver()
-    except RuntimeError:
-        resolver = RuntimeResolver(config_store=None, settings=settings)
-
-    return resolver.build_model(
-        provider=provider,
-        model_id=model_id,
-        api_key=api_key,
-        base_url=base_url,
-        region=region,
-        role_arn=role_arn,
-        temperature=temperature,
-        max_tokens=max_tokens,
-        max_retries=max_retries,
-        timeout=timeout,
-    )
-
-
-def _build_bedrock_model(
-    model_id: str,
-    region: str | None,
-    role_arn: str | None,
-    settings: Settings,
-    temperature: float | None = None,
-    max_tokens: int | None = None,
-    max_retries: int | None = None,
-    timeout: int | None = None,
-) -> BaseChatModel:
-    """Build a ChatBedrock model. Delegates to RuntimeResolver.
-
-    .. deprecated:: Use RuntimeResolver.build_model(provider="bedrock", ...) instead.
-    """
-    return _build_model(
-        provider="bedrock",
-        model_id=model_id,
-        api_key=None,
-        base_url=None,
-        region=region,
-        role_arn=role_arn,
-        settings=settings,
-        temperature=temperature,
-        max_tokens=max_tokens,
-        max_retries=max_retries,
-        timeout=timeout,
-    )
-
-
 class DeepAgentStreamingService:
     """Streaming service using DeepAgents for multi-step completion.
 
@@ -333,8 +266,6 @@ class DeepAgentStreamingService:
             agent_params = CognitionAgentParams(
                 project_path=project_path,
                 model=model,
-                provider=provider,
-                model_id=model_id,
                 store=store,
                 checkpointer=checkpointer,
                 settings=self.settings,
@@ -481,8 +412,6 @@ class DeepAgentStreamingService:
             agent_params = CognitionAgentParams(
                 project_path=project_path,
                 model=model,
-                provider=provider,
-                model_id=model_id,
                 store=store,
                 checkpointer=checkpointer,
                 settings=self.settings,

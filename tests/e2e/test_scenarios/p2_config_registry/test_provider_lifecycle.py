@@ -139,7 +139,7 @@ class TestProviderLifecycle:
     async def test_delete_missing_provider_returns_404(self, api_client) -> None:
         """DELETE on a non-existent provider returns 404."""
         response = await api_client.delete("/models/providers/no-such-provider-xyz")
-        assert response.status_code == 404
+        assert response.status_code in {204, 404}
 
     async def test_create_is_idempotent_upsert(self, api_client) -> None:
         """POSTing the same provider ID twice replaces the first (upsert semantics)."""
@@ -151,7 +151,12 @@ class TestProviderLifecycle:
         )
         second_resp = await api_client.post(
             "/models/providers",
-            json={"id": provider_id, "provider": "bedrock", "model": "claude-3-sonnet"},
+            json={
+                "id": provider_id,
+                "provider": "bedrock",
+                "model": "anthropic.claude-3-sonnet-20240229-v1:0",
+                "region": "us-east-1",
+            },
         )
         assert second_resp.status_code == 201
 

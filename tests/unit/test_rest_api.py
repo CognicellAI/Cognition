@@ -3,6 +3,7 @@
 Tests for the Phase 5 REST API implementation with workspace-based sessions.
 """
 
+import tempfile
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -134,6 +135,67 @@ class TestSessionEndpoints:
         assert data["title"] == "updated-title"
         assert data["metadata"] == {"ticket": "ABC-123"}
 
+    def test_update_session_model_only_resolves_unambiguous_provider(self):
+        provider_resp = client.post(
+            "/models/providers",
+            json={
+                "id": "session-openai-compatible",
+                "provider": "openai_compatible",
+                "model": "google/gemini-3-flash-preview",
+                "base_url": "https://openrouter.ai/api/v1",
+            },
+        )
+        assert provider_resp.status_code == 201
+
+        create_resp = client.post("/sessions", json={"title": "session-provider-resolution"})
+        session_id = create_resp.json()["id"]
+
+        response = client.patch(
+            f"/sessions/{session_id}",
+            json={"config": {"model": "google/gemini-3-flash-preview"}},
+        )
+        assert response.status_code == 200
+
+    def test_update_session_model_only_rejects_ambiguous_provider_resolution(self):
+        client.post(
+            "/models/providers",
+            json={
+                "id": "session-openai-compatible-ambiguous",
+                "provider": "openai_compatible",
+                "model": "shared-model",
+                "base_url": "https://openrouter.ai/api/v1",
+            },
+        )
+        client.post(
+            "/models/providers",
+            json={
+                "id": "session-openai-ambiguous",
+                "provider": "openai",
+                "model": "shared-model",
+            },
+        )
+
+        create_resp = client.post("/sessions", json={"title": "session-provider-ambiguous"})
+        session_id = create_resp.json()["id"]
+
+        response = client.patch(
+            f"/sessions/{session_id}",
+            json={"config": {"model": "shared-model"}},
+        )
+        assert response.status_code == 422
+        assert "multiple provider types" in response.json()["detail"]
+
+    def test_update_session_model_only_rejects_unknown_model(self):
+        create_resp = client.post("/sessions", json={"title": "session-provider-unknown-model"})
+        session_id = create_resp.json()["id"]
+
+        response = client.patch(
+            f"/sessions/{session_id}",
+            json={"config": {"model": "not-configured-anywhere"}},
+        )
+        assert response.status_code == 422
+        assert "is not configured on any enabled provider" in response.json()["detail"]
+
     def test_delete_session(self):
         """Test deleting a session."""
         # Create a session
@@ -217,6 +279,86 @@ class TestConfigEndpoints:
         data = response.json()
         assert "server" in data
         assert "llm" in data
+
+
+class TestModelEndpoints:
+    """Test model catalog API behavior."""
+
+    @pytest.fixture(autouse=True)
+    def reset_config_store(self):
+        from server.app.api.dependencies import set_model_catalog_dep
+        from server.app.llm.model_catalog import ModelCatalog
+        from server.app.settings import get_settings
+        from server.app.storage.config_registry import MemoryConfigRegistry
+        from server.app.storage.config_store import DefaultConfigStore
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            set_config_store(DefaultConfigStore(MemoryConfigRegistry(), workspace_path=tmpdir))
+            settings = get_settings()
+            set_model_catalog_dep(ModelCatalog(catalog_url=settings.model_catalog_url))
+            yield
+
+    def test_list_models_returns_empty_without_configured_providers(self):
+        response = client.get("/models")
+        assert response.status_code == 200
+        assert response.json()["models"] == []
+
+    def test_list_models_returns_only_configured_provider_types(self):
+        client.post(
+            "/models/providers",
+            json={"id": "catalog-openai", "provider": "openai", "model": "gpt-4o"},
+        )
+
+        response = client.get("/models")
+        assert response.status_code == 200
+        models = response.json()["models"]
+        assert models
+        assert all(model["provider"] == "openai" for model in models)
+
+    def test_list_models_filters_to_requested_configured_provider(self):
+        client.post(
+            "/models/providers",
+            json={"id": "catalog-openai-2", "provider": "openai", "model": "gpt-4o"},
+        )
+        client.post(
+            "/models/providers",
+            json={
+                "id": "catalog-anthropic-2",
+                "provider": "anthropic",
+                "model": "claude-sonnet-4-6",
+            },
+        )
+
+        response = client.get("/models", params={"provider": "anthropic"})
+        assert response.status_code == 200
+        models = response.json()["models"]
+        assert models
+        assert all(model["provider"] == "anthropic" for model in models)
+
+    def test_list_models_excludes_unconfigured_provider_filter(self):
+        client.post(
+            "/models/providers",
+            json={"id": "catalog-openai-3", "provider": "openai", "model": "gpt-4o"},
+        )
+
+        response = client.get("/models", params={"provider": "anthropic"})
+        assert response.status_code == 200
+        assert response.json()["models"] == []
+
+    def test_list_models_openai_compatible_contributes_no_catalog_models(self):
+        client.post(
+            "/models/providers",
+            json={
+                "id": "catalog-openrouter",
+                "provider": "openai_compatible",
+                "model": "google/gemini-3-flash-preview",
+                "base_url": "https://openrouter.ai/api/v1",
+            },
+        )
+
+        response = client.get("/models")
+        assert response.status_code == 200
+        assert response.json()["models"] == []
 
 
 class TestAPIIntegration:
