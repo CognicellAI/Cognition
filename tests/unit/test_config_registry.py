@@ -80,7 +80,13 @@ class TestMemoryProviderCRUD:
     async def test_upsert_overwrites(self, mem_reg: MemoryConfigRegistry):
         prov = _provider()
         await mem_reg.upsert_provider(prov)
-        updated = ProviderConfig(id="prov-1", provider="bedrock", model="claude-3", source="api")
+        updated = ProviderConfig(
+            id="prov-1",
+            provider="bedrock",
+            model="anthropic.claude-3-sonnet-20240229-v1:0",
+            region="us-east-1",
+            source="api",
+        )
         await mem_reg.upsert_provider(updated)
         result = await mem_reg.get_provider("prov-1")
         assert result is not None
