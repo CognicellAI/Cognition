@@ -400,7 +400,7 @@ class AgentDefinition(BaseModel):
 
         if self.config.model:
             provider = self.config.provider
-            if provider:
+            if provider and provider != "openai_compatible":
                 spec["model"] = f"{provider}:{self.config.model}"
             else:
                 spec["model"] = self.config.model
