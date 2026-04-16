@@ -7,6 +7,50 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [0.8.2] — 2026-04-16
+
+### Highlights
+
+- Stabilized provider/model resolution, PostgreSQL startup, and delegated OpenAI-compatible model wiring for the 0.8.x line.
+
+### Bug Fixes
+
+- Fixed PostgreSQL-backed agent startup and streaming initialization so production deployments no longer fail during checkpointer and store setup.
+- Fixed async SQLAlchemy/PostgreSQL DSN normalization so Cognition uses the correct driver format for SQLAlchemy and `asyncpg`.
+- Fixed provider bootstrap from workspace config and OpenTelemetry startup so startup wiring matches configured deployment behavior.
+- Fixed provider and session model configuration flow so unambiguous model-only session updates resolve correctly and invalid configurations fail explicitly.
+- Fixed OpenAI-compatible subagent model conversion so delegated agents inherit compatible model settings correctly.
+
+### Documentation and Tests
+
+- Updated API and configuration documentation to reflect the corrected provider resolution and session configuration behavior.
+- Added and expanded unit and API coverage for provider CRUD validation, session config normalization, REST health endpoints, and PostgreSQL DSN handling.
+
+### Merged PRs
+
+- `#101` fix postgres-backed agent startup and streaming
+- `#102` fix provider bootstrap and otel startup
+- `#106` fix: normalize postgres DSNs for async SQLAlchemy
+- `#107` fix provider and model configuration flow
+- `fix/openai-compatible-subagent-model` fix openai-compatible subagent model conversion
+
+## [0.8.1] — 2026-04-13
+
+### Highlights
+
+- Captured the post-RFC cleanup train in release metadata and documentation after the architecture-deepening work landed.
+
+### Documentation
+
+- Updated release metadata and roadmap references to match the completed post-RFC cleanup train.
+- Published the follow-up architectural cleanup record covering scoping, config store simplification, runtime cleanup, and storage deduplication.
+
+### Merged PRs
+
+- `#98` chore: update release metadata for v0.8.0
+- `#99` chore: centralize version source
+- `#100` docs: update roadmap for post-rfc cleanup train
+
 ## [0.8.0] — 2026-04-13
 
 ### Highlights
