@@ -632,17 +632,17 @@ class RuntimeResolver:
     @staticmethod
     def _resolve_temperature(session: Any, agent_def: Any | None) -> float | None:
         if agent_def and agent_def.config and agent_def.config.temperature is not None:
-            return agent_def.config.temperature
+            return cast(float, agent_def.config.temperature)
         if session and session.config and session.config.temperature is not None:
-            return session.config.temperature
+            return cast(float, session.config.temperature)
         return None
 
     @staticmethod
     def _resolve_max_tokens(session: Any, agent_def: Any | None) -> int | None:
         if agent_def and agent_def.config and agent_def.config.max_tokens is not None:
-            return agent_def.config.max_tokens
+            return cast(int, agent_def.config.max_tokens)
         if session and session.config and session.config.max_tokens is not None:
-            return session.config.max_tokens
+            return cast(int, session.config.max_tokens)
         return None
 
     async def _warn_if_no_tool_call_support(self, provider: str, model_id: str) -> None:

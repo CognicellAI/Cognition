@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import AsyncGenerator
-from typing import Annotated, Any
+from typing import Annotated, Any, cast
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from fastapi.responses import StreamingResponse
@@ -116,7 +116,7 @@ async def _normalize_session_config(
         raise
 
     if request.config.provider is None:
-        request.config.provider = target.provider
+        request.config.provider = cast(Any, target.provider)
 
 
 async def _get_scoped_session(
