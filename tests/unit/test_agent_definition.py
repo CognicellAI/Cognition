@@ -196,6 +196,21 @@ class TestAgentDefinition:
                 system_prompt="You are a test agent.",
             )
 
+    def test_to_subagent_does_not_construct_openai_compatible_model_string(self):
+        """openai_compatible subagents must not emit provider-prefixed model strings."""
+        agent = AgentDefinition(
+            name="researcher",
+            system_prompt="You are a researcher.",
+            config=AgentConfig(
+                provider="openai_compatible",
+                model="google/gemini-3-flash-preview",
+            ),
+        )
+
+        subagent = agent.to_subagent()
+
+        assert subagent["model"] == "google/gemini-3-flash-preview"
+
     def test_valid_name_with_hyphen_and_underscore(self):
         """Test that names with hyphens and underscores are valid."""
         agent = AgentDefinition(
