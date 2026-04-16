@@ -68,6 +68,26 @@ cognition-server
 - **Multi-Tenant Isolation** — Session scoping via `X-Cognition-Scope-*` headers. Rate limiting, CORS, and circuit breaker built in.
 - **Multi-Agent Registry** — Built-in agents (`default`, `readonly`) plus user-defined agents in `.cognition/agents/`. Session-agent binding via `agent_name`.
 
+## Model And Provider Configuration
+
+Cognition resolves provider configuration once, builds a concrete LangChain chat model, and hands that model to Deep Agents. The runtime does not silently guess across providers.
+
+Recommended flow:
+
+1. Create provider configs with `POST /models/providers` or bootstrap them from `.cognition/config.yaml`.
+2. Bind sessions with `config.provider_id` whenever possible.
+3. Use `config.provider` + `config.model` only for direct overrides.
+4. Use `config.model` alone only when it maps to exactly one enabled provider type.
+
+Important rules:
+
+- `openai_compatible` providers must include `base_url`
+- `bedrock` providers must include `region`
+- `role_arn` is only valid for `bedrock`
+- ambiguous model-only session updates return `422` instead of silently picking a provider
+
+See [API Reference](./docs/guides/api-reference.md) and [Configuration Reference](./docs/guides/configuration.md) for the exact request shapes and precedence rules.
+
 ## Architecture
 
 Cognition follows a strict 7-layer architecture. Define your agent; get everything else automatically.

@@ -1,4 +1,4 @@
-"""Unit tests for Bedrock credential resolution in _build_bedrock_model().
+"""Unit tests for Bedrock credential resolution in RuntimeResolver._build_bedrock_model().
 
 Focus on the credential resolution paths:
 - Ambient credentials (no keys set → boto3 credential chain)
@@ -16,11 +16,12 @@ import pytest
 from pydantic import SecretStr
 from pydantic_settings import SettingsConfigDict
 
+from server.app.agent.resolver import RuntimeResolver
 from server.app.settings import Settings
 
 
 # Isolated settings that never read from .env
-class TestSettings(Settings):
+class RegistryTestSettings(Settings):
     model_config = SettingsConfigDict(
         env_file=None,
         env_file_encoding="utf-8",
@@ -31,23 +32,21 @@ class TestSettings(Settings):
 
 
 class TestBedrockCredentialResolution:
-    """Tests for _build_bedrock_model() credential handling."""
+    """Tests for RuntimeResolver._build_bedrock_model() credential handling."""
 
     def test_no_keys_omits_credentials_from_kwargs(self):
         """When no keys are set, credential kwargs must be absent so boto3 uses ambient chain."""
-        settings = TestSettings()
+        settings = RegistryTestSettings()
         assert settings.aws_access_key_id is None
         assert settings.aws_secret_access_key is None
+        resolver = RuntimeResolver(config_store=None, settings=settings)
 
         with patch("langchain_aws.ChatBedrock") as mock_bedrock:
             mock_bedrock.return_value = MagicMock()
-            from server.app.llm.deep_agent_service import _build_bedrock_model
-
-            _build_bedrock_model(
+            resolver._build_bedrock_model(
                 model_id="anthropic.claude-3-sonnet-20240229-v1:0",
                 region=None,
                 role_arn=None,
-                settings=settings,
             )
 
         _, kwargs = mock_bedrock.call_args
@@ -61,20 +60,18 @@ class TestBedrockCredentialResolution:
 
     def test_both_keys_passes_credentials(self):
         """When both key + secret are set, they must be forwarded to ChatBedrock."""
-        settings = TestSettings(
+        settings = RegistryTestSettings(
             aws_access_key_id=SecretStr("AKIAIOSFODNN7EXAMPLE"),
             aws_secret_access_key=SecretStr("wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"),
         )
+        resolver = RuntimeResolver(config_store=None, settings=settings)
 
         with patch("langchain_aws.ChatBedrock") as mock_bedrock:
             mock_bedrock.return_value = MagicMock()
-            from server.app.llm.deep_agent_service import _build_bedrock_model
-
-            _build_bedrock_model(
+            resolver._build_bedrock_model(
                 model_id="anthropic.claude-3-sonnet-20240229-v1:0",
                 region=None,
                 role_arn=None,
-                settings=settings,
             )
 
         _, kwargs = mock_bedrock.call_args
@@ -84,21 +81,19 @@ class TestBedrockCredentialResolution:
 
     def test_session_token_passed_alongside_keys(self):
         """When AWS_SESSION_TOKEN is set along with key+secret, all three are forwarded."""
-        settings = TestSettings(
+        settings = RegistryTestSettings(
             aws_access_key_id=SecretStr("ASIA_EXAMPLE_KEY"),
             aws_secret_access_key=SecretStr("secret"),
             aws_session_token=SecretStr("AQoDYXdzENH...token"),
         )
+        resolver = RuntimeResolver(config_store=None, settings=settings)
 
         with patch("langchain_aws.ChatBedrock") as mock_bedrock:
             mock_bedrock.return_value = MagicMock()
-            from server.app.llm.deep_agent_service import _build_bedrock_model
-
-            _build_bedrock_model(
+            resolver._build_bedrock_model(
                 model_id="anthropic.claude-3-sonnet-20240229-v1:0",
                 region=None,
                 role_arn=None,
-                settings=settings,
             )
 
         _, kwargs = mock_bedrock.call_args
@@ -109,33 +104,34 @@ class TestBedrockCredentialResolution:
     def test_partial_keys_raises_error(self):
         """Only one of key/secret set must raise LLMProviderConfigError immediately."""
         from server.app.exceptions import LLMProviderConfigError
-        from server.app.llm.deep_agent_service import _build_bedrock_model
 
-        settings_key_only = TestSettings(
+        settings_key_only = RegistryTestSettings(
             aws_access_key_id=SecretStr("AKIAIOSFODNN7EXAMPLE"),
         )
-        settings_secret_only = TestSettings(
+        settings_secret_only = RegistryTestSettings(
             aws_secret_access_key=SecretStr("wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"),
         )
+        resolver_key_only = RuntimeResolver(config_store=None, settings=settings_key_only)
+        resolver_secret_only = RuntimeResolver(config_store=None, settings=settings_secret_only)
 
         with pytest.raises(LLMProviderConfigError, match="Both AWS_ACCESS_KEY_ID"):
-            _build_bedrock_model(
-                "anthropic.claude-3-sonnet", region=None, role_arn=None, settings=settings_key_only
+            resolver_key_only._build_bedrock_model(
+                "anthropic.claude-3-sonnet", region=None, role_arn=None
             )
 
         with pytest.raises(LLMProviderConfigError, match="Both AWS_ACCESS_KEY_ID"):
-            _build_bedrock_model(
+            resolver_secret_only._build_bedrock_model(
                 "anthropic.claude-3-sonnet",
                 region=None,
                 role_arn=None,
-                settings=settings_secret_only,
             )
 
     def test_role_arn_calls_sts_assume_role(self):
         """When role_arn is provided, sts:AssumeRole is called and temp creds used."""
-        settings = TestSettings(
+        settings = RegistryTestSettings(
             bedrock_role_arn="arn:aws:iam::123456789012:role/CognitionBedrockRole",
         )
+        resolver = RuntimeResolver(config_store=None, settings=settings)
 
         fake_creds = {
             "Credentials": {
@@ -152,13 +148,10 @@ class TestBedrockCredentialResolution:
             patch("langchain_aws.ChatBedrock") as mock_bedrock,
         ):
             mock_bedrock.return_value = MagicMock()
-            from server.app.llm.deep_agent_service import _build_bedrock_model
-
-            _build_bedrock_model(
+            resolver._build_bedrock_model(
                 model_id="anthropic.claude-3-sonnet-20240229-v1:0",
                 region=None,
                 role_arn=None,  # role_arn comes from settings.bedrock_role_arn
-                settings=settings,
             )
 
         mock_boto3_client.assert_called_once_with("sts", region_name=settings.aws_region)
@@ -173,9 +166,10 @@ class TestBedrockCredentialResolution:
 
     def test_explicit_role_arn_param_takes_precedence(self):
         """role_arn passed directly overrides settings.bedrock_role_arn."""
-        settings = TestSettings(
+        settings = RegistryTestSettings(
             bedrock_role_arn="arn:aws:iam::999:role/SettingsRole",
         )
+        resolver = RuntimeResolver(config_store=None, settings=settings)
 
         fake_creds = {
             "Credentials": {
@@ -192,13 +186,10 @@ class TestBedrockCredentialResolution:
             patch("langchain_aws.ChatBedrock") as mock_bedrock,
         ):
             mock_bedrock.return_value = MagicMock()
-            from server.app.llm.deep_agent_service import _build_bedrock_model
-
-            _build_bedrock_model(
+            resolver._build_bedrock_model(
                 model_id="anthropic.claude-3-sonnet-20240229-v1:0",
                 region=None,
                 role_arn="arn:aws:iam::123:role/ExplicitRole",  # explicit overrides settings
-                settings=settings,
             )
 
         call_kwargs = mock_sts.assume_role.call_args[1]
@@ -206,17 +197,15 @@ class TestBedrockCredentialResolution:
 
     def test_bedrock_max_tokens_uses_top_level_kwarg(self):
         """ChatBedrock should receive max_tokens as a top-level kwarg, not in model_kwargs."""
-        settings = TestSettings()
+        settings = RegistryTestSettings()
+        resolver = RuntimeResolver(config_store=None, settings=settings)
 
         with patch("langchain_aws.ChatBedrock") as mock_bedrock:
             mock_bedrock.return_value = MagicMock()
-            from server.app.llm.deep_agent_service import _build_bedrock_model
-
-            _build_bedrock_model(
+            resolver._build_bedrock_model(
                 model_id="anthropic.claude-3-sonnet-20240229-v1:0",
                 region=None,
                 role_arn=None,
-                settings=settings,
                 temperature=0.2,
                 max_tokens=16000,
             )

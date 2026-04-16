@@ -26,6 +26,7 @@ def _agent_to_response(agent: AgentDefinition) -> AgentResponse:
         mode=agent.mode,
         hidden=agent.hidden,
         native=agent.native,
+        provider=agent.config.provider,
         model=agent.config.model,
         temperature=agent.config.temperature,
         config=AgentConfigResponse(

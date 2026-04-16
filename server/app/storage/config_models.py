@@ -21,6 +21,16 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
+PROVIDER_TYPES = {
+    "openai",
+    "anthropic",
+    "bedrock",
+    "mock",
+    "openai_compatible",
+    "google_genai",
+    "google_vertexai",
+}
+
 # ---------------------------------------------------------------------------
 # Provider / LLM
 # ---------------------------------------------------------------------------
@@ -78,6 +88,35 @@ class ProviderConfig(BaseModel):
         if not v.replace("-", "").replace("_", "").isalnum():
             raise ValueError(f"Provider id must be alphanumeric with hyphens/underscores only: {v}")
         return v
+
+    @field_validator("provider")
+    @classmethod
+    def validate_provider(cls, v: str) -> str:
+        """Ensure provider type is one of Cognition's supported runtime providers."""
+        if v not in PROVIDER_TYPES:
+            supported = ", ".join(sorted(PROVIDER_TYPES))
+            raise ValueError(f"Unsupported provider '{v}'. Supported providers: {supported}")
+        return v
+
+    @model_validator(mode="after")
+    def validate_provider_specific_fields(self) -> ProviderConfig:
+        """Reject provider-specific fields that don't apply to the selected provider."""
+        if self.provider == "openai_compatible":
+            if not self.base_url:
+                raise ValueError("openai_compatible providers require base_url")
+        elif self.base_url is not None:
+            raise ValueError("base_url is only valid for openai_compatible providers")
+
+        if self.provider == "bedrock":
+            if not self.region:
+                raise ValueError("bedrock providers require region")
+        elif self.region is not None:
+            raise ValueError("region is only valid for bedrock providers")
+
+        if self.role_arn is not None and self.provider != "bedrock":
+            raise ValueError("role_arn is only valid for bedrock providers")
+
+        return self
 
 
 # ---------------------------------------------------------------------------

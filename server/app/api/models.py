@@ -503,6 +503,10 @@ class AgentResponse(BaseModel):
     mode: Literal["primary", "subagent", "all"] = Field(..., description="Agent mode")
     hidden: bool = Field(..., description="Whether agent is hidden from listings")
     native: bool = Field(..., description="Whether agent is built-in")
+    provider: str | None = Field(
+        None,
+        description="Deprecated compatibility field. Use config.provider instead.",
+    )
     model: str | None = Field(
         None,
         description="Deprecated compatibility field. Use config.model instead.",
@@ -710,6 +714,7 @@ class ProviderCreate(BaseModel):
 class ProviderUpdate(BaseModel):
     """Request to partially update a provider config."""
 
+    provider: str | None = None
     model: str | None = None
     display_name: str | None = None
     enabled: bool | None = None

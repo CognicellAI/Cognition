@@ -39,6 +39,17 @@ The workspace root is resolved to an absolute path at startup. The agent's tools
 
 LLM provider and model settings are managed through the **ConfigRegistry**, a database-backed configuration store that supports hot-reloading. Provider configuration no longer lives in `Settings` or environment variables like `COGNITION_LLM_PROVIDER` / `COGNITION_LLM_MODEL`.
 
+### Canonical runtime flow
+
+Cognition does not pass raw provider selection policy into Deep Agents. Instead, it follows one canonical flow:
+
+1. select a model target from session config, agent config, or provider registry
+2. resolve provider-specific transport and credential fields
+3. build a concrete LangChain chat model
+4. pass that model into Deep Agents
+
+This means Cognition owns configuration, validation, and LangChain model construction. Deep Agents owns execution.
+
 ### How it works
 
 1. The `llm:` section in `.cognition/config.yaml` is **bootstrapped** into the ConfigRegistry on first startup using `seed_if_absent` — YAML values provide defaults, but rows written via the API always take precedence.
@@ -46,6 +57,24 @@ LLM provider and model settings are managed through the **ConfigRegistry**, a da
 3. To list available models for a provider: `GET /models/providers/{id}/models`.
 4. To verify credentials: `POST /models/providers/{id}/test`.
 5. Sessions reference a provider via `SessionConfig.provider_id`.
+
+### Runtime selection precedence
+
+When Cognition resolves a model for a session, it uses this precedence order:
+
+1. `SessionConfig.provider_id`
+2. `SessionConfig.provider` + `SessionConfig.model`
+3. `AgentDefinition.config.provider` + `AgentDefinition.config.model`
+4. first enabled `ProviderConfig` by ascending `priority`
+
+Recommended usage:
+
+- prefer `provider_id` for stable runtime selection
+- use `provider` + `model` only for direct transient overrides
+- avoid model-only selection unless the mapping is unambiguous
+- treat `/models` as a catalog view over configured provider types, not as the full global models.dev inventory
+
+There is no silent provider fallback.
 
 ### Supported provider types
 
@@ -58,6 +87,18 @@ LLM provider and model settings are managed through the **ConfigRegistry**, a da
 | `google_genai` | Google Generative AI (Gemini) |
 | `google_vertexai` | Google Vertex AI |
 | `mock` | Test-only provider; skipped during bootstrap |
+
+### Provider-specific validation
+
+| Rule | Effect |
+|---|---|
+| `openai_compatible` requires `base_url` | Invalid config is rejected |
+| Non-`openai_compatible` providers reject `base_url` | Prevents mismatched transport config |
+| `bedrock` requires `region` | Invalid config is rejected |
+| Non-`bedrock` providers reject `region` | Prevents provider-specific field drift |
+| Non-`bedrock` providers reject `role_arn` | Prevents invalid cross-provider fields |
+
+These rules apply to both create and update requests.
 
 ### config.yaml `llm:` section format
 
@@ -98,6 +139,10 @@ Each entry supports the following fields:
 | `api_key_env` | No | Name of the environment variable holding the API key |
 | `region` | No | AWS region (`bedrock`) or GCP region (`google_vertexai`) |
 | `role_arn` | No | AWS IAM role ARN for cross-account Bedrock access |
+
+The `llm:` section is a bootstrap surface, not the long-term source of truth. After startup, the effective provider registry lives in the ConfigRegistry and can be changed through the API without restart.
+
+For production systems and user-facing applications, prefer API-managed provider configs and bind sessions by `provider_id`.
 
 ### Credential environment variables
 
@@ -200,6 +245,17 @@ Requires GCP Application Default Credentials to be configured.
 **Mock (testing only):**
 
 No credentials required. Returns deterministic responses. Used by unit tests. The `mock` provider is skipped during bootstrap and cannot be seeded from config.yaml.
+
+### Session config guidance
+
+`SessionConfig` can set `provider_id`, `provider`, `model`, `temperature`, `max_tokens`, and `recursion_limit`.
+
+Important rules:
+
+- `provider_id` is the safest and most explicit selector
+- `provider` requires `model`
+- `model` by itself is only accepted when it matches exactly one enabled provider type
+- if model-only selection is ambiguous or unknown, Cognition returns `422` instead of picking a provider silently
 
 ---
 

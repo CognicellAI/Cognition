@@ -61,3 +61,18 @@ API-managed configuration is best for:
 - dynamic tools and skills
 - global provider and agent defaults
 - programmatic builder/UIs
+
+## Provider Notes
+
+Use this example to understand the difference between bootstrap config and the live provider registry:
+
+1. `.cognition/config.yaml` seeds provider configs on first startup
+2. `POST /models/providers` and `PATCH /models/providers/{id}` manage the live registry after startup
+3. sessions should usually bind by `provider_id`
+
+Important validation rules reflected by the runtime:
+
+- `openai_compatible` requires `base_url`
+- `bedrock` requires `region`
+- `role_arn` is only valid for `bedrock`
+- model-only session selection is rejected when ambiguous

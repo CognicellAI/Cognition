@@ -103,6 +103,47 @@ class TestCreateProvider:
         response = client.post("/models/providers", json={"id": "x", "provider": "openai"})
         assert response.status_code == 422
 
+    def test_create_provider_rejects_unknown_provider_type(self):
+        response = client.post(
+            "/models/providers",
+            json={"id": "x", "provider": "mystic_cloud", "model": "foo-1"},
+        )
+        assert response.status_code == 500
+        assert "Unsupported provider" in response.json()["detail"]
+
+    def test_create_openai_compatible_requires_base_url(self):
+        response = client.post(
+            "/models/providers",
+            json={"id": "openrouter", "provider": "openai_compatible", "model": "gpt-4o"},
+        )
+        assert response.status_code == 500
+        assert "require base_url" in response.json()["detail"]
+
+    def test_create_openai_rejects_base_url(self):
+        response = client.post(
+            "/models/providers",
+            json={
+                "id": "openai-invalid-base-url",
+                "provider": "openai",
+                "model": "gpt-4o",
+                "base_url": "https://api.example.com/v1",
+            },
+        )
+        assert response.status_code == 500
+        assert "base_url is only valid" in response.json()["detail"]
+
+    def test_create_bedrock_requires_region(self):
+        response = client.post(
+            "/models/providers",
+            json={
+                "id": "bedrock-missing-region",
+                "provider": "bedrock",
+                "model": "claude-3-sonnet",
+            },
+        )
+        assert response.status_code == 500
+        assert "require region" in response.json()["detail"]
+
 
 class TestUpdateProvider:
     def test_patch_provider_partial_update(self):
@@ -140,6 +181,30 @@ class TestUpdateProvider:
         )
         assert response.status_code == 200
         assert response.json()["priority"] == 5
+
+    def test_patch_provider_rejects_invalid_provider_specific_field(self):
+        client.post(
+            "/models/providers",
+            json={"id": "test-provider-invalid-patch", "provider": "openai", "model": "gpt-4o"},
+        )
+        response = client.patch(
+            "/models/providers/test-provider-invalid-patch",
+            json={"region": "us-east-1"},
+        )
+        assert response.status_code == 500
+        assert "region is only valid for bedrock providers" in response.json()["detail"]
+
+    def test_patch_provider_rejects_invalid_provider_type(self):
+        client.post(
+            "/models/providers",
+            json={"id": "test-provider-invalid-type", "provider": "openai", "model": "gpt-4o"},
+        )
+        response = client.patch(
+            "/models/providers/test-provider-invalid-type",
+            json={"provider": "mystic_cloud"},
+        )
+        assert response.status_code == 500
+        assert "Unsupported provider" in response.json()["detail"]
 
 
 class TestDeleteProvider:
