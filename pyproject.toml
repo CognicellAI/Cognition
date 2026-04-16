@@ -184,6 +184,7 @@ warn_redundant_casts = true
 warn_unused_ignores = true
 show_error_codes = true
 explicit_package_bases = true
+exclude = ["^workspaces/"]
 
 # Pragmatic overrides for tests - too many untyped fixtures to fix
 [[tool.mypy.overrides]]
@@ -198,11 +199,6 @@ ignore_missing_imports = true
 # E2E tests use pytest fixtures extensively with untyped signatures - ignore all errors
 [[tool.mypy.overrides]]
 module = "tests.e2e.*"
-ignore_errors = true
-
-# Ignore workspaces entirely - it's example/scratch code
-[[tool.mypy.overrides]]
-module = "workspaces.*"
 ignore_errors = true
 
 # Observability uses optional-import pattern for prometheus/otel - suppress noise
