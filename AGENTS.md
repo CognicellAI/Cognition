@@ -119,6 +119,11 @@ Cognition is designed to be highly pluggable using native `deepagents` extension
 #### Subagents
 1. Define specialized subagents in `.cognition/config.yaml` to handle complex domain-specific tasks in isolated contexts.
 
+### Releases
+- Follow `docs/guides/release-checklist.md` for all release preparation, validation, tagging, and post-release verification.
+- Do not cut or replace a release tag until the exact release commit has passed code-quality and container-build validation.
+- Before tagging, run the pre-release image workflow for the exact release branch commit so app and sandbox multi-arch pushes are proven against GHCR.
+
 ### Testing & Scenarios
 - **Unit Tests**: Fast, mocked dependencies. No containers.
 - **E2E Tests**: Use `tests/e2e/`. May require running server.

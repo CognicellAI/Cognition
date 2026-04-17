@@ -1,0 +1,245 @@
+name: Pre-Release Images
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Release version without v prefix (for example 0.8.3)"
+        required: true
+      prerelease_tag:
+        description: "Temporary container tag suffix (for example rc1)"
+        required: true
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: cognicellai/cognition
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.11", "3.12"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Install dependencies
+        run: uv sync --all-extras --dev
+
+      - name: Run unit tests
+        run: uv run pytest tests/unit -v
+
+      - name: Run type checking
+        run: uv run mypy .
+
+      - name: Run linting
+        run: uv run ruff check .
+
+  build-amd64-app:
+    needs: test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push amd64 app image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          platforms: linux/amd64
+          push: true
+          tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.event.inputs.version }}-${{ github.event.inputs.prerelease_tag }}-amd64
+          cache-from: type=gha,scope=cognition-amd64
+          cache-to: type=gha,mode=max,scope=cognition-amd64
+          build-args: |
+            BUILD_DATE=${{ github.event.repository.updated_at }}
+            VCS_REF=${{ github.sha }}
+            VERSION=v${{ github.event.inputs.version }}-${{ github.event.inputs.prerelease_tag }}
+
+  build-amd64-sandbox:
+    needs: test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push amd64 sandbox image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile.sandbox
+          platforms: linux/amd64
+          push: true
+          tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-sandbox:${{ github.event.inputs.version }}-${{ github.event.inputs.prerelease_tag }}-amd64
+          cache-from: type=gha,scope=cognition-sandbox-amd64
+          cache-to: type=gha,mode=max,scope=cognition-sandbox-amd64
+          build-args: |
+            BUILD_DATE=${{ github.event.repository.updated_at }}
+            VCS_REF=${{ github.sha }}
+            VERSION=v${{ github.event.inputs.version }}-${{ github.event.inputs.prerelease_tag }}
+
+  build-arm64-app:
+    needs: test
+    runs-on: ubuntu-24.04-arm
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push arm64 app image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          platforms: linux/arm64
+          push: true
+          tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.event.inputs.version }}-${{ github.event.inputs.prerelease_tag }}-arm64
+          cache-from: type=gha,scope=cognition-arm64
+          cache-to: type=gha,mode=max,scope=cognition-arm64
+          build-args: |
+            BUILD_DATE=${{ github.event.repository.updated_at }}
+            VCS_REF=${{ github.sha }}
+            VERSION=v${{ github.event.inputs.version }}-${{ github.event.inputs.prerelease_tag }}
+
+  build-arm64-sandbox:
+    needs: test
+    runs-on: ubuntu-24.04-arm
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push arm64 sandbox image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile.sandbox
+          platforms: linux/arm64
+          push: true
+          tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-sandbox:${{ github.event.inputs.version }}-${{ github.event.inputs.prerelease_tag }}-arm64
+          cache-from: type=gha,scope=cognition-sandbox-arm64
+          cache-to: type=gha,mode=max,scope=cognition-sandbox-arm64
+          build-args: |
+            BUILD_DATE=${{ github.event.repository.updated_at }}
+            VCS_REF=${{ github.sha }}
+            VERSION=v${{ github.event.inputs.version }}-${{ github.event.inputs.prerelease_tag }}
+
+  merge-manifests-app:
+    needs: [build-amd64-app, build-arm64-app]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Log in to Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Create app pre-release manifest
+        run: |
+          IMAGE="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}"
+          TAG="${{ github.event.inputs.version }}-${{ github.event.inputs.prerelease_tag }}"
+          AMD64="${IMAGE}:${TAG}-amd64"
+          ARM64="${IMAGE}:${TAG}-arm64"
+
+          docker buildx imagetools create \
+            -t "${IMAGE}:${TAG}" \
+            "$AMD64" "$ARM64"
+
+  merge-manifests-sandbox:
+    needs: [build-amd64-sandbox, build-arm64-sandbox]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Log in to Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Create sandbox pre-release manifest
+        run: |
+          IMAGE="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-sandbox"
+          TAG="${{ github.event.inputs.version }}-${{ github.event.inputs.prerelease_tag }}"
+          AMD64="${IMAGE}:${TAG}-amd64"
+          ARM64="${IMAGE}:${TAG}-arm64"
+
+          docker buildx imagetools create \
+            -t "${IMAGE}:${TAG}" \
+            "$AMD64" "$ARM64"

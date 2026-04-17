@@ -7,6 +7,27 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [0.8.3] — 2026-04-17
+
+### Highlights
+
+- Hardened the release pipeline so multi-arch app and sandbox images are validated and published independently for the 0.8.x line.
+
+### Release and Container Fixes
+
+- Fixed the sandbox image to install the correct `gh` CLI binary for the target architecture, unblocking `linux/arm64` sandbox builds.
+- Split release image builds into independent app and sandbox jobs for `linux/amd64` and `linux/arm64` so one image family no longer cancels the other.
+- Split multi-arch manifest publication into independent app and sandbox jobs so partial release image failures are isolated correctly.
+
+### Validation and Release Process
+
+- Restored strict release validation after the build-isolation changes by fixing the related `mypy` regressions in runtime resolver and session config normalization.
+- Added a dedicated release checklist document and updated agent guidance so future releases validate the exact release commit before tagging.
+
+### Merged PRs
+
+- `#110` fix release image build isolation
+
 ## [0.8.2] — 2026-04-16
 
 ### Highlights
