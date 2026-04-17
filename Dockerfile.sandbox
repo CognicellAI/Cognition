@@ -21,6 +21,7 @@
 
 ARG GH_CLI_VERSION=2.66.1
 ARG NODE_MAJOR=22
+ARG TARGETARCH
 
 FROM python:3.11-slim
 
@@ -46,10 +47,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # ── gh CLI ───────────────────────────────────────────────────────────────────
 ARG GH_CLI_VERSION
-RUN curl -fsSL \
-    "https://github.com/cli/cli/releases/download/v${GH_CLI_VERSION}/gh_${GH_CLI_VERSION}_linux_amd64.tar.gz" \
+ARG TARGETARCH
+RUN case "${TARGETARCH}" in \
+        amd64|arm64) gh_arch="${TARGETARCH}" ;; \
+        *) echo "Unsupported TARGETARCH: ${TARGETARCH}" >&2; exit 1 ;; \
+    esac \
+    && curl -fsSL \
+    "https://github.com/cli/cli/releases/download/v${GH_CLI_VERSION}/gh_${GH_CLI_VERSION}_linux_${gh_arch}.tar.gz" \
     | tar -xz -C /usr/local/bin --strip-components=2 \
-    "gh_${GH_CLI_VERSION}_linux_amd64/bin/gh" \
+    "gh_${GH_CLI_VERSION}_linux_${gh_arch}/bin/gh" \
     && gh --version
 
 # ── Node.js LTS ──────────────────────────────────────────────────────────────

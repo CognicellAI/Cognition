@@ -16,7 +16,8 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import AsyncGenerator
-from typing import Annotated, Any, cast
+<<<<<<< HEAD
+from typing import Annotated, Any, Literal, cast
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from fastapi.responses import StreamingResponse
@@ -56,6 +57,21 @@ from server.app.storage.backend import StorageBackend
 from server.app.storage.config_store import ConfigStore
 
 router = APIRouter(prefix="/sessions", tags=["sessions"])
+
+
+SessionProvider = Literal[
+    "openai",
+    "anthropic",
+    "bedrock",
+    "mock",
+    "openai_compatible",
+    "google_genai",
+    "google_vertexai",
+]
+
+
+def _as_session_provider(provider: str) -> SessionProvider | None:
+    return cast(SessionProvider, provider)
 
 
 def _unprocessable_entity(detail: str) -> HTTPException:
@@ -116,7 +132,11 @@ async def _normalize_session_config(
         raise
 
     if request.config.provider is None:
+<<<<<<< HEAD
         request.config.provider = cast(Any, target.provider)
+=======
+        request.config.provider = _as_session_provider(target.provider)
+>>>>>>> d1e262c (Fix release image build isolation)
 
 
 async def _get_scoped_session(
