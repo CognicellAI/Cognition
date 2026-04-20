@@ -413,7 +413,7 @@ class TestMiddlewareWiring:
 
 class TestToolsWiring:
     @pytest.mark.asyncio
-    async def test_agent_def_tools_added_to_runtime_tools(self):
+    async def test_agent_def_tools_added_to_runtime_tools(self, tmp_path):
         """Tools from AgentDefinition._resolve_tools() are included in runtime tools."""
         from langchain_core.tools import BaseTool
 
@@ -435,6 +435,7 @@ class TestToolsWiring:
         mock_def_registry.subagents = MagicMock(return_value=[])
 
         s = MagicMock(spec=Settings)
+        s.workspace_path = tmp_path
         service = DeepAgentStreamingService(s)
 
         mock_config_store = MagicMock()
@@ -490,6 +491,9 @@ class TestToolsWiring:
                 pass
 
         assert len(resolve_tools_calls) == 1
+        # Must resolve against the workspace root, NOT the per-session sandbox
+        # path passed as project_path. See issue #112.
+        assert resolve_tools_calls[0].get("base_path") == str(tmp_path)
 
         params = _get_params(create_agent_mock)
         assert params is not None

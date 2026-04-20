@@ -501,3 +501,52 @@ class TestAgentDefinitionPathValidation:
         assert len(results["tools"]) == 1
         assert len(results["skills"]) == 1
         assert len(results["memory"]) == 1
+
+
+class TestResolveTools:
+    """Tests for AgentDefinition._resolve_tools."""
+
+    def test_resolves_file_path_relative_to_base(self, tmp_path):
+        """Relative .py tool paths resolve against base_path (workspace root)."""
+        tools_dir = tmp_path / ".cognition" / "tools"
+        tools_dir.mkdir(parents=True)
+        tool_file = tools_dir / "my_tool.py"
+        tool_file.write_text(
+            "from langchain_core.tools import tool\n"
+            "\n"
+            "@tool\n"
+            "def do_thing(x: str) -> str:\n"
+            "    '''does a thing'''\n"
+            "    return x\n"
+        )
+
+        agent = AgentDefinition(
+            name="test-agent",
+            system_prompt="test",
+            tools=[".cognition/tools/my_tool.py"],
+        )
+        resolved = agent._resolve_tools(base_path=str(tmp_path))
+        assert len(resolved) == 1
+        assert resolved[0].name == "do_thing"
+
+    def test_missing_tool_file_logs_warning(self, tmp_path):
+        """Missing tool file emits a warning (not silent) — see issue #112."""
+        from structlog.testing import capture_logs
+
+        agent = AgentDefinition(
+            name="test-agent",
+            system_prompt="test",
+            tools=[".cognition/tools/missing.py"],
+        )
+        with capture_logs() as logs:
+            resolved = agent._resolve_tools(base_path=str(tmp_path))
+
+        assert resolved == []
+        warnings = [
+            log
+            for log in logs
+            if log.get("log_level") == "warning"
+            and "Tool file not found" in log.get("event", "")
+        ]
+        assert warnings, f"expected warning for missing tool, got: {logs}"
+        assert warnings[0]["tool_path"] == ".cognition/tools/missing.py"

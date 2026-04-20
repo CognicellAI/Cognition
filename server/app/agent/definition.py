@@ -318,6 +318,13 @@ class AgentDefinition(BaseModel):
                     # Treat as file path
                     tool_file = base / tool_path
                     if not tool_file.exists():
+                        logger.warning(
+                            "Tool file not found — skipping",
+                            tool_path=tool_path,
+                            resolved=str(tool_file),
+                            base_path=str(base),
+                            agent=self.name,
+                        )
                         continue
 
                     # Load module from file

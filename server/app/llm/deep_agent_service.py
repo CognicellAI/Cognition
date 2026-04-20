@@ -211,7 +211,9 @@ class DeepAgentStreamingService:
             resolved.middleware = _resolve_middleware(agent_def.middleware)
 
         if agent_def.tools:
-            agent_def_tools = agent_def._resolve_tools(base_path=project_path)
+            agent_def_tools = agent_def._resolve_tools(
+                base_path=str(self.settings.workspace_path)
+            )
             if agent_def_tools:
                 custom_tools = list(custom_tools) + agent_def_tools
 
