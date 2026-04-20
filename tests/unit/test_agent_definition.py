@@ -529,6 +529,35 @@ class TestResolveTools:
         assert len(resolved) == 1
         assert resolved[0].name == "do_thing"
 
+    def test_to_subagent_passes_base_path_to_resolver(self, tmp_path):
+        """to_subagent(base_path=...) must forward base_path to _resolve_tools.
+
+        Without this, subagent tool files referenced by relative path fail to
+        resolve — see issue #112 follow-up.
+        """
+        tools_dir = tmp_path / ".cognition" / "tools"
+        tools_dir.mkdir(parents=True)
+        tool_file = tools_dir / "sub_tool.py"
+        tool_file.write_text(
+            "from langchain_core.tools import tool\n"
+            "\n"
+            "@tool\n"
+            "def sub_action(x: str) -> str:\n"
+            "    '''sub tool'''\n"
+            "    return x\n"
+        )
+
+        agent = AgentDefinition(
+            name="breach-analyst",
+            description="analyses breaches",
+            system_prompt="test",
+            tools=[".cognition/tools/sub_tool.py"],
+        )
+        spec = agent.to_subagent(base_path=str(tmp_path))
+        assert "tools" in spec
+        assert len(spec["tools"]) == 1
+        assert spec["tools"][0].name == "sub_action"
+
     def test_missing_tool_file_logs_warning(self, tmp_path):
         """Missing tool file emits a warning (not silent) — see issue #112."""
         from structlog.testing import capture_logs

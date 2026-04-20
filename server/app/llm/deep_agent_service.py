@@ -193,7 +193,12 @@ class DeepAgentStreamingService:
             resolved.skills.append("/skills/api/")
 
         all_defs = await cs.list_agent_definitions(include_hidden=True)
-        resolved.subagents = [s.to_subagent() for s in all_defs if s.name != agent_def.name]
+        workspace_base = str(self.settings.workspace_path)
+        resolved.subagents = [
+            s.to_subagent(base_path=workspace_base)
+            for s in all_defs
+            if s.name != agent_def.name
+        ]
 
         if agent_def.memory:
             resolved.memory = list(agent_def.memory)
@@ -211,9 +216,7 @@ class DeepAgentStreamingService:
             resolved.middleware = _resolve_middleware(agent_def.middleware)
 
         if agent_def.tools:
-            agent_def_tools = agent_def._resolve_tools(
-                base_path=str(self.settings.workspace_path)
-            )
+            agent_def_tools = agent_def._resolve_tools(base_path=workspace_base)
             if agent_def_tools:
                 custom_tools = list(custom_tools) + agent_def_tools
 

@@ -385,8 +385,14 @@ class AgentDefinition(BaseModel):
 
         return resolved_tools
 
-    def to_subagent(self) -> dict[str, Any]:
+    def to_subagent(self, base_path: str | Path | None = None) -> dict[str, Any]:
         """Translate AgentDefinition to Deep Agents SubAgent TypedDict.
+
+        Args:
+            base_path: Base path for resolving relative tool file paths. Should
+                be the workspace root — not a per-session sandbox — because
+                ``.cognition/tools/`` is a workspace-level concept loaded into
+                the server process. See issue #112.
 
         Returns:
             A dict matching the Deep Agents SubAgent TypedDict specification:
@@ -414,7 +420,7 @@ class AgentDefinition(BaseModel):
 
         # Resolve tools from paths to BaseTool instances
         # This prevents AttributeError when ToolNode tries to access .name on strings
-        resolved_tools = self._resolve_tools()
+        resolved_tools = self._resolve_tools(base_path=base_path)
         if resolved_tools:
             spec["tools"] = resolved_tools
 

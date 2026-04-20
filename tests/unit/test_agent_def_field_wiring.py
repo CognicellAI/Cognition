@@ -501,6 +501,89 @@ class TestToolsWiring:
         assert agent_def_tool in passed_tools
 
     @pytest.mark.asyncio
+    async def test_subagent_to_subagent_receives_workspace_path(self, tmp_path):
+        """Subagents' to_subagent() must get base_path=settings.workspace_path.
+
+        Follow-up to issue #112: primary agent fix wasn't enough — subagent
+        tools resolve via to_subagent() and also need the workspace root.
+        """
+        from server.app.agent.definition import AgentDefinition
+        from server.app.llm.deep_agent_service import DeepAgentStreamingService
+        from server.app.settings import Settings
+
+        session = _make_session()
+        mock_runtime = _make_mock_runtime(DoneEvent())
+
+        primary = AgentDefinition(name="test-agent", system_prompt="primary")
+        subagent_def = AgentDefinition(
+            name="helper",
+            description="helps",
+            system_prompt="sub",
+        )
+
+        s = MagicMock(spec=Settings)
+        s.workspace_path = tmp_path
+        service = DeepAgentStreamingService(s)
+
+        mock_config_store = MagicMock()
+        mock_config_store.get_agent_definition = AsyncMock(return_value=primary)
+        mock_config_store.list_agent_definitions = AsyncMock(
+            return_value=[primary, subagent_def]
+        )
+        mock_config_store.list_tools = AsyncMock(return_value=[])
+        mock_config_store.list_mcp_servers = AsyncMock(return_value=[])
+        service._config_store = mock_config_store
+
+        mock_storage = MagicMock()
+        mock_storage.get_session = AsyncMock(return_value=session)
+        mock_storage.get_checkpointer = AsyncMock(return_value=MagicMock())
+        mock_storage.get_store = AsyncMock(return_value=MagicMock())
+        service.storage_backend = mock_storage
+
+        to_subagent_calls: list[Any] = []
+
+        def _fake_to_subagent(self_inner: Any, **kwargs: Any) -> dict[str, Any]:
+            to_subagent_calls.append(kwargs)
+            return {"name": self_inner.name, "description": "", "system_prompt": "x"}
+
+        with (
+            patch(
+                "server.app.llm.deep_agent_service.DeepAgentRuntime",
+                return_value=mock_runtime,
+            ),
+            patch.object(
+                service,
+                "_resolve_model",
+                new_callable=AsyncMock,
+                return_value=(MagicMock(), "mock", "mock-model", 100),
+            ),
+            patch(
+                "server.app.llm.deep_agent_service.create_cognition_agent",
+                new_callable=AsyncMock,
+                return_value=MagicMock(),
+            ),
+            patch(
+                "server.app.storage.factory.create_storage_backend",
+                return_value=mock_storage,
+            ),
+            patch(
+                "server.app.agent.definition.AgentDefinition.to_subagent",
+                _fake_to_subagent,
+            ),
+        ):
+            async for _ in service.stream_response(
+                session_id=session.id,
+                thread_id=session.thread_id,
+                project_path="/tmp/ws",
+                content="hello",
+            ):
+                pass
+
+        # One call per non-primary def
+        assert len(to_subagent_calls) == 1
+        assert to_subagent_calls[0].get("base_path") == str(tmp_path)
+
+    @pytest.mark.asyncio
     async def test_session_recursion_limit_beats_agent_def(self):
         """session.config.recursion_limit must override agent_def.config.recursion_limit."""
         from server.app.agent.definition import AgentConfig, AgentDefinition
