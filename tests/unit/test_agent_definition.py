@@ -529,6 +529,30 @@ class TestResolveTools:
         assert len(resolved) == 1
         assert resolved[0].name == "do_thing"
 
+    def test_resolves_suffixless_file_path_adds_py_extension(self, tmp_path):
+        """Relative tool paths missing the .py suffix still resolve if the
+        .py file exists.
+        """
+        tools_dir = tmp_path / ".cognition" / "tools"
+        tools_dir.mkdir(parents=True)
+        (tools_dir / "bare_tool.py").write_text(
+            "from langchain_core.tools import tool\n"
+            "\n"
+            "@tool\n"
+            "def bare(x: str) -> str:\n"
+            "    '''bare tool'''\n"
+            "    return x\n"
+        )
+
+        agent = AgentDefinition(
+            name="test-agent",
+            system_prompt="test",
+            tools=[".cognition/tools/bare_tool"],
+        )
+        resolved = agent._resolve_tools(base_path=str(tmp_path))
+        assert len(resolved) == 1
+        assert resolved[0].name == "bare"
+
     def test_to_subagent_passes_base_path_to_resolver(self, tmp_path):
         """to_subagent(base_path=...) must forward base_path to _resolve_tools.
 

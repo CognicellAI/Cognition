@@ -317,6 +317,8 @@ class AgentDefinition(BaseModel):
                 if "/" in tool_path or tool_path.endswith(".py"):
                     # Treat as file path
                     tool_file = base / tool_path
+                    if not tool_file.exists() and not tool_file.suffix:
+                        tool_file = tool_file.with_suffix(".py")
                     if not tool_file.exists():
                         logger.warning(
                             "Tool file not found — skipping",
