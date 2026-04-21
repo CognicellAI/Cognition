@@ -19,6 +19,11 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Split release image builds into independent app and sandbox jobs for `linux/amd64` and `linux/arm64` so one image family no longer cancels the other.
 - Split multi-arch manifest publication into independent app and sandbox jobs so partial release image failures are isolated correctly.
 
+### Bug Fixes
+
+- Fixed agent and subagent tool resolution so workspace-relative `.cognition/tools/...` paths load from the workspace root instead of the per-session sandbox path.
+- Added a warning when configured tool files are missing and allowed suffixless tool references to fall back to `.py` during resolution.
+
 ### Validation and Release Process
 
 - Restored strict release validation after the build-isolation changes by fixing the related `mypy` regressions in runtime resolver and session config normalization.
@@ -27,6 +32,7 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Merged PRs
 
 - `#110` fix release image build isolation
+- `#113` Fix #112: resolve AgentDefinition tools against workspace root
 
 ## [0.8.2] — 2026-04-16
 
