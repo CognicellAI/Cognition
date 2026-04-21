@@ -317,7 +317,16 @@ class AgentDefinition(BaseModel):
                 if "/" in tool_path or tool_path.endswith(".py"):
                     # Treat as file path
                     tool_file = base / tool_path
+                    if not tool_file.exists() and not tool_file.suffix:
+                        tool_file = tool_file.with_suffix(".py")
                     if not tool_file.exists():
+                        logger.warning(
+                            "Tool file not found — skipping",
+                            tool_path=tool_path,
+                            resolved=str(tool_file),
+                            base_path=str(base),
+                            agent=self.name,
+                        )
                         continue
 
                     # Load module from file
@@ -378,8 +387,14 @@ class AgentDefinition(BaseModel):
 
         return resolved_tools
 
-    def to_subagent(self) -> dict[str, Any]:
+    def to_subagent(self, base_path: str | Path | None = None) -> dict[str, Any]:
         """Translate AgentDefinition to Deep Agents SubAgent TypedDict.
+
+        Args:
+            base_path: Base path for resolving relative tool file paths. Should
+                be the workspace root — not a per-session sandbox — because
+                ``.cognition/tools/`` is a workspace-level concept loaded into
+                the server process. See issue #112.
 
         Returns:
             A dict matching the Deep Agents SubAgent TypedDict specification:
@@ -407,7 +422,7 @@ class AgentDefinition(BaseModel):
 
         # Resolve tools from paths to BaseTool instances
         # This prevents AttributeError when ToolNode tries to access .name on strings
-        resolved_tools = self._resolve_tools()
+        resolved_tools = self._resolve_tools(base_path=base_path)
         if resolved_tools:
             spec["tools"] = resolved_tools
 
