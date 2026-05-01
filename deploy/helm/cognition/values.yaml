@@ -118,16 +118,32 @@ config:
     maxTokens: 4096
     # Base URL for OpenAI compatible providers (e.g., OpenRouter, vLLM)
     openaiCompatibleBaseUrl: "https://openrouter.ai/api/v1"
+
+  # File-based skill and tool source directories to seed into the registry at startup.
+  skillSources:
+    - .cognition/skills/
+
+  toolSources:
+    - .cognition/tools/
   
+  # Embedded skill definitions to copy into the workspace from ConfigMap.
+  # Each key becomes a skill directory under .cognition/skills/<name>/SKILL.md.
+  skills: {}
+  #  example-skill:
+  #    name: example-skill
+  #    description: An example skill
+  #    content: |
+  #      # Example Skill
+  #      Instructions for the skill go here.
+
   # Agent configuration
   agent:
     # Memory files to load
     memory:
       - AGENTS.md
-    # Skills directories
-    skills:
-      - .cognition/skills/
-    # Additional tools (optional)
+    # Attached skill names (not filesystem paths)
+    skills: []
+    # Attached tool names (not filesystem paths)
     tools: []
     # Custom AGENTS.md content (optional)
     agentsMd: ""

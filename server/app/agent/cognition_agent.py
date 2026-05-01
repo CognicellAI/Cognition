@@ -356,13 +356,12 @@ async def create_cognition_agent(params: CognitionAgentParams) -> CognitionAgent
         agent_memory = defaults.memory if defaults else ["AGENTS.md"]
 
     if params.skills is not None:
-        agent_skills = list(params.skills)
+        attached_skill_names = list(params.skills)
     else:
         defaults = await _defaults()
-        agent_skills = defaults.skills if defaults else [".cognition/skills/"]
+        attached_skill_names = defaults.skills if defaults else []
 
-    if "/skills/api/" not in agent_skills:
-        agent_skills = agent_skills + ["/skills/api/"]
+    agent_skills = ["/skills/api/"] if attached_skill_names else []
 
     from deepagents.backends.protocol import BackendProtocol
 
@@ -374,7 +373,11 @@ async def create_cognition_agent(params: CognitionAgentParams) -> CognitionAgent
 
         reg = getattr(config_store, "config_registry", None)
         if reg is not None:
-            db_skills_backend = ConfigRegistrySkillsBackend(registry=reg, scope=params.scope)
+            db_skills_backend = ConfigRegistrySkillsBackend(
+                registry=reg,
+                scope=params.scope,
+                allowed_skill_names=attached_skill_names,
+            )
             backend = CompositeBackend(
                 default=sandbox_backend,
                 routes={"/skills/api/": db_skills_backend},

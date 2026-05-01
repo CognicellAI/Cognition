@@ -61,6 +61,13 @@ async def register_tool(
             detail="Provide either 'path' or 'code', not both.",
         )
 
+    existing = await config_store.get_tool(body.name, scope=body.scope or None)
+    if existing is not None and existing.source == "file":
+        raise HTTPException(
+            status_code=409,
+            detail=f"Tool '{body.name}' is file-managed and cannot be modified via API",
+        )
+
     try:
         tool_data: dict[str, Any] = {
             "name": body.name,
@@ -92,10 +99,17 @@ async def register_tool(
 async def unregister_tool(
     name: str,
     config_store: ConfigStore = Depends(get_config_store),  # noqa: B008
+    scope: SessionScope = Depends(get_scope_dep),  # noqa: B008
 ) -> None:
     """Remove a tool from the ConfigStore."""
     try:
-        deleted = await config_store.delete_tool(name)
+        existing = await config_store.get_tool(name, scope=scope.get_all() or None)
+        if existing is not None and existing.source == "file":
+            raise HTTPException(
+                status_code=409,
+                detail=f"Tool '{name}' is file-managed and cannot be modified via API",
+            )
+        deleted = await config_store.delete_tool(name, scope=scope.get_all() or None)
         if not deleted:
             raise HTTPException(status_code=404, detail=f"Tool '{name}' not found in registry")
     except HTTPException:
@@ -132,12 +146,18 @@ async def update_tool(
     name: str,
     body: ToolUpdate,
     config_store: ConfigStore = Depends(get_config_store),  # noqa: B008
+    scope: SessionScope = Depends(get_scope_dep),  # noqa: B008
 ) -> ToolResponse:
     """Partially update an API-registered tool in the ConfigStore."""
     try:
-        existing = await config_store.get_tool(name)
+        existing = await config_store.get_tool(name, scope=scope.get_all() or None)
         if existing is None:
             raise HTTPException(status_code=404, detail=f"Tool '{name}' not found")
+        if existing.source == "file":
+            raise HTTPException(
+                status_code=409,
+                detail=f"Tool '{name}' is file-managed and cannot be modified via API",
+            )
 
         updates = body.model_dump(exclude_none=True)
         tool_data: dict[str, Any] = {

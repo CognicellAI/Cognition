@@ -1,15 +1,23 @@
-"""Unit tests for server.app.bootstrap.seed_providers_from_config().
+"""Unit tests for server.app.bootstrap config seeding helpers.
 
 Tests the config.yaml -> ConfigStore provider seeding logic.
 """
 
 from __future__ import annotations
 
+from pathlib import Path
 from unittest.mock import AsyncMock
 
 import pytest
 
-from server.app.bootstrap import _infer_api_key_env, seed_providers_from_config
+from server.app.bootstrap import (
+    _infer_api_key_env,
+    seed_providers_from_config,
+    seed_skills_from_sources,
+    seed_tools_from_sources,
+)
+from server.app.storage.config_registry import MemoryConfigRegistry
+from server.app.storage.config_store import DefaultConfigStore
 
 
 class TestInferApiKeyEnv:
@@ -179,3 +187,118 @@ class TestSeedProvidersFromConfig:
     @pytest.mark.asyncio
     async def test_empty_config(self) -> None:
         assert await seed_providers_from_config({}, self._store()) is False
+
+
+class TestSeedSkillsFromSources:
+    @pytest.mark.asyncio
+    async def test_seeds_skill_from_configured_source(self, tmp_path: Path) -> None:
+        source_dir = tmp_path / ".cognition" / "skills" / "clean-code"
+        source_dir.mkdir(parents=True)
+        (source_dir / "SKILL.md").write_text(
+            "---\nname: clean-code\ndescription: Use this skill for clean code.\n---\n\n# Clean Code\n",
+            encoding="utf-8",
+        )
+
+        store = DefaultConfigStore(MemoryConfigRegistry(), workspace_path=tmp_path)
+        inserted = await seed_skills_from_sources(
+            {"skill_sources": [".cognition/skills/"]},
+            store,
+            tmp_path,
+        )
+
+        assert inserted == 1
+        skill = await store.get_skill("clean-code", scope={})
+        assert skill is not None
+        assert skill.source == "file"
+        assert skill.description == "Use this skill for clean code."
+
+    @pytest.mark.asyncio
+    async def test_does_not_override_api_skill(self, tmp_path: Path) -> None:
+        source_dir = tmp_path / ".cognition" / "skills" / "clean-code"
+        source_dir.mkdir(parents=True)
+        (source_dir / "SKILL.md").write_text(
+            "---\nname: clean-code\ndescription: File description\n---\n\n# Clean Code\n",
+            encoding="utf-8",
+        )
+
+        store = DefaultConfigStore(MemoryConfigRegistry(), workspace_path=tmp_path)
+        await store.upsert_skill_from_dict(
+            {
+                "name": "clean-code",
+                "path": "/skills/api/clean-code/SKILL.md",
+                "enabled": True,
+                "description": "API description",
+                "content": "# API skill",
+                "scope": {},
+                "source": "api",
+            }
+        )
+
+        inserted = await seed_skills_from_sources(
+            {"skill_sources": [".cognition/skills/"]},
+            store,
+            tmp_path,
+        )
+
+        assert inserted == 0
+        skill = await store.get_skill("clean-code", scope={})
+        assert skill is not None
+        assert skill.source == "api"
+        assert skill.description == "API description"
+
+
+class TestSeedToolsFromSources:
+    @pytest.mark.asyncio
+    async def test_seeds_tool_from_configured_source(self, tmp_path: Path) -> None:
+        source_dir = tmp_path / ".cognition" / "tools"
+        source_dir.mkdir(parents=True)
+        (source_dir / "directorate.py").write_text(
+            "from langchain_core.tools import tool\n\n@tool\ndef directorate_get_change_set_context() -> str:\n    \"\"\"Get change set context.\"\"\"\n    return \"ok\"\n",
+            encoding="utf-8",
+        )
+
+        store = DefaultConfigStore(MemoryConfigRegistry(), workspace_path=tmp_path)
+        inserted = await seed_tools_from_sources(
+            {"tool_sources": [".cognition/tools/"]},
+            store,
+            tmp_path,
+        )
+
+        assert inserted == 1
+        tool = await store.get_tool("directorate_get_change_set_context", scope={})
+        assert tool is not None
+        assert tool.source == "file"
+
+    @pytest.mark.asyncio
+    async def test_does_not_override_api_tool(self, tmp_path: Path) -> None:
+        source_dir = tmp_path / ".cognition" / "tools"
+        source_dir.mkdir(parents=True)
+        (source_dir / "directorate.py").write_text(
+            "from langchain_core.tools import tool\n\n@tool\ndef directorate_get_change_set_context() -> str:\n    \"\"\"File tool\"\"\"\n    return \"ok\"\n",
+            encoding="utf-8",
+        )
+
+        store = DefaultConfigStore(MemoryConfigRegistry(), workspace_path=tmp_path)
+        await store.upsert_tool_from_dict(
+            {
+                "name": "directorate_get_change_set_context",
+                "path": "server.app.tools.test_tool",
+                "code": None,
+                "enabled": True,
+                "description": "API tool",
+                "interrupt_on": False,
+                "scope": {},
+                "source": "api",
+            }
+        )
+
+        inserted = await seed_tools_from_sources(
+            {"tool_sources": [".cognition/tools/"]},
+            store,
+            tmp_path,
+        )
+
+        assert inserted == 0
+        tool = await store.get_tool("directorate_get_change_set_context", scope={})
+        assert tool is not None
+        assert tool.source == "api"

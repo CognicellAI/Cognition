@@ -65,6 +65,12 @@ async def create_skill(
 ) -> SkillResponse:
     """Create or replace a skill in the ConfigStore."""
     effective_scope = scope.get_all() or (body.scope or {})
+    existing = await config_store.get_skill(body.name, scope=effective_scope)
+    if existing is not None and existing.source == "file":
+        raise HTTPException(
+            status_code=409,
+            detail=f"Skill '{body.name}' is file-managed and cannot be modified via API",
+        )
 
     # Auto-generate path if content is provided, otherwise use provided path
     if body.content:
@@ -116,6 +122,11 @@ async def update_skill(
     skill = await config_store.get_skill(name, scope=scope_dict)
     if skill is None:
         raise HTTPException(status_code=404, detail=f"Skill '{name}' not found")
+    if skill.source == "file":
+        raise HTTPException(
+            status_code=409,
+            detail=f"Skill '{name}' is file-managed and cannot be modified via API",
+        )
 
     updates = body.model_dump(exclude_none=True)
 
@@ -136,6 +147,12 @@ async def delete_skill(
 ) -> None:
     """Delete a skill from the ConfigStore."""
     scope_dict = scope.get_all() or None
+    skill = await config_store.get_skill(name, scope=scope_dict)
+    if skill is not None and skill.source == "file":
+        raise HTTPException(
+            status_code=409,
+            detail=f"Skill '{name}' is file-managed and cannot be modified via API",
+        )
     deleted = await config_store.delete_skill(name, scope=scope_dict)
     if not deleted:
         raise HTTPException(status_code=404, detail=f"Skill '{name}' not found")

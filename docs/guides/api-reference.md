@@ -574,8 +574,8 @@ Create or replace an agent definition in the ConfigRegistry.
   "system_prompt": "You are a security expert. Audit code for vulnerabilities.",
   "description": "Audits code for security issues",
   "mode": "subagent",
-  "tools": ["myapp.tools.security.run_semgrep"],
-  "skills": [],
+  "tools": ["run_semgrep"],
+  "skills": ["python-review"],
   "memory": ["AGENTS.md"],
   "interrupt_on": {},
   "model": "gpt-4o",
@@ -590,8 +590,8 @@ Create or replace an agent definition in the ConfigRegistry.
 | `system_prompt` | string | Agent's system prompt |
 | `description` | string | Human-readable description |
 | `mode` | `"primary"` \| `"subagent"` \| `"all"` | Whether agent can own sessions, be delegated to, or both |
-| `tools` | list[string] | Dotted Python import paths for tool functions |
-| `skills` | list[string] | Paths to SKILL.md files or directories |
+| `tools` | list[string] | Registry tool names to attach to this agent |
+| `skills` | list[string] | Registry skill names to attach to this agent |
 | `memory` | list[string] | Paths to instruction files (e.g. AGENTS.md) |
 | `interrupt_on` | dict | Tool names mapped to `true` for HITL confirmation |
 | `model` | string | Model override (overrides global default for this agent's sessions) |
@@ -638,6 +638,8 @@ Delete an agent definition from the ConfigRegistry.
 ## Skills
 
 Skills are SKILL.md files stored in the ConfigRegistry. When an agent loads, its configured skills are injected progressively as the context window fills.
+
+File-managed skills (seeded from `skill_sources` directories at startup) have `source: "file"` and cannot be modified or deleted via the API (returns `409 Conflict`). API-created skills have `source: "api"`.
 
 ### `GET /skills`
 
@@ -778,6 +780,8 @@ List all registered tools from both file discovery (AgentRegistry) and API regis
 - `"file"` — auto-discovered from `.cognition/tools/` or built-in
 - `"api_code"` — registered via `POST /tools` with `code` field (Python source stored in DB)
 - `"api_path"` — registered via `POST /tools` with `path` field (module path)
+
+File-managed tools (seeded from `tool_sources` directories at startup) have `source: "file"` and cannot be modified or deleted via the API (returns `409 Conflict`).
 
 ### `GET /tools/{name}`
 

@@ -270,6 +270,97 @@ class TestUpdateAgent:
         )
         assert response.status_code == 404
 
+    def test_patch_agent_tools_with_simple_names(self):
+        """PATCH with simple tool names (no dots) should persist correctly.
+
+        Regression: validate_tools used to reject names without at least one
+        dot, causing silent data loss in the PATCH handler.
+        """
+        client.post(
+            "/agents",
+            json={
+                "name": "test-patch-tools-agent",
+                "system_prompt": "tools test",
+            },
+        )
+        response = client.patch(
+            "/agents/test-patch-tools-agent",
+            json={"tools": ["directorate_get_change_set_context", "my_custom_tool"]},
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert data["tools"] == ["directorate_get_change_set_context", "my_custom_tool"]
+
+        # Verify round-trip via GET
+        get_resp = client.get("/agents/test-patch-tools-agent")
+        assert get_resp.status_code == 200
+        assert get_resp.json()["tools"] == ["directorate_get_change_set_context", "my_custom_tool"]
+
+    def test_patch_agent_tools_with_module_paths_rejected(self):
+        """Agent tool attachments must be registry tool names, not module paths."""
+        client.post(
+            "/agents",
+            json={
+                "name": "test-patch-module-tools-agent",
+                "system_prompt": "module tools test",
+            },
+        )
+        response = client.patch(
+            "/agents/test-patch-module-tools-agent",
+            json={"tools": ["server.app.tools.file_tools"]},
+        )
+        assert response.status_code == 500
+
+    def test_patch_agent_skills(self):
+        """PATCH with attached skill names should persist correctly."""
+        client.post(
+            "/agents",
+            json={
+                "name": "test-patch-skills-agent",
+                "system_prompt": "skills test",
+            },
+        )
+        response = client.patch(
+            "/agents/test-patch-skills-agent",
+            json={
+                "skills": ["clean-code", "directorate-github-developer-workflow"],
+            },
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert data["skills"] == ["clean-code", "directorate-github-developer-workflow"]
+
+    def test_patch_agent_empty_tool_name_rejected(self):
+        """Empty tool names should still be rejected by the validator."""
+        client.post(
+            "/agents",
+            json={
+                "name": "test-patch-empty-tool-agent",
+                "system_prompt": "empty tool test",
+            },
+        )
+        response = client.patch(
+            "/agents/test-patch-empty-tool-agent",
+            json={"tools": [""]},
+        )
+        assert response.status_code == 500
+
+    def test_create_agent_with_tools_and_skills(self):
+        """POST with tools and skills should persist and round-trip."""
+        response = client.post(
+            "/agents",
+            json={
+                "name": "test-create-with-tools",
+                "system_prompt": "create with tools test",
+                "tools": ["my_tool"],
+                "skills": ["clean-code"],
+            },
+        )
+        assert response.status_code == 201
+        data = response.json()
+        assert data["tools"] == ["my_tool"]
+        assert data["skills"] == ["clean-code"]
+
 
 class TestDeleteAgent:
     def test_delete_existing_agent(self):

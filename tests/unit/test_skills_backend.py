@@ -86,6 +86,26 @@ class TestAlsInfo:
             "/skill-2/",
         }
 
+    async def test_filters_to_allowed_skill_names(self, registry):
+        backend = ConfigRegistrySkillsBackend(
+            registry=registry,
+            scope={},
+            allowed_skill_names=["skill-1"],
+        )
+        for i in range(3):
+            await registry.upsert_skill(
+                SkillDefinition(
+                    name=f"skill-{i}",
+                    path=f"/skills/api/skill-{i}/SKILL.md",
+                    enabled=True,
+                    content=f"# Skill {i}",
+                )
+            )
+
+        result = await backend.als_info("/")
+        assert len(result) == 1
+        assert result[0]["path"] == "/skill-1/"
+
 
 class TestAdownloadFiles:
     """Tests for the adownload_files method."""

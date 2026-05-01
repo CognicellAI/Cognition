@@ -7,6 +7,16 @@ metadata:
     {{- include "cognition.labels" . | nindent 4 }}
 data:
   config.yaml: |
+    {{- if .Values.config.skillSources }}
+    skill_sources:
+      {{- toYaml .Values.config.skillSources | nindent 6 }}
+    {{- end }}
+
+    {{- if .Values.config.toolSources }}
+    tool_sources:
+      {{- toYaml .Values.config.toolSources | nindent 6 }}
+    {{- end }}
+
     llm:
       provider: {{ .Values.config.llm.provider }}
       model: {{ .Values.config.llm.model }}
@@ -52,9 +62,16 @@ data:
     - Run tests before committing changes
     - Use meaningful commit messages
     
-    {{- if .Values.config.agent.agentsMd }}
-    
-    ## Custom Instructions
-    
-    {{ .Values.config.agent.agentsMd | nindent 4 }}
-    {{- end }}
+  {{- if .Values.config.skills }}
+  {{- range $skillName, $skillContent := .Values.config.skills }}
+  skill-{{ $skillName }}.md: |
+    {{- $skillContent | nindent 4 }}
+  {{- end }}
+  {{- end }}
+
+  {{- if .Values.config.agent.agentsMd }}
+
+  ## Custom Instructions
+
+  {{ .Values.config.agent.agentsMd | nindent 4 }}
+  {{- end }}

@@ -85,6 +85,30 @@ class TestCreateTool:
         response = client.post("/tools", json=payload)
         assert response.status_code == 201
 
+    def test_create_tool_rejects_file_managed_tool(self):
+        from server.app.api.dependencies import get_config_store
+
+        store = get_config_store()
+        import asyncio
+
+        asyncio.run(
+            store.upsert_tool_from_dict(
+                {
+                    "name": "file-tool",
+                    "path": ".cognition/tools/file_tool.py",
+                    "code": None,
+                    "enabled": True,
+                    "description": "file-managed",
+                    "interrupt_on": False,
+                    "scope": {},
+                    "source": "file",
+                }
+            )
+        )
+
+        response = client.post("/tools", json={"name": "file-tool", "path": "a.b"})
+        assert response.status_code == 409
+
 
 class TestDeleteTool:
     def test_delete_existing_tool(self):
@@ -96,6 +120,30 @@ class TestDeleteTool:
         response = client.delete("/tools/nonexistent-tool-xyz")
         assert response.status_code == 404
 
+    def test_delete_file_managed_tool_returns_409(self):
+        from server.app.api.dependencies import get_config_store
+
+        store = get_config_store()
+        import asyncio
+
+        asyncio.run(
+            store.upsert_tool_from_dict(
+                {
+                    "name": "file-delete-tool",
+                    "path": ".cognition/tools/file_delete_tool.py",
+                    "code": None,
+                    "enabled": True,
+                    "description": "file-managed",
+                    "interrupt_on": False,
+                    "scope": {},
+                    "source": "file",
+                }
+            )
+        )
+
+        response = client.delete("/tools/file-delete-tool")
+        assert response.status_code == 409
+
 
 class TestUpdateTool:
     def test_patch_tool_updates_interrupt_on(self):
@@ -105,3 +153,27 @@ class TestUpdateTool:
         response = client.patch("/tools/test-tool-patch", json={"interrupt_on": True})
         assert response.status_code == 200
         assert response.json()["interrupt_on"] is True
+
+    def test_patch_file_managed_tool_returns_409(self):
+        from server.app.api.dependencies import get_config_store
+
+        store = get_config_store()
+        import asyncio
+
+        asyncio.run(
+            store.upsert_tool_from_dict(
+                {
+                    "name": "file-patch-tool",
+                    "path": ".cognition/tools/file_patch_tool.py",
+                    "code": None,
+                    "enabled": True,
+                    "description": "file-managed",
+                    "interrupt_on": False,
+                    "scope": {},
+                    "source": "file",
+                }
+            )
+        )
+
+        response = client.patch("/tools/file-patch-tool", json={"interrupt_on": True})
+        assert response.status_code == 409

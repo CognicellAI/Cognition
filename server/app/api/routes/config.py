@@ -138,7 +138,7 @@ async def get_config(
     catalog: ModelCatalog = Depends(get_model_catalog_dep),  # noqa: B008
 ) -> ConfigResponse:
     """Get server configuration."""
-    yaml_config = load_config(cwd=settings.workspace_root)
+    yaml_config = load_config(cwd=settings.workspace_path)
 
     available_providers: list[dict[str, Any]] = []
     try:
@@ -192,7 +192,7 @@ async def patch_config(
     if not changes:
         raise HTTPException(status_code=422, detail="No valid changes provided")
 
-    current_config = load_config(cwd=settings.workspace_root)
+    current_config = load_config(cwd=settings.workspace_path)
     config_path = Path(".cognition/config.yaml")
     backup_path = Path(".cognition/config.yaml.backup")
 

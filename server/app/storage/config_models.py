@@ -351,7 +351,7 @@ class GlobalAgentDefaults(BaseModel):
     """
 
     memory: list[str] = Field(default_factory=lambda: ["AGENTS.md"])
-    skills: list[str] = Field(default_factory=lambda: [".cognition/skills/"])
+    skills: list[str] = Field(default_factory=list)
     subagents: list[dict[str, Any]] = Field(default_factory=list)
     interrupt_on: dict[str, bool] = Field(default_factory=dict)
     response_format: str | None = Field(default=None)

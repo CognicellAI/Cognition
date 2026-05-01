@@ -74,6 +74,23 @@ spec:
                   echo "Created default AGENTS.md"
                 fi
               fi
+              if [ ! -f "${WS}/.cognition/config.yaml" ]; then
+                if [ -f "/etc/cognition-config/config.yaml" ]; then
+                  cp /etc/cognition-config/config.yaml "${WS}/.cognition/config.yaml"
+                  echo "Copied config.yaml from ConfigMap"
+                fi
+              fi
+              {{- if .Values.config.skills }}
+              {{- range $skillName, $_ := .Values.config.skills }}
+              mkdir -p "${WS}/.cognition/skills/{{ $skillName }}"
+              if [ ! -f "${WS}/.cognition/skills/{{ $skillName }}/SKILL.md" ]; then
+                if [ -f "/etc/cognition-config/skill-{{ $skillName }}.md" ]; then
+                  cp "/etc/cognition-config/skill-{{ $skillName }}.md" "${WS}/.cognition/skills/{{ $skillName }}/SKILL.md"
+                  echo "Copied skill '{{ $skillName }}' from ConfigMap"
+                fi
+              fi
+              {{- end }}
+              {{- end }}
               chown -R 1000:1000 "${WS}"
               echo "Workspace initialized"
           volumeMounts:

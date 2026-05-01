@@ -7,6 +7,58 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [0.9.0] — 2026-05-01
+
+### Highlights
+
+- Unified file-based and API-based skills and tools through a single `ConfigRegistry`, replacing the old ad-hoc path/module attachment model.
+
+### Breaking Changes
+
+- **`agent.skills` and `agent.tools` are now registry names only.** Filesystem paths (e.g. `.cognition/skills/`) and module paths (e.g. `server.app.tools.some_tool`) are no longer accepted in agent definitions. Use the name of a skill or tool as it appears in the registry.
+- **File-managed skills and tools cannot be modified via the API.** Skills and tools seeded from `skill_sources`/`tool_sources` at startup are marked `source: "file"` and return `409 Conflict` on `PATCH` or `DELETE`.
+- **`skill_sources` and `tool_sources` replace direct path attachment.** To make file-based skills/tools available, configure source directories in `.cognition/config.yaml` under `skill_sources` and `tool_sources`. These directories are scanned at startup and seeded into the `ConfigRegistry`.
+
+### Added
+
+- `skill_sources` config key: list of workspace-relative or absolute directories to scan for `SKILL.md` files at startup.
+- `tool_sources` config key: list of workspace-relative or absolute directories to scan for Python tool modules at startup.
+- `seed_skills_from_sources()` and `seed_tools_from_sources()` bootstrap functions in `server/app/bootstrap.py`.
+- `ConfigRegistrySkillsBackend` accepts `allowed_skill_names` to filter skills to those attached to the agent.
+- `RuntimeResolver.build_tools()` accepts `allowed_tool_names` to filter tools to those attached to the agent.
+- Helm ConfigMap now renders `skill_sources` and `tool_sources`.
+- Helm init container copies `config.yaml` from ConfigMap into the workspace.
+- Helm `config.skills` values key for embedding skill SKILL.md content into the ConfigMap and copying it into the workspace.
+- Startup log: `Bootstrapped file sources skills=N tools=M`.
+- Debug log: `Loaded YAML config` showing config keys found.
+
+### Changed
+
+- `AgentDefinition.tools` validated as registry names only — module paths and file paths are rejected.
+- `AgentDefinition.skills` validated as registry names only — directory and file paths are rejected.
+- `DeepAgentStreamingService` passes `allowed_tool_names=agent_def.tools` to `RuntimeResolver.build_tools()`.
+- `CognitionAgent` passes `allowed_skill_names=agent_def.skills` to `ConfigRegistrySkillsBackend`.
+- `create_default_agent_definition()` defaults `skills=[]` instead of `[".cognition/skills/"]`.
+- Built-in agent definitions default `skills=[]` and `tools=[]`.
+- `POST /skills` and `PUT /skills/{name}` return `409 Conflict` when attempting to create/overwrite a `source: "file"` skill.
+- `PATCH /skills/{name}` and `DELETE /skills/{name}` return `409 Conflict` for `source: "file"` skills.
+- `POST /tools` and `PUT /tools/{name}` return `409 Conflict` when attempting to create/overwrite a `source: "file"` tool.
+- `PATCH /tools/{name}` and `DELETE /tools/{name}` return `409 Conflict` for `source: "file"` tools.
+- `server/app/main.py` loads config with `cwd=settings.workspace_path` (was `workspace_root`).
+- `server/app/api/routes/config.py` loads config with `cwd=settings.workspace_path`.
+- `Deployment.yaml` Helm template: init container copies `config.yaml` from ConfigMap into workspace.
+
+### Removed
+
+- `AgentDefinition._resolve_tools()` is no longer called during streaming. Tool resolution is handled by `RuntimeResolver.build_tools()` with registry lookups.
+
+### Fixed
+
+- Startup config loading in deployed environments now correctly resolves `.cognition/config.yaml` relative to `workspace_path` instead of `workspace_root`.
+- Tests updated to use registry names instead of module/file paths in agent definitions.
+
+---
+
 ## [0.8.3] — 2026-04-17
 
 ### Highlights
