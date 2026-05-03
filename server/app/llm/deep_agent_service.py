@@ -12,6 +12,7 @@ and builds a LangChain BaseChatModel. No custom fallback chains.
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncGenerator
 from dataclasses import dataclass, field
 from typing import Any, cast
@@ -305,58 +306,66 @@ class DeepAgentStreamingService:
 
             acc = StreamAccumulator(input_tokens=len(content.split()))
 
+            runtime_exception: Exception | None = None
+
             try:
-                async for event in runtime.astream_events(
-                    {"messages": messages},
-                    thread_id=thread_id,
-                ):
-                    if isinstance(event, TokenEvent):
-                        acc.record_token(event.content)
-                        yield event
-
-                    elif isinstance(event, ToolCallEvent):
-                        acc.set_tool_call(event.tool_call_id)
-                        yield event
-
-                    elif isinstance(event, ToolResultEvent):
-                        acc.set_tool_call(None)
-                        yield event
-
-                    elif isinstance(event, PlanningEvent) or isinstance(
-                        event, (DelegationEvent, StatusEvent, StepCompleteEvent, InterruptEvent)
+                try:
+                    async for event in runtime.astream_events(
+                        {"messages": messages},
+                        thread_id=thread_id,
                     ):
-                        yield event
-                        if isinstance(event, InterruptEvent):
-                            return
+                        if isinstance(event, TokenEvent):
+                            acc.record_token(event.content)
+                            yield event
 
-                    elif isinstance(event, ErrorEvent):
-                        yield event
-                        if event.code == "ABORTED":
-                            return
+                        elif isinstance(event, ToolCallEvent):
+                            acc.set_tool_call(event.tool_call_id)
+                            yield event
+
+                        elif isinstance(event, ToolResultEvent):
+                            acc.set_tool_call(None)
+                            yield event
+
+                        elif isinstance(event, PlanningEvent) or isinstance(
+                            event, (DelegationEvent, StatusEvent, StepCompleteEvent, InterruptEvent)
+                        ):
+                            yield event
+                            if isinstance(event, InterruptEvent):
+                                return
+
+                        elif isinstance(event, ErrorEvent):
+                            yield event
+                            if event.code == "ABORTED":
+                                return
 
                     # DoneEvent from the runtime is absorbed here; we emit our own below.
 
-            except Exception as exc:
-                logger.error(
-                    "LangGraph execution failed during stream_response",
-                    error=str(exc),
-                    session_id=session_id,
-                    exc_info=True,
+                except asyncio.CancelledError:
+                    raise
+                except Exception as exc:
+                    logger.error(
+                        "LangGraph execution failed during stream_response",
+                        error=str(exc),
+                        session_id=session_id,
+                        exc_info=True,
+                    )
+                    runtime_exception = exc
+
+                if runtime_exception is not None:
+                    yield ErrorEvent(message=f"Agent execution failed: {runtime_exception}", code="STREAMING_ERROR")
+
+                yield UsageEvent(
+                    input_tokens=acc.input_tokens,
+                    output_tokens=acc.output_tokens,
+                    estimated_cost=self._estimate_cost(acc.input_tokens, acc.output_tokens, provider),
+                    provider=provider,
+                    model=model_id,
                 )
-                yield ErrorEvent(message=f"Agent execution failed: {exc}", code="STREAMING_ERROR")
+                yield DoneEvent()
 
             finally:
                 if manager:
                     manager.unregister_runtime(session_id)
-
-            yield UsageEvent(
-                input_tokens=acc.input_tokens,
-                output_tokens=acc.output_tokens,
-                estimated_cost=self._estimate_cost(acc.input_tokens, acc.output_tokens, provider),
-                provider=provider,
-                model=model_id,
-            )
-            yield DoneEvent()
 
         except LLMProviderConfigError as e:
             logger.error(

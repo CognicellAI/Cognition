@@ -56,6 +56,9 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - Startup config loading in deployed environments now correctly resolves `.cognition/config.yaml` relative to `workspace_path` instead of `workspace_root`.
 - Tests updated to use registry names instead of module/file paths in agent definitions.
+- Streaming reliability: replaced `asyncio.wait_for` in SSE heartbeat with non-cancelling `asyncio.wait()` to prevent heartbeat timeouts from closing the event stream during long tool/subagent gaps. This fixes missing terminal SSE events and assistant message persistence after successful model/tool turns in sandboxed environments.
+- Streaming reliability: restructured `stream_response` so `UsageEvent`/`DoneEvent` are yielded inside the `try` block before runtime cleanup, ensuring terminal events are always emitted on normal completion.
+- Streaming reliability: added explicit `asyncio.CancelledError` re-raise to prevent accidental swallowing during generator teardown.
 
 ---
 
