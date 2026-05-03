@@ -3,7 +3,7 @@
     "AGENTS.md"
   ],
   "skills": [
-    ".cognition/skills/"
+    "my-skill-name"
   ],
   "subagents": [],
   "interrupt_on": {

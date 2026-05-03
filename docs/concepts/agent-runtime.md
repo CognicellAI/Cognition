@@ -111,8 +111,8 @@ Every consumer of the runtime (streaming endpoint, tests, evaluators) deals only
 class AgentDefinition(BaseModel):
     name: str
     system_prompt: str | PromptConfig | None = None
-    tools: list[str] = []           # dotted import paths, e.g. "myapp.tools.search"
-    skills: list[str] = []          # paths to SKILL.md files or directories
+    tools: list[str] = []           # registry tool names
+    skills: list[str] = []          # registry skill names
     memory: list[str] = []          # paths to instruction files (AGENTS.md)
     subagents: list[SubagentDefinition] = []
     interrupt_on: dict[str, bool] = {}
@@ -156,9 +156,9 @@ class AgentConfig(BaseModel):
     tool_token_limit_before_evict: int | None = None
 ```
 
-### Tool Path Resolution
+### Tool Resolution
 
-Tools are referenced as dotted Python import paths. At runtime, `AgentDefinition._resolve_tools()` imports each path and returns the callable. The `trusted_tool_namespaces` security setting constrains which namespaces are allowed.
+Tools are referenced by registry name. At runtime, `RuntimeResolver.build_tools()` looks up each name in the ConfigRegistry and returns the corresponding callable. File-seeded tools (from `tool_sources`) and API-registered tools are both resolved this way. The `allowed_tool_names` parameter on `build_tools()` filters to only the tools attached to the agent definition.
 
 ---
 
@@ -175,8 +175,8 @@ system_prompt: |
   You are a security expert. Audit code for vulnerabilities.
   Report findings with severity ratings.
 tools:
-  - "myapp.tools.security.run_semgrep"
-  - "myapp.tools.security.check_dependencies"
+  - "run_semgrep"
+  - "check_dependencies"
 config:
   model: gpt-4o
   temperature: 0.1
@@ -191,7 +191,7 @@ The file name becomes the agent name; the Markdown body becomes the `system_prom
 mode: subagent
 description: Read-only research assistant
 tools:
-  - "myapp.tools.web_search"
+  - "web_search"
 ---
 
 You are a research assistant. Gather information from the web and summarize findings.
@@ -206,7 +206,7 @@ from server.app.agent.definition import AgentDefinition, AgentConfig
 definition = AgentDefinition(
     name="my-agent",
     system_prompt="You are a helpful assistant.",
-    tools=["myapp.tools.analyze"],
+    tools=["analyze"],
     config=AgentConfig(model="gpt-4o-mini", temperature=0.3),
     mode="primary",
 )
@@ -275,7 +275,7 @@ The factory:
 1. Selects the sandbox backend from settings (`local` or `docker`)
 2. Loads built-in tools: `BrowserTool`, `SearchTool`, `InspectPackageTool`
 3. Loads MCP tools from configured remote servers
-4. Resolves tools from the `AgentDefinition` (dotted import paths + ConfigRegistry API-registered tools)
+4. Resolves tools from the ConfigRegistry by registry name (filtered by `allowed_tool_names` from the AgentDefinition)
 5. Attaches the middleware stack:
    - `ToolSecurityMiddleware` — blocks tools on the `COGNITION_BLOCKED_TOOLS` deny-list
    - `CognitionObservabilityMiddleware` — tracks LLM and tool Prometheus metrics

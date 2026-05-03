@@ -150,6 +150,12 @@ class ConfigRegistry(Protocol):
         """Return the best-matching agent definition dict, or None."""
         ...
 
+    async def get_agent_raw_with_scope(
+        self, name: str, scope: dict[str, str] | None = None
+    ) -> tuple[dict[str, Any], dict[str, str]] | None:
+        """Return (definition_dict, matched_scope) for the best-matching agent, or None."""
+        ...
+
     async def list_agents(self, scope: dict[str, str] | None = None) -> list[AgentDefinition]:
         """List all agent definitions visible in the given scope."""
         ...
@@ -447,6 +453,34 @@ class SqliteConfigRegistry:
 
         return best[1] if best else None
 
+    async def _get_entity_with_scope(
+        self,
+        entity_type: str,
+        name: str,
+        scope: dict[str, str] | None,
+    ) -> tuple[dict[str, Any], dict[str, str]] | None:
+        """Return (definition_dict, matched_scope) for the best-matching row."""
+        target_scope = scope or {}
+        conn = await self._get_conn()
+        async with conn.execute(
+            "SELECT scope, definition FROM config_entities WHERE entity_type=? AND name=?",
+            (entity_type, name),
+        ) as cursor:
+            rows = await cursor.fetchall()
+
+        if not rows:
+            return None
+
+        best: tuple[int, dict[str, Any], dict[str, str]] | None = None
+        for row in rows:
+            row_scope = _scope_from_json(row["scope"])
+            if all(target_scope.get(k) == v for k, v in row_scope.items()):
+                depth = _scope_depth(row_scope)
+                if best is None or depth > best[0]:
+                    best = (depth, json.loads(row["definition"]), row_scope)
+
+        return (best[1], best[2]) if best else None
+
     async def _list_entities(
         self,
         entity_type: str,
@@ -583,6 +617,11 @@ class SqliteConfigRegistry:
     ) -> dict[str, Any] | None:
         return await self._get_entity("agent", name, scope)
 
+    async def get_agent_raw_with_scope(
+        self, name: str, scope: dict[str, str] | None = None
+    ) -> tuple[dict[str, Any], dict[str, str]] | None:
+        return await self._get_entity_with_scope("agent", name, scope)
+
     async def list_agents(self, scope: dict[str, str] | None = None) -> list[AgentDefinition]:
         rows = await self._list_entities("agent", scope)
         return [AgentDefinition.model_validate(r) for r in rows]
@@ -591,7 +630,7 @@ class SqliteConfigRegistry:
         return await self._delete_entity("agent", name, scope)
 
     # ------------------------------------------------------------------
-    # MCP server CRUD
+    # MCP server CRUD (SqliteConfigRegistry)
     # ------------------------------------------------------------------
 
     async def list_mcp_servers(
@@ -865,6 +904,34 @@ class PostgresConfigRegistry:
                     best = (depth, definition)
         return best[1] if best else None
 
+    async def _get_entity_with_scope(
+        self,
+        entity_type: str,
+        name: str,
+        scope: dict[str, str] | None,
+    ) -> tuple[dict[str, Any], dict[str, str]] | None:
+        """Return (definition_dict, matched_scope) for the best-matching row."""
+        target_scope = scope or {}
+        pool = await self._get_pool()
+        async with pool.connection() as conn:
+            rows = await self._fetch_all(
+                conn,
+                "SELECT scope, definition FROM config_entities WHERE entity_type=%s AND name=%s",
+                (entity_type, name),
+            )
+        if not rows:
+            return None
+
+        best: tuple[int, dict[str, Any], dict[str, str]] | None = None
+        for row in rows:
+            row_scope: dict[str, str] = _scope_from_json(row["scope"])
+            if all(target_scope.get(k) == v for k, v in row_scope.items()):
+                depth = len(row_scope)
+                definition: dict[str, Any] = _definition_from_raw(row["definition"])
+                if best is None or depth > best[0]:
+                    best = (depth, definition, row_scope)
+        return (best[1], best[2]) if best else None
+
     async def _list_entities(
         self,
         entity_type: str,
@@ -987,6 +1054,11 @@ class PostgresConfigRegistry:
         self, name: str, scope: dict[str, str] | None = None
     ) -> dict[str, Any] | None:
         return await self._get_entity("agent", name, scope)
+
+    async def get_agent_raw_with_scope(
+        self, name: str, scope: dict[str, str] | None = None
+    ) -> tuple[dict[str, Any], dict[str, str]] | None:
+        return await self._get_entity_with_scope("agent", name, scope)
 
     async def list_agents(self, scope: dict[str, str] | None = None) -> list[AgentDefinition]:
         rows = await self._list_entities("agent", scope)
@@ -1157,6 +1229,22 @@ class MemoryConfigRegistry:
                     best = (depth, defn)
         return best[1] if best else None
 
+    def _get_entity_with_scope(
+        self, entity_type: str, name: str, scope: dict[str, str] | None
+    ) -> tuple[dict[str, Any], dict[str, str]] | None:
+        """Return (definition_dict, matched_scope) for the best-matching row."""
+        target = scope or {}
+        best: tuple[int, dict[str, Any], dict[str, str]] | None = None
+        for (et, n, s_json), defn in self._store.items():
+            if et != entity_type or n != name:
+                continue
+            row_scope = _scope_from_json(s_json)
+            if all(target.get(k) == v for k, v in row_scope.items()):
+                depth = len(row_scope)
+                if best is None or depth > best[0]:
+                    best = (depth, defn, row_scope)
+        return (best[1], best[2]) if best else None
+
     def _list_entities(
         self, entity_type: str, scope: dict[str, str] | None
     ) -> list[dict[str, Any]]:
@@ -1266,6 +1354,11 @@ class MemoryConfigRegistry:
         self, name: str, scope: dict[str, str] | None = None
     ) -> dict[str, Any] | None:
         return self._get_entity("agent", name, scope)
+
+    async def get_agent_raw_with_scope(
+        self, name: str, scope: dict[str, str] | None = None
+    ) -> tuple[dict[str, Any], dict[str, str]] | None:
+        return self._get_entity_with_scope("agent", name, scope)
 
     async def list_agents(self, scope: dict[str, str] | None = None) -> list[AgentDefinition]:
         return [AgentDefinition.model_validate(r) for r in self._list_entities("agent", scope)]

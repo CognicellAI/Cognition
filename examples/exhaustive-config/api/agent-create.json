@@ -5,10 +5,10 @@
   "mode": "primary",
   "hidden": false,
   "tools": [
-    ".cognition/tools/repo_health.py"
+    "repo_health"
   ],
   "skills": [
-    ".cognition/skills/"
+    "deploy-app"
   ],
   "memory": [
     "AGENTS.md"

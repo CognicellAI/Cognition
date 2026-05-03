@@ -7,6 +7,61 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [0.9.0] — 2026-05-01
+
+### Highlights
+
+- Unified file-based and API-based skills and tools through a single `ConfigRegistry`, replacing the old ad-hoc path/module attachment model.
+
+### Breaking Changes
+
+- **`agent.skills` and `agent.tools` are now registry names only.** Filesystem paths (e.g. `.cognition/skills/`) and module paths (e.g. `server.app.tools.some_tool`) are no longer accepted in agent definitions. Use the name of a skill or tool as it appears in the registry.
+- **File-managed skills and tools cannot be modified via the API.** Skills and tools seeded from `skill_sources`/`tool_sources` at startup are marked `source: "file"` and return `409 Conflict` on `PATCH` or `DELETE`.
+- **`skill_sources` and `tool_sources` replace direct path attachment.** To make file-based skills/tools available, configure source directories in `.cognition/config.yaml` under `skill_sources` and `tool_sources`. These directories are scanned at startup and seeded into the `ConfigRegistry`.
+
+### Added
+
+- `skill_sources` config key: list of workspace-relative or absolute directories to scan for `SKILL.md` files at startup.
+- `tool_sources` config key: list of workspace-relative or absolute directories to scan for Python tool modules at startup.
+- `seed_skills_from_sources()` and `seed_tools_from_sources()` bootstrap functions in `server/app/bootstrap.py`.
+- `ConfigRegistrySkillsBackend` accepts `allowed_skill_names` to filter skills to those attached to the agent.
+- `RuntimeResolver.build_tools()` accepts `allowed_tool_names` to filter tools to those attached to the agent.
+- Helm ConfigMap now renders `skill_sources` and `tool_sources`.
+- Helm init container copies `config.yaml` from ConfigMap into the workspace.
+- Helm `config.skills` values key for embedding skill SKILL.md content into the ConfigMap and copying it into the workspace.
+- Startup log: `Bootstrapped file sources skills=N tools=M`.
+- Debug log: `Loaded YAML config` showing config keys found.
+
+### Changed
+
+- `AgentDefinition.tools` validated as registry names only — module paths and file paths are rejected.
+- `AgentDefinition.skills` validated as registry names only — directory and file paths are rejected.
+- `DeepAgentStreamingService` passes `allowed_tool_names=agent_def.tools` to `RuntimeResolver.build_tools()`.
+- `CognitionAgent` passes `allowed_skill_names=agent_def.skills` to `ConfigRegistrySkillsBackend`.
+- `create_default_agent_definition()` defaults `skills=[]` instead of `[".cognition/skills/"]`.
+- Built-in agent definitions default `skills=[]` and `tools=[]`.
+- `POST /skills` and `PUT /skills/{name}` return `409 Conflict` when attempting to create/overwrite a `source: "file"` skill.
+- `PATCH /skills/{name}` and `DELETE /skills/{name}` return `409 Conflict` for `source: "file"` skills.
+- `POST /tools` and `PUT /tools/{name}` return `409 Conflict` when attempting to create/overwrite a `source: "file"` tool.
+- `PATCH /tools/{name}` and `DELETE /tools/{name}` return `409 Conflict` for `source: "file"` tools.
+- `server/app/main.py` loads config with `cwd=settings.workspace_path` (was `workspace_root`).
+- `server/app/api/routes/config.py` loads config with `cwd=settings.workspace_path`.
+- `Deployment.yaml` Helm template: init container copies `config.yaml` from ConfigMap into workspace.
+
+### Removed
+
+- `AgentDefinition._resolve_tools()` is no longer called during streaming. Tool resolution is handled by `RuntimeResolver.build_tools()` with registry lookups.
+
+### Fixed
+
+- Startup config loading in deployed environments now correctly resolves `.cognition/config.yaml` relative to `workspace_path` instead of `workspace_root`.
+- Tests updated to use registry names instead of module/file paths in agent definitions.
+- Streaming reliability: replaced `asyncio.wait_for` in SSE heartbeat with non-cancelling `asyncio.wait()` to prevent heartbeat timeouts from closing the event stream during long tool/subagent gaps. This fixes missing terminal SSE events and assistant message persistence after successful model/tool turns in sandboxed environments.
+- Streaming reliability: restructured `stream_response` so `UsageEvent`/`DoneEvent` are yielded inside the `try` block before runtime cleanup, ensuring terminal events are always emitted on normal completion.
+- Streaming reliability: added explicit `asyncio.CancelledError` re-raise to prevent accidental swallowing during generator teardown.
+
+---
+
 ## [0.8.3] — 2026-04-17
 
 ### Highlights
@@ -19,6 +74,11 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Split release image builds into independent app and sandbox jobs for `linux/amd64` and `linux/arm64` so one image family no longer cancels the other.
 - Split multi-arch manifest publication into independent app and sandbox jobs so partial release image failures are isolated correctly.
 
+### Bug Fixes
+
+- Fixed agent and subagent tool resolution so workspace-relative `.cognition/tools/...` paths load from the workspace root instead of the per-session sandbox path.
+- Added a warning when configured tool files are missing and allowed suffixless tool references to fall back to `.py` during resolution.
+
 ### Validation and Release Process
 
 - Restored strict release validation after the build-isolation changes by fixing the related `mypy` regressions in runtime resolver and session config normalization.
@@ -27,6 +87,7 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Merged PRs
 
 - `#110` fix release image build isolation
+- `#113` Fix #112: resolve AgentDefinition tools against workspace root
 
 ## [0.8.2] — 2026-04-16
 
