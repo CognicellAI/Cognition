@@ -413,8 +413,8 @@ class TestMiddlewareWiring:
 
 class TestToolsWiring:
     @pytest.mark.asyncio
-    async def test_agent_def_tools_added_to_runtime_tools(self, tmp_path):
-        """Tools from AgentDefinition._resolve_tools() are included in runtime tools."""
+    async def test_agent_def_tools_filtering_passed_to_runtime(self, tmp_path):
+        """Agent definition tool names are passed as allowed_tool_names to build_tools."""
         from langchain_core.tools import BaseTool
 
         from server.app.agent.definition import AgentDefinition
@@ -428,7 +428,7 @@ class TestToolsWiring:
         agent_def = AgentDefinition(
             name="test-agent",
             system_prompt="test",
-            tools=["server.app.tools.some_tool"],
+            tools=["some_tool"],
         )
         mock_def_registry = MagicMock()
         mock_def_registry.get = MagicMock(return_value=agent_def)
@@ -451,10 +451,10 @@ class TestToolsWiring:
         mock_storage.get_store = AsyncMock(return_value=MagicMock())
         service.storage_backend = mock_storage
 
-        resolve_tools_calls: list[Any] = []
+        build_tools_calls: list[Any] = []
 
-        def _fake_resolve_tools(self_inner: Any, **kwargs: Any) -> list[Any]:
-            resolve_tools_calls.append(kwargs)
+        async def _fake_build_tools(*args: Any, **kwargs: Any) -> list[Any]:
+            build_tools_calls.append(kwargs)
             return [agent_def_tool]
 
         with (
@@ -477,9 +477,10 @@ class TestToolsWiring:
                 "server.app.storage.factory.create_storage_backend",
                 return_value=mock_storage,
             ),
-            patch(
-                "server.app.agent.definition.AgentDefinition._resolve_tools",
-                _fake_resolve_tools,
+            patch.object(
+                service._get_runtime_resolver(),
+                "build_tools",
+                _fake_build_tools,
             ),
         ):
             async for _ in service.stream_response(
@@ -490,10 +491,8 @@ class TestToolsWiring:
             ):
                 pass
 
-        assert len(resolve_tools_calls) == 1
-        # Must resolve against the workspace root, NOT the per-session sandbox
-        # path passed as project_path. See issue #112.
-        assert resolve_tools_calls[0].get("base_path") == str(tmp_path)
+        assert len(build_tools_calls) == 1
+        assert build_tools_calls[0].get("allowed_tool_names") == ["some_tool"]
 
         params = _get_params(create_agent_mock)
         assert params is not None

@@ -84,11 +84,22 @@ observability:
 
 # Agent behavior settings
 # Configure how the AI agent behaves and what capabilities it has.
+# File-based resource sources are seeded into the ConfigRegistry at startup.
+skill_sources:
+  - ".cognition/skills/"
+
+tool_sources:
+  - ".cognition/tools/"
+
 agent:
   memory:
     - "AGENTS.md"
-  skills:
-    - ".cognition/skills/"
+  # Attached skill names. These must match skill names discovered from
+  # configured skill_sources or created dynamically via the API.
+  skills: []
+  # Attached tool names. These must match tool names discovered from
+  # configured tool_sources or created dynamically via the API.
+  tools: []
   subagents: []
   interrupt_on: {}
   # Maximum recursion depth for the agent ReAct loop.

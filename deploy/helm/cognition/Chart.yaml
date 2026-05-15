@@ -2,7 +2,7 @@ apiVersion: v2
 name: cognition
 description: Cognition AI coding assistant - batteries-included AI backend
 version: 0.1.0
-appVersion: "0.3.0"
+appVersion: "0.9.0"
 home: https://github.com/CognicellAI/Cognition
 sources:
   - https://github.com/CognicellAI/Cognition

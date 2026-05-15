@@ -1,4 +1,4 @@
-"""Provider bootstrap from config.yaml.
+"""Config bootstrap from config.yaml and workspace sources.
 
 Seeds ``ProviderConfig`` entries into the ConfigStore on startup from the
 ``llm:`` section of ``.cognition/config.yaml``. Uses ``seed_if_absent``
@@ -10,9 +10,16 @@ the ``main.py`` lifespan before the server begins accepting requests.
 
 from __future__ import annotations
 
+import importlib.util
+import inspect
+import sys
+from pathlib import Path
 from typing import Any
 
 import structlog
+from langchain_core.tools import BaseTool
+
+from server.app.storage.config_models import SkillDefinition, ToolRegistration
 
 logger = structlog.get_logger(__name__)
 
@@ -140,3 +147,131 @@ async def seed_providers_from_config(
             model=model,
         )
         return False
+
+
+def _resolve_source_dir(source: str, workspace_root: Path) -> Path:
+    path = Path(source)
+    if path.is_absolute():
+        return path
+    return (workspace_root / path).resolve()
+
+
+def _load_tool_file(tool_file: Path) -> list[BaseTool]:
+    module_name = f"_cognition_seed_tool_{tool_file.stem}"
+    file_spec = importlib.util.spec_from_file_location(module_name, str(tool_file))
+    if file_spec is None or file_spec.loader is None:
+        return []
+
+    module = importlib.util.module_from_spec(file_spec)
+    if module_name in sys.modules:
+        del sys.modules[module_name]
+    sys.modules[module_name] = module
+    file_spec.loader.exec_module(module)
+
+    resolved_tools: list[BaseTool] = []
+    for _, obj in inspect.getmembers(module):
+        if isinstance(obj, BaseTool):
+            resolved_tools.append(obj)
+    return resolved_tools
+
+
+async def seed_skills_from_sources(
+    config: dict[str, Any],
+    config_store: Any,
+    workspace_root: Path,
+) -> int:
+    """Seed file-managed skills from configured skill source directories."""
+    from server.app.config_loader import get_skill_sources
+
+    inserted = 0
+    for source in get_skill_sources(config):
+        source_dir = _resolve_source_dir(source, workspace_root)
+        if not source_dir.exists() or not source_dir.is_dir():
+            logger.warning("Skill source directory missing", source=source, resolved=str(source_dir))
+            continue
+
+        for skill_dir in sorted(path for path in source_dir.iterdir() if path.is_dir()):
+            skill_md = skill_dir / "SKILL.md"
+            if not skill_md.exists() or not skill_md.is_file():
+                continue
+
+            content = skill_md.read_text(encoding="utf-8")
+            name = skill_dir.name
+            description: str | None = None
+            try:
+                import yaml
+
+                if content.startswith("---\n"):
+                    _, frontmatter, _ = content.split("---", 2)
+                    metadata = yaml.safe_load(frontmatter)
+                    if isinstance(metadata, dict):
+                        name = metadata.get("name") or name
+                        description = metadata.get("description")
+            except Exception:
+                logger.warning("Failed to parse skill frontmatter", path=str(skill_md), exc_info=True)
+
+            definition = SkillDefinition(
+                name=name,
+                path=str(skill_md.relative_to(workspace_root)) if skill_md.is_relative_to(workspace_root) else str(skill_md),
+                enabled=True,
+                description=description,
+                content=content,
+                scope={},
+                source="file",
+            )
+
+            existing = await config_store.get_skill(name, scope={})
+            if existing and existing.source == "api":
+                logger.warning("Skipping file skill seed because API-managed skill exists", name=name)
+                continue
+
+            await config_store.upsert_skill(definition)
+            inserted += 1
+
+    return inserted
+
+
+async def seed_tools_from_sources(
+    config: dict[str, Any],
+    config_store: Any,
+    workspace_root: Path,
+) -> int:
+    """Seed file-managed tools from configured tool source directories."""
+    from server.app.config_loader import get_tool_sources
+
+    inserted = 0
+    for source in get_tool_sources(config):
+        source_dir = _resolve_source_dir(source, workspace_root)
+        if not source_dir.exists() or not source_dir.is_dir():
+            logger.warning("Tool source directory missing", source=source, resolved=str(source_dir))
+            continue
+
+        for tool_file in sorted(path for path in source_dir.iterdir() if path.is_file() and path.suffix == ".py"):
+            try:
+                discovered_tools = _load_tool_file(tool_file)
+            except Exception:
+                logger.warning("Failed to load tool file during seeding", path=str(tool_file), exc_info=True)
+                continue
+
+            for tool in discovered_tools:
+                name = tool.name
+                definition = ToolRegistration(
+                    name=name,
+                    path=str(tool_file.relative_to(workspace_root)) if tool_file.is_relative_to(workspace_root) else str(tool_file),
+                    code=None,
+                    enabled=True,
+                    description=getattr(tool, "description", None),
+                    interrupt_on=False,
+                    scope={},
+                    source="file",
+                )
+
+                existing = await config_store.get_tool(name, scope={})
+                if existing and existing.source == "api":
+                    logger.warning("Skipping file tool seed because API-managed tool exists", name=name)
+                    continue
+
+                await config_store.upsert_tool(definition)
+                inserted += 1
+
+    return inserted

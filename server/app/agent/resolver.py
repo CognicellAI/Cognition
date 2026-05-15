@@ -5,7 +5,9 @@ from __future__ import annotations
 import importlib
 import inspect
 import os
+import sys
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, cast
 
 import structlog
@@ -80,6 +82,7 @@ class RuntimeResolver:
         self,
         scope: dict[str, str] | None = None,
         extra_tools: list[Any] | None = None,
+        allowed_tool_names: list[str] | None = None,
     ) -> list[Any]:
         """Build BaseTool instances from all sources.
 
@@ -104,8 +107,12 @@ class RuntimeResolver:
             logger.debug("ConfigStore unavailable — skipping API-registered tools")
             return tools
 
+        allowed = set(allowed_tool_names or [])
+
         for reg_tool in registrations:
             if not reg_tool.enabled:
+                continue
+            if allowed and reg_tool.name not in allowed:
                 continue
             try:
                 if reg_tool.code:
@@ -120,10 +127,28 @@ class RuntimeResolver:
                         ):
                             tools.append(obj)
                 elif reg_tool.path:
-                    module = importlib.import_module(reg_tool.path)
-                    for _, obj in inspect.getmembers(module):
-                        if isinstance(obj, BaseTool):
-                            tools.append(obj)
+                    path = Path(reg_tool.path)
+                    if path.is_absolute() or "/" in reg_tool.path or reg_tool.path.endswith(".py"):
+                        base = self._settings.workspace_path
+                        tool_file = path if path.is_absolute() else (base / path)
+                        if not tool_file.exists() and not tool_file.suffix:
+                            tool_file = tool_file.with_suffix(".py")
+                        module_name = f"_cognition_registry_tool_{tool_file.stem}"
+                        spec = importlib.util.spec_from_file_location(module_name, str(tool_file))
+                        if spec and spec.loader:
+                            module = importlib.util.module_from_spec(spec)
+                            if module_name in sys.modules:
+                                del sys.modules[module_name]
+                            sys.modules[module_name] = module
+                            spec.loader.exec_module(module)
+                            for _, obj in inspect.getmembers(module):
+                                if isinstance(obj, BaseTool):
+                                    tools.append(obj)
+                    else:
+                        module = importlib.import_module(reg_tool.path)
+                        for _, obj in inspect.getmembers(module):
+                            if isinstance(obj, BaseTool):
+                                tools.append(obj)
             except Exception:
                 logger.warning(
                     "Failed to load ConfigStore tool — skipping",

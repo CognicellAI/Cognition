@@ -13,7 +13,7 @@ async def test_create_cognition_agent_pluggability():
         params = CognitionAgentParams(
             project_path=".",
             memory=["TEST_MEMORY.md"],
-            skills=[".cognition/skills/"],
+            skills=["clean-code"],
             subagents=[{"name": "test-subagent", "system_prompt": "..."}],
             interrupt_on={"execute": True},
         )
@@ -21,7 +21,7 @@ async def test_create_cognition_agent_pluggability():
 
         args, kwargs = mock_create.call_args
         assert kwargs["memory"] == ["TEST_MEMORY.md"]
-        assert kwargs["skills"] == [".cognition/skills/", "/skills/api/"]
+        assert kwargs["skills"] == ["/skills/api/"]
         assert len(kwargs["subagents"]) == 1
         sa = kwargs["subagents"][0]
         assert sa["name"] == "test-subagent"

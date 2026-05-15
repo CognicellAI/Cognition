@@ -282,54 +282,68 @@ class SSEStream:
                 event_id=reconnect_event_id,
             )
 
-        try:
-            while True:
-                # Check for client disconnection
-                if await request.is_disconnected():
-                    break
+        next_event_task: asyncio.Task[dict[str, Any]] | None = None
 
-                # Wait for next event with timeout for heartbeat
-                try:
-                    # Use asyncio.wait_for to implement heartbeat
-                    event = await asyncio.wait_for(
-                        event_stream.__anext__(),
-                        timeout=self.heartbeat_interval,
+        while True:
+            if await request.is_disconnected():
+                break
+
+            try:
+                heartbeat_task = asyncio.ensure_future(
+                    asyncio.sleep(self.heartbeat_interval)
+                )
+                if next_event_task is None:
+                    next_event_task = asyncio.ensure_future(
+                        event_stream.__anext__()
                     )
+                done, pending = await asyncio.wait(
+                    {heartbeat_task, next_event_task},
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+                if next_event_task in done:
+                    heartbeat_task.cancel()
+                    try:
+                        await heartbeat_task
+                    except asyncio.CancelledError:
+                        pass
+                    event = next_event_task.result()
+                    next_event_task = None
 
-                    # Process the event
                     event_type = event.get("event", "message")
                     data = event.get("data", {})
 
-                    # Generate unique event ID
                     event_id = await self._generate_event_id()
 
-                    # Buffer the event for potential replay
                     await self._event_buffer.add(event_id, event_type, data)
 
-                    # Yield the formatted event
                     yield self.format_event(event_type, data, event_id)
-
-                except TimeoutError:
-                    # Send keepalive heartbeat
+                else:
+                    heartbeat_task.cancel()
+                    try:
+                        await heartbeat_task
+                    except asyncio.CancelledError:
+                        pass
                     if not await request.is_disconnected():
                         yield self.format_keepalive()
+                    # Do NOT cancel next_event_task — reuse it next iteration.
 
-        except StopAsyncIteration:
-            # Event stream exhausted normally
-            pass
-        except Exception as e:
-            # Send error event
-            error_event_id = await self._generate_event_id()
-            await self._event_buffer.add(
-                error_event_id,
-                "error",
-                {"message": str(e), "code": "STREAM_ERROR"},
-            )
-            yield self.format_event(
-                "error",
-                {"message": str(e), "code": "STREAM_ERROR"},
-                error_event_id,
-            )
+            except StopAsyncIteration:
+                break
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                error_event_id = await self._generate_event_id()
+                await self._event_buffer.add(
+                    error_event_id,
+                    "error",
+                    {"message": str(e), "code": "STREAM_ERROR"},
+                )
+                yield self.format_event(
+                    "error",
+                    {"message": str(e), "code": "STREAM_ERROR"},
+                    error_event_id,
+                )
+                break
 
     def create_response(
         self,

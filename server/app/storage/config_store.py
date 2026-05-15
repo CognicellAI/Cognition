@@ -136,6 +136,10 @@ class ConfigStore(Protocol):
         self, name: str, scope: dict[str, str] | None = None
     ) -> dict[str, Any] | None: ...
 
+    async def get_agent_raw_with_scope(
+        self, name: str, scope: dict[str, str] | None = None
+    ) -> tuple[dict[str, Any], dict[str, str]] | None: ...
+
     async def delete_agent(self, name: str, scope: dict[str, str] | None = None) -> bool: ...
 
     async def get_agent_definition(
@@ -243,7 +247,7 @@ class DefaultConfigStore:
             hidden=False,
             native=True,
             tools=[],
-            skills=[".cognition/skills/"],
+            skills=[],
             memory=["AGENTS.md"],
             subagents=[],
             interrupt_on={},
@@ -265,7 +269,7 @@ You can only read files, search, and provide analysis.""",
             hidden=False,
             native=True,
             tools=[],
-            skills=[".cognition/skills/"],
+            skills=[],
             memory=["AGENTS.md"],
             subagents=[],
             interrupt_on={"write_file": True, "edit_file": True, "execute": True},
@@ -289,7 +293,7 @@ Attempt the exact protected tool call immediately so that human-in-the-loop appr
             hidden=False,
             native=True,
             tools=[],
-            skills=[".cognition/skills/"],
+            skills=[],
             memory=["AGENTS.md"],
             subagents=[],
             interrupt_on={"write_file": True, "edit_file": True, "execute": True},
@@ -354,7 +358,15 @@ Attempt the exact protected tool call immediately so that human-in-the-loop appr
         data = await self._config_registry.get_agent_raw(event.name, event.scope)
         if not data:
             return
-        definition = AgentDefinition.model_validate(data)
+        try:
+            definition = AgentDefinition.model_validate(data)
+        except Exception:
+            logger.warning(
+                "Invalid agent definition in DB for %s — skipping cache update",
+                event.name,
+                exc_info=True,
+            )
+            return
         definition.native = False
         existing = self._agent_definitions.get(event.name)
         if existing and existing.native:
@@ -440,21 +452,27 @@ Attempt the exact protected tool call immediately so that human-in-the-loop appr
         definition: dict[str, Any],
         source: str = "api",
     ) -> None:
+        agent_def = AgentDefinition.model_validate(definition)
+        agent_def.native = False
+        existing = self._agent_definitions.get(name)
+        if existing and existing.native:
+            return
         await self._config_registry.upsert_agent(name, scope, definition, source)
-        try:
-            agent_def = AgentDefinition.model_validate(definition)
-            agent_def.native = False
-            existing = self._agent_definitions.get(name)
-            if existing and existing.native:
-                return
-            self._agent_definitions[name] = agent_def
-        except Exception as e:
-            logger.warning(f"Failed to update in-memory agent definition after upsert: {e}")
+        self._agent_definitions[name] = agent_def
 
     async def get_agent_raw(
         self, name: str, scope: dict[str, str] | None = None
     ) -> dict[str, Any] | None:
         return cast(dict[str, Any] | None, await self._config_registry.get_agent_raw(name, scope))
+
+    async def get_agent_raw_with_scope(
+        self, name: str, scope: dict[str, str] | None = None
+    ) -> tuple[dict[str, Any], dict[str, str]] | None:
+        result = await self._config_registry.get_agent_raw_with_scope(name, scope)
+        if result is None:
+            return None
+        data, matched_scope = result
+        return (dict(data), dict(matched_scope))
 
     async def delete_agent(self, name: str, scope: dict[str, str] | None = None) -> bool:
         result = bool(await self._config_registry.delete_agent(name, scope))

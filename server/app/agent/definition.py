@@ -12,10 +12,7 @@ P3 Multi-Agent Registry:
 
 from __future__ import annotations
 
-import importlib.util
-import inspect
 import re
-import sys
 from pathlib import Path
 from typing import Any, Literal
 
@@ -93,8 +90,8 @@ class AgentDefinition(BaseModel):
     Attributes:
         name: Unique agent identifier.
         system_prompt: System prompt that defines agent behavior.
-        tools: List of tool module paths (e.g., "server.app.tools.file_tools").
-        skills: List of skill directory paths.
+        tools: List of attached tool names.
+        skills: List of attached skill names.
         memory: List of memory file paths.
         subagents: Nested subagent definitions.
         interrupt_on: Tools requiring human confirmation (tool_name -> bool).
@@ -130,25 +127,27 @@ class AgentDefinition(BaseModel):
     @field_validator("tools")
     @classmethod
     def validate_tools(cls, v: list[str]) -> list[str]:
-        """Validate tool module paths."""
-        for tool_path in v:
-            if not tool_path:
+        """Validate attached tool names."""
+        for tool_name in v:
+            if not tool_name:
                 raise ValueError("Tool path cannot be empty")
-            # Basic validation: check it looks like a module path
-            parts = tool_path.split(".")
-            if len(parts) < 2:
+            if "/" in tool_name or tool_name.endswith(".py") or "." in tool_name:
                 raise ValueError(
-                    f"Tool path must be a valid Python module path (e.g., 'module.submodule'): {tool_path}"
+                    "Agent tools must be registry tool names, not module or file paths"
                 )
         return v
 
     @field_validator("skills")
     @classmethod
     def validate_skills(cls, v: list[str]) -> list[str]:
-        """Validate skill directory paths."""
-        for skill_path in v:
-            if not skill_path:
+        """Validate attached skill names."""
+        for skill_name in v:
+            if not skill_name:
                 raise ValueError("Skill path cannot be empty")
+            if "/" in skill_name or skill_name.endswith(".md"):
+                raise ValueError(
+                    "Agent skills must be registry skill names, not file or directory paths"
+                )
         return v
 
     @field_validator("memory")
@@ -220,45 +219,12 @@ class AgentDefinition(BaseModel):
             yaml.dump(self.model_dump(), f, default_flow_style=False, sort_keys=False)
 
     def validate_tool_paths(self, base_path: str | Path | None = None) -> list[str]:
-        """Validate that tool module paths can be resolved.
-
-        Args:
-            base_path: Optional base path for resolving relative imports.
-
-        Returns:
-            List of tool paths that failed validation.
-        """
-        failed: list[str] = []
-
-        for tool_path in self.tools:
-            try:
-                # Try to import the module
-                spec = importlib.util.find_spec(tool_path)
-                if spec is None:
-                    failed.append(tool_path)
-            except (ImportError, ModuleNotFoundError, ValueError):
-                failed.append(tool_path)
-
-        return failed
+        """Agent tool attachments are validated by name against the registry at runtime."""
+        return []
 
     def validate_skill_paths(self, base_path: str | Path | None = None) -> list[str]:
-        """Validate that skill directory paths exist.
-
-        Args:
-            base_path: Optional base path for resolving relative paths.
-
-        Returns:
-            List of skill paths that failed validation.
-        """
-        failed: list[str] = []
-        base = Path(base_path) if base_path else Path.cwd()
-
-        for skill_path in self.skills:
-            skill_dir = base / skill_path
-            if not skill_dir.exists() or not skill_dir.is_dir():
-                failed.append(skill_path)
-
-        return failed
+        """Agent skill attachments are validated by name against the registry at runtime."""
+        return []
 
     def validate_memory_paths(self, base_path: str | Path | None = None) -> list[str]:
         """Validate that memory file paths exist.
@@ -296,96 +262,12 @@ class AgentDefinition(BaseModel):
         }
 
     def _resolve_tools(self, base_path: str | Path | None = None) -> list[BaseTool]:
-        """Resolve tool paths to BaseTool instances.
+        """Direct tool path resolution is no longer supported.
 
-        Tool paths can be:
-        - Module paths (e.g., "server.app.tools.file_tools")
-        - File paths (e.g., ".cognition/tools/my_tool.py")
-
-        Args:
-            base_path: Optional base path for resolving relative file paths.
-
-        Returns:
-            List of BaseTool instances resolved from the tool paths.
+        Agent definitions attach registry tool names only. Runtime resolution
+        happens via ``RuntimeResolver.build_tools()``.
         """
-        resolved_tools: list[BaseTool] = []
-        base = Path(base_path) if base_path else Path.cwd()
-
-        for tool_path in self.tools:
-            try:
-                # Check if it's a file path (contains / or ends with .py)
-                if "/" in tool_path or tool_path.endswith(".py"):
-                    # Treat as file path
-                    tool_file = base / tool_path
-                    if not tool_file.exists() and not tool_file.suffix:
-                        tool_file = tool_file.with_suffix(".py")
-                    if not tool_file.exists():
-                        logger.warning(
-                            "Tool file not found — skipping",
-                            tool_path=tool_path,
-                            resolved=str(tool_file),
-                            base_path=str(base),
-                            agent=self.name,
-                        )
-                        continue
-
-                    # Load module from file
-                    module_name = f"_cognition_tool_{tool_file.stem}"
-                    spec = importlib.util.spec_from_file_location(module_name, str(tool_file))
-                    if not spec or not spec.loader:
-                        continue
-
-                    module = importlib.util.module_from_spec(spec)
-                    # Remove existing module if already loaded (for hot reload)
-                    if module_name in sys.modules:
-                        del sys.modules[module_name]
-                    sys.modules[module_name] = module
-                    spec.loader.exec_module(module)
-
-                    # Find BaseTool instances
-                    for _, obj in inspect.getmembers(module):
-                        if isinstance(obj, BaseTool):
-                            resolved_tools.append(obj)
-
-                else:
-                    # Treat as module path
-                    try:
-                        module = importlib.import_module(tool_path)
-                        for _, obj in inspect.getmembers(module):
-                            if isinstance(obj, BaseTool):
-                                resolved_tools.append(obj)
-                    except ImportError:
-                        # Try to find as a file relative to base_path
-                        tool_file = base / tool_path.replace(".", "/")
-                        if tool_file.exists():
-                            # Add .py extension if not present
-                            if not tool_file.suffix:
-                                tool_file = tool_file.with_suffix(".py")
-                            if tool_file.exists():
-                                module_name = f"_cognition_tool_{tool_file.stem}"
-                                spec = importlib.util.spec_from_file_location(
-                                    module_name, str(tool_file)
-                                )
-                                if spec and spec.loader:
-                                    module = importlib.util.module_from_spec(spec)
-                                    if module_name in sys.modules:
-                                        del sys.modules[module_name]
-                                    sys.modules[module_name] = module
-                                    spec.loader.exec_module(module)
-
-                                    for _, obj in inspect.getmembers(module):
-                                        if isinstance(obj, BaseTool):
-                                            resolved_tools.append(obj)
-            except Exception:
-                logger.warning(
-                    "Failed to load tool — skipping",
-                    tool_path=tool_path,
-                    agent=self.name,
-                    exc_info=True,
-                )
-                continue
-
-        return resolved_tools
+        return []
 
     def to_subagent(self, base_path: str | Path | None = None) -> dict[str, Any]:
         """Translate AgentDefinition to Deep Agents SubAgent TypedDict.
@@ -489,7 +371,7 @@ def create_default_agent_definition(name: str = "default-agent") -> AgentDefinit
         name=name,
         system_prompt="You are a helpful AI coding assistant.",
         tools=[],
-        skills=[".cognition/skills/"],
+        skills=[],
         memory=["AGENTS.md"],
         subagents=[],
         interrupt_on={},
@@ -508,7 +390,7 @@ def load_agent_definition_from_markdown(path: str | Path) -> AgentDefinition:
     model: anthropic/claude-haiku-4
     temperature: 0.1
     skills:
-      - .cognition/skills/
+      - my-skill-name
     ---
     You are a code reviewer. Focus on security...
 

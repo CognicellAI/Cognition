@@ -81,12 +81,12 @@ Use this skill when the user asks to deploy the application or push changes to p
 4. Update the ECS service: `aws ecs update-service --cluster prod --service myapp --force-new-deployment`
 ```
 
-Configure skill directories:
+Attach skills by registry name (seeded from `skill_sources` directories):
 
 ```yaml
 agent:
   skills:
-    - ".cognition/skills/"
+    - "my-skill-name"
 ```
 
 ---
@@ -105,7 +105,7 @@ The filename (without extension) becomes the agent name. The YAML frontmatter pr
 mode: subagent
 description: Audits code for security vulnerabilities and reports findings with severity ratings
 tools:
-  - "myapp.tools.security.run_semgrep"
+  - "run_semgrep"
 config:
   model: gpt-4o
   temperature: 0.1
@@ -130,8 +130,8 @@ system_prompt: |
   You are a data analyst. Use pandas and matplotlib for analysis.
   Always validate data quality before drawing conclusions.
 tools:
-  - "myapp.tools.data.load_csv"
-  - "myapp.tools.data.plot_chart"
+  - "load_csv"
+  - "plot_chart"
 config:
   model: gpt-4o
   temperature: 0.2
@@ -189,10 +189,16 @@ The docstring becomes the tool description shown to the agent. Type annotations 
 
 ```yaml
 # .cognition/config.yaml
+skill_sources:
+  - .cognition/skills/
+
+tool_sources:
+  - .cognition/tools/
+
 agent:
   tools:
-    - "myapp.tools.analysis.run_linter"
-    - "myapp.tools.data.query_database"
+    - "run_linter"
+    - "query_database"
 ```
 
 ### Auto-Discovery
@@ -283,7 +289,7 @@ from server.app.agent.definition import AgentDefinition
 definition = AgentDefinition(
     name="my-agent",
     system_prompt="You are a helpful assistant.",
-    tools=["myapp.tools.analysis.run_linter"],
+    tools=["run_linter"],
 )
 
 agent = await create_cognition_agent(definition, settings)

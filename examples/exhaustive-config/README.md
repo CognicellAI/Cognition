@@ -54,13 +54,17 @@ File configuration is best for:
 - project defaults
 - checked-in examples
 - initial provider bootstrap
-- file-based agents/skills/tools/middleware
+- `skill_sources` and `tool_sources` directories (seeded into the ConfigRegistry at startup as `source: "file"`)
 
 API-managed configuration is best for:
 - user- or project-scoped provider configs
-- dynamic tools and skills
+- dynamic tools and skills (`source: "api"`)
 - global provider and agent defaults
 - programmatic builder/UIs
+
+Agent definitions reference skills and tools by **registry name** only — not by filesystem path. File-based skills/tools are discovered from `skill_sources`/`tool_sources` directories and seeded at startup; API-based skills/tools are created at runtime via the REST API. Both are stored in the ConfigRegistry and looked up by name when an agent loads.
+
+File-managed skills and tools (those with `source: "file"`) are locked from API mutation — `PATCH` and `DELETE` return `409 Conflict`.
 
 ## Provider Notes
 

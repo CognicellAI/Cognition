@@ -163,9 +163,10 @@ async def update_agent(
         )
 
     try:
-        data = await config_store.get_agent_raw(name, scope_dict)
-        if data is None:
+        result = await config_store.get_agent_raw_with_scope(name, scope_dict)
+        if result is None:
             raise HTTPException(status_code=404, detail=f"Agent '{name}' not found in registry")
+        data, agent_scope = result
 
         updates = body.model_dump(exclude_none=True)
         config_fields = {
@@ -186,7 +187,6 @@ async def update_agent(
             data["response_format"] = updates.pop("response_format")
         data.update(updates)
 
-        agent_scope: dict[str, Any] = data.get("scope", {})
         await config_store.upsert_agent(name, agent_scope, data, "api")
 
         agent_def = await config_store.get_agent_definition(name)

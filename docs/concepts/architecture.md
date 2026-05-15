@@ -361,7 +361,7 @@ from cognition import AgentDefinition, Cognition
 
 agent = AgentDefinition(
     tools=[my_tool, another_tool],
-    skills=[".cognition/skills/deploy-app/"],
+    skills=["deploy-app"],
     system_prompt="You are a deployment expert.",
 )
 

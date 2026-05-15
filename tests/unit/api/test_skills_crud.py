@@ -98,6 +98,32 @@ class TestCreateSkill:
         assert data["path"] == "/skills/api/content-skill/SKILL.md"
         assert data["content"] == "# My Skill\n\nInstructions here."
 
+    def test_create_skill_rejects_file_managed_skill(self):
+        from server.app.api.dependencies import get_config_store
+
+        store = get_config_store()
+        import asyncio
+
+        asyncio.run(
+            store.upsert_skill_from_dict(
+                {
+                    "name": "file-skill",
+                    "path": ".cognition/skills/file-skill/SKILL.md",
+                    "enabled": True,
+                    "description": "file-managed",
+                    "content": "# file skill",
+                    "scope": {},
+                    "source": "file",
+                }
+            )
+        )
+
+        response = client.post(
+            "/skills",
+            json={"name": "file-skill", "content": "# overwrite"},
+        )
+        assert response.status_code == 409
+
 
 class TestUpdateSkill:
     def test_put_skill_replaces_definition(self):
@@ -135,6 +161,29 @@ class TestUpdateSkill:
         response = client.patch("/skills/no-such-skill-patch", json={"enabled": False})
         assert response.status_code == 404
 
+    def test_patch_file_managed_skill_returns_409(self):
+        from server.app.api.dependencies import get_config_store
+
+        store = get_config_store()
+        import asyncio
+
+        asyncio.run(
+            store.upsert_skill_from_dict(
+                {
+                    "name": "file-patch-skill",
+                    "path": ".cognition/skills/file-patch-skill/SKILL.md",
+                    "enabled": True,
+                    "description": "file-managed",
+                    "content": "# file skill",
+                    "scope": {},
+                    "source": "file",
+                }
+            )
+        )
+
+        response = client.patch("/skills/file-patch-skill", json={"enabled": False})
+        assert response.status_code == 409
+
 
 class TestDeleteSkill:
     def test_delete_existing_skill(self):
@@ -148,3 +197,26 @@ class TestDeleteSkill:
     def test_delete_missing_skill_returns_404(self):
         response = client.delete("/skills/ghost-skill-delete")
         assert response.status_code == 404
+
+    def test_delete_file_managed_skill_returns_409(self):
+        from server.app.api.dependencies import get_config_store
+
+        store = get_config_store()
+        import asyncio
+
+        asyncio.run(
+            store.upsert_skill_from_dict(
+                {
+                    "name": "file-delete-skill",
+                    "path": ".cognition/skills/file-delete-skill/SKILL.md",
+                    "enabled": True,
+                    "description": "file-managed",
+                    "content": "# file skill",
+                    "scope": {},
+                    "source": "file",
+                }
+            )
+        )
+
+        response = client.delete("/skills/file-delete-skill")
+        assert response.status_code == 409

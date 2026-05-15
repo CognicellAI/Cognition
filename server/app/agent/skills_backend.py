@@ -26,7 +26,12 @@ class ConfigRegistrySkillsBackend(BackendProtocol):
     to content stored in the ConfigRegistry.
     """
 
-    def __init__(self, registry: ConfigRegistry, scope: dict[str, str] | None = None):
+    def __init__(
+        self,
+        registry: ConfigRegistry,
+        scope: dict[str, str] | None = None,
+        allowed_skill_names: list[str] | None = None,
+    ):
         """Initialize the backend.
 
         Args:
@@ -35,6 +40,7 @@ class ConfigRegistrySkillsBackend(BackendProtocol):
         """
         self._registry = registry
         self._scope = scope or {}
+        self._allowed_skill_names = set(allowed_skill_names or [])
 
     async def als_info(self, path: str) -> list[FileInfo]:
         """List skill directories for SkillsMiddleware discovery.
@@ -53,6 +59,8 @@ class ConfigRegistrySkillsBackend(BackendProtocol):
         file_infos: list[FileInfo] = []
         for skill in skills:
             if not skill.enabled:
+                continue
+            if self._allowed_skill_names and skill.name not in self._allowed_skill_names:
                 continue
 
             # Each skill appears as a directory under the source path.

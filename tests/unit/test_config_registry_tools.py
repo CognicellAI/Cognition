@@ -156,6 +156,42 @@ class TestLoadCodeTools:
         assert len(tools) == 0
 
     @pytest.mark.asyncio
+    async def test_allowed_tool_names_filters_registry_tools(self):
+        from server.app.agent.resolver import RuntimeResolver
+        from server.app.storage.config_models import ToolRegistration
+
+        code = textwrap.dedent("""\
+            from langchain_core.tools import tool
+
+            @tool
+            def allowed_tool(x: str) -> str:
+                \"\"\"Allowed tool.\"\"\"
+                return x
+        """)
+        other_code = textwrap.dedent("""\
+            from langchain_core.tools import tool
+
+            @tool
+            def other_tool(x: str) -> str:
+                \"\"\"Other tool.\"\"\"
+                return x
+        """)
+
+        mock_store = MagicMock()
+        mock_store.list_tools = AsyncMock(
+            return_value=[
+                ToolRegistration(name="allowed-tool", code=code, enabled=True),
+                ToolRegistration(name="other-tool", code=other_code, enabled=True),
+            ]
+        )
+
+        resolver = RuntimeResolver(config_store=mock_store, settings=MagicMock())
+        tools = await resolver.build_tools(scope=None, allowed_tool_names=["allowed-tool"])
+
+        assert len(tools) == 1
+        assert tools[0].name == "allowed_tool"
+
+    @pytest.mark.asyncio
     async def test_code_with_syntax_error_is_skipped(self):
         """A tool with invalid Python source is skipped without crashing."""
         from server.app.agent.resolver import RuntimeResolver

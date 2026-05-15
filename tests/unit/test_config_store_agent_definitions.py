@@ -108,3 +108,81 @@ class TestDbAgents:
         assert agent is not None
         assert agent.native is True
         assert agent.system_prompt != "override"
+
+
+class TestScopePreservation:
+    @pytest.mark.asyncio
+    async def test_get_agent_raw_with_scope_returns_stored_scope(self, store: DefaultConfigStore):
+        """get_agent_raw_with_scope returns the DB row's scope, not the definition dict's."""
+        await store.upsert_agent(
+            "scoped-agent",
+            {"org": "acme"},
+            {
+                "name": "scoped-agent",
+                "system_prompt": "scoped",
+                "mode": "primary",
+                "tools": ["my_tool"],
+            },
+            "api",
+        )
+
+        result = await store.get_agent_raw_with_scope("scoped-agent", {"org": "acme"})
+        assert result is not None
+        data, scope = result
+        assert scope == {"org": "acme"}
+        assert data["tools"] == ["my_tool"]
+
+    @pytest.mark.asyncio
+    async def test_get_agent_raw_with_scope_empty_scope(self, store: DefaultConfigStore):
+        """Agent stored with empty scope returns {} as matched scope."""
+        await store.upsert_agent(
+            "unscoped-agent",
+            {},
+            {"name": "unscoped-agent", "system_prompt": "no scope", "mode": "primary"},
+            "api",
+        )
+
+        result = await store.get_agent_raw_with_scope("unscoped-agent")
+        assert result is not None
+        _, scope = result
+        assert scope == {}
+
+    @pytest.mark.asyncio
+    async def test_get_agent_raw_with_scope_missing_returns_none(self, store: DefaultConfigStore):
+        result = await store.get_agent_raw_with_scope("no-such-agent")
+        assert result is None
+
+
+class TestValidationPropagation:
+    @pytest.mark.asyncio
+    async def test_upsert_agent_invalid_definition_raises(self, store: DefaultConfigStore):
+        """Invalid agent definition should raise, not be silently swallowed.
+
+        Regression: upsert_agent used to swallow validation errors, writing
+        invalid data to the DB but not updating the in-memory cache.
+        """
+        with pytest.raises(Exception):
+            await store.upsert_agent(
+                "bad-agent",
+                {},
+                {"name": "bad-agent", "system_prompt": "test", "tools": [""]},
+                "api",
+            )
+
+    @pytest.mark.asyncio
+    async def test_upsert_agent_valid_definition_updates_cache(self, store: DefaultConfigStore):
+        """Valid definition with simple tool names should succeed and update cache."""
+        await store.upsert_agent(
+            "simple-tool-agent",
+            {},
+            {
+                "name": "simple-tool-agent",
+                "system_prompt": "test",
+                "tools": ["my_tool", "file_tools"],
+            },
+            "api",
+        )
+
+        agent = await store.get_agent_definition("simple-tool-agent")
+        assert agent is not None
+        assert agent.tools == ["my_tool", "file_tools"]
