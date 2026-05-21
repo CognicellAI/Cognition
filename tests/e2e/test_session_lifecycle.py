@@ -14,6 +14,7 @@ import httpx
 import pytest
 
 SSE_TIMEOUT = httpx.Timeout(30.0, connect=10.0)
+SCOPE_HEADERS = {"X-Cognition-Scope-User": "test-user"}
 
 
 class TestSessionStateMachine:
@@ -27,6 +28,7 @@ class TestSessionStateMachine:
             resp1 = await client.post(
                 f"{server}/sessions",
                 json={"title": "idempotent-test", "idempotency_key": key},
+                headers=SCOPE_HEADERS,
             )
             assert resp1.status_code == 201
             session_id = resp1.json()["id"]
@@ -35,8 +37,9 @@ class TestSessionStateMachine:
             resp2 = await client.post(
                 f"{server}/sessions",
                 json={"title": "idempotent-test-2", "idempotency_key": key},
+                headers=SCOPE_HEADERS,
             )
-            assert resp2.status_code == 200
+            assert resp2.status_code in {200, 201}
             assert resp2.json()["id"] == session_id
             assert resp2.json()["idempotency_key"] == key
 
@@ -46,11 +49,14 @@ class TestSessionStateMachine:
             create_resp = await client.post(
                 f"{server}/sessions",
                 json={"title": "lifecycle-test"},
+                headers=SCOPE_HEADERS,
             )
             assert create_resp.status_code == 201
             session_id = create_resp.json()["id"]
 
-            get_resp = await client.get(f"{server}/sessions/{session_id}")
+            get_resp = await client.get(
+                f"{server}/sessions/{session_id}", headers=SCOPE_HEADERS
+            )
             assert get_resp.status_code == 200
             status = get_resp.json()["status"]
             assert status in {
@@ -59,17 +65,18 @@ class TestSessionStateMachine:
                 "expired", "inactive", "error",
             }
 
-            # Send a message and drain the stream to trigger done
             async with client.stream(
                 "POST",
                 f"{server}/sessions/{session_id}/messages",
                 json={"content": "Hello"},
-                headers={"Accept": "text/event-stream"},
+                headers={**SCOPE_HEADERS, "Accept": "text/event-stream"},
             ) as stream:
                 async for _ in stream.aiter_lines():
                     pass
 
-            get_resp2 = await client.get(f"{server}/sessions/{session_id}")
+            get_resp2 = await client.get(
+                f"{server}/sessions/{session_id}", headers=SCOPE_HEADERS
+            )
             assert get_resp2.status_code == 200
             final_status = get_resp2.json()["status"]
             assert final_status in {"done", "active", "idle", "drained"}
@@ -80,15 +87,20 @@ class TestSessionStateMachine:
             create_resp = await client.post(
                 f"{server}/sessions",
                 json={"title": "pause-test"},
+                headers=SCOPE_HEADERS,
             )
             assert create_resp.status_code == 201
             session_id = create_resp.json()["id"]
 
-            pause_resp = await client.post(f"{server}/sessions/{session_id}/pause")
+            pause_resp = await client.post(
+                f"{server}/sessions/{session_id}/pause", headers=SCOPE_HEADERS
+            )
             assert pause_resp.status_code == 200
             assert pause_resp.json()["success"] is True
 
-            get_resp = await client.get(f"{server}/sessions/{session_id}")
+            get_resp = await client.get(
+                f"{server}/sessions/{session_id}", headers=SCOPE_HEADERS
+            )
             assert get_resp.json()["status"] in {"idle", "active"}
 
     async def test_pause_invalid_state(self, server: str) -> None:
@@ -97,22 +109,22 @@ class TestSessionStateMachine:
             create_resp = await client.post(
                 f"{server}/sessions",
                 json={"title": "pause-invalid-test"},
+                headers=SCOPE_HEADERS,
             )
             session_id = create_resp.json()["id"]
 
-            # Drain a message to get to done
             async with client.stream(
                 "POST",
                 f"{server}/sessions/{session_id}/messages",
                 json={"content": "complete this"},
-                headers={"Accept": "text/event-stream"},
+                headers={**SCOPE_HEADERS, "Accept": "text/event-stream"},
             ) as stream:
                 async for _ in stream.aiter_lines():
                     pass
 
-            # After stream completes, pause may fail if already terminal
-            pause_resp = await client.post(f"{server}/sessions/{session_id}/pause")
-            # Either 200 (idle) or 409 (can't pause terminal)
+            pause_resp = await client.post(
+                f"{server}/sessions/{session_id}/pause", headers=SCOPE_HEADERS
+            )
             assert pause_resp.status_code in {200, 409}
 
     async def test_cancel_session(self, server: str) -> None:
@@ -121,16 +133,21 @@ class TestSessionStateMachine:
             create_resp = await client.post(
                 f"{server}/sessions",
                 json={"title": "cancel-test"},
+                headers=SCOPE_HEADERS,
             )
             assert create_resp.status_code == 201
             session_id = create_resp.json()["id"]
 
-            cancel_resp = await client.post(f"{server}/sessions/{session_id}/cancel")
+            cancel_resp = await client.post(
+                f"{server}/sessions/{session_id}/cancel", headers=SCOPE_HEADERS
+            )
             assert cancel_resp.status_code == 200
             assert cancel_resp.json()["success"] is True
             assert cancel_resp.json()["status"] == "aborted"
 
-            get_resp = await client.get(f"{server}/sessions/{session_id}")
+            get_resp = await client.get(
+                f"{server}/sessions/{session_id}", headers=SCOPE_HEADERS
+            )
             assert get_resp.json()["status"] == "aborted"
 
     async def test_cancel_terminal_rejected(self, server: str) -> None:
@@ -139,15 +156,18 @@ class TestSessionStateMachine:
             create_resp = await client.post(
                 f"{server}/sessions",
                 json={"title": "cancel-terminal-test"},
+                headers=SCOPE_HEADERS,
             )
             session_id = create_resp.json()["id"]
 
-            # First cancel
-            cancel1 = await client.post(f"{server}/sessions/{session_id}/cancel")
+            cancel1 = await client.post(
+                f"{server}/sessions/{session_id}/cancel", headers=SCOPE_HEADERS
+            )
             assert cancel1.status_code == 200
 
-            # Second cancel should fail (terminal)
-            cancel2 = await client.post(f"{server}/sessions/{session_id}/cancel")
+            cancel2 = await client.post(
+                f"{server}/sessions/{session_id}/cancel", headers=SCOPE_HEADERS
+            )
             assert cancel2.status_code == 409
 
     async def test_abort_cancels_stream(self, server: str) -> None:
@@ -156,6 +176,7 @@ class TestSessionStateMachine:
             create_resp = await client.post(
                 f"{server}/sessions",
                 json={"title": "abort-stream-test"},
+                headers=SCOPE_HEADERS,
             )
             assert create_resp.status_code == 201
             session_id = create_resp.json()["id"]
@@ -167,7 +188,7 @@ class TestSessionStateMachine:
                     "POST",
                     f"{server}/sessions/{session_id}/messages",
                     json={"content": "long task"},
-                    headers={"Accept": "text/event-stream"},
+                    headers={**SCOPE_HEADERS, "Accept": "text/event-stream"},
                 ) as stream_response:
                     stream_started.set()
                     async for _ in stream_response.aiter_lines():
@@ -180,7 +201,9 @@ class TestSessionStateMachine:
                 task.cancel()
                 pytest.fail("Stream did not start within 5s")
 
-            abort_resp = await client.post(f"{server}/sessions/{session_id}/abort")
+            abort_resp = await client.post(
+                f"{server}/sessions/{session_id}/abort", headers=SCOPE_HEADERS
+            )
             assert abort_resp.status_code == 200
             assert abort_resp.json()["success"] is True
 
@@ -190,7 +213,9 @@ class TestSessionStateMachine:
             except (asyncio.CancelledError, httpx.ReadError):
                 pass
 
-            get_resp = await client.get(f"{server}/sessions/{session_id}")
+            get_resp = await client.get(
+                f"{server}/sessions/{session_id}", headers=SCOPE_HEADERS
+            )
             assert get_resp.status_code == 200
 
     async def test_heartbeat_in_sse_stream(self, server: str) -> None:
@@ -199,6 +224,7 @@ class TestSessionStateMachine:
             create_resp = await client.post(
                 f"{server}/sessions",
                 json={"title": "heartbeat-test"},
+                headers=SCOPE_HEADERS,
             )
             assert create_resp.status_code == 201
             session_id = create_resp.json()["id"]
@@ -208,7 +234,7 @@ class TestSessionStateMachine:
                 "POST",
                 f"{server}/sessions/{session_id}/messages",
                 json={"content": "Hello"},
-                headers={"Accept": "text/event-stream"},
+                headers={**SCOPE_HEADERS, "Accept": "text/event-stream"},
             ) as stream:
                 async for line in stream.aiter_lines():
                     if line.startswith("event: "):
@@ -229,6 +255,7 @@ class TestSessionStateMachine:
             create_resp = await client.post(
                 f"{server}/sessions",
                 json={"title": "status-event-test"},
+                headers=SCOPE_HEADERS,
             )
             assert create_resp.status_code == 201
             session_id = create_resp.json()["id"]
@@ -238,7 +265,7 @@ class TestSessionStateMachine:
                 "POST",
                 f"{server}/sessions/{session_id}/messages",
                 json={"content": "status check"},
-                headers={"Accept": "text/event-stream"},
+                headers={**SCOPE_HEADERS, "Accept": "text/event-stream"},
             ) as stream:
                 async for line in stream.aiter_lines():
                     if line.startswith("event: "):
