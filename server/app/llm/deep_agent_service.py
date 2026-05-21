@@ -24,12 +24,15 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from server.app.agent.cognition_agent import CognitionAgentParams, create_cognition_agent
 from server.app.agent.resolver import RuntimeResolver
 from server.app.agent.runtime import (
+    CallbackEvent,  # noqa: F401 — re-exported for consumers of this module
     DeepAgentRuntime,
     DelegationEvent,
     DoneEvent,
     ErrorEvent,
+    HeartbeatEvent,  # noqa: F401 — re-exported for consumers of this module
     InterruptEvent,
     PlanningEvent,
+    RunStateEvent,  # noqa: F401 — re-exported for consumers of this module
     SandboxLifecycleEvent,
     StatusEvent,
     StepCompleteEvent,  # noqa: F401 — re-exported for consumers of this module
