@@ -41,11 +41,14 @@ from server.app.api.models import (
 from server.app.api.scoping import SessionScope
 from server.app.api.sse import EventBuilder, SSEStream, get_last_event_id
 from server.app.llm.deep_agent_service import (
+    CallbackEvent,
     DelegationEvent,
     DoneEvent,
     ErrorEvent,
+    HeartbeatEvent,
     InterruptEvent,
     PlanningEvent,
+    RunStateEvent,
     SessionAgentManager,
     StatusEvent,
     StepCompleteEvent,
@@ -175,6 +178,9 @@ async def agent_event_stream(
                     session_id=session_id,
                     status=SessionStatus.WAITING_FOR_APPROVAL.value,
                 )
+                yield EventBuilder.run_state(
+                    from_status="active", to_status=SessionStatus.WAITING_FOR_APPROVAL.value
+                )
                 yield EventBuilder.interrupt(
                     tool_call_id=event.tool_call_id,
                     tool_name=event.tool_name,
@@ -210,7 +216,12 @@ async def agent_event_stream(
                 )
 
             elif isinstance(event, DoneEvent):
-                await store.update_session(session_id=session_id, status=SessionStatus.ACTIVE.value)
+                await store.update_session(
+                    session_id=session_id, status=SessionStatus.DONE.value
+                )
+                yield EventBuilder.run_state(
+                    from_status="active", to_status=SessionStatus.DONE.value
+                )
                 # ISSUE-019: Generate message_id upfront and include in done event
                 # This allows clients to correlate with persisted message without extra API call
                 message_id = event.message_id or str(uuid.uuid4())
@@ -224,8 +235,49 @@ async def agent_event_stream(
                 yield EventBuilder.done(assistant_data=assistant_data, message_id=message_id)
 
             elif isinstance(event, ErrorEvent):
-                await store.update_session(session_id=session_id, status=SessionStatus.ERROR.value)
+                if event.code == "ABORTED":
+                    await store.update_session(
+                        session_id=session_id, status=SessionStatus.ABORTED.value
+                    )
+                    yield EventBuilder.run_state(
+                        from_status="active", to_status=SessionStatus.ABORTED.value,
+                        reason="Execution aborted",
+                    )
+                else:
+                    await store.update_session(
+                        session_id=session_id, status=SessionStatus.FAILED.value
+                    )
+                    yield EventBuilder.run_state(
+                        from_status="active", to_status=SessionStatus.FAILED.value,
+                        reason=event.message,
+                    )
                 yield EventBuilder.error(event.message, code=event.code)
+
+            elif isinstance(event, HeartbeatEvent):
+                yield EventBuilder.heartbeat(
+                    step_label=event.step_label,
+                    last_model_call=event.last_model_call,
+                    last_tool_call=event.last_tool_call,
+                    active_subagent_count=event.active_subagent_count,
+                    sandbox_ready=event.sandbox_ready,
+                )
+
+            elif isinstance(event, RunStateEvent):
+                yield EventBuilder.run_state(
+                    from_status=event.from_status,
+                    to_status=event.to_status,
+                    reason=event.reason,
+                )
+
+            elif isinstance(event, CallbackEvent):
+                yield EventBuilder.callback(
+                    callback_id=event.callback_id,
+                    url=event.url,
+                    status=event.status,
+                    attempt=event.attempt,
+                    response_status=event.response_status,
+                    error_message=event.error_message,
+                )
 
     except Exception as e:
         logger.error("Agent streaming error", error=str(e), session_id=session_id, exc_info=True)
