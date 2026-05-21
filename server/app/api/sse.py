@@ -514,6 +514,28 @@ class EventBuilder:
             "data": {"last_event_id": last_event_id, "resumed": True},
         }
 
+    @staticmethod
+    def sandbox_lifecycle(
+        sandbox_id: str,
+        phase: str,
+        sandbox_backend: str,
+        duration_ms: float | None = None,
+        exit_code: int | None = None,
+        is_warm_pool_hit: bool = False,
+    ) -> dict:
+        """Create a sandbox lifecycle event."""
+        return {
+            "event": "sandbox_lifecycle",
+            "data": {
+                "sandbox_id": sandbox_id,
+                "phase": phase,
+                "sandbox_backend": sandbox_backend,
+                "duration_ms": duration_ms,
+                "exit_code": exit_code,
+                "is_warm_pool_hit": is_warm_pool_hit,
+            },
+        }
+
 
 def get_last_event_id(request: Request) -> str | None:
     """Extract Last-Event-ID header from request.

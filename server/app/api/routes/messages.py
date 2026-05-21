@@ -46,6 +46,7 @@ from server.app.llm.deep_agent_service import (
     ErrorEvent,
     InterruptEvent,
     PlanningEvent,
+    SandboxLifecycleEvent,
     SessionAgentManager,
     StatusEvent,
     StepCompleteEvent,
@@ -123,6 +124,17 @@ async def agent_event_stream(
         model_used: str | None = None
         metadata: dict[str, Any] = {}
 
+        # Drain any sandbox lifecycle events queued during agent setup
+        for se in agent_manager.drain_sandbox_events(session_id):
+            yield EventBuilder.sandbox_lifecycle(
+                sandbox_id=se.sandbox_id,
+                phase=se.phase,
+                sandbox_backend=se.sandbox_backend,
+                duration_ms=se.duration_ms,
+                exit_code=se.exit_code,
+                is_warm_pool_hit=se.is_warm_pool_hit,
+            )
+
         # Stream response using DeepAgents with multi-step support
         # Pass agent_manager to enable abort functionality
         async for event in service.stream_response(
@@ -189,6 +201,16 @@ async def agent_event_stream(
                     from_agent=event.from_agent,
                     to_agent=event.to_agent,
                     task=event.task,
+                )
+
+            elif isinstance(event, SandboxLifecycleEvent):
+                yield EventBuilder.sandbox_lifecycle(
+                    sandbox_id=event.sandbox_id,
+                    phase=event.phase,
+                    sandbox_backend=event.sandbox_backend,
+                    duration_ms=event.duration_ms,
+                    exit_code=event.exit_code,
+                    is_warm_pool_hit=event.is_warm_pool_hit,
                 )
 
             elif isinstance(event, StatusEvent):

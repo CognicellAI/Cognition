@@ -208,6 +208,23 @@ class DelegationEvent(AgentEvent):
     task: str
 
 
+@dataclass
+class SandboxLifecycleEvent(AgentEvent):
+    """Sandbox backend lifecycle transition.
+
+    Emitted during sandbox: provision, verification, execution,
+    cleanup, and teardown.
+    """
+
+    sandbox_id: str
+    phase: str  # provision_requested, provisioned, verified, command_started, command_completed, cleanup_started, teardown_complete
+    sandbox_backend: str  # local, docker, kubernetes
+    duration_ms: float | None = None
+    exit_code: int | None = None
+    is_warm_pool_hit: bool = False
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+
 # Union type for all events
 StreamEvent = (
     TokenEvent
@@ -221,6 +238,7 @@ StreamEvent = (
     | StepCompleteEvent
     | InterruptEvent
     | DelegationEvent
+    | SandboxLifecycleEvent
 )
 
 

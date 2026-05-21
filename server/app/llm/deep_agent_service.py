@@ -30,6 +30,7 @@ from server.app.agent.runtime import (
     ErrorEvent,
     InterruptEvent,
     PlanningEvent,
+    SandboxLifecycleEvent,
     StatusEvent,
     StepCompleteEvent,  # noqa: F401 — re-exported for consumers of this module
     StreamEvent,
@@ -618,6 +619,8 @@ class SessionAgentManager:
         self._project_paths: dict[str, str] = {}
         self._active_runtimes: dict[str, Any] = {}
         self._sandbox_backends: dict[str, Any] = {}
+        self._sandbox_events: dict[str, asyncio.Queue[SandboxLifecycleEvent]] = {}
+        self._sandbox_backend_type: str = settings.sandbox_backend
 
     def register_session(
         self,
@@ -696,6 +699,16 @@ class SessionAgentManager:
             backend: The sandbox backend instance (must have a ``terminate()`` method).
         """
         self._sandbox_backends[session_id] = backend
+        sandbox_id = getattr(backend, "id", str(id(backend)))
+        self._emit_sandbox_event(
+            session_id,
+            SandboxLifecycleEvent(
+                sandbox_id=sandbox_id,
+                phase="provisioned",
+                sandbox_backend=self._sandbox_backend_type,
+                is_warm_pool_hit=getattr(backend, "_warm_pool", None) is not None,
+            ),
+        )
         logger.debug("Sandbox backend registered", session_id=session_id)
 
     def unregister_session(self, session_id: str) -> None:
@@ -705,16 +718,57 @@ class SessionAgentManager:
         self._active_runtimes.pop(session_id, None)
 
         backend = self._sandbox_backends.pop(session_id, None)
-        if backend is not None and hasattr(backend, "terminate"):
-            try:
-                backend.terminate()
-                logger.info("Sandbox backend terminated", session_id=session_id)
-            except Exception as e:
-                logger.warning(
-                    "Sandbox backend terminate failed", session_id=session_id, error=str(e)
-                )
+        if backend is not None:
+            sandbox_id = getattr(backend, "id", str(id(backend)))
+            self._emit_sandbox_event(
+                session_id,
+                SandboxLifecycleEvent(
+                    sandbox_id=sandbox_id,
+                    phase="teardown_started",
+                    sandbox_backend=self._sandbox_backend_type,
+                ),
+            )
+            if hasattr(backend, "terminate"):
+                try:
+                    backend.terminate()
+                    self._emit_sandbox_event(
+                        session_id,
+                        SandboxLifecycleEvent(
+                            sandbox_id=sandbox_id,
+                            phase="teardown_complete",
+                            sandbox_backend=self._sandbox_backend_type,
+                        ),
+                    )
+                    logger.info("Sandbox backend terminated", session_id=session_id)
+                except Exception as e:
+                    logger.warning(
+                        "Sandbox backend terminate failed", session_id=session_id, error=str(e)
+                    )
 
+        self._sandbox_events.pop(session_id, None)
         logger.info("Session unregistered", session_id=session_id)
+
+    def _emit_sandbox_event(self, session_id: str, event: SandboxLifecycleEvent) -> None:
+        """Queue a sandbox lifecycle event for the session."""
+        if session_id not in self._sandbox_events:
+            self._sandbox_events[session_id] = asyncio.Queue(maxsize=20)
+        try:
+            self._sandbox_events[session_id].put_nowait(event)
+        except asyncio.QueueFull:
+            pass
+
+    def drain_sandbox_events(self, session_id: str) -> list[SandboxLifecycleEvent]:
+        """Drain any pending sandbox lifecycle events."""
+        queue = self._sandbox_events.get(session_id)
+        if queue is None:
+            return []
+        events: list[SandboxLifecycleEvent] = []
+        while not queue.empty():
+            try:
+                events.append(queue.get_nowait())
+            except asyncio.QueueEmpty:
+                break
+        return events
 
 
 # Global manager instance
