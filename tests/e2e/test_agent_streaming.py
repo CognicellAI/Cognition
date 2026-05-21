@@ -13,11 +13,13 @@ import httpx
 import pytest
 
 SSE_TIMEOUT = httpx.Timeout(30.0, connect=10.0)
-SCOPE_HEADERS = {"X-Cognition-Scope-User": "test-user"}
 
 
 async def _collect_sse_events(
-    client: httpx.AsyncClient, url: str, payload: dict
+    client: httpx.AsyncClient,
+    url: str,
+    payload: dict,
+    scope_headers: dict[str, str],
 ) -> dict[str, list[dict]]:
     """Collect SSE events from a stream, organized by event type."""
     events: dict[str, list[dict]] = {}
@@ -27,7 +29,7 @@ async def _collect_sse_events(
         "POST",
         url,
         json=payload,
-        headers={**SCOPE_HEADERS, "Accept": "text/event-stream"},
+        headers={**scope_headers, "Accept": "text/event-stream"},
     ) as response:
         async for line in response.aiter_lines():
             if line.startswith("event: "):
@@ -47,64 +49,79 @@ class TestStreamingEventTypes:
     """Verifies the SSE stream emits expected event types."""
 
     @pytest.fixture
-    async def session(self, server: str) -> str:
+    async def session(self, server: str, scope_headers: dict[str, str]) -> str:
         async with httpx.AsyncClient(timeout=SSE_TIMEOUT) as client:
             resp = await client.post(
                 f"{server}/sessions",
                 json={"title": "streaming-test"},
-                headers=SCOPE_HEADERS,
+                headers=scope_headers,
             )
             assert resp.status_code == 201
             return resp.json()["id"]
 
-    async def test_stream_produces_done_event(self, server: str, session: str) -> None:
+    async def test_stream_produces_done_event(
+        self, server: str, session: str, scope_headers: dict[str, str]
+    ) -> None:
         """Every completed message stream ends with a done event."""
         async with httpx.AsyncClient(timeout=SSE_TIMEOUT) as client:
             stream_url = f"{server}/sessions/{session}/messages"
-            events = await _collect_sse_events(client, stream_url, {"content": "Hi"})
+            events = await _collect_sse_events(
+                client, stream_url, {"content": "Hi"}, scope_headers
+            )
 
         assert "done" in events, f"Expected done event, got: {sorted(events.keys())}"
 
-    async def test_stream_produces_token_events(self, server: str, session: str) -> None:
+    async def test_stream_produces_token_events(
+        self, server: str, session: str, scope_headers: dict[str, str]
+    ) -> None:
         """Message stream includes token delta events."""
         async with httpx.AsyncClient(timeout=SSE_TIMEOUT) as client:
             events = await _collect_sse_events(
                 client,
                 f"{server}/sessions/{session}/messages",
                 {"content": "Say something"},
+                scope_headers,
             )
 
         assert "done" in events
 
-    async def test_stream_produces_status_event(self, server: str, session: str) -> None:
+    async def test_stream_produces_status_event(
+        self, server: str, session: str, scope_headers: dict[str, str]
+    ) -> None:
         """Message stream includes status events."""
         async with httpx.AsyncClient(timeout=SSE_TIMEOUT) as client:
             events = await _collect_sse_events(
                 client,
                 f"{server}/sessions/{session}/messages",
                 {"content": "Status check"},
+                scope_headers,
             )
 
         assert "done" in events
 
-    async def test_stream_produces_usage_event(self, server: str, session: str) -> None:
+    async def test_stream_produces_usage_event(
+        self, server: str, session: str, scope_headers: dict[str, str]
+    ) -> None:
         """Message stream includes usage/cost events."""
         async with httpx.AsyncClient(timeout=SSE_TIMEOUT) as client:
             events = await _collect_sse_events(
                 client,
                 f"{server}/sessions/{session}/messages",
                 {"content": "Usage test"},
+                scope_headers,
             )
 
         assert "done" in events
 
-    async def test_stream_handles_multiple_messages(self, server: str) -> None:
+    async def test_stream_handles_multiple_messages(
+        self, server: str, scope_headers: dict[str, str]
+    ) -> None:
         """Session can handle multiple consecutive message streams."""
         async with httpx.AsyncClient(timeout=SSE_TIMEOUT) as client:
             resp = await client.post(
                 f"{server}/sessions",
                 json={"title": "multi-stream"},
-                headers=SCOPE_HEADERS,
+                headers=scope_headers,
             )
             session_id = resp.json()["id"]
 
@@ -113,16 +130,20 @@ class TestStreamingEventTypes:
                     client,
                     f"{server}/sessions/{session_id}/messages",
                     {"content": f"Message {i}"},
+                    scope_headers,
                 )
                 assert "done" in events, f"Message {i} did not complete"
 
-    async def test_heartbeat_event_present(self, server: str, session: str) -> None:
+    async def test_heartbeat_event_present(
+        self, server: str, session: str, scope_headers: dict[str, str]
+    ) -> None:
         """SSE stream includes heartbeat events during agent execution."""
         async with httpx.AsyncClient(timeout=SSE_TIMEOUT) as client:
             events = await _collect_sse_events(
                 client,
                 f"{server}/sessions/{session}/messages",
                 {"content": "Heartbeat check"},
+                scope_headers,
             )
         assert "done" in events
 
@@ -130,21 +151,23 @@ class TestStreamingEventTypes:
         """Sending a message to a nonexistent session returns error event."""
         async with httpx.AsyncClient(timeout=SSE_TIMEOUT) as client:
             try:
-                await _collect_sse_events(
-                    client,
+                await client.post(
                     f"{server}/sessions/nonexistent-session/messages",
-                    {"content": "test"},
+                    json={"content": "test"},
                 )
             except (httpx.HTTPStatusError, Exception):
                 pass
 
-    async def test_run_state_event_present(self, server: str, session: str) -> None:
+    async def test_run_state_event_present(
+        self, server: str, session: str, scope_headers: dict[str, str]
+    ) -> None:
         """SSE stream includes run_state events."""
         async with httpx.AsyncClient(timeout=SSE_TIMEOUT) as client:
             events = await _collect_sse_events(
                 client,
                 f"{server}/sessions/{session}/messages",
                 {"content": "Run state check"},
+                scope_headers,
             )
 
         assert "done" in events
@@ -152,13 +175,16 @@ class TestStreamingEventTypes:
             f"Expected run_state event, got: {sorted(events.keys())}"
         )
 
-    async def test_sandbox_lifecycle_event_present(self, server: str, session: str) -> None:
+    async def test_sandbox_lifecycle_event_present(
+        self, server: str, session: str, scope_headers: dict[str, str]
+    ) -> None:
         """SSE stream may include sandbox_lifecycle events when sandbox backend is active."""
         async with httpx.AsyncClient(timeout=SSE_TIMEOUT) as client:
             events = await _collect_sse_events(
                 client,
                 f"{server}/sessions/{session}/messages",
                 {"content": "Sandbox lifecycle check"},
+                scope_headers,
             )
 
         assert "done" in events

@@ -353,11 +353,11 @@ class PostgresArtifactStore:
         scope_json = _scope_to_json(scope)
         async with self._pool.connection() as conn:
             async with conn.cursor() as cur:
-                rowcount = await cur.execute(
+                await cur.execute(
                     "DELETE FROM artifacts WHERE id = %s AND scope = %s",
                     (artifact_id, scope_json),
                 )
-                return rowcount is not None and int(rowcount) > 0
+                return cur.rowcount is not None and cur.rowcount > 0
 
     async def get_artifact_version(
         self, artifact_id: str, version: int, scope: dict[str, str] | None = None
