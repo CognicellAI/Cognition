@@ -15,6 +15,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import AsyncGenerator
 from dataclasses import dataclass, field
+from datetime import datetime, UTC
 from typing import Any, cast
 
 import structlog
@@ -45,6 +46,7 @@ from server.app.agent.runtime import (
     _resolve_middleware as _resolve_single_middleware,
 )
 from server.app.exceptions import LLMProviderConfigError
+from server.app.models import SessionConfig, SessionStatus
 from server.app.settings import Settings
 from server.app.storage.config_store import ConfigStore
 from server.app.storage.factory import create_storage_backend
@@ -309,6 +311,46 @@ class DeepAgentStreamingService:
 
             acc = StreamAccumulator(input_tokens=len(content.split()))
 
+            heartbeat_interval = getattr(
+                self.settings, "run_heartbeat_interval_seconds", 30.0
+            )
+            stall_timeout = getattr(self.settings, "run_stall_timeout_seconds", 300.0)
+
+            heartbeat_queue: asyncio.Queue[HeartbeatEvent | None] = asyncio.Queue(maxsize=1)
+            last_activity: dict[str, Any] = {
+                "time": datetime.now(UTC),
+                "step_label": None,
+                "last_model_call": None,
+                "last_tool_call": None,
+                "active_subagent_count": 0,
+                "sandbox_ready": agent.sandbox_backend is not None,
+            }
+            heartbeat_task: asyncio.Task[None] | None = None
+
+            async def _run_heartbeat() -> None:
+                """Background task that puts heartbeat events into a queue."""
+                try:
+                    while True:
+                        await asyncio.sleep(heartbeat_interval)
+                        if heartbeat_queue.full():
+                            try:
+                                heartbeat_queue.get_nowait()
+                            except asyncio.QueueEmpty:
+                                pass
+                        heartbeat_queue.put_nowait(
+                            HeartbeatEvent(
+                                step_label=last_activity.get("step_label"),
+                                last_model_call=last_activity.get("last_model_call"),
+                                last_tool_call=last_activity.get("last_tool_call"),
+                                active_subagent_count=last_activity.get("active_subagent_count", 0),
+                                sandbox_ready=last_activity.get("sandbox_ready", False),
+                            )
+                        )
+                except asyncio.CancelledError:
+                    pass
+
+            heartbeat_task = asyncio.create_task(_run_heartbeat())
+
             runtime_exception: Exception | None = None
 
             try:
@@ -317,12 +359,27 @@ class DeepAgentStreamingService:
                         {"messages": messages},
                         thread_id=thread_id,
                     ):
+                        # Drain heartbeat queue first (non-blocking)
+                        try:
+                            hb = heartbeat_queue.get_nowait()
+                            if hb is not None:
+                                yield hb
+                        except asyncio.QueueEmpty:
+                            pass
+
+                        # Track activity
+                        now = datetime.now(UTC)
+                        last_activity["time"] = now
+
                         if isinstance(event, TokenEvent):
                             acc.record_token(event.content)
+                            last_activity["last_model_call"] = now.isoformat()
                             yield event
 
                         elif isinstance(event, ToolCallEvent):
                             acc.set_tool_call(event.tool_call_id)
+                            last_activity["last_tool_call"] = event.name
+                            last_activity["step_label"] = f"Running: {event.name}"
                             yield event
 
                         elif isinstance(event, ToolResultEvent):
@@ -340,6 +397,15 @@ class DeepAgentStreamingService:
                             yield event
                             if event.code == "ABORTED":
                                 return
+
+                    # Stall check after the event stream ends naturally
+                    stall_elapsed = (datetime.now(UTC) - last_activity["time"]).total_seconds()
+                    if stall_elapsed > stall_timeout:
+                        yield RunStateEvent(
+                            from_status="active",
+                            to_status=SessionStatus.STALLED.value,
+                            reason=f"No progress for {int(stall_elapsed)}s",
+                        )
 
                     # DoneEvent from the runtime is absorbed here; we emit our own below.
 
@@ -367,6 +433,12 @@ class DeepAgentStreamingService:
                 yield DoneEvent()
 
             finally:
+                if heartbeat_task and not heartbeat_task.done():
+                    heartbeat_task.cancel()
+                    try:
+                        await heartbeat_task
+                    except asyncio.CancelledError:
+                        pass
                 if manager:
                     manager.unregister_runtime(session_id)
 

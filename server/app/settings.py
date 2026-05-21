@@ -223,6 +223,18 @@ class Settings(BaseSettings):
         alias="COGNITION_SSE_HEARTBEAT_INTERVAL_SECONDS",
     )
 
+    # Run lifecycle monitoring
+    run_heartbeat_interval_seconds: float = Field(
+        default=30.0,
+        alias="COGNITION_RUN_HEARTBEAT_INTERVAL_SECONDS",
+        description="Interval in seconds between HeartbeatEvent emissions during active runs",
+    )
+    run_stall_timeout_seconds: float = Field(
+        default=300.0,
+        alias="COGNITION_RUN_STALL_TIMEOUT_SECONDS",
+        description="Seconds without progress before a run is flagged as stalled",
+    )
+
     @property
     def workspace_path(self) -> Path:
         """Get the current workspace path.
