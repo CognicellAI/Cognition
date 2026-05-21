@@ -16,7 +16,10 @@ See AGENTS.md for category definitions, DoD requirements, and precedence rules.
 
 | Date | Description | Severity | Layer | Status |
 |------|-------------|----------|-------|--------|
-| | | | | |
+| 2026-05-21 | K8s sandbox shell injection in `_upload_files_via_execute` — file paths interpolated into shell command without `shlex.quote()` | High | 3 | Planned |
+| 2026-05-21 | K8s sandbox thread-unsafe lazy init in `_ensure_sandbox()` — concurrent calls can create duplicate sandbox CRs | Medium | 3 | Planned |
+| 2026-05-21 | Dead unreachable `execute()` return block — duplicate return statements at end of method, second block never reached | Low | 3 | Planned |
+| 2026-05-21 | Hardcoded `error="is_directory"` in upload failure path — masks actual error with incorrect category | Low | 3 | Planned |
 
 ---
 
@@ -111,6 +114,7 @@ The following fallback patterns exist and are tracked for removal. They produce 
 | `langgraph` + `langchain` | langgraph 1.0.8, langchain 1.2.9 | langgraph 1.1.3, langchain 1.2.13 | `astream()` now supports `version="v2"` unified StreamPart format; required for streaming rewrite (#34) | Completed |
 | `deepagents` + `anthropic` + `langchain-anthropic` | deepagents 0.3.12, anthropic 0.79.0, langchain-anthropic 1.3.2 | deepagents 0.4.12, anthropic 0.86.0, langchain-anthropic 1.4.0 | `execute()` in `SandboxBackendProtocol` gained `timeout: int \| None = None` kwarg — updated `CognitionLocalSandboxBackend` and `CognitionDockerSandboxBackend` to match. Also fixed latent `self._timeout` bug (attribute didn't exist; now uses `self._default_timeout` from parent). | Completed |
 | Core runtime and framework refresh | deepagents 0.4.12, fastapi 0.128.6, starlette 0.52.1, langgraph 1.1.3, langchain 1.2.13, langsmith 0.6.9, openai 2.17.0, typer 0.23.0, rich 14.3.2, uvicorn 0.40.0, websockets 15.0.1 | deepagents 0.5.2, fastapi 0.135.3, starlette 1.0.0, langgraph 1.1.6, langchain 1.2.15, langsmith 0.7.30, openai 2.31.0, typer 0.24.1, rich 15.0.0, uvicorn 0.44.0, websockets 16.0 | `deepagents` composite backend now expects routed backends to implement `ls()` in addition to legacy `ls_info()`; test shim updated. Verified with full unit suite after lock refresh. | Completed |
+| deepagents → 0.6.2 + LangChain family upgrade | deepagents 0.5.2, langchain-core >=0.3.0,<1.3.0 | deepagents 0.6.2, langchain-core >=1.4.0, langchain >=1.3.0 | deepagents 0.6.2 requires langchain-core>=1.4.0; removes current `<1.3.0` cap. Async subagents, v3 event streaming, ContextHubBackend, interpreter middleware. Blocked by: none → unblocks all v0.10.0 features. | Planned |
 
 ### Post-RFC Cleanup Train
 
@@ -176,6 +180,9 @@ The following fallback patterns exist and are tracked for removal. They produce 
 | Graceful abort/cancellation | Layer 4 | Pending | Abort button immediately stops execution; no zombie processes | 1 day | P0: Session lifecycle |
 | Proper error propagation | Layer 5/6 | Completed | All 14 fallback sites resolved: provider errors surface with `LLMProviderConfigError`, registry-missing returns 503, silent `except Exception: pass` replaced with logged warnings throughout | 2 days | None |
 | Rate limiting | Layer 6 | Pending | Per-user and global rate limits enforced | 1 day | None |
+| **v0.10.0: Durable run lifecycle + unified observability spine** | Layer 2/4/6/7 | Planned | Background run creation with stable `run_id`; 11-state lifecycle (queued→done); pause/resume/cancel/retry/fork/replay APIs; idempotency keys; checkpoint APIs; durable callback/webhook delivery; retry policies; LangGraph checkpointing as state carrier. Combined with: Deep Agents v3-aligned event taxonomy; OTel-first platform tracing with W3C propagation; stable correlation IDs across API/run/model/tool/sandbox/callback boundaries; heartbeats + stall detection; append-only durable event streams; redacted end-user timelines; structured action logs; queryable trace trees. | 10–14 days | Track A (deepagents 0.6.2) |
+| **v0.10.0: Persistent artifacts + structured handoffs** | Layer 2/4/6/7 | Planned | Typed artifact routes (`/scratch/`, `/artifacts/`, `/contracts/`, `/evals/`, `/memories/`, `/skills/`, `/policies/`); artifact API (CRUD, diff, version history, link to run/checkpoint); built-in schemas (feature_list.json, progress.json, contract.json, eval_report.json); structured handoff events; scope-aware artifact visibility. | 3–5 days | Track A |
+| **v0.10.0: Trusted runtime context + tool arg repair + permissions/HITL** | Layer 1/3/4/6/7 | Planned | Trusted run context injection into tool callbacks (session_id, run_id, user_id, org_id, repo, branch, etc.) without model-editable parameters; schema-aware tool argument validation; bounded repair retries with events; scoped secret references + short-lived sandbox env injection; rich HITL config (approve/edit/reject/timeout); permission request events + audit logs; filesystem permissions across agent/subagent graphs. | 5–7 days | P1: runner-lifecycle |
 
 ### P1-1: Configurable Agent Parameters
 
@@ -230,6 +237,15 @@ The following fallback patterns exist and are tracked for removal. They produce 
 | Connection pooling | Layer 2 | Pending | Database connections pooled; no connection leaks | 1 day | None |
 | Health check endpoint | Layer 6 | Pending | `/health` returns 200 when all deps ready | 0.5 days | None |
 | Metrics and telemetry | Layer 7 | Pending | Prometheus metrics; OpenTelemetry traces | 2 days | None |
+| **v0.10.0: Async subagents as long-running workstreams** | Layer 2/4/6/7 | Planned | Async subagents in agent definitions; APIs and SSE events for async lifecycle (launch/status/update/cancel); mid-flight steering; cross-run correlation (parent run/async task/subagent thread/artifact/trace IDs); capability flags for upstream preview state. | 3–5 days | P1: runner-lifecycle |
+| **v0.10.0: Planner/generator/evaluator harness + eval pipeline** | Layer 2/4/6/7 | Planned | Definition-driven harness roles (planner/generator/evaluator); contract artifacts as typed criteria; evaluator runs with browser automation, test tools, API calls, sandbox execution; eval_mode policies (per-sprint, run-end, on-request, after-risky-tools); eval definitions in ConfigRegistry (rubric skills, model/profile, thresholds, cadence); end-user feedback capture; eval reports as artifacts and trace events. | 5–7 days | P1: runner-lifecycle, P1: artifacts-handoffs |
+| **v0.10.0: Model-aware harness profiles** | Layer 4/5/6/7 | Planned | Profile definitions in ConfigRegistry scoped by org/project/user/agent; profile selection by provider+model; fields: subagent config, evaluator cadence, context policy, tool visibility, middleware stack, model kwargs, cost/latency budgets; effective-profile introspection on each run; deterministic scope-aware selection. | 2–3 days | P1: runner-lifecycle |
+| **v0.10.0: Context compression + offloading + token controls** | Layer 2/4/6/7 | Planned | Declarative context policy (token limit before eviction, summarization enabled/disabled, summarizer model/profile, per-tool retention rules); context events and metrics (tokens before/after, artifacts created, summary id, source tool calls); deterministic verification for large-tool-output offload; debug APIs for effective prompt assembly. | 2–3 days | P1: artifacts-handoffs, P1: runner-lifecycle |
+| **v0.10.0: Code interpreter middleware (QuickJS)** | Layer 3/4/6/7 | Planned | Declarative `code_interpreter` middleware config; allowlisted callable tools and execution limits; interpreter state visibility (eval count, logs, errors, result size, linked tool calls); policy controls per agent/subagent; disabled by default; no host filesystem/network/shell access except through explicit bridges. | 2–3 days | Track A |
+| **v0.10.0: Scoped memory + background consolidation** | Layer 2/4/6/7 | Planned | Memory scopes (user/assistant/project/organization policy); read-only/write policies per route; background consolidation jobs with cadence/source threads/output artifact; episodic search over prior threads scoped by user/org/project; memory update events and audit logs; namespaces derived from Cognition scope; org memory read-only to agents by default. | 3–4 days | P1: artifacts-handoffs |
+| **v0.10.0: Sandbox lifecycle + resource scheduling + K8s hardening** | Layer 2/3/4/6/7 | Planned | Resource-aware sandbox scheduling (capacity check, queued state, pending reason, estimated retry, capacity endpoint); sandbox lifecycle events (provision/queue/pending/ready/verified/env-verified/warm-pool/command/file-transfer/ttl/cleanup/teardown); cleanup status for abort/delete (pod/claim/worktree/volume/credential); SandboxTemplate runtime verification (env vars, workspace root, gh auth, writable dirs); sandbox resource metrics; built-in Git/GitHub execution evidence. Includes K8s security hardening (shell injection fix, thread-safe lazy init, dead code removal, accurate error codes). | 4–6 days | Track A, P1: runner-lifecycle |
+| **v0.10.0: MCP alignment (auth/capability/progress)** | Layer 3/4/5/6/7 | Planned | MCP server capability discovery; tool interceptors and policy hooks; MCP auth status and scoped credential references; MCP progress notifications as Cognition events; connection lifecycle metrics and logs; resource and prompt surfacing in agent definitions. | 2–3 days | Track A |
+| **v0.10.0: Capability registry + compatibility surface** | Layer 1/4/5/6/7 | Planned | `GET /capabilities` with version info (Cognition, Deep Agents, LangGraph, LangChain), stream protocol versions, enabled middleware types, sandbox backends, async subagent support, interpreter support, MCP support, checkpoint/time-travel, evaluation support; startup compatibility checks; schema discovery for agent definition fields. | 1–2 days | Track A |
 
 ---
 
@@ -352,11 +368,46 @@ All write endpoints respect `X-Cognition-Scope-{key}` headers for multi-tenant s
 | Evaluation framework | Layer 7 | Pending | Automated benchmark runs on agent performance | 5 days | P1: Production-Ready |
 | Builder boundary documentation | Layer 6 | Completed | A builder-facing guide clearly defines Cognition Core vs app-layer responsibilities, gives decision rules, and links from the main docs index and root README | 0.25 days | None |
 | `app = Cognition(agent); app.run()` | All | Pending | Single-line instantiation provides all features | 5 days | All above |
+| **v0.10.0: Protocol adapters (ACP/A2A)** | Layer 4/6/7 | Planned | Optional ACP adapter for Agent Client Protocol clients; optional A2A adapter for agent-to-agent workflows; clear mapping between protocol events and Cognition run/session/event models; adapters preserve Cognition scoping, audit, permissions, and event semantics; native API remains canonical. | 2–3 days | P1: runner-lifecycle |
 
 ### Explicitly Deferred
 
-- `#45` LangGraph Store memory tools — deferred until memory UX/design is specified (tool vs middleware, namespace, retrieval strategy).
-- `#53` ACP transport layer — deferred until core Deep Agents runtime capabilities are surfaced over existing REST/SSE transport.
+- `#45` LangGraph Store memory tools — deferred until memory UX/design is specified (tool vs middleware, namespace, retrieval strategy). Superseded by v0.10.0: scoped-memory (P12).
+- `#53` ACP transport layer — deferred until core Deep Agents runtime capabilities are surfaced over existing REST/SSE transport. Superseded by v0.10.0: protocol-adapters (P16).
+
+---
+
+## v0.10.0 Release Tracking
+
+This section tracks the v0.10.0 long-running agents release. See `localdocs/v0.10.0-plan.md` for the full branching strategy, wave schedule, and K8s cluster context.
+
+### Release Branch
+
+- **Branch**: `release/v0.10.0` (cut from `main` after Track A + Track 0 land)
+- **Strategy**: Feature branches PR into release branch; tested per-wave with pre-release images; one final merge to `main`
+
+### Wave Schedule
+
+| Wave | Branches | Pre-Release Tag | Gate |
+|------|----------|-----------------|------|
+| 1 | `runner-lifecycle`, `artifacts-handoffs`, `sandbox-hardening` | `0.10.0-w1` | Scenarios pass on dev K8s cluster |
+| 2 | `tool-safety`, `async-subagents`, `model-profiles`, `context-controls` | `0.10.0-w2` | Scenarios pass |
+| 3 | `harness-eval`, `scoped-memory`, `code-interpreter`, `mcp-alignment` | `0.10.0-w3` | Scenarios pass |
+| 4 | `capability-registry`, `protocol-adapters` | `0.10.0-w4` | Scenarios pass |
+
+### Phase 0 Blockers
+
+| Task | Target | Status |
+|------|--------|--------|
+| `feat/runtime-upgrade` → `main` | deepagents 0.6.2 + langchain-core >=1.4.0 | Planned |
+| `feat/k8s-security` → `main` | Shell injection, thread safety, dead code, error accuracy | Planned |
+| ROADMAP.md populated | 4 security + 1 dependency + 13 feature entries | Complete |
+| `server/version.py` → `"0.10.0"` | Version bump on release branch | Planned |
+| `localdocs/v0.10.0-plan.md` | Agent reference document | In Progress |
+
+### Done Criteria
+
+See `localdocs/v0.10.0-long-running-agents-priorities.md` §v0.10.0 Definition Of Done for the full list of 17 release-level acceptance criteria.
 
 ---
 
@@ -371,4 +422,4 @@ Per AGENTS.md requirements:
    - Features/Architectural: Before starting work
    - Security/Bug/Performance/Dependency: As part of PR
 
-**Last Updated**: 2026-04-11 (K8s sandbox backend)
+**Last Updated**: 2026-05-21 (v0.10.0 release planning)

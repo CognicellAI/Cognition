@@ -20,10 +20,10 @@ classifiers = [
 
 dependencies = [
     # Core framework
-    "deepagents>=0.1.0",
-    "langchain>=1.2.13", # MLflow autolog compatible
+    "deepagents>=0.6.2",
+    "langchain>=1.3.0",
     "langgraph>=0.2.0",
-    "langchain-core>=0.3.0,<1.3.0",
+    "langchain-core>=1.4.0",
     # Server
     "fastapi>=0.115.0",
     "uvicorn[standard]>=0.32.0",
