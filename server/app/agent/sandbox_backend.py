@@ -358,7 +358,7 @@ class CognitionKubernetesSandboxBackend(SandboxBackendProtocol):
             logger.warning(
                 "Sandbox runtime verification found issues",
                 sandbox_id=self._id,
-                failures={name: detail for name, detail in failures},
+                failures=dict(failures),
             )
         else:
             logger.info(
