@@ -20,6 +20,7 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator, Mapping
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Protocol, cast, runtime_checkable
 
@@ -208,6 +209,53 @@ class DelegationEvent(AgentEvent):
     task: str
 
 
+@dataclass
+class HeartbeatEvent(AgentEvent):
+    """Periodic heartbeat indicating the run is alive and making progress.
+
+    Emitted during long-running tool/model/sandbox operations at a
+    configurable interval. Helps clients distinguish between active work
+    and a stalled/dead connection.
+    """
+
+    step_label: str | None = None
+    last_model_call: str | None = None
+    last_tool_call: str | None = None
+    active_subagent_count: int = 0
+    sandbox_ready: bool = False
+
+
+@dataclass
+class RunStateEvent(AgentEvent):
+    """Run lifecycle state transition.
+
+    Emitted when the run enters a new status: queued, starting, active,
+    paused, stalled, aborting, aborted, failed, done, expired.
+    """
+
+    from_status: str
+    to_status: str
+    reason: str | None = None
+    timestamp: datetime | None = None
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class CallbackEvent(AgentEvent):
+    """Durable callback/webhook delivery status event.
+
+    Emitted when a callback is queued, sent, retried, or exhausted.
+    Independent of whether the initiating SSE client stays connected.
+    """
+
+    callback_id: str
+    url: str
+    status: str  # sent | failed | retrying | exhausted
+    attempt: int = 1
+    response_status: int | None = None
+    error_message: str | None = None
+
+
 # Union type for all events
 StreamEvent = (
     TokenEvent
@@ -221,6 +269,9 @@ StreamEvent = (
     | StepCompleteEvent
     | InterruptEvent
     | DelegationEvent
+    | HeartbeatEvent
+    | RunStateEvent
+    | CallbackEvent
 )
 
 

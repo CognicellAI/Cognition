@@ -15,12 +15,60 @@ from pydantic import BaseModel
 
 
 class SessionStatus(StrEnum):
-    """Session status enumeration."""
+    """Session lifecycle status enumeration.
 
+    v0.10.0: Expanded to 11 states for long-running agent lifecycles.
+    """
+
+    QUEUED = "queued"
+    STARTING = "starting"
     ACTIVE = "active"
+    IDLE = "idle"
+    WAITING_FOR_APPROVAL = "waiting_for_approval"
+    STALLED = "stalled"
+    ABORTING = "aborting"
+    ABORTED = "aborted"
+    FAILED = "failed"
+    DONE = "done"
+    EXPIRED = "expired"
+
+    # Legacy aliases for backward compatibility
     INACTIVE = "inactive"
     ERROR = "error"
-    WAITING_FOR_APPROVAL = "waiting_for_approval"
+
+    @classmethod
+    def can_transition(cls, current: SessionStatus | str, target: SessionStatus | str) -> bool:
+        """Check if a transition from current to target is valid."""
+        current_str = current.value if isinstance(current, SessionStatus) else current
+        target_str = target.value if isinstance(target, SessionStatus) else target
+
+        # Terminal states cannot transition out
+        if current_str in {"done", "expired"}:
+            return False
+
+        # Valid transitions
+        valid: dict[str, set[str]] = {
+            "queued": {"starting", "failed", "expired"},
+            "starting": {"active", "failed"},
+            "active": {"idle", "waiting_for_approval", "stalled", "aborting", "failed", "done"},
+            "idle": {"active", "stalled", "aborting", "failed", "expired"},
+            "waiting_for_approval": {"active", "aborting", "stalled", "failed"},
+            "stalled": {"active", "aborting", "failed", "expired"},
+            "aborting": {"aborted", "failed"},
+            "aborted": set(),
+            "failed": set(),
+            "done": set(),
+            "expired": set(),
+            "inactive": {"active", "expired"},
+            "error": {"active", "failed"},
+        }
+        return target_str in valid.get(current_str, set())
+
+    @classmethod
+    def is_terminal(cls, status: SessionStatus | str) -> bool:
+        """Check if a status is terminal (no further transitions)."""
+        status_str = status.value if isinstance(status, SessionStatus) else status
+        return status_str in {"done", "aborted", "failed", "expired"}
 
 
 class PromptConfig(BaseModel):
