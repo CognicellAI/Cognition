@@ -399,11 +399,11 @@ This section tracks the v0.10.0 long-running agents release. See `localdocs/v0.1
 
 | Task | Target | Status |
 |------|--------|--------|
-| `feat/runtime-upgrade` → `main` | deepagents 0.6.2 + langchain-core >=1.4.0 | Planned |
-| `feat/k8s-security` → `main` | Shell injection, thread safety, dead code, error accuracy | Planned |
+| `feat/runtime-upgrade` → `main` | deepagents 0.6.3 + langchain-core >=1.4.0 | PR #115 |
+| `feat/k8s-security` → `main` | Shell injection, thread safety, dead code, error accuracy | PR #116 |
 | ROADMAP.md populated | 4 security + 1 dependency + 13 feature entries | Complete |
-| `server/version.py` → `"0.10.0"` | Version bump on release branch | Planned |
-| `localdocs/v0.10.0-plan.md` | Agent reference document | In Progress |
+| `server/version.py` → `"0.10.0"` | Version bump on release branch | Complete |
+| `localdocs/v0.10.0-plan.md` | Agent reference document | Complete |
 
 ### Done Criteria
 
