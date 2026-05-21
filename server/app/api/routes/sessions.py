@@ -548,6 +548,104 @@ async def pause_session(
     return {"success": True, "message": "Session paused", "status": SessionStatus.IDLE.value}
 
 
+@router.get(
+    "/{session_id}/checkpoints",
+    status_code=status.HTTP_200_OK,
+    responses={
+        404: {"model": ErrorResponse, "description": "Session not found"},
+    },
+)
+async def list_checkpoints(
+    session_id: str,
+    store: StorageBackend = Depends(get_storage_backend_dep),  # noqa: B008
+    scope: SessionScope = Depends(get_scope_dep),
+    limit: int = Query(default=20, ge=1, le=100, description="Max checkpoints to return"),
+) -> dict[str, Any]:
+    """List checkpoints for a session's LangGraph thread."""
+    session = await _get_scoped_session(session_id, store, scope)
+
+    checkpointer = await store.get_checkpointer()
+    if checkpointer is None:
+        return {"session_id": session_id, "checkpoints": [], "count": 0}
+
+    config: dict[str, Any] = {"configurable": {"thread_id": session.thread_id}}
+    try:
+        checkpoints: list[dict[str, Any]] = []
+        async for cp in checkpointer.alist(config, limit=limit):  # type: ignore
+            checkpoint_data: dict[str, Any] = {
+                "checkpoint_id": getattr(cp.config.get("configurable", {}), "get", lambda *a: None)(
+                    "checkpoint_id", str(id(cp))
+                ),
+            }
+            if hasattr(cp, "metadata") and isinstance(cp.metadata, dict):
+                checkpoint_data["timestamp"] = cp.metadata.get("timestamp")
+                checkpoint_data["parent_checkpoint_id"] = cp.metadata.get("parent_checkpoint_id")
+            checkpoints.append(checkpoint_data)
+        return {
+            "session_id": session_id,
+            "thread_id": session.thread_id,
+            "checkpoints": checkpoints,
+            "count": len(checkpoints),
+        }
+    except Exception as e:
+        return {"session_id": session_id, "checkpoints": [], "count": 0, "error": str(e)}
+
+
+@router.get(
+    "/{session_id}/checkpoints/{checkpoint_id}",
+    status_code=status.HTTP_200_OK,
+    responses={
+        404: {"model": ErrorResponse, "description": "Session or checkpoint not found"},
+    },
+)
+async def inspect_checkpoint(
+    session_id: str,
+    checkpoint_id: str,
+    store: StorageBackend = Depends(get_storage_backend_dep),  # noqa: B008
+    scope: SessionScope = Depends(get_scope_dep),
+) -> dict[str, Any]:
+    """Inspect the state at a specific checkpoint."""
+    session = await _get_scoped_session(session_id, store, scope)
+
+    checkpointer = await store.get_checkpointer()
+    if checkpointer is None:
+        raise HTTPException(status_code=status.HTTP_501_NOT_IMPLEMENTED, detail="No checkpointer available")
+
+    config: dict[str, Any] = {
+        "configurable": {"thread_id": session.thread_id, "checkpoint_id": checkpoint_id}
+    }
+    try:
+        tuple_data = await checkpointer.aget_tuple(config)  # type: ignore
+        if tuple_data is None:
+            raise HTTPException(status_code=404, detail=f"Checkpoint '{checkpoint_id}' not found")
+
+        checkpoint = tuple_data.checkpoint
+        metadata = tuple_data.metadata
+
+        messages_count = 0
+        if hasattr(checkpoint, "channel_values"):
+            channel_values: dict[str, Any] = checkpoint.channel_values  # type: ignore
+            if isinstance(channel_values, dict) and "messages" in channel_values:
+                messages_count = len(channel_values["messages"])
+
+        parent_id: str | None = None
+        if isinstance(metadata, dict):
+            parent_id = metadata.get("parent_checkpoint_id")  # type: ignore
+
+        return {
+            "session_id": session_id,
+            "thread_id": session.thread_id,
+            "checkpoint_id": checkpoint_id,
+            "parent_checkpoint_id": parent_id,
+            "messages_count": messages_count,
+            "metadata": metadata if isinstance(metadata, dict) else {},
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to inspect checkpoint: {e}")
+
+
 # ──────────────────────────────────────────────────────────────────────────────
 # Helpers
 # ──────────────────────────────────────────────────────────────────────────────
