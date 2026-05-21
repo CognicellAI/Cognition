@@ -514,64 +514,6 @@ class EventBuilder:
             "data": {"last_event_id": last_event_id, "resumed": True},
         }
 
-    @staticmethod
-    def heartbeat(
-        step_label: str | None = None,
-        last_model_call: str | None = None,
-        last_tool_call: str | None = None,
-        active_subagent_count: int = 0,
-        sandbox_ready: bool = False,
-    ) -> dict:
-        """Create a heartbeat event."""
-        return {
-            "event": "heartbeat",
-            "data": {
-                "step_label": step_label,
-                "last_model_call": last_model_call,
-                "last_tool_call": last_tool_call,
-                "active_subagent_count": active_subagent_count,
-                "sandbox_ready": sandbox_ready,
-            },
-        }
-
-    @staticmethod
-    def run_state(
-        from_status: str,
-        to_status: str,
-        reason: str | None = None,
-    ) -> dict:
-        """Create a run state transition event."""
-        return {
-            "event": "run_state",
-            "data": {
-                "from_status": from_status,
-                "to_status": to_status,
-                "reason": reason,
-            },
-        }
-
-    @staticmethod
-    def callback(
-        callback_id: str,
-        url: str,
-        status: str,
-        attempt: int = 1,
-        response_status: int | None = None,
-        error_message: str | None = None,
-    ) -> dict:
-        """Create a callback delivery event."""
-        return {
-            "event": "callback",
-            "data": {
-                "callback_id": callback_id,
-                "url": url,
-                "status": status,
-                "attempt": attempt,
-                "response_status": response_status,
-                "error_message": error_message,
-            },
-        }
-
 
 def get_last_event_id(request: Request) -> str | None:
     """Extract Last-Event-ID header from request.

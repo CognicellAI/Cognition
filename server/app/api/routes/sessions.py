@@ -176,14 +176,6 @@ async def create_session(
     if not await config_store.is_valid_primary(request.agent_name):
         raise _unprocessable_entity(f"Invalid or unknown agent: {request.agent_name}")
 
-    # Idempotency: return existing session if idempotency_key matches
-    if request.idempotency_key:
-        existing = await _find_session_by_idempotency_key(
-            store, request.idempotency_key, scope.get_all()
-        )
-        if existing is not None:
-            return SessionResponse.from_core(existing)
-
     session_id = str(uuid.uuid4())
     thread_id = str(uuid.uuid4())  # For LangGraph checkpointing
     workspace_path = build_session_workspace_path(settings, session_id)
@@ -200,10 +192,7 @@ async def create_session(
         title=request.title,
         scopes=scope.get_all(),
         agent_name=request.agent_name,
-        metadata={
-            **(request.metadata or {}),
-            **({"idempotency_key": request.idempotency_key} if request.idempotency_key else {}),
-        },
+        metadata=request.metadata,
         workspace_path=workspace_path,
     )
 
@@ -465,118 +454,3 @@ async def resume_session(
             "X-Accel-Buffering": "no",
         },
     )
-
-
-@router.post(
-    "/{session_id}/cancel",
-    status_code=status.HTTP_200_OK,
-    responses={
-        404: {"model": ErrorResponse, "description": "Session not found"},
-        409: {"model": ErrorResponse, "description": "Session cannot be cancelled in current state"},
-    },
-)
-async def cancel_session(
-    session_id: str,
-    store: StorageBackend = Depends(get_storage_backend_dep),  # noqa: B008
-    agent_manager: SessionAgentManager = Depends(get_session_agent_manager_dep),
-    scope: SessionScope = Depends(get_scope_dep),
-) -> dict[str, str | bool]:
-    """Cancel a session with proper lifecycle state transitions.
-
-    Transitions: current → ABORTING → ABORTED.
-    Terminal states (done, expired) cannot be cancelled.
-    """
-    session = await _get_scoped_session(session_id, store, scope)
-    current = SessionStatus(session.status)
-
-    if SessionStatus.is_terminal(current):
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=f"Session '{session_id}' is in terminal state '{current.value}'",
-        )
-
-    # Transition to CANCELLING
-    await _transition_status(store, session_id, current, SessionStatus.ABORTING)
-
-    # Abort the agent runtime
-    await agent_manager.abort_session(session_id, session.thread_id)
-
-    # Transition to CANCELLED
-    await _transition_status(store, session_id, SessionStatus.ABORTING, SessionStatus.ABORTED)
-
-    return {
-        "success": True,
-        "message": "Session cancelled",
-        "status": SessionStatus.ABORTED.value,
-    }
-
-
-@router.post(
-    "/{session_id}/pause",
-    status_code=status.HTTP_200_OK,
-    responses={
-        404: {"model": ErrorResponse, "description": "Session not found"},
-        409: {"model": ErrorResponse, "description": "Session cannot be paused in current state"},
-    },
-)
-async def pause_session(
-    session_id: str,
-    store: StorageBackend = Depends(get_storage_backend_dep),  # noqa: B008
-    scope: SessionScope = Depends(get_scope_dep),
-) -> dict[str, str | bool]:
-    """Pause an active session.
-
-    Transitions: active → idle.
-    Only active sessions can be paused.
-    """
-    session = await _get_scoped_session(session_id, store, scope)
-    current = SessionStatus(session.status)
-
-    if current != SessionStatus.ACTIVE:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=f"Session '{session_id}' is not active (current: '{current.value}')",
-        )
-
-    if not SessionStatus.can_transition(current, SessionStatus.IDLE):
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=f"Cannot pause session '{session_id}' from '{current.value}'",
-        )
-
-    await store.update_session(session_id=session_id, status=SessionStatus.IDLE.value)
-    return {"success": True, "message": "Session paused", "status": SessionStatus.IDLE.value}
-
-
-# ──────────────────────────────────────────────────────────────────────────────
-# Helpers
-# ──────────────────────────────────────────────────────────────────────────────
-
-
-async def _find_session_by_idempotency_key(
-    store: StorageBackend,
-    idempotency_key: str,
-    scope: dict[str, str],
-) -> Any | None:
-    """Find an existing session by idempotency key in the given scope."""
-    sessions = await store.list_sessions()
-    for s in sessions:
-        if s.metadata and s.metadata.get("idempotency_key") == idempotency_key:
-            return s
-    return None
-
-
-async def _transition_status(
-    store: StorageBackend,
-    session_id: str,
-    from_status: SessionStatus,
-    to_status: SessionStatus,
-) -> None:
-    """Transition a session to a new status if allowed."""
-    if not SessionStatus.can_transition(from_status, to_status):
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=f"Cannot transition session '{session_id}' "
-            f"from '{from_status.value}' to '{to_status.value}'",
-        )
-    await store.update_session(session_id=session_id, status=to_status.value)

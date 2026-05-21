@@ -31,12 +31,6 @@ class SessionCreate(BaseModel):
         default=None,
         description="Arbitrary key-value metadata attached to the session",
     )
-    idempotency_key: str | None = Field(
-        default=None,
-        max_length=200,
-        description="Client-provided key for idempotent session creation. "
-        "Repeated requests with the same key return the existing session.",
-    )
 
 
 class SessionResponse(BaseModel):
@@ -45,20 +39,13 @@ class SessionResponse(BaseModel):
     id: str = Field(..., description="Unique session identifier")
     title: str | None = Field(None, description="Session title")
     thread_id: str = Field(..., description="LangGraph thread ID for checkpointing")
-    status: Literal[
-        "queued", "starting", "active", "idle",
-        "waiting_for_approval", "stalled",
-        "aborting", "aborted",
-        "failed", "done", "expired",
-        "inactive", "error",
-    ] = Field(..., description="Session status")
+    status: Literal["active", "inactive", "error", "waiting_for_approval"] = Field(
+        ..., description="Session status"
+    )
     created_at: str = Field(..., description="Session creation timestamp (ISO format)")
     updated_at: str = Field(..., description="Last activity timestamp (ISO format)")
     message_count: int = Field(0, description="Number of messages in session")
     agent_name: str = Field("default", description="Agent bound to this session")
-    idempotency_key: str | None = Field(
-        default=None, description="Idempotency key used during creation, if any"
-    )
     metadata: dict[str, str] = Field(
         default_factory=dict,
         description="Arbitrary key-value metadata attached to the session",
@@ -76,7 +63,6 @@ class SessionResponse(BaseModel):
             updated_at=session.updated_at,
             message_count=session.message_count,
             agent_name=session.agent_name,
-            idempotency_key=session.metadata.get("idempotency_key") if session.metadata else None,
             metadata=session.metadata,
         )
 
@@ -301,23 +287,6 @@ class ReconnectedEvent(BaseModel):
 
     event: Literal["reconnected"] = "reconnected"
     data: dict = Field(..., description="Reconnection info with 'last_event_id' and 'resumed' flag")
-
-
-class HeartbeatEventModel(BaseModel):
-    """Server-sent event: periodic heartbeat indicating the run is alive."""
-
-    event: Literal["heartbeat"] = "heartbeat"
-    data: dict = Field(..., description="Heartbeat info with step label, activity timestamps")
-
-
-class RunStateEventModel(BaseModel):
-    """Server-sent event: run lifecycle state transition."""
-
-    event: Literal["run_state"] = "run_state"
-    data: dict = Field(
-        ...,
-        description="Run state transition with from_status, to_status, reason",
-    )
 
 
 # ============================================================================
