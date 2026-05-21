@@ -2,7 +2,8 @@
 
 Creates appropriate storage backend instances based on configuration.
 Supports SQLite, PostgreSQL, and Memory backends.
-Also creates the matching ConfigRegistry and ConfigChangeDispatcher.
+Also creates the matching ConfigRegistry, ConfigChangeDispatcher,
+and ArtifactStore.
 """
 
 from __future__ import annotations
@@ -14,6 +15,7 @@ from server.app.exceptions import CognitionError, ErrorCode
 
 if TYPE_CHECKING:
     from server.app.settings import Settings
+    from server.app.storage.artifact_store import ArtifactStore
     from server.app.storage.backend import StorageBackend
     from server.app.storage.config_dispatcher import ConfigChangeDispatcher
     from server.app.storage.config_registry import ConfigRegistry
@@ -158,3 +160,48 @@ def create_config_dispatcher(settings: Settings) -> ConfigChangeDispatcher:
         from server.app.storage.config_dispatcher import InProcessDispatcher
 
         return InProcessDispatcher()
+
+
+def create_artifact_store(settings: Settings) -> ArtifactStore:
+    """Create the ArtifactStore matching the persistence backend.
+
+    Args:
+        settings: Application settings.
+
+    Returns:
+        Configured ArtifactStore instance.
+
+    Raises:
+        StorageBackendError: If backend type is unknown.
+    """
+    backend_type = getattr(settings, "persistence_backend", "sqlite")
+    uri = getattr(settings, "persistence_uri", ".cognition/state.db")
+    workspace_path = str(settings.workspace_path)
+
+    if backend_type == "sqlite":
+        from server.app.storage.artifact_store import SqliteArtifactStore
+
+        normalized_uri = uri.removeprefix("sqlite:///")
+        db_path = Path(normalized_uri)
+        if not db_path.is_absolute():
+            db_path = Path(workspace_path) / normalized_uri
+        db_path.parent.mkdir(parents=True, exist_ok=True)
+        return SqliteArtifactStore(db_path=str(db_path))
+
+    elif backend_type == "postgres":
+        from server.app.storage.artifact_store import PostgresArtifactStore
+
+        asyncpg_dsn = uri.replace("postgresql+asyncpg://", "postgresql://", 1)
+        return PostgresArtifactStore(dsn=asyncpg_dsn)
+
+    elif backend_type == "memory":
+        from server.app.storage.artifact_store import MemoryArtifactStore
+
+        return MemoryArtifactStore()
+
+    else:
+        raise StorageBackendError(
+            f"Unknown storage backend type: '{backend_type}'. "
+            f"Supported types: sqlite, postgres, memory",
+            backend_type=backend_type,
+        )

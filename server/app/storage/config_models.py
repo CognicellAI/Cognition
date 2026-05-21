@@ -257,6 +257,76 @@ class McpServerRegistration(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# Artifact
+# ---------------------------------------------------------------------------
+
+ARTIFACT_TYPES = Literal["scratch", "artifact", "contract", "eval", "memory", "policy"]
+
+
+class ArtifactDefinition(BaseModel):
+    """A persistent artifact stored in the config registry.
+
+    Artifacts are durable, scope-aware files that agents and builders can
+    read, write, list, and diff. They provide explicit state outside the
+    model context window, used for long-running agent handoffs.
+
+    Attributes:
+        id: Unique artifact identifier (UUID).
+        name: Human-readable name (e.g. "feature-list", "progress").
+        artifact_type: Route category (scratch, artifact, contract, eval,
+            memory, policy).
+        path: Virtual path within the type route (e.g. "feature_list.json").
+        content: File content (JSON, Markdown, or plain text).
+        content_type: MIME or type tag (e.g. "application/json").
+        version: Monotonic version number (incremented on update).
+        parent_version: Version this artifact descends from (None for v1).
+        run_id: Optional associated run identifier.
+        checkpoint_id: Optional associated checkpoint identifier.
+        visibility: "private" (scope-only), "run" (visible within session),
+            "public" (visible to all scope members).
+        scope: Scope this artifact belongs to.
+        source: "file" or "api".
+        created_at: Creation timestamp.
+        updated_at: Last update timestamp.
+    """
+
+    id: str = Field(..., min_length=1, max_length=100)
+    name: str = Field(..., min_length=1, max_length=100)
+    artifact_type: ARTIFACT_TYPES = Field(default="scratch")
+    path: str = Field(default="")
+    content: str = Field(default="")
+    content_type: str = Field(default="text/plain")
+    version: int = Field(default=1, ge=1)
+    parent_version: int | None = Field(default=None, ge=1)
+    run_id: str | None = Field(default=None)
+    checkpoint_id: str | None = Field(default=None)
+    visibility: Literal["private", "run", "public"] = Field(default="private")
+    scope: dict[str, str] = Field(default_factory=dict)
+    source: Literal["file", "api"] = Field(default="api")
+    created_at: datetime | None = Field(default=None)
+    updated_at: datetime | None = Field(default=None)
+
+    @field_validator("name")
+    @classmethod
+    def validate_name(cls, v: str) -> str:
+        """Validate artifact name format."""
+        if not v.replace("-", "").replace("_", "").replace(".", "").isalnum():
+            raise ValueError(
+                f"Artifact name must be alphanumeric with hyphens/underscores/dots only: {v}"
+            )
+        return v
+
+    @field_validator("artifact_type")
+    @classmethod
+    def validate_artifact_type(cls, v: str) -> str:
+        """Ensure artifact type is one of the known route categories."""
+        allowed = {"scratch", "artifact", "contract", "eval", "memory", "policy"}
+        if v not in allowed:
+            raise ValueError(f"Artifact type must be one of {sorted(allowed)}, got: {v!r}")
+        return v
+
+
+# ---------------------------------------------------------------------------
 # Config change / invalidation events
 # ---------------------------------------------------------------------------
 
@@ -361,6 +431,8 @@ class GlobalAgentDefaults(BaseModel):
 
 
 __all__ = [
+    "ARTIFACT_TYPES",
+    "ArtifactDefinition",
     "ConfigChange",
     "ConfigChangeEvent",
     "EntityType",

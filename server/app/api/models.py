@@ -683,6 +683,85 @@ class SkillList(BaseModel):
 
 
 # ============================================================================
+# Artifact Models
+# ============================================================================
+
+
+class ArtifactCreate(BaseModel):
+    """Request to create an artifact."""
+
+    id: str = Field(..., min_length=1, max_length=100, description="Unique artifact identifier")
+    name: str = Field(..., min_length=1, max_length=100, description="Human-readable name")
+    artifact_type: str = Field(default="scratch", description="Route category")
+    path: str = Field(default="", description="Virtual path within the type route")
+    content: str = Field(default="", description="File content")
+    content_type: str = Field(default="text/plain", description="MIME or type tag")
+    run_id: str | None = Field(default=None, description="Associated run identifier")
+    checkpoint_id: str | None = Field(default=None, description="Associated checkpoint")
+    visibility: str = Field(default="private", description="Visibility: private, run, or public")
+    scope: dict[str, str] = Field(default_factory=dict, description="Scope (empty = global)")
+
+
+class ArtifactUpdate(BaseModel):
+    """Request to partially update an artifact.
+
+    Updating content creates a new version automatically.
+    """
+
+    name: str | None = Field(default=None, max_length=100)
+    content: str | None = Field(default=None, description="New file content")
+    content_type: str | None = Field(default=None)
+    run_id: str | None = Field(default=None)
+    checkpoint_id: str | None = Field(default=None)
+    visibility: str | None = Field(default=None)
+
+
+class ArtifactResponse(BaseModel):
+    """Artifact information for API responses."""
+
+    id: str
+    name: str
+    artifact_type: str
+    path: str
+    content: str
+    content_type: str
+    version: int
+    parent_version: int | None = None
+    run_id: str | None = None
+    checkpoint_id: str | None = None
+    visibility: str
+    scope: dict[str, str] = Field(default_factory=dict)
+    source: str = "api"
+    created_at: str | None = None
+    updated_at: str | None = None
+
+
+class ArtifactVersion(BaseModel):
+    """A single version of an artifact."""
+
+    version: int
+    parent_version: int | None = None
+    content: str
+    content_type: str
+    created_at: str | None = None
+
+
+class ArtifactList(BaseModel):
+    """List of artifacts response."""
+
+    artifacts: list[ArtifactResponse] = Field(default_factory=list)
+    count: int = 0
+
+
+class ArtifactVersionList(BaseModel):
+    """List of artifact versions."""
+
+    artifact_id: str
+    versions: list[ArtifactVersion] = Field(default_factory=list)
+    count: int = 0
+
+
+# ============================================================================
 # Provider / Model CRUD Models
 # ============================================================================
 
