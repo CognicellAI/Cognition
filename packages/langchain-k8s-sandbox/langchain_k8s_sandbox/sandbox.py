@@ -21,6 +21,7 @@ Design decisions:
 from __future__ import annotations
 
 import shlex
+import threading
 from datetime import UTC
 from typing import Any
 
@@ -73,6 +74,7 @@ class K8sSandbox(BaseSandbox):
         self._sandbox_id = f"k8s-{id(self):x}"
         self._sandbox: Any | None = None
         self._client: Any | None = None
+        self._lock = threading.Lock()
 
     @property
     def id(self) -> str:
@@ -81,6 +83,9 @@ class K8sSandbox(BaseSandbox):
 
     def _ensure_sandbox(self) -> Any:
         """Lazily create the Sandbox CR on first use.
+
+        Thread-safe: uses double-checked locking to prevent concurrent
+        callers from creating duplicate Sandbox CRs.
 
         Returns:
             The agent-sandbox SDK Sandbox object.
@@ -92,48 +97,52 @@ class K8sSandbox(BaseSandbox):
         if self._sandbox is not None:
             return self._sandbox
 
-        try:
-            from k8s_agent_sandbox import SandboxClient
-            from k8s_agent_sandbox.models import SandboxDirectConnectionConfig
-        except ImportError as e:
-            raise RuntimeError(
-                "k8s-agent-sandbox is required for K8sSandbox. "
-                "Install with: pip install langchain-k8s-sandbox[k8s]"
-            ) from e
+        with self._lock:
+            if self._sandbox is not None:
+                return self._sandbox
 
-        connection_config = SandboxDirectConnectionConfig(
-            api_url=self._router_url,
-            server_port=self._server_port,
-        )
-        self._client = SandboxClient(connection_config=connection_config)
+            try:
+                from k8s_agent_sandbox import SandboxClient
+                from k8s_agent_sandbox.models import SandboxDirectConnectionConfig
+            except ImportError as e:
+                raise RuntimeError(
+                    "k8s-agent-sandbox is required for K8sSandbox. "
+                    "Install with: pip install langchain-k8s-sandbox[k8s]"
+                ) from e
 
-        create_kwargs: dict[str, Any] = {
-            "template": self._template,
-            "namespace": self._namespace,
-            "labels": self._labels,
-        }
+            connection_config = SandboxDirectConnectionConfig(
+                api_url=self._router_url,
+                server_port=self._server_port,
+            )
+            self._client = SandboxClient(connection_config=connection_config)
 
-        logger.info(
-            "Creating K8s sandbox",
-            template=self._template,
-            namespace=self._namespace,
-            labels=self._labels,
-            ttl=self._ttl,
-        )
+            create_kwargs: dict[str, Any] = {
+                "template": self._template,
+                "namespace": self._namespace,
+                "labels": self._labels,
+            }
 
-        self._sandbox = self._client.create_sandbox(**create_kwargs)
+            logger.info(
+                "Creating K8s sandbox",
+                template=self._template,
+                namespace=self._namespace,
+                labels=self._labels,
+                ttl=self._ttl,
+            )
 
-        sandbox_name = getattr(self._sandbox, "sandbox_id", None) or getattr(
-            self._sandbox, "claim_name", None
-        )
-        if sandbox_name:
-            self._sandbox_id = str(sandbox_name)
+            self._sandbox = self._client.create_sandbox(**create_kwargs)
 
-        if self._ttl is not None:
-            self._apply_shutdown_time(self._sandbox_id)
+            sandbox_name = getattr(self._sandbox, "sandbox_id", None) or getattr(
+                self._sandbox, "claim_name", None
+            )
+            if sandbox_name:
+                self._sandbox_id = str(sandbox_name)
 
-        logger.info("K8s sandbox created", sandbox_id=self._sandbox_id)
-        return self._sandbox
+            if self._ttl is not None:
+                self._apply_shutdown_time(self._sandbox_id)
+
+            logger.info("K8s sandbox created", sandbox_id=self._sandbox_id)
+            return self._sandbox
 
     def _apply_shutdown_time(self, sandbox_name: str) -> None:
         """Set spec.shutdownTime on the Sandbox CR for automatic cleanup.
@@ -224,16 +233,6 @@ class K8sSandbox(BaseSandbox):
             truncated=False,
         )
 
-        output = result.stdout
-        if result.stderr:
-            output = f"{output}\n{result.stderr}" if output else result.stderr
-
-        return ExecuteResponse(
-            output=output,
-            exit_code=result.exit_code,
-            truncated=False,
-        )
-
     def upload_files(self, files: list[tuple[str, bytes]]) -> list[FileUploadResponse]:
         """Upload files to the sandbox via base64 encoding through execute().
 
@@ -257,11 +256,18 @@ class K8sSandbox(BaseSandbox):
         results: list[FileUploadResponse] = []
         for file_path, content in files:
             encoded = base64.b64encode(content).decode("ascii")
-            cmd = f"mkdir -p $(dirname {file_path}) && echo '{encoded}' | base64 -d > {file_path}"
+            quoted_path = shlex.quote(file_path)
+            cmd = f"mkdir -p $(dirname {quoted_path}) && echo '{encoded}' | base64 -d > {quoted_path}"
             resp = self.execute(cmd)
             if resp.exit_code == 0:
                 results.append(FileUploadResponse(path=file_path))
             else:
+                logger.warning(
+                    "K8s sandbox upload failed",
+                    path=file_path,
+                    exit_code=resp.exit_code,
+                    output=resp.output.strip(),
+                )
                 results.append(FileUploadResponse(path=file_path, error="is_directory"))
         return results
 
@@ -271,7 +277,8 @@ class K8sSandbox(BaseSandbox):
 
         results: list[FileDownloadResponse] = []
         for file_path in paths:
-            resp = self.execute(f"base64 {file_path}")
+            quoted_path = shlex.quote(file_path)
+            resp = self.execute(f"base64 {quoted_path}")
             if resp.exit_code == 0 and resp.output.strip():
                 try:
                     content = base64.b64decode(resp.output.strip())
