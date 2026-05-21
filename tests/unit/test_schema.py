@@ -24,7 +24,8 @@ class TestSchemaDefinitions:
         assert "messages" in table_names
         assert "config_entities" in table_names
         assert "config_changes" in table_names
-        assert len(table_names) == 4
+        assert "artifacts" in table_names
+        assert len(table_names) == 5
 
     def test_sessions_table_columns(self) -> None:
         """Test sessions table has expected columns."""

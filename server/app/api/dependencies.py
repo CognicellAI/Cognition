@@ -29,6 +29,7 @@ from server.app.storage.config_store import ConfigStore
 if TYPE_CHECKING:
     from server.app.llm.deep_agent_service import SessionAgentManager
     from server.app.llm.model_catalog import ModelCatalog
+    from server.app.storage.artifact_store import ArtifactStore
     from server.app.storage.backend import StorageBackend
 
 # ---------------------------------------------------------------------------
@@ -40,6 +41,7 @@ _runtime_resolver: RuntimeResolver | None = None
 _storage_backend: StorageBackend | None = None
 _session_agent_manager: SessionAgentManager | None = None
 _model_catalog: ModelCatalog | None = None
+_artifact_store: ArtifactStore | None = None
 
 
 def set_config_store(store: ConfigStore) -> None:
@@ -65,6 +67,11 @@ def set_session_agent_manager_dep(manager: SessionAgentManager) -> None:
 def set_model_catalog_dep(catalog: ModelCatalog) -> None:
     global _model_catalog
     _model_catalog = catalog
+
+
+def set_artifact_store(store: ArtifactStore) -> None:
+    global _artifact_store
+    _artifact_store = store
 
 
 # ---------------------------------------------------------------------------
@@ -114,6 +121,14 @@ def get_model_catalog_dep() -> ModelCatalog:
     return _model_catalog
 
 
+def get_artifact_store() -> ArtifactStore:
+    if _artifact_store is None:
+        raise RuntimeError(
+            "ArtifactStore not initialized. Call set_artifact_store() during startup."
+        )
+    return _artifact_store
+
+
 def get_rate_limiter_dep() -> RateLimiter:
     return get_rate_limiter()
 
@@ -132,6 +147,7 @@ def get_scope_dep(
 __all__ = [
     "ConfigStore",
     "RuntimeResolver",
+    "get_artifact_store",
     "get_config_store",
     "get_model_catalog_dep",
     "get_rate_limiter_dep",
@@ -140,6 +156,7 @@ __all__ = [
     "get_session_agent_manager_dep",
     "get_settings_dep",
     "get_storage_backend_dep",
+    "set_artifact_store",
     "set_config_store",
     "set_model_catalog_dep",
     "set_runtime_resolver",

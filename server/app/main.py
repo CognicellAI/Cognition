@@ -14,6 +14,7 @@ from fastapi.responses import JSONResponse
 from server.app.agent.resolver import RuntimeResolver
 from server.app.api.dependencies import (
     get_storage_backend_dep,
+    set_artifact_store,
     set_config_store,
     set_model_catalog_dep,
     set_runtime_resolver,
@@ -22,7 +23,16 @@ from server.app.api.dependencies import (
 )
 from server.app.api.middleware import ObservabilityMiddleware, SecurityHeadersMiddleware
 from server.app.api.models import HealthStatus, ReadyStatus
-from server.app.api.routes import agents, config, messages, models, sessions, skills, tools
+from server.app.api.routes import (
+    agents,
+    artifacts,
+    config,
+    messages,
+    models,
+    sessions,
+    skills,
+    tools,
+)
 from server.app.exceptions import RateLimitError
 from server.app.file_watcher import WorkspaceWatcher
 from server.app.observability import setup_metrics, setup_tracing
@@ -90,6 +100,15 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
     # Seed store-backed agent definitions after ConfigStore is available.
     await config_store.seed_agent_definitions()
+
+    # Initialize ArtifactStore
+    from server.app.storage.factory import create_artifact_store
+
+    artifact_store = create_artifact_store(settings)
+    if hasattr(artifact_store, "initialize"):
+        await artifact_store.initialize()
+    set_artifact_store(artifact_store)
+    logger.info("ArtifactStore initialized")
 
     # Initialize RuntimeResolver (agent runtime bridge)
     runtime_resolver = RuntimeResolver(config_store=config_store, settings=settings)
@@ -229,6 +248,7 @@ app.include_router(agents.router)
 app.include_router(skills.router)
 app.include_router(models.router)
 app.include_router(tools.router)
+app.include_router(artifacts.router)
 
 
 @app.get("/health", response_model=HealthStatus, tags=["health"])

@@ -369,7 +369,9 @@ async def create_cognition_agent(params: CognitionAgentParams) -> CognitionAgent
     if config_store is not None:
         from deepagents.backends.composite import CompositeBackend
 
+        from server.app.agent.artifacts_backend import ArtifactBackend
         from server.app.agent.skills_backend import ConfigRegistrySkillsBackend
+        from server.app.api.dependencies import get_artifact_store
 
         reg = getattr(config_store, "config_registry", None)
         if reg is not None:
@@ -378,9 +380,28 @@ async def create_cognition_agent(params: CognitionAgentParams) -> CognitionAgent
                 scope=params.scope,
                 allowed_skill_names=attached_skill_names,
             )
+            try:
+                artifact_store = get_artifact_store()
+            except RuntimeError:
+                artifact_store = None
+
+            routes: dict[str, BackendProtocol] = {"/skills/api/": db_skills_backend}
+            if artifact_store is not None:
+                artifact_backend = ArtifactBackend(
+                    artifact_store=artifact_store,
+                    scope=params.scope,
+                )
+                routes.update({
+                    "/scratch/": artifact_backend,
+                    "/artifacts/": artifact_backend,
+                    "/contracts/": artifact_backend,
+                    "/evals/": artifact_backend,
+                    "/memories/": artifact_backend,
+                    "/policies/": artifact_backend,
+                })
             backend = CompositeBackend(
                 default=sandbox_backend,
-                routes={"/skills/api/": db_skills_backend},
+                routes=routes,
             )
         else:
             backend = sandbox_backend
