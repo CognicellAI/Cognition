@@ -7,6 +7,67 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [Unreleased] — v0.10.0 Wave 1
+
+### Highlights
+
+- **11-state session lifecycle**: queued → starting → active → idle → stalled → aborting → aborted → failed → done → expired + waiting_for_approval. Pause, cancel, and abort APIs with validated state transitions.
+- **Persistent artifacts**: blob-store semantics over SQL with pluggable `ArtifactStore` (Sqlite/Postgres/Memory), 6 typed categories, version history, scope-aware visibility.
+- **SSE event surface**: heartbeat, run_state, callback, sandbox_lifecycle, delegation, and status events for full run observability.
+- **Session idempotency**: `idempotency_key` on `POST /sessions` prevents duplicate creation.
+
+### Added
+
+- `SessionStatus` enum with 11 states, `can_transition()`, and `is_terminal()` validators (`server/app/models.py`).
+- `POST /sessions/{id}/pause` — transitions active → idle.
+- `POST /sessions/{id}/cancel` — transitions → aborting → aborted (terminal).
+- `POST /sessions/{id}/abort` — cancels in-progress agent operation.
+- `POST /sessions/{id}/resume` — resumes `waiting_for_approval` sessions.
+- `idempotency_key` field on `SessionCreate` — repeated requests return existing session.
+- `HeartbeatEvent` + background heartbeat task feeding bounded queue, drained non-blocking in event loop (`server/app/agent/runtime.py`, `server/app/llm/deep_agent_service.py`).
+- `RunStateEvent` for state transition streaming; stall detection after stream ends naturally.
+- `CallbackEvent` for detached callback/webhook delivery.
+- `SandboxLifecycleEvent` with phases: provisioned, teardown_started, teardown_complete.
+- `EventBuilder.heartbeat()`, `.run_state()`, `.callback()`, `.sandbox_lifecycle()` (`server/app/api/sse.py`).
+- Sandbox event queue + lifecycle methods on `SessionAgentManager` (`server/app/llm/deep_agent_service.py`).
+- Artifact REST API (`server/app/api/routes/artifacts.py`):
+  - `GET /artifacts` — list with type/run filters
+  - `GET /artifacts/{id}` — latest version
+  - `POST /artifacts` — create
+  - `PUT /artifacts/{id}` — update (auto version bump)
+  - `DELETE /artifacts/{id}` — delete all versions
+  - `GET /artifacts/{id}/versions` — version history
+  - `GET /artifacts/{id}/versions/{v}` — specific version
+- `ArtifactStore` protocol + Sqlite/Postgres/Memory implementations (`server/app/storage/artifact_store.py`).
+- `ArtifactBackend` implementing `BackendProtocol` with 6 typed composite routes (`server/app/agent/artifacts_backend.py`).
+- `artifacts` table in storage schema (`server/app/storage/schema.py`).
+- `create_artifact_store()` factory in storage factory (`server/app/storage/factory.py`).
+- Sandbox runtime verification: workspace, writable paths, env vars, GitHub auth (`server/app/agent/sandbox_backend.py`).
+- `COGNITION_BLOCKED_TOOLS` environment variable for per-name tool blocklisting.
+- `settings.run_heartbeat_interval_seconds` and `settings.run_stall_timeout_seconds`.
+
+### Changed
+
+- `DoneEvent` transitions to `DONE` (was `ACTIVE`). `ErrorEvent` transitions to `FAILED` (was `ERROR`). `ErrorEvent(code=ABORTED)` → `ABORTED`.
+- Session creation with `idempotency_key` returns HTTP 200/201 for existing session.
+
+### Fixed
+
+- Postgres `ArtifactStore.delete_artifact`: `cur.rowcount` accessed after execute instead of treating `AsyncCursor` as int.
+- Shell injection prevention via `shlex.quote` in K8s sandbox commands.
+- Thread-safe lazy initialization with double-check locking in sandbox backend.
+
+### Testing
+
+- `tests/e2e/test_session_lifecycle.py` — 9 tests: idempotency, 11-state enum, pause/cancel/abort, SSE heartbeat/status events.
+- `tests/e2e/test_artifacts.py` — 10 tests: CRUD across 6 types, version history, type validation, scope isolation.
+- `tests/e2e/test_agent_streaming.py` — 9 tests: done, token, heartbeat, run_state, sandbox_lifecycle, error events.
+- `tests/e2e/test_scenarios/long_running_agents/` — 13 scenario tests covering artifact production, session state transitions, and stream event exhaustiveness.
+- `tests/e2e/conftest.py` — `scope_headers` fixture for dynamic scoping detection.
+- All API-level e2e tests (`test_p0_features.py`, `test_workflow.py`) updated to use `scope_headers` fixture.
+
+---
+
 ## [0.9.0] — 2026-05-01
 
 ### Highlights

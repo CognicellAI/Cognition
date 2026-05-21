@@ -390,7 +390,7 @@ This section tracks the v0.10.0 long-running agents release. See `localdocs/v0.1
 
 | Wave | Branches | Pre-Release Tag | Gate |
 |------|----------|-----------------|------|
-| 1 | `runner-lifecycle`, `artifacts-handoffs`, `sandbox-hardening` | `0.10.0-w1` | Scenarios pass on dev K8s cluster |
+| 1 | `runner-lifecycle`, `artifacts-handoffs`, `sandbox-hardening` | `0.10.0-w1` | ✅ Complete — 27/28 API tests + 13/13 scenario tests pass on dev K8s |
 | 2 | `tool-safety`, `async-subagents`, `model-profiles`, `context-controls` | `0.10.0-w2` | Scenarios pass |
 | 3 | `harness-eval`, `scoped-memory`, `code-interpreter`, `mcp-alignment` | `0.10.0-w3` | Scenarios pass |
 | 4 | `capability-registry`, `protocol-adapters` | `0.10.0-w4` | Scenarios pass |
