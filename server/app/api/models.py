@@ -31,6 +31,12 @@ class SessionCreate(BaseModel):
         default=None,
         description="Arbitrary key-value metadata attached to the session",
     )
+    idempotency_key: str | None = Field(
+        default=None,
+        max_length=200,
+        description="Client-provided key for idempotent session creation. "
+        "Repeated requests with the same key return the existing session.",
+    )
 
 
 class SessionResponse(BaseModel):
@@ -39,13 +45,20 @@ class SessionResponse(BaseModel):
     id: str = Field(..., description="Unique session identifier")
     title: str | None = Field(None, description="Session title")
     thread_id: str = Field(..., description="LangGraph thread ID for checkpointing")
-    status: Literal["active", "inactive", "error", "waiting_for_approval"] = Field(
-        ..., description="Session status"
-    )
+    status: Literal[
+        "queued", "starting", "active", "idle",
+        "waiting_for_approval", "stalled",
+        "aborting", "aborted",
+        "failed", "done", "expired",
+        "inactive", "error",
+    ] = Field(..., description="Session status")
     created_at: str = Field(..., description="Session creation timestamp (ISO format)")
     updated_at: str = Field(..., description="Last activity timestamp (ISO format)")
     message_count: int = Field(0, description="Number of messages in session")
     agent_name: str = Field("default", description="Agent bound to this session")
+    idempotency_key: str | None = Field(
+        default=None, description="Idempotency key used during creation, if any"
+    )
     metadata: dict[str, str] = Field(
         default_factory=dict,
         description="Arbitrary key-value metadata attached to the session",
@@ -63,6 +76,7 @@ class SessionResponse(BaseModel):
             updated_at=session.updated_at,
             message_count=session.message_count,
             agent_name=session.agent_name,
+            idempotency_key=session.metadata.get("idempotency_key") if session.metadata else None,
             metadata=session.metadata,
         )
 
@@ -287,6 +301,23 @@ class ReconnectedEvent(BaseModel):
 
     event: Literal["reconnected"] = "reconnected"
     data: dict = Field(..., description="Reconnection info with 'last_event_id' and 'resumed' flag")
+
+
+class HeartbeatEventModel(BaseModel):
+    """Server-sent event: periodic heartbeat indicating the run is alive."""
+
+    event: Literal["heartbeat"] = "heartbeat"
+    data: dict = Field(..., description="Heartbeat info with step label, activity timestamps")
+
+
+class RunStateEventModel(BaseModel):
+    """Server-sent event: run lifecycle state transition."""
+
+    event: Literal["run_state"] = "run_state"
+    data: dict = Field(
+        ...,
+        description="Run state transition with from_status, to_status, reason",
+    )
 
 
 # ============================================================================
@@ -679,6 +710,85 @@ class SkillList(BaseModel):
     """List of skills response."""
 
     skills: list[SkillResponse] = Field(default_factory=list)
+    count: int = 0
+
+
+# ============================================================================
+# Artifact Models
+# ============================================================================
+
+
+class ArtifactCreate(BaseModel):
+    """Request to create an artifact."""
+
+    id: str = Field(..., min_length=1, max_length=100, description="Unique artifact identifier")
+    name: str = Field(..., min_length=1, max_length=100, description="Human-readable name")
+    artifact_type: str = Field(default="scratch", description="Route category")
+    path: str = Field(default="", description="Virtual path within the type route")
+    content: str = Field(default="", description="File content")
+    content_type: str = Field(default="text/plain", description="MIME or type tag")
+    run_id: str | None = Field(default=None, description="Associated run identifier")
+    checkpoint_id: str | None = Field(default=None, description="Associated checkpoint")
+    visibility: str = Field(default="private", description="Visibility: private, run, or public")
+    scope: dict[str, str] = Field(default_factory=dict, description="Scope (empty = global)")
+
+
+class ArtifactUpdate(BaseModel):
+    """Request to partially update an artifact.
+
+    Updating content creates a new version automatically.
+    """
+
+    name: str | None = Field(default=None, max_length=100)
+    content: str | None = Field(default=None, description="New file content")
+    content_type: str | None = Field(default=None)
+    run_id: str | None = Field(default=None)
+    checkpoint_id: str | None = Field(default=None)
+    visibility: str | None = Field(default=None)
+
+
+class ArtifactResponse(BaseModel):
+    """Artifact information for API responses."""
+
+    id: str
+    name: str
+    artifact_type: str
+    path: str
+    content: str
+    content_type: str
+    version: int
+    parent_version: int | None = None
+    run_id: str | None = None
+    checkpoint_id: str | None = None
+    visibility: str
+    scope: dict[str, str] = Field(default_factory=dict)
+    source: str = "api"
+    created_at: str | None = None
+    updated_at: str | None = None
+
+
+class ArtifactVersion(BaseModel):
+    """A single version of an artifact."""
+
+    version: int
+    parent_version: int | None = None
+    content: str
+    content_type: str
+    created_at: str | None = None
+
+
+class ArtifactList(BaseModel):
+    """List of artifacts response."""
+
+    artifacts: list[ArtifactResponse] = Field(default_factory=list)
+    count: int = 0
+
+
+class ArtifactVersionList(BaseModel):
+    """List of artifact versions."""
+
+    artifact_id: str
+    versions: list[ArtifactVersion] = Field(default_factory=list)
     count: int = 0
 
 

@@ -197,6 +197,53 @@ config_changes_table = Table(
 Index("idx_config_changes_changed_at", config_changes_table.c.changed_at)
 Index("idx_config_changes_unprocessed", config_changes_table.c.processed)
 
+# ---------------------------------------------------------------------------
+# Artifacts table — blob-store through SQL
+# ---------------------------------------------------------------------------
+# Flat, denormalized key-value rows. Each version is an independent row.
+# No foreign keys. run_id, checkpoint_id, artifact_type are tags, not constraints.
+# The natural key is (id, scope, version).
+
+artifacts_table = Table(
+    "artifacts",
+    metadata,
+    Column("id", String(200), primary_key=False, nullable=False),
+    Column("version", Integer, primary_key=False, nullable=False),
+    Column("name", String(200), nullable=False),
+    Column("artifact_type", String(50), nullable=False, default="scratch"),
+    Column("content", Text, default=""),
+    Column("content_type", String(100), default="text/plain"),
+    Column("parent_version", Integer),
+    Column("run_id", String(100)),
+    Column("checkpoint_id", String(100)),
+    Column("visibility", String(20), default="private"),
+    Column("scope", _JsonbOrJson(), nullable=False, default=dict),
+    Column("source", String(10), nullable=False, default="api"),
+    Column(
+        "created_at",
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    ),
+    Column(
+        "updated_at",
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    ),
+)
+
+Index(
+    "idx_artifacts_lookup",
+    artifacts_table.c.id,
+    artifacts_table.c.scope,
+    artifacts_table.c.version,
+    unique=True,
+)
+Index("idx_artifacts_type", artifacts_table.c.artifact_type)
+Index("idx_artifacts_run_id", artifacts_table.c.run_id)
+Index("idx_artifacts_name", artifacts_table.c.name)
+
 
 async def create_all_tables(engine: AsyncEngine) -> None:
     """Create all defined tables in the database.
@@ -257,6 +304,7 @@ __all__ = [
     "messages_table",
     "config_entities_table",
     "config_changes_table",
+    "artifacts_table",
     "create_all_tables",
     "drop_all_tables",
     "get_table_names",
