@@ -201,6 +201,23 @@ class InterruptEvent(AgentEvent):
 
 
 @dataclass
+class SandboxLifecycleEvent(AgentEvent):
+    """Sandbox backend lifecycle transition.
+
+    Emitted during sandbox: provision, verification, execution,
+    cleanup, and teardown.
+    """
+
+    sandbox_id: str
+    phase: str  # provisioned, verified, teardown_started, teardown_complete
+    sandbox_backend: str  # local, docker, kubernetes
+    duration_ms: float | None = None
+    exit_code: int | None = None
+    is_warm_pool_hit: bool = False
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
 class DelegationEvent(AgentEvent):
     """Agent is delegating to a sub-agent."""
 
@@ -272,6 +289,7 @@ StreamEvent = (
     | HeartbeatEvent
     | RunStateEvent
     | CallbackEvent
+    | SandboxLifecycleEvent
 )
 
 

@@ -13,6 +13,7 @@ provides K8s-native isolation for production deployments on Kubernetes.
 from __future__ import annotations
 
 import os
+import shlex
 from pathlib import Path
 from typing import Any, cast
 
@@ -306,7 +307,65 @@ class CognitionKubernetesSandboxBackend(SandboxBackendProtocol):
                 template=self._template,
                 namespace=self._namespace,
             )
+
+            # Verify runtime readiness before agent execution
+            self._verify_sandbox_runtime()
+
         return self._backend
+
+    def _verify_sandbox_runtime(self) -> None:
+        """Verify sandbox runtime readiness before agent work begins.
+
+        Checks env vars, workspace root, writable directories, and optional
+        GitHub auth status. Logs warnings for any failures so builders can
+        diagnose issues before an agent run fails mysteriously.
+        """
+        if self._backend is None:
+            return
+
+        checks: list[tuple[str, str, bool | None]] = []
+
+        # Check workspace root
+        expected_root = str(self._root_dir)
+        result = self._backend.execute(f'test -d {shlex.quote(expected_root)} && echo "ok" || echo "missing"')
+        workspace_ok = result.exit_code == 0
+        checks.append(("workspace_root", f"Expected {expected_root}", workspace_ok))
+
+        # Check writable workspace
+        result = self._backend.execute(f'test -w {shlex.quote(expected_root)} && echo "ok" || echo "ro"')
+        writable_ok = result.exit_code == 0
+        checks.append(("workspace_writable", expected_root, writable_ok))
+
+        # Check writable temp
+        result = self._backend.execute('test -w /tmp && echo "ok" || echo "ro"')
+        tmp_ok = result.exit_code == 0
+        checks.append(("temp_writable", "/tmp", tmp_ok))
+
+        # Check env vars
+        result = self._backend.execute("env | grep -c COGNITION_WORKSPACE_ROOT")
+        env_ok = result.exit_code == 0 and result.output.strip().isdigit() and int(result.output.strip()) > 0
+        checks.append(("env_var", "COGNITION_WORKSPACE_ROOT", env_ok))
+
+        # Check GitHub auth if token is expected
+        gh_token = os.environ.get("GH_TOKEN", "") or os.environ.get("GITHUB_TOKEN", "")
+        if gh_token:
+            result = self._backend.execute("gh auth status 2>&1 || echo 'not_authenticated'")
+            gh_ok = "not_authenticated" not in result.output
+            checks.append(("github_auth", "gh auth status", gh_ok))
+
+        failures = [(name, detail) for name, detail, ok in checks if ok is not None and not ok]
+        if failures:
+            logger.warning(
+                "Sandbox runtime verification found issues",
+                sandbox_id=self._id,
+                failures={name: detail for name, detail in failures},
+            )
+        else:
+            logger.info(
+                "Sandbox runtime verification passed",
+                sandbox_id=self._id,
+                checks_count=len(checks),
+            )
 
     def _is_protected_path(self, path: str) -> bool:
         """Check if a path is protected.
