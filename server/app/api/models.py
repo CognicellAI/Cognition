@@ -575,6 +575,10 @@ class AgentResponse(BaseModel):
         default_factory=list,
         description="Deep Agents filesystem permission rules for this agent",
     )
+    subagents: list[dict[str, Any]] = Field(
+        default_factory=list,
+        description="Subagent definitions for this agent",
+    )
     # ISSUE-009: Added tools and skills for better agent introspection
     tools: list[str] = Field(
         default_factory=list, description="Tool paths this agent has access to"

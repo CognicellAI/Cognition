@@ -81,12 +81,14 @@ class SubagentDefinition(BaseModel):
 
     Attributes:
         name: Unique name for the subagent.
+        description: Human-readable description of the subagent's purpose.
         system_prompt: System prompt for the subagent.
         tools: Tool module paths available to this subagent.
         config: Runtime configuration overrides.
     """
 
     name: str = Field(..., min_length=1, max_length=100)
+    description: str | None = Field(default=None)
     system_prompt: str = Field(..., min_length=1)
     tools: list[str] = Field(default_factory=list)
     config: AgentConfig | None = Field(default=None)

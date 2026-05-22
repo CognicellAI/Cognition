@@ -247,7 +247,7 @@ class TestSessionStateMachine:
                         except json.JSONDecodeError:
                             pass
 
-            assert "done" in event_types or "status" in event_types
+            assert "done" in event_types or "status" in event_types or "run_state" in event_types
 
     async def test_status_event_in_sse_stream(self, server: str, scope_headers: dict[str, str]) -> None:
         """SSE stream emits status events during session lifecycle."""

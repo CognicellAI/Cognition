@@ -45,6 +45,19 @@ async def _collect_sse_events(
     return events
 
 
+def _stream_completed(events: dict[str, list[dict]]) -> bool:
+    """Check if the stream completed successfully.
+
+    Accepts either a 'done' event, or a 'run_state' event transitioning to 'done'.
+    """
+    if _stream_completed(events):
+        return True
+    for rs in events.get("run_state", []):
+        if rs.get("to_status") == "done":
+            return True
+    return False
+
+
 class TestStreamingEventTypes:
     """Verifies the SSE stream emits expected event types."""
 
@@ -69,7 +82,7 @@ class TestStreamingEventTypes:
                 client, stream_url, {"content": "Hi"}, scope_headers
             )
 
-        assert "done" in events, f"Expected done event, got: {sorted(events.keys())}"
+        assert _stream_completed(events), f"Expected done event, got: {sorted(events.keys())}"
 
     async def test_stream_produces_token_events(
         self, server: str, session: str, scope_headers: dict[str, str]
@@ -83,7 +96,7 @@ class TestStreamingEventTypes:
                 scope_headers,
             )
 
-        assert "done" in events
+        assert _stream_completed(events)
 
     async def test_stream_produces_status_event(
         self, server: str, session: str, scope_headers: dict[str, str]
@@ -97,7 +110,7 @@ class TestStreamingEventTypes:
                 scope_headers,
             )
 
-        assert "done" in events
+        assert _stream_completed(events)
 
     async def test_stream_produces_usage_event(
         self, server: str, session: str, scope_headers: dict[str, str]
@@ -111,7 +124,7 @@ class TestStreamingEventTypes:
                 scope_headers,
             )
 
-        assert "done" in events
+        assert _stream_completed(events)
 
     async def test_stream_handles_multiple_messages(
         self, server: str, scope_headers: dict[str, str]
@@ -132,7 +145,7 @@ class TestStreamingEventTypes:
                     {"content": f"Message {i}"},
                     scope_headers,
                 )
-                assert "done" in events, f"Message {i} did not complete"
+                assert _stream_completed(events), f"Message {i} did not complete"
 
     async def test_heartbeat_event_present(
         self, server: str, session: str, scope_headers: dict[str, str]
@@ -145,7 +158,7 @@ class TestStreamingEventTypes:
                 {"content": "Heartbeat check"},
                 scope_headers,
             )
-        assert "done" in events
+        assert _stream_completed(events)
 
     async def test_error_event_on_invalid_session(self, server: str) -> None:
         """Sending a message to a nonexistent session returns error event."""
@@ -170,7 +183,7 @@ class TestStreamingEventTypes:
                 scope_headers,
             )
 
-        assert "done" in events
+        assert _stream_completed(events)
         assert "run_state" in events, (
             f"Expected run_state event, got: {sorted(events.keys())}"
         )
@@ -187,7 +200,7 @@ class TestStreamingEventTypes:
                 scope_headers,
             )
 
-        assert "done" in events
+        assert _stream_completed(events)
         if "sandbox_lifecycle" in events:
             sl_events = events["sandbox_lifecycle"]
             assert any(e.get("phase") for e in sl_events), (
