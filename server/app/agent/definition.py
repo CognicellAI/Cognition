@@ -51,6 +51,28 @@ class AgentConfig(BaseModel):
     timeout_seconds: float | None = Field(default=None, gt=0)
 
 
+class FilesystemPermissionConfig(BaseModel):
+    """Deep Agents filesystem permission rule.
+
+    This is an agent/app-level capability policy for built-in filesystem
+    operations. It is not a tenant authorization mechanism.
+    """
+
+    operations: list[Literal["read", "write"]] = Field(..., min_length=1)
+    paths: list[str] = Field(..., min_length=1)
+    mode: Literal["allow", "deny"] = Field(default="allow")
+
+
+class HumanInTheLoopConfig(BaseModel):
+    """Deep Agents human-in-the-loop policy for a tool."""
+
+    allowed_decisions: list[Literal["approve", "edit", "reject", "respond"]] = Field(
+        ..., min_length=1
+    )
+    description: str | None = None
+    args_schema: dict[str, Any] | None = None
+
+
 class SubagentDefinition(BaseModel):
     """Definition of a subagent.
 
@@ -68,6 +90,7 @@ class SubagentDefinition(BaseModel):
     system_prompt: str = Field(..., min_length=1)
     tools: list[str] = Field(default_factory=list)
     config: AgentConfig | None = Field(default=None)
+    permissions: list[FilesystemPermissionConfig] = Field(default_factory=list)
 
     @field_validator("name")
     @classmethod
@@ -94,7 +117,8 @@ class AgentDefinition(BaseModel):
         skills: List of attached skill names.
         memory: List of memory file paths.
         subagents: Nested subagent definitions.
-        interrupt_on: Tools requiring human confirmation (tool_name -> bool).
+        interrupt_on: Tool-name to HITL policy map.
+        permissions: Deep Agents filesystem permission rules.
         middleware: Middleware class paths.
         config: Runtime configuration (temperature, max_tokens, etc.).
     """
@@ -105,7 +129,8 @@ class AgentDefinition(BaseModel):
     skills: list[str] = Field(default_factory=list)
     memory: list[str] = Field(default_factory=list)
     subagents: list[SubagentDefinition] = Field(default_factory=list)
-    interrupt_on: dict[str, Any] = Field(default_factory=dict)
+    interrupt_on: dict[str, HumanInTheLoopConfig] = Field(default_factory=dict)
+    permissions: list[FilesystemPermissionConfig] = Field(default_factory=list)
     response_format: str | None = Field(default=None)
     middleware: list[str | dict[str, Any]] = Field(default_factory=list)
 
@@ -287,7 +312,8 @@ class AgentDefinition(BaseModel):
             - tools: list[Any] | None (optional)
             - skills: list[str] | None (optional)
             - middleware: list[Any] | None (optional)
-            - interrupt_on: dict[str, bool | Any] | None (optional)
+            - interrupt_on: dict[str, InterruptOnConfig] | None (optional)
+            - permissions: list[FilesystemPermission] | None (optional)
         """
         spec: dict[str, Any] = {
             "name": self.name,
@@ -312,7 +338,17 @@ class AgentDefinition(BaseModel):
             spec["skills"] = self.skills
 
         if self.interrupt_on:
-            spec["interrupt_on"] = self.interrupt_on
+            spec["interrupt_on"] = {
+                name: config.model_dump(exclude_none=True)
+                for name, config in self.interrupt_on.items()
+            }
+        if self.permissions:
+            from deepagents.middleware.filesystem import FilesystemPermission
+
+            spec["permissions"] = [
+                FilesystemPermission(**permission.model_dump())
+                for permission in self.permissions
+            ]
 
         return spec
 

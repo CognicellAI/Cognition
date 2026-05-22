@@ -27,6 +27,7 @@ from typing import Any, Protocol, cast, runtime_checkable
 from server.app.agent.definition import (
     AgentConfig,
     AgentDefinition,
+    HumanInTheLoopConfig,
     load_agent_definition,
     load_agent_definition_from_markdown,
 )
@@ -46,6 +47,12 @@ from server.app.storage.config_models import (
 logger = logging.getLogger(__name__)
 
 _default_store: DefaultConfigStore | None = None
+
+
+def _full_hitl_config() -> HumanInTheLoopConfig:
+    return HumanInTheLoopConfig(
+        allowed_decisions=["approve", "edit", "reject", "respond"]
+    )
 
 
 def set_default_config_store(store: DefaultConfigStore) -> None:
@@ -272,7 +279,11 @@ You can only read files, search, and provide analysis.""",
             skills=[],
             memory=["AGENTS.md"],
             subagents=[],
-            interrupt_on={"write_file": True, "edit_file": True, "execute": True},
+            interrupt_on={
+                "write_file": _full_hitl_config(),
+                "edit_file": _full_hitl_config(),
+                "execute": _full_hitl_config(),
+            },
             response_format=None,
             middleware=[],
             config=AgentConfig(),
@@ -296,7 +307,11 @@ Attempt the exact protected tool call immediately so that human-in-the-loop appr
             skills=[],
             memory=["AGENTS.md"],
             subagents=[],
-            interrupt_on={"write_file": True, "edit_file": True, "execute": True},
+            interrupt_on={
+                "write_file": _full_hitl_config(),
+                "edit_file": _full_hitl_config(),
+                "execute": _full_hitl_config(),
+            },
             response_format=None,
             middleware=[],
             config=AgentConfig(),

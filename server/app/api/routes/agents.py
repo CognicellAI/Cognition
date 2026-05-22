@@ -39,7 +39,16 @@ def _agent_to_response(agent: AgentDefinition) -> AgentResponse:
             timeout_seconds=agent.config.timeout_seconds,
         ),
         response_format=getattr(agent, "response_format", None),
-        interrupt_on={k: bool(v) for k, v in (agent.interrupt_on or {}).items()},
+        interrupt_on={
+            name: config.model_dump(exclude_none=True)
+            if hasattr(config, "model_dump")
+            else dict(config)
+            for name, config in (agent.interrupt_on or {}).items()
+        },
+        permissions=[
+            p.model_dump() if hasattr(p, "model_dump") else dict(p)
+            for p in (agent.permissions or [])
+        ],
         tools=agent.tools or [],
         skills=agent.skills or [],
         system_prompt=agent.system_prompt,
@@ -101,7 +110,11 @@ async def create_agent(
             "skills": body.skills,
             "memory": body.memory,
             "subagents": [],
-            "interrupt_on": body.interrupt_on,
+            "interrupt_on": {
+                name: config.model_dump(exclude_none=True)
+                for name, config in body.interrupt_on.items()
+            },
+            "permissions": [p.model_dump() for p in body.permissions],
             "response_format": body.response_format,
             "middleware": body.middleware,
             "config": {

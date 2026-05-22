@@ -5,12 +5,14 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from langchain_core.messages import AIMessageChunk
 
-from server.app.agent.cognition_agent import _resolve_response_format
+from server.app.agent.cognition_agent import CognitionContext, _resolve_response_format
 from server.app.agent.resolver import RuntimeResolver
 from server.app.agent.runtime import (
     DeepAgentRuntime,
+    HitlDecisionEvent,
     PlanningEvent,
     StepCompleteEvent,
+    _hitl_decision_event,
     _resolve_middleware,
 )
 from server.app.settings import Settings
@@ -113,6 +115,39 @@ class TestProviderModelPlumbing:
 
 
 class TestRuntimeResume:
+    def test_hitl_decision_audit_increments_metric(self, monkeypatch) -> None:
+        labels_seen: list[dict[str, str]] = []
+        incremented = False
+
+        class _Metric:
+            def labels(self, **labels: str) -> _Metric:
+                labels_seen.append(labels)
+                return self
+
+            def inc(self) -> None:
+                nonlocal incremented
+                incremented = True
+
+        monkeypatch.setattr("server.app.agent.runtime.HITL_DECISION_COUNT", _Metric())
+
+        event = _hitl_decision_event(
+            context=CognitionContext.from_scope(
+                {"tenant": "acme"},
+                session_id="session-1",
+                thread_id="thread-1",
+            ),
+            thread_id="thread-1",
+            decision="edit",
+            tool_name="write_file",
+            args={"content": "secret", "path": "file.py"},
+        )
+
+        assert event.edited_arg_keys == ["content", "path"]
+        assert "secret" not in str(event)
+        assert "acme" not in str(event)
+        assert labels_seen == [{"decision": "edit", "tool_name": "write_file"}]
+        assert incremented is True
+
     @pytest.mark.asyncio
     async def test_resume_uses_langgraph_command(self) -> None:
         agent = MagicMock()
@@ -148,4 +183,70 @@ class TestRuntimeResume:
             )
         ]
 
-        assert events
+        decision_event = next(event for event in events if isinstance(event, HitlDecisionEvent))
+        assert decision_event.decision == "approve"
+        assert decision_event.tool_name == "write_file"
+
+    @pytest.mark.asyncio
+    async def test_astream_resume_events_emits_redacted_edit_decision(self) -> None:
+        agent = MagicMock()
+
+        async def _astream(*args, **kwargs):
+            yield ((AIMessageChunk(content="ok"), {}), {})
+
+        agent.astream = _astream
+        runtime = DeepAgentRuntime(
+            agent=agent,
+            checkpointer=MagicMock(),
+            thread_id="thread-1",
+            context=CognitionContext.from_scope(
+                {"tenant": "acme", "project": "ios"},
+                session_id="session-1",
+                thread_id="thread-1",
+            ),
+        )
+
+        events = [
+            event
+            async for event in runtime.astream_resume_events(
+                decision="edit",
+                tool_name="write_file",
+                args={"path": "secret.py", "content": "super sensitive"},
+                thread_id="thread-1",
+            )
+        ]
+
+        decision_event = next(event for event in events if isinstance(event, HitlDecisionEvent))
+        assert decision_event.decision == "edit"
+        assert decision_event.tool_name == "write_file"
+        assert decision_event.session_id == "session-1"
+        assert decision_event.run_id == "thread-1"
+        assert decision_event.scope_keys == ["project", "tenant"]
+        assert decision_event.edited_arg_keys == ["content", "path"]
+        assert "super sensitive" not in str(decision_event)
+        assert "acme" not in str(decision_event)
+
+    @pytest.mark.asyncio
+    async def test_astream_resume_events_emits_reject_message_presence_only(self) -> None:
+        agent = MagicMock()
+
+        async def _astream(*args, **kwargs):
+            yield ((AIMessageChunk(content="ok"), {}), {})
+
+        agent.astream = _astream
+        runtime = DeepAgentRuntime(agent=agent, checkpointer=MagicMock(), thread_id="thread-1")
+
+        events = [
+            event
+            async for event in runtime.astream_resume_events(
+                decision="reject",
+                tool_name="execute",
+                args={"message": "Do not run this command"},
+                thread_id="thread-1",
+            )
+        ]
+
+        decision_event = next(event for event in events if isinstance(event, HitlDecisionEvent))
+        assert decision_event.decision == "reject"
+        assert decision_event.has_rejection_message is True
+        assert "Do not run this command" not in str(decision_event)

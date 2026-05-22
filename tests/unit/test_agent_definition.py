@@ -157,7 +157,17 @@ class TestAgentDefinition:
                     system_prompt="Focus on finding vulnerabilities...",
                 )
             ],
-            interrupt_on={"execute": True, "write_file": False},
+            interrupt_on={
+                "execute": {"allowed_decisions": ["approve", "reject"]},
+                "write_file": {"allowed_decisions": ["approve", "edit", "reject"]},
+            },
+            permissions=[
+                {
+                    "operations": ["read", "write"],
+                    "paths": ["/workspace/repo/**"],
+                    "mode": "allow",
+                }
+            ],
             middleware=["server.app.api.middleware.LoggingMiddleware"],
             config=AgentConfig(temperature=0.3, max_tokens=2000),
         )
@@ -166,8 +176,29 @@ class TestAgentDefinition:
         assert len(agent.skills) == 1
         assert len(agent.memory) == 2
         assert len(agent.subagents) == 1
-        assert agent.interrupt_on["execute"] is True
+        assert agent.interrupt_on["execute"].allowed_decisions == ["approve", "reject"]
+        assert agent.permissions[0].operations == ["read", "write"]
         assert agent.config.temperature == 0.3
+
+    def test_to_subagent_includes_permissions(self):
+        """Subagent specs preserve Deep Agents filesystem permission rules."""
+        agent = AgentDefinition(
+            name="docs-writer",
+            system_prompt="Write docs only.",
+            permissions=[
+                {
+                    "operations": ["write"],
+                    "paths": ["/workspace/docs/**"],
+                    "mode": "allow",
+                }
+            ],
+        )
+
+        subagent = agent.to_subagent()
+
+        assert subagent["permissions"][0].operations == ["write"]
+        assert subagent["permissions"][0].paths == ["/workspace/docs/**"]
+        assert subagent["permissions"][0].mode == "allow"
 
     def test_empty_name(self):
         """Test that empty name raises error."""
@@ -352,8 +383,15 @@ memory:
   - AGENTS.md
   - SECURITY.md
 interrupt_on:
-  execute: true
-  write_file: false
+  execute:
+    allowed_decisions:
+      - approve
+      - reject
+  write_file:
+    allowed_decisions:
+      - approve
+      - edit
+      - reject
 config:
   temperature: 0.3
   max_tokens: 2000
@@ -367,7 +405,10 @@ config:
             assert len(agent.tools) == 2
             assert len(agent.skills) == 1
             assert len(agent.memory) == 2
-            assert agent.interrupt_on["execute"] is True
+            assert agent.interrupt_on["execute"].allowed_decisions == [
+                "approve",
+                "reject",
+            ]
             assert agent.config.temperature == 0.3
         finally:
             os.unlink(temp_path)

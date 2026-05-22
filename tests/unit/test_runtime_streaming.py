@@ -36,6 +36,7 @@ from server.app.agent.runtime import (
     TokenEvent,
     ToolCallEvent,
     ToolResultEvent,
+    ToolSafetyEvent,
 )
 
 # ---------------------------------------------------------------------------
@@ -318,6 +319,94 @@ class TestStatusEvents:
         events = await _collect(runtime)
         status_events = [e for e in events if isinstance(e, StatusEvent)]
         assert len(status_events) == 0
+
+
+class TestToolSafetyEvents:
+    @pytest.mark.asyncio
+    async def test_custom_context_injection_chunk_yields_tool_safety_event(self):
+        runtime = _make_runtime(
+            _make_chunk(
+                "custom",
+                {
+                    "event": "tool_context_injected",
+                    "tool_name": "update_assignment",
+                    "tool_call_id": "call-ctx",
+                    "fields": ["session_id", "effective_scope"],
+                    "overwritten_fields": ["session_id"],
+                    "session_id": "session-1",
+                    "run_id": "run-1",
+                    "scope_keys": ["project", "tenant"],
+                },
+            )
+        )
+        events = await _collect(runtime)
+        safety_events = [e for e in events if isinstance(e, ToolSafetyEvent)]
+
+        assert len(safety_events) == 1
+        assert safety_events[0].action == "context_injected"
+        assert safety_events[0].tool_name == "update_assignment"
+        assert safety_events[0].tool_call_id == "call-ctx"
+        assert safety_events[0].fields == ["session_id", "effective_scope"]
+        assert safety_events[0].overwritten_fields == ["session_id"]
+        assert safety_events[0].session_id == "session-1"
+        assert safety_events[0].run_id == "run-1"
+        assert safety_events[0].scope_keys == ["project", "tenant"]
+
+    @pytest.mark.asyncio
+    async def test_custom_validation_chunk_yields_tool_safety_event(self):
+        runtime = _make_runtime(
+            _make_chunk(
+                "custom",
+                {
+                    "event": "tool_argument_validation_failed",
+                    "tool_name": "update_assignment",
+                    "tool_call_id": "call-validation",
+                    "errors": [{"loc": ["status"], "msg": "Field required"}],
+                    "session_id": "session-1",
+                    "run_id": "run-1",
+                    "scope_keys": ["tenant"],
+                },
+            )
+        )
+        events = await _collect(runtime)
+        safety_events = [e for e in events if isinstance(e, ToolSafetyEvent)]
+
+        assert len(safety_events) == 1
+        assert safety_events[0].action == "argument_validation_failed"
+        assert safety_events[0].tool_name == "update_assignment"
+        assert safety_events[0].tool_call_id == "call-validation"
+        assert safety_events[0].errors == [{"loc": ["status"], "msg": "Field required"}]
+        assert safety_events[0].session_id == "session-1"
+        assert safety_events[0].run_id == "run-1"
+        assert safety_events[0].scope_keys == ["tenant"]
+
+    @pytest.mark.asyncio
+    async def test_custom_blocked_chunk_yields_tool_safety_event(self):
+        runtime = _make_runtime(
+            _make_chunk(
+                "custom",
+                {
+                    "event": "tool_blocked",
+                    "tool_name": "execute",
+                    "tool_call_id": "call-blocked",
+                    "message": "Tool 'execute' is disabled by server policy.",
+                    "session_id": "session-1",
+                    "run_id": "run-1",
+                    "scope_keys": ["tenant"],
+                },
+            )
+        )
+        events = await _collect(runtime)
+        safety_events = [e for e in events if isinstance(e, ToolSafetyEvent)]
+
+        assert len(safety_events) == 1
+        assert safety_events[0].action == "blocked"
+        assert safety_events[0].tool_name == "execute"
+        assert safety_events[0].tool_call_id == "call-blocked"
+        assert safety_events[0].message == "Tool 'execute' is disabled by server policy."
+        assert safety_events[0].session_id == "session-1"
+        assert safety_events[0].run_id == "run-1"
+        assert safety_events[0].scope_keys == ["tenant"]
 
 
 # ---------------------------------------------------------------------------

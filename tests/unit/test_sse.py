@@ -366,6 +366,29 @@ class TestEventBuilder:
         assert event["data"]["output"] == "result"
         assert event["data"]["exit_code"] == 0
 
+    def test_tool_safety_event(self) -> None:
+        """Test creating tool safety event."""
+        event = EventBuilder.tool_safety(
+            action="argument_validation_failed",
+            tool_name="update_assignment",
+            tool_call_id="call-1",
+            errors=[{"loc": ["status"], "msg": "Field required"}],
+            message="Tool argument validation failed",
+            session_id="session-1",
+            run_id="run-1",
+            scope_keys=["tenant"],
+        )
+
+        assert event["event"] == "tool_safety"
+        assert event["data"]["action"] == "argument_validation_failed"
+        assert event["data"]["tool_name"] == "update_assignment"
+        assert event["data"]["tool_call_id"] == "call-1"
+        assert event["data"]["errors"][0]["loc"] == ["status"]
+        assert event["data"]["message"] == "Tool argument validation failed"
+        assert event["data"]["session_id"] == "session-1"
+        assert event["data"]["run_id"] == "run-1"
+        assert event["data"]["scope_keys"] == ["tenant"]
+
     def test_error_event(self) -> None:
         """Test creating error event."""
         event = EventBuilder.error("Something went wrong", code="ERR_001")
@@ -438,6 +461,27 @@ class TestEventBuilder:
         assert event["data"]["tool_name"] == "write_file"
         assert event["data"]["args"] == {"path": "foo.py"}
         assert event["data"]["session_id"] == "sess-123"
+
+    def test_hitl_decision_event(self) -> None:
+        """Test creating HITL decision event."""
+        event = EventBuilder.hitl_decision(
+            decision="edit",
+            tool_name="write_file",
+            session_id="session-1",
+            run_id="run-1",
+            scope_keys=["tenant"],
+            edited_arg_keys=["content", "path"],
+            has_rejection_message=False,
+        )
+
+        assert event["event"] == "hitl_decision"
+        assert event["data"]["decision"] == "edit"
+        assert event["data"]["tool_name"] == "write_file"
+        assert event["data"]["session_id"] == "session-1"
+        assert event["data"]["run_id"] == "run-1"
+        assert event["data"]["scope_keys"] == ["tenant"]
+        assert event["data"]["edited_arg_keys"] == ["content", "path"]
+        assert event["data"]["has_rejection_message"] is False
 
     def test_reconnected_event(self) -> None:
         """Test creating reconnected event."""

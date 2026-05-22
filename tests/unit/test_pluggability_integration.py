@@ -36,7 +36,7 @@ async def test_agent_full_config_passing(tmp_path):
     workspace.mkdir()
 
     subagents = [{"name": "test-subagent", "system_prompt": "...", "description": "Test subagent"}]
-    interrupt_on = {"execute": True}
+    interrupt_on = {"execute": {"allowed_decisions": ["approve", "reject"]}}
 
     with patch("server.app.agent.cognition_agent.create_deep_agent") as mock_create:
         mock_create.return_value = AsyncMock()

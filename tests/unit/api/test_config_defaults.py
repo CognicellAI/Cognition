@@ -50,15 +50,34 @@ def test_get_agent_defaults() -> None:
 
     assert response.status_code == 200
     assert response.json()["recursion_limit"] == 1000
+    assert response.json()["permissions"] == []
 
 
 def test_patch_agent_defaults() -> None:
     response = client.patch(
         "/config/defaults/agent",
-        json={"recursion_limit": 2000, "memory": ["AGENTS.md", "TEAM.md"]},
+        json={
+            "recursion_limit": 2000,
+            "memory": ["AGENTS.md", "TEAM.md"],
+            "interrupt_on": {
+                "execute": {
+                    "allowed_decisions": ["approve", "reject"],
+                    "description": "Review shell commands",
+                }
+            },
+            "permissions": [
+                {
+                    "operations": ["read"],
+                    "paths": ["/workspace/repo/**"],
+                    "mode": "allow",
+                }
+            ],
+        },
     )
 
     assert response.status_code == 200
     data = response.json()
     assert data["recursion_limit"] == 2000
     assert data["memory"] == ["AGENTS.md", "TEAM.md"]
+    assert data["interrupt_on"]["execute"]["allowed_decisions"] == ["approve", "reject"]
+    assert data["permissions"][0]["operations"] == ["read"]
