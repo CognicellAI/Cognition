@@ -404,6 +404,36 @@ class EventBuilder:
         }
 
     @staticmethod
+    def tool_safety(
+        action: str,
+        tool_name: str,
+        tool_call_id: str | None = None,
+        fields: list[str] | None = None,
+        overwritten_fields: list[str] | None = None,
+        errors: list[dict[str, Any]] | None = None,
+        message: str | None = None,
+        session_id: str | None = None,
+        run_id: str | None = None,
+        scope_keys: list[str] | None = None,
+    ) -> dict:
+        """Create a tool safety/audit event."""
+        return {
+            "event": "tool_safety",
+            "data": {
+                "action": action,
+                "tool_name": tool_name,
+                "tool_call_id": tool_call_id,
+                "fields": fields or [],
+                "overwritten_fields": overwritten_fields or [],
+                "errors": errors or [],
+                "message": message,
+                "session_id": session_id,
+                "run_id": run_id,
+                "scope_keys": scope_keys or [],
+            },
+        }
+
+    @staticmethod
     def error(message: str, code: str | None = None) -> dict:
         """Create an error event."""
         data = {"message": message}
@@ -508,6 +538,30 @@ class EventBuilder:
         if scope_keys:
             data["scope_keys"] = scope_keys
         return {"event": "interrupt", "data": data}
+
+    @staticmethod
+    def hitl_decision(
+        decision: str,
+        tool_name: str,
+        session_id: str | None = None,
+        run_id: str | None = None,
+        scope_keys: list[str] | None = None,
+        edited_arg_keys: list[str] | None = None,
+        has_rejection_message: bool = False,
+    ) -> dict:
+        """Create a HITL decision audit event."""
+        return {
+            "event": "hitl_decision",
+            "data": {
+                "decision": decision,
+                "tool_name": tool_name,
+                "session_id": session_id,
+                "run_id": run_id,
+                "scope_keys": scope_keys or [],
+                "edited_arg_keys": edited_arg_keys or [],
+                "has_rejection_message": has_rejection_message,
+            },
+        }
 
     @staticmethod
     def status(status: str) -> dict:

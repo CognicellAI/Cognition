@@ -93,6 +93,19 @@ class TestCreateAgent:
             "tool_token_limit_before_evict": 2000,
             "timeout_seconds": 45,
             "middleware": [{"name": "tool_retry", "max_retries": 2}],
+            "interrupt_on": {
+                "execute": {
+                    "allowed_decisions": ["approve", "reject"],
+                    "description": "Shell commands require approval",
+                }
+            },
+            "permissions": [
+                {
+                    "operations": ["read", "write"],
+                    "paths": ["/workspace/repo/**"],
+                    "mode": "allow",
+                }
+            ],
         }
         response = client.post("/agents", json=payload)
         assert response.status_code == 201
@@ -104,6 +117,8 @@ class TestCreateAgent:
         assert data["config"]["provider"] == "bedrock"
         assert data["config"]["tool_token_limit_before_evict"] == 2000
         assert data["config"]["timeout_seconds"] == 45
+        assert data["interrupt_on"]["execute"]["allowed_decisions"] == ["approve", "reject"]
+        assert data["permissions"][0]["paths"] == ["/workspace/repo/**"]
 
     def test_get_preserves_top_level_provider(self):
         client.post(

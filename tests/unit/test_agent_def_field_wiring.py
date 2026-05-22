@@ -241,7 +241,10 @@ class TestInterruptOnWiring:
         agent_def = AgentDefinition(
             name="test-agent",
             system_prompt="test",
-            interrupt_on={"execute": True, "write_file": False},
+            interrupt_on={
+                "execute": {"allowed_decisions": ["approve", "reject"]},
+                "write_file": {"allowed_decisions": ["approve", "edit", "reject"]},
+            },
         )
         mock_def_registry = MagicMock()
         mock_def_registry.get = MagicMock(return_value=agent_def)
@@ -251,7 +254,10 @@ class TestInterruptOnWiring:
 
         params = _get_params(create_agent_mock)
         assert params is not None
-        assert params.interrupt_on == {"execute": True, "write_file": False}
+        assert params.interrupt_on == {
+            "execute": {"allowed_decisions": ["approve", "reject"]},
+            "write_file": {"allowed_decisions": ["approve", "edit", "reject"]},
+        }
 
     @pytest.mark.asyncio
     async def test_empty_interrupt_on_not_passed(self):
@@ -272,6 +278,44 @@ class TestInterruptOnWiring:
         params = _get_params(create_agent_mock)
         assert params is not None
         assert params.interrupt_on is None
+
+
+class TestFilesystemPermissionsWiring:
+    @pytest.mark.asyncio
+    async def test_permissions_passed_to_create_cognition_agent(self):
+        """AgentDefinition permissions are forwarded as app-level filesystem policy."""
+        from server.app.agent.definition import AgentDefinition
+
+        session = _make_session()
+        mock_runtime = _make_mock_runtime(DoneEvent())
+        patches = _base_patches(mock_runtime, session)
+
+        agent_def = AgentDefinition(
+            name="test-agent",
+            system_prompt="test",
+            permissions=[
+                {
+                    "operations": ["read"],
+                    "paths": ["/workspace/repo/**"],
+                    "mode": "allow",
+                }
+            ],
+        )
+        mock_def_registry = MagicMock()
+        mock_def_registry.get = MagicMock(return_value=agent_def)
+        mock_def_registry.subagents = MagicMock(return_value=[])
+
+        _, create_agent_mock = await _run(patches, session, mock_def_registry=mock_def_registry)
+
+        params = _get_params(create_agent_mock)
+        assert params is not None
+        assert params.permissions == [
+            {
+                "operations": ["read"],
+                "paths": ["/workspace/repo/**"],
+                "mode": "allow",
+            }
+        ]
 
 
 class TestStructuredOutputAndContextControls:

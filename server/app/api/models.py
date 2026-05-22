@@ -11,6 +11,7 @@ from typing import Any, Literal
 
 from pydantic import AnyHttpUrl, BaseModel, Field
 
+from server.app.agent.definition import FilesystemPermissionConfig, HumanInTheLoopConfig
 from server.app.models import Session as CoreSession
 from server.app.models import SessionConfig
 
@@ -203,6 +204,13 @@ class ToolResultEvent(BaseModel):
     data: dict = Field(..., description="Tool result with 'tool_call_id', 'output', 'exit_code'")
 
 
+class ToolSafetyEvent(BaseModel):
+    """Server-sent event: Tool safety/audit signal."""
+
+    event: Literal["tool_safety"] = "tool_safety"
+    data: dict = Field(..., description="Tool safety action, fields, errors, and message")
+
+
 class ErrorEvent(BaseModel):
     """Server-sent event: Error occurred.
 
@@ -274,6 +282,13 @@ class InterruptEvent(BaseModel):
         ...,
         description="Interrupt info with tool call details and optional resume hints",
     )
+
+
+class HitlDecisionEvent(BaseModel):
+    """Server-sent event: human approval/edit/reject decision applied."""
+
+    event: Literal["hitl_decision"] = "hitl_decision"
+    data: dict = Field(..., description="HITL decision with redacted audit metadata")
 
 
 class ReconnectedEvent(BaseModel):
@@ -501,7 +516,8 @@ class GlobalAgentDefaultsResponse(BaseModel):
     memory: list[str] = Field(default_factory=list)
     skills: list[str] = Field(default_factory=list)
     subagents: list[dict[str, Any]] = Field(default_factory=list)
-    interrupt_on: dict[str, bool] = Field(default_factory=dict)
+    interrupt_on: dict[str, Any] = Field(default_factory=dict)
+    permissions: list[dict[str, Any]] = Field(default_factory=list)
     response_format: str | None = None
     tool_token_limit_before_evict: int | None = None
     recursion_limit: int
@@ -514,7 +530,8 @@ class GlobalAgentDefaultsUpdate(BaseModel):
     memory: list[str] | None = None
     skills: list[str] | None = None
     subagents: list[dict[str, Any]] | None = None
-    interrupt_on: dict[str, bool] | None = None
+    interrupt_on: dict[str, HumanInTheLoopConfig] | None = None
+    permissions: list[FilesystemPermissionConfig] | None = None
     response_format: str | None = None
     tool_token_limit_before_evict: int | None = None
     recursion_limit: int | None = None
@@ -550,9 +567,13 @@ class AgentResponse(BaseModel):
         None, description="Full runtime config for this agent"
     )
     response_format: str | None = Field(None, description="Structured output schema path")
-    interrupt_on: dict[str, bool] = Field(
+    interrupt_on: dict[str, dict[str, Any]] = Field(
         default_factory=dict,
-        description="Tool-name to HITL requirement map for this agent",
+        description="Tool-name to HITL requirement or rich approval config map",
+    )
+    permissions: list[dict[str, Any]] = Field(
+        default_factory=list,
+        description="Deep Agents filesystem permission rules for this agent",
     )
     # ISSUE-009: Added tools and skills for better agent introspection
     tools: list[str] = Field(
@@ -891,7 +912,8 @@ class AgentCreate(BaseModel):
     tools: list[str] = Field(default_factory=list)
     skills: list[str] = Field(default_factory=list)
     memory: list[str] = Field(default_factory=list)
-    interrupt_on: dict[str, bool] = Field(default_factory=dict)
+    interrupt_on: dict[str, HumanInTheLoopConfig] = Field(default_factory=dict)
+    permissions: list[FilesystemPermissionConfig] = Field(default_factory=list)
     response_format: str | None = Field(
         default=None, description="Dotted path to structured output schema"
     )
@@ -916,7 +938,8 @@ class AgentUpdate(BaseModel):
     tools: list[str] | None = None
     skills: list[str] | None = None
     memory: list[str] | None = None
-    interrupt_on: dict[str, bool] | None = None
+    interrupt_on: dict[str, HumanInTheLoopConfig] | None = None
+    permissions: list[FilesystemPermissionConfig] | None = None
     response_format: str | None = None
     model: str | None = None
     temperature: float | None = None

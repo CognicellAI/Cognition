@@ -35,6 +35,8 @@ from langgraph.types import Command
 
 from server.app.agent.cognition_agent import CognitionAgentParams, create_cognition_agent
 from server.app.agent.definition import AgentDefinition
+from server.app.observability import HITL_DECISION_COUNT
+from server.app.observability import span as trace_span
 from server.app.settings import Settings, get_settings
 from server.app.storage.factory import create_storage_backend
 
@@ -140,6 +142,22 @@ class ToolResultEvent(AgentEvent):
 
 
 @dataclass
+class ToolSafetyEvent(AgentEvent):
+    """Tool safety/audit signal emitted by Cognition middleware."""
+
+    action: str
+    tool_name: str
+    tool_call_id: str | None = None
+    fields: list[str] = field(default_factory=list)
+    overwritten_fields: list[str] = field(default_factory=list)
+    errors: list[dict[str, Any]] = field(default_factory=list)
+    message: str | None = None
+    session_id: str | None = None
+    run_id: str | None = None
+    scope_keys: list[str] = field(default_factory=list)
+
+
+@dataclass
 class StatusEvent(AgentEvent):
     """Agent status update."""
 
@@ -198,6 +216,19 @@ class InterruptEvent(AgentEvent):
     args: dict[str, Any]
     session_id: str | None = None
     action_requests: list[dict[str, Any]] = field(default_factory=list)
+
+
+@dataclass
+class HitlDecisionEvent(AgentEvent):
+    """Human-in-the-loop decision applied to resume an interrupted run."""
+
+    decision: str
+    tool_name: str
+    session_id: str | None = None
+    run_id: str | None = None
+    scope_keys: list[str] = field(default_factory=list)
+    edited_arg_keys: list[str] = field(default_factory=list)
+    has_rejection_message: bool = False
 
 
 @dataclass
@@ -278,6 +309,7 @@ StreamEvent = (
     TokenEvent
     | ToolCallEvent
     | ToolResultEvent
+    | ToolSafetyEvent
     | StatusEvent
     | DoneEvent
     | ErrorEvent
@@ -285,6 +317,7 @@ StreamEvent = (
     | PlanningEvent
     | StepCompleteEvent
     | InterruptEvent
+    | HitlDecisionEvent
     | DelegationEvent
     | HeartbeatEvent
     | RunStateEvent
@@ -412,6 +445,71 @@ def _extract_interrupt_requests(exc: GraphInterrupt) -> list[dict[str, Any]]:
                 request["review_config"] = dict(review_config)
             requests.append(request)
     return requests
+
+
+def _runtime_context_value(context: Any, field_name: str) -> Any:
+    if context is None:
+        return None
+    if isinstance(context, Mapping):
+        return context.get(field_name)
+    return getattr(context, field_name, None)
+
+
+def _hitl_decision_event(
+    *,
+    context: Any,
+    thread_id: str,
+    decision: str,
+    tool_name: str,
+    args: dict[str, Any] | None,
+) -> HitlDecisionEvent:
+    effective_scope = _runtime_context_value(context, "effective_scope")
+    scope_keys = sorted(effective_scope) if isinstance(effective_scope, Mapping) else []
+    session_id = _runtime_context_value(context, "session_id")
+    run_id = _runtime_context_value(context, "run_id") or thread_id
+    edited_arg_keys = sorted(args) if decision == "edit" and isinstance(args, dict) else []
+    has_rejection_message = (
+        decision == "reject" and isinstance(args, dict) and isinstance(args.get("message"), str)
+    )
+    event = HitlDecisionEvent(
+        decision=decision,
+        tool_name=tool_name,
+        session_id=str(session_id) if session_id is not None else None,
+        run_id=str(run_id) if run_id is not None else None,
+        scope_keys=[str(key) for key in scope_keys],
+        edited_arg_keys=[str(key) for key in edited_arg_keys],
+        has_rejection_message=has_rejection_message,
+    )
+    _audit_hitl_decision(event)
+    return event
+
+
+def _audit_hitl_decision(event: HitlDecisionEvent) -> None:
+    """Record HITL decision logs, metrics, and trace span without sensitive values."""
+    logger.info(
+        "hitl_decision",
+        decision=event.decision,
+        tool_name=event.tool_name,
+        session_id=event.session_id,
+        run_id=event.run_id,
+        scope_keys=event.scope_keys,
+        edited_arg_keys=event.edited_arg_keys,
+        has_rejection_message=event.has_rejection_message,
+    )
+    HITL_DECISION_COUNT.labels(decision=event.decision, tool_name=event.tool_name).inc()
+    with trace_span(
+        "cognition.hitl_decision",
+        {
+            "cognition.hitl.decision": event.decision,
+            "tool.name": event.tool_name,
+            "cognition.session_id": event.session_id or "",
+            "cognition.run_id": event.run_id or "",
+            "cognition.scope_keys": ",".join(event.scope_keys),
+            "cognition.hitl.edited_arg_keys": ",".join(event.edited_arg_keys),
+            "cognition.hitl.has_rejection_message": event.has_rejection_message,
+        },
+    ):
+        pass
 
 
 @runtime_checkable
@@ -581,6 +679,14 @@ class DeepAgentRuntime:
             resume_decision["message"] = args["message"]
         elif decision != "approve":
             raise ValueError(f"Unsupported resume decision: {decision}")
+
+        yield _hitl_decision_event(
+            context=self._context,
+            thread_id=tid,
+            decision=decision,
+            tool_name=tool_name,
+            args=args,
+        )
 
         async for event in self.astream_events(
             Command(resume={"decisions": [resume_decision]}),
@@ -790,6 +896,102 @@ class DeepAgentRuntime:
                 # tools or middleware — e.g. {"status": "thinking"}.
                 elif chunk_type == "custom":
                     if isinstance(data, dict):
+                        event_name = data.get("event") or data.get("type")
+                        if event_name == "tool_context_injected":
+                            yield ToolSafetyEvent(
+                                action="context_injected",
+                                tool_name=str(data.get("tool_name", "unknown")),
+                                tool_call_id=(
+                                    str(data["tool_call_id"])
+                                    if data.get("tool_call_id") is not None
+                                    else None
+                                ),
+                                fields=[
+                                    str(field)
+                                    for field in data.get("fields", [])
+                                    if field is not None
+                                ],
+                                overwritten_fields=[
+                                    str(field)
+                                    for field in data.get("overwritten_fields", [])
+                                    if field is not None
+                                ],
+                                session_id=(
+                                    str(data["session_id"])
+                                    if data.get("session_id") is not None
+                                    else None
+                                ),
+                                run_id=(
+                                    str(data["run_id"])
+                                    if data.get("run_id") is not None
+                                    else None
+                                ),
+                                scope_keys=[
+                                    str(key)
+                                    for key in data.get("scope_keys", [])
+                                    if key is not None
+                                ],
+                            )
+                        elif event_name == "tool_argument_validation_failed":
+                            raw_errors = data.get("errors", [])
+                            errors = [
+                                dict(error)
+                                for error in raw_errors
+                                if isinstance(error, Mapping)
+                            ]
+                            yield ToolSafetyEvent(
+                                action="argument_validation_failed",
+                                tool_name=str(data.get("tool_name", "unknown")),
+                                tool_call_id=(
+                                    str(data["tool_call_id"])
+                                    if data.get("tool_call_id") is not None
+                                    else None
+                                ),
+                                errors=errors,
+                                message="Tool argument validation failed",
+                                session_id=(
+                                    str(data["session_id"])
+                                    if data.get("session_id") is not None
+                                    else None
+                                ),
+                                run_id=(
+                                    str(data["run_id"])
+                                    if data.get("run_id") is not None
+                                    else None
+                                ),
+                                scope_keys=[
+                                    str(key)
+                                    for key in data.get("scope_keys", [])
+                                    if key is not None
+                                ],
+                            )
+                        elif event_name == "tool_blocked":
+                            yield ToolSafetyEvent(
+                                action="blocked",
+                                tool_name=str(data.get("tool_name", "unknown")),
+                                tool_call_id=(
+                                    str(data["tool_call_id"])
+                                    if data.get("tool_call_id") is not None
+                                    else None
+                                ),
+                                message=str(data.get("message", "Tool blocked")),
+                                session_id=(
+                                    str(data["session_id"])
+                                    if data.get("session_id") is not None
+                                    else None
+                                ),
+                                run_id=(
+                                    str(data["run_id"])
+                                    if data.get("run_id") is not None
+                                    else None
+                                ),
+                                scope_keys=[
+                                    str(key)
+                                    for key in data.get("scope_keys", [])
+                                    if key is not None
+                                ],
+                            )
+
                         status = data.get("status")
                         if status and isinstance(status, str):
                             yield StatusEvent(status=status)
@@ -1129,12 +1331,14 @@ __all__ = [
     "TokenEvent",
     "ToolCallEvent",
     "ToolResultEvent",
+    "ToolSafetyEvent",
     "StatusEvent",
     "DoneEvent",
     "ErrorEvent",
     "StepCompleteEvent",
     "PlanningEvent",
     "InterruptEvent",
+    "HitlDecisionEvent",
     "UsageEvent",
     "AgentRuntimeType",
 ]

@@ -42,6 +42,7 @@ from server.app.api.sse import EventBuilder, SSEStream, get_last_event_id
 from server.app.llm.deep_agent_service import (
     DeepAgentStreamingService,
     DoneEvent,
+    HitlDecisionEvent,
     SessionAgentManager,
     TokenEvent,
     UsageEvent,
@@ -448,6 +449,16 @@ async def resume_session(
         ):
             if isinstance(event, TokenEvent):
                 yield EventBuilder.token(event.content)
+            elif isinstance(event, HitlDecisionEvent):
+                yield EventBuilder.hitl_decision(
+                    decision=event.decision,
+                    tool_name=event.tool_name,
+                    session_id=event.session_id,
+                    run_id=event.run_id,
+                    scope_keys=event.scope_keys,
+                    edited_arg_keys=event.edited_arg_keys,
+                    has_rejection_message=event.has_rejection_message,
+                )
             elif isinstance(event, UsageEvent):
                 yield EventBuilder.usage(
                     input_tokens=event.input_tokens,

@@ -30,6 +30,7 @@ from server.app.agent.runtime import (
     DoneEvent,
     ErrorEvent,
     HeartbeatEvent,  # noqa: F401 — re-exported for consumers of this module
+    HitlDecisionEvent,
     InterruptEvent,
     PlanningEvent,
     RunStateEvent,  # noqa: F401 — re-exported for consumers of this module
@@ -40,6 +41,7 @@ from server.app.agent.runtime import (
     TokenEvent,
     ToolCallEvent,
     ToolResultEvent,
+    ToolSafetyEvent,
     UsageEvent,
 )
 from server.app.agent.runtime import (
@@ -85,6 +87,7 @@ class ResolvedAgentConfig:
     skills: list[str] = field(default_factory=list)
     memory: list[str] | None = None
     interrupt_on: dict[str, Any] | None = None
+    permissions: list[Any] | None = None
     middleware: list[Any] | None = None
     response_format: str | None = None
     tool_token_limit_before_evict: int | None = None
@@ -207,7 +210,18 @@ class DeepAgentStreamingService:
             resolved.memory = list(agent_def.memory)
 
         if agent_def.interrupt_on:
-            resolved.interrupt_on = dict(agent_def.interrupt_on)
+            resolved.interrupt_on = {
+                name: config.model_dump(exclude_none=True)
+                if hasattr(config, "model_dump")
+                else dict(config)
+                for name, config in agent_def.interrupt_on.items()
+            }
+
+        if agent_def.permissions:
+            resolved.permissions = [
+                p.model_dump() if hasattr(p, "model_dump") else dict(p)
+                for p in agent_def.permissions
+            ]
 
         if agent_def.response_format:
             resolved.response_format = agent_def.response_format
@@ -263,7 +277,11 @@ class DeepAgentStreamingService:
             from server.app.agent.cognition_agent import CognitionContext
 
             invocation_context = CognitionContext.from_scope(
-                session.scopes if session and hasattr(session, "scopes") else scope
+                session.scopes if session and hasattr(session, "scopes") else scope,
+                session_id=session.id if session else session_id,
+                thread_id=session.thread_id if session else thread_id,
+                agent_name=session.agent_name if session else None,
+                metadata=session.metadata if session else None,
             )
 
             mcp_configs = await self._resolve_mcp_configs(scope=scope)
@@ -280,6 +298,7 @@ class DeepAgentStreamingService:
                 subagents=agent_cfg.subagents,
                 memory=agent_cfg.memory,
                 interrupt_on=agent_cfg.interrupt_on,
+                permissions=agent_cfg.permissions,
                 response_format=(
                     session.config.response_format if session and session.config else None
                 )
@@ -331,7 +350,14 @@ class DeepAgentStreamingService:
                             yield event
 
                         elif isinstance(event, PlanningEvent) or isinstance(
-                            event, (DelegationEvent, StatusEvent, StepCompleteEvent, InterruptEvent)
+                            event,
+                            (
+                                DelegationEvent,
+                                StatusEvent,
+                                StepCompleteEvent,
+                                InterruptEvent,
+                                ToolSafetyEvent,
+                            ),
                         ):
                             yield event
                             if isinstance(event, InterruptEvent):
@@ -420,7 +446,11 @@ class DeepAgentStreamingService:
             from server.app.agent.cognition_agent import CognitionContext
 
             invocation_context = CognitionContext.from_scope(
-                session.scopes if hasattr(session, "scopes") else scope
+                session.scopes if hasattr(session, "scopes") else scope,
+                session_id=session.id,
+                thread_id=session.thread_id,
+                agent_name=session.agent_name,
+                metadata=session.metadata,
             )
             mcp_configs = await self._resolve_mcp_configs(scope=scope)
 
@@ -436,6 +466,7 @@ class DeepAgentStreamingService:
                 subagents=agent_cfg.subagents,
                 memory=agent_cfg.memory,
                 interrupt_on=agent_cfg.interrupt_on,
+                permissions=agent_cfg.permissions,
                 response_format=(session.config.response_format if session.config else None)
                 or agent_cfg.response_format,
                 tool_token_limit_before_evict=agent_cfg.tool_token_limit_before_evict,
@@ -480,6 +511,8 @@ class DeepAgentStreamingService:
                         TokenEvent,
                         ToolCallEvent,
                         ToolResultEvent,
+                        ToolSafetyEvent,
+                        HitlDecisionEvent,
                         StatusEvent,
                         ErrorEvent,
                         UsageEvent,

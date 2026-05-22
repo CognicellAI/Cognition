@@ -415,7 +415,8 @@ class GlobalAgentDefaults(BaseModel):
         memory: List of memory file paths.
         skills: List of skill directory paths.
         subagents: Subagent specs (list of dicts).
-        interrupt_on: Tool-name -> bool map for human-in-the-loop.
+        interrupt_on: Tool-name -> bool or rich human-in-the-loop config.
+        permissions: Deep Agents filesystem permission rules.
         recursion_limit: Max ReAct recursion depth.
         mcp_servers: MCP server config dicts keyed by name.
     """
@@ -423,7 +424,8 @@ class GlobalAgentDefaults(BaseModel):
     memory: list[str] = Field(default_factory=lambda: ["AGENTS.md"])
     skills: list[str] = Field(default_factory=list)
     subagents: list[dict[str, Any]] = Field(default_factory=list)
-    interrupt_on: dict[str, bool] = Field(default_factory=dict)
+    interrupt_on: dict[str, Any] = Field(default_factory=dict)
+    permissions: list[dict[str, Any]] = Field(default_factory=list)
     response_format: str | None = Field(default=None)
     tool_token_limit_before_evict: int | None = Field(default=None, gt=0)
     recursion_limit: int = Field(default=1000, gt=0)

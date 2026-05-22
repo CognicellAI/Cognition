@@ -56,6 +56,7 @@ from server.app.llm.deep_agent_service import (
     TokenEvent,
     ToolCallEvent,
     ToolResultEvent,
+    ToolSafetyEvent,
     UsageEvent,
 )
 from server.app.models import SessionStatus
@@ -174,6 +175,20 @@ async def agent_event_stream(
                     tool_call_id=event.tool_call_id,
                     output=event.output,
                     exit_code=event.exit_code,
+                )
+
+            elif isinstance(event, ToolSafetyEvent):
+                yield EventBuilder.tool_safety(
+                    action=event.action,
+                    tool_name=event.tool_name,
+                    tool_call_id=event.tool_call_id,
+                    fields=event.fields,
+                    overwritten_fields=event.overwritten_fields,
+                    errors=event.errors,
+                    message=event.message,
+                    session_id=event.session_id,
+                    run_id=event.run_id,
+                    scope_keys=event.scope_keys or scope_keys,
                 )
 
             elif isinstance(event, PlanningEvent):

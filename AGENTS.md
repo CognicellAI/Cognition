@@ -158,7 +158,7 @@ authentication boundary.
 | Process isolation | Docker sandbox backend — container per session, separate network namespace |
 | Network isolation | `network_mode="none"` on Docker sandbox backend |
 | Filesystem isolation | `CognitionLocalSandboxBackend` protected paths; `virtual_mode=True` |
-| Scope propagation | Builder-authorized `effective_scope: dict[str, str]` carried through API, persistence, runtime context, tools, memory, artifacts, MCP, secrets, sandboxes, callbacks, and observability |
+| Scope propagation | Builder-authorized `effective_scope: dict[str, str]` carried through API, persistence, runtime context, tools, memory, artifacts, MCP, sandboxes, callbacks, and observability |
 | Memory isolation | LangGraph Store namespaces derived from `effective_scope` via `CognitionContext` |
 
 **What this means for builders:**
@@ -196,7 +196,7 @@ Rules:
   gateway, signed claims, or an embedding application.
 - Cognition must carry and persist the same `effective_scope` across sessions,
   runs, messages, events, approvals, artifacts, memory, tools, MCP configs,
-  secrets, sandboxes, callbacks, logs, metrics, and traces.
+  sandboxes, callbacks, logs, metrics, and traces.
 - Scope keys are builder-defined. Do not hardcode `user`, `org`, or `project` as
   the only valid vocabulary. Optional aliases like `user_id`, `org_id`, and
   `project_id` may be derived from configured scope keys for compatibility.
@@ -211,8 +211,12 @@ Rules:
   action/resource descriptor and correlation ids. Cognition enforces returned
   `allow`, `deny`, or `approve` decisions but does not own the decision logic.
 - New v0.10.0 features that touch runtime state, tool safety, memory, artifacts,
-  MCP, secrets, sandboxing, callbacks, or observability must include scoped
-  isolation tests or document explicit shared-scope behavior.
+  MCP, sandboxing, callbacks, or observability must include scoped isolation
+  tests or document explicit shared-scope behavior.
+- Cognition v0.10.0 must not introduce a secret-reference, secret-resolution, or
+  secret-injection surface. Builders own credential handling and accept the risk
+  of any credentials they provide to their own tools, sandboxes, or
+  infrastructure.
 
 
 # Hard Requirements

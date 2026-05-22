@@ -83,6 +83,18 @@ if PROMETHEUS_AVAILABLE:
         "cognition_tool_calls_total", "Total tool calls", ["tool_name", "status"]
     )
 
+    TOOL_SAFETY_EVENT_COUNT = Counter(
+        "cognition_tool_safety_events_total",
+        "Total tool safety events",
+        ["action", "tool_name"],
+    )
+
+    HITL_DECISION_COUNT = Counter(
+        "cognition_hitl_decisions_total",
+        "Total human-in-the-loop decisions",
+        ["decision", "tool_name"],
+    )
+
     SESSION_COUNT = Counter(
         "cognition_sessions_total",
         "Session lifecycle events",
@@ -105,6 +117,8 @@ else:
     REQUEST_DURATION = DummyMetric()  # type: ignore[assignment]
     LLM_CALL_DURATION = DummyMetric()  # type: ignore[assignment]
     TOOL_CALL_COUNT = DummyMetric()  # type: ignore[assignment]
+    TOOL_SAFETY_EVENT_COUNT = DummyMetric()  # type: ignore[assignment]
+    HITL_DECISION_COUNT = DummyMetric()  # type: ignore[assignment]
     SESSION_COUNT = DummyMetric()  # type: ignore[assignment]
 
 
