@@ -430,18 +430,25 @@ class EventBuilder:
         }
 
     @staticmethod
-    def done(assistant_data: dict[str, Any] | None = None, message_id: str | None = None) -> dict:
+    def done(
+        assistant_data: dict[str, Any] | None = None,
+        message_id: str | None = None,
+        scope_keys: list[str] | None = None,
+    ) -> dict:
         """Create a done event.
 
         Args:
             assistant_data: Optional assistant message data for persistence
             message_id: Optional ID of the persisted assistant message (ISSUE-019)
+            scope_keys: Optional scope key names for UI visibility (values redacted)
         """
         data: dict[str, Any] = {}
         if assistant_data:
             data["assistant_data"] = assistant_data
         if message_id:
             data["message_id"] = message_id
+        if scope_keys:
+            data["scope_keys"] = scope_keys
         return {"event": "done", "data": data}
 
     @staticmethod
@@ -488,18 +495,19 @@ class EventBuilder:
         args: dict[str, Any],
         session_id: str,
         action_requests: list[dict[str, Any]] | None = None,
+        scope_keys: list[str] | None = None,
     ) -> dict:
         """Create an interrupt event for HITL approval."""
-        return {
-            "event": "interrupt",
-            "data": {
-                "tool_call_id": tool_call_id,
-                "tool_name": tool_name,
-                "args": args,
-                "session_id": session_id,
-                "action_requests": action_requests or [],
-            },
+        data: dict[str, Any] = {
+            "tool_call_id": tool_call_id,
+            "tool_name": tool_name,
+            "args": args,
+            "session_id": session_id,
+            "action_requests": action_requests or [],
         }
+        if scope_keys:
+            data["scope_keys"] = scope_keys
+        return {"event": "interrupt", "data": data}
 
     @staticmethod
     def status(status: str) -> dict:
@@ -539,16 +547,17 @@ class EventBuilder:
         from_status: str,
         to_status: str,
         reason: str | None = None,
+        scope_keys: list[str] | None = None,
     ) -> dict:
         """Create a run state transition event."""
-        return {
-            "event": "run_state",
-            "data": {
-                "from_status": from_status,
-                "to_status": to_status,
-                "reason": reason,
-            },
+        data: dict[str, Any] = {
+            "from_status": from_status,
+            "to_status": to_status,
+            "reason": reason,
         }
+        if scope_keys:
+            data["scope_keys"] = scope_keys
+        return {"event": "run_state", "data": data}
 
     @staticmethod
     def callback(

@@ -161,6 +161,7 @@ The following fallback patterns exist and are tracked for removal. They produce 
 
 | Task | Layer | Status | Acceptance Criteria | Effort | Dependencies |
 |------|-------|--------|---------------------|--------|--------------|
+| **v0.10.0 P0 blocker: Canonical `effective_scope` propagation** | Layer 1/2/3/4/6/7 | Planned | Builder-defined `effective_scope: dict[str, str]` is extracted from trusted ingress and propagated through API, persistence, Deep Agents runtime context, tools, memory, artifacts, MCP, secrets, sandboxes, callbacks, events, logs, metrics, and traces; session/run scope is immutable; mismatched-scope runtime access is rejected; config inheritance is separated from exact-scope runtime resource access; tool-safety and external policy hooks receive scope plus action/resource descriptors; scoped isolation tests cover every touched v0.10.0 runtime boundary. Cognition carries builder-authorized scope and enforces returned decisions, but does not own authorization logic. | 3–5 days | None; blocks Wave 2B+ safety/runtime work |
 | Message persistence (SQLite/Postgres) | Layer 2 | In Progress | Messages survive server restart; SQLite works; Postgres works | 2 days | None |
 | Session lifecycle management | Layer 2 | In Progress | Sessions can be created, listed, retrieved, deleted | 1 day | None |
 | Basic tool execution security | Layer 3 | In Progress | No shell=True; no arbitrary code execution | 1 day | None |
@@ -391,23 +392,25 @@ This section tracks the v0.10.0 long-running agents release. See `localdocs/v0.1
 | Wave | Branches | Pre-Release Tag | Gate |
 |------|----------|-----------------|------|
 | 1 | `runner-lifecycle`, `artifacts-handoffs`, `sandbox-hardening` | `0.10.0-w1` | ✅ Complete — 27/28 API tests + 13/13 scenario tests pass on dev K8s |
-| 2 | `tool-safety`, `async-subagents`, `model-profiles`, `context-controls` | `0.10.0-w2` | Scenarios pass |
+| 2A | `scope-alignment` | `0.10.0-w2a` | P0 scope propagation and isolation matrix pass; blocks Wave 2B+ |
+| 2B | `tool-safety`, `async-subagents`, `model-profiles`, `context-controls` | `0.10.0-w2b` | Scenarios pass after scope gate |
 | 3 | `harness-eval`, `scoped-memory`, `code-interpreter`, `mcp-alignment` | `0.10.0-w3` | Scenarios pass |
 | 4 | `capability-registry`, `protocol-adapters` | `0.10.0-w4` | Scenarios pass |
 
-### Phase 0 Blockers
+### Release Gates And Phase 0 Blockers
 
 | Task | Target | Status |
 |------|--------|--------|
 | `feat/runtime-upgrade` → `main` | deepagents 0.6.3 + langchain-core >=1.4.0 | PR #115 |
 | `feat/k8s-security` → `main` | Shell injection, thread safety, dead code, error accuracy | PR #116 |
-| ROADMAP.md populated | 4 security + 1 dependency + 13 feature entries | Complete |
+| Canonical scope propagation | P0 feature entry + dedicated Wave 2A implementation gate | Planned |
+| ROADMAP.md populated | 4 security + 1 dependency + 14 feature entries | Complete |
 | `server/version.py` → `"0.10.0"` | Version bump on release branch | Complete |
 | `localdocs/v0.10.0-plan.md` | Agent reference document | Complete |
 
 ### Done Criteria
 
-See `localdocs/v0.10.0-long-running-agents-priorities.md` §v0.10.0 Definition Of Done for the full list of 17 release-level acceptance criteria.
+See `localdocs/v0.10.0-long-running-agents-priorities.md` §v0.10.0 Definition Of Done for the full release-level acceptance criteria.
 
 ---
 
