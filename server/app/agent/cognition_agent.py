@@ -54,31 +54,22 @@ class CognitionContext:
     """Invocation context passed to each agent run.
 
     LangGraph threads this through ``runtime.context`` so nodes and middleware
-    can scope Store namespaces to the requesting user/org/project without
-    needing to pass scope explicitly through every tool call.
+    can scope Store namespaces to the builder-authorized effective scope
+    without needing to pass scope explicitly through every tool call.
 
     Attributes:
-        user_id: Primary user identifier for Store namespace isolation.
-        org_id: Optional organisation identifier for org-shared namespaces.
-        project_id: Optional project identifier for project-scoped namespaces.
-        extra: Additional scope dimensions from session.scopes.
+        effective_scope: Builder-defined scope key-value pairs (e.g.
+            ``{"tenant": "acme", "project": "ios", "end_user": "user_123"}``).
+            Cognition does not hardcode a vocabulary — builders own scope keys.
     """
 
-    user_id: str = "anonymous"
-    org_id: str | None = None
-    project_id: str | None = None
-    extra: dict[str, str] = field(default_factory=dict)
+    effective_scope: dict[str, str] = field(default_factory=dict)
 
     @classmethod
     def from_scope(cls, scope: dict[str, str] | None) -> CognitionContext:
         if not scope:
             return cls()
-        return cls(
-            user_id=scope.get("user", "anonymous"),
-            org_id=scope.get("org"),
-            project_id=scope.get("project"),
-            extra={k: v for k, v in scope.items() if k not in ("user", "org", "project")},
-        )
+        return cls(effective_scope=dict(scope))
 
 
 @dataclass(frozen=True)
@@ -295,12 +286,9 @@ async def create_cognition_agent(params: CognitionAgentParams) -> CognitionAgent
     k8s_labels: dict[str, str] | None = None
     if params.scope:
         k8s_labels = {}
-        if "user" in params.scope:
-            k8s_labels["cognition.io/user"] = params.scope["user"]
-        if "org" in params.scope:
-            k8s_labels["cognition.io/org"] = params.scope["org"]
-        if "project" in params.scope:
-            k8s_labels["cognition.io/project"] = params.scope["project"]
+        for key, value in params.scope.items():
+            safe_key = key.replace("_", "-")
+            k8s_labels[f"cognition.io/{safe_key}"] = str(value)
         k8s_labels["cognition.io/session"] = sandbox_id
 
     config_store = params.config_store

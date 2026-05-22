@@ -386,8 +386,12 @@ async def send_message(
     # Enforce scoping - check if session scope matches current scope
     if not scope.is_empty() and not scope.matches(session.scopes):
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Session not found: {session_id}",
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=(
+                f"Scope mismatch: session '{session_id}' was created with scope "
+                f"{session.scopes}, but request has scope {scope.get_all()}. "
+                "Session scope is immutable after creation."
+            ),
         )
 
     # Get thread_id from session for state persistence
@@ -532,8 +536,12 @@ async def list_messages(
     # Enforce scoping - check if session scope matches current scope
     if not scope.is_empty() and not scope.matches(session.scopes):
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Session not found: {session_id}",
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=(
+                f"Scope mismatch: session '{session_id}' was created with scope "
+                f"{session.scopes}, but request has scope {scope.get_all()}. "
+                "Session scope is immutable after creation."
+            ),
         )
 
     messages, total = await store.get_messages_by_session(session_id, limit, offset)
@@ -599,8 +607,12 @@ async def get_message(
     # Enforce scoping - check if session scope matches current scope
     if not scope.is_empty() and not scope.matches(session.scopes):
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Session not found: {session_id}",
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=(
+                f"Scope mismatch: session '{session_id}' was created with scope "
+                f"{session.scopes}, but request has scope {scope.get_all()}. "
+                "Session scope is immutable after creation."
+            ),
         )
 
     message = await store.get_message(message_id)

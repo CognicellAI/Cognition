@@ -156,8 +156,8 @@ class TestStorePlumbingDoesNotBreakStreaming:
 class TestMultipleSessionsSameUser:
     """Two sessions for the same user don't interfere with each other.
 
-    With Store wired, Store namespaces are keyed on user_id from
-    CognitionContext. Two sessions for the same user share a namespace,
+    With Store wired, Store namespaces are derived from effective_scope.
+    Two sessions for the same scope share a namespace,
     but their LangGraph thread states are isolated. This verifies the
     two don't conflict.
     """
@@ -229,7 +229,7 @@ class TestMultipleSessionsSameUser:
 class TestUserScopeIsolation:
     """User A's sessions and Store namespace are isolated from user B.
 
-    CognitionContext.from_scope() maps session.scopes['user'] to user_id,
+    CognitionContext.from_scope() carries the builder-defined effective_scope,
     which is used to namespace Store entries. This class verifies that the
     scope isolation the rest of Cognition already enforces still holds
     after Store wiring.

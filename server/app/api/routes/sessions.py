@@ -140,10 +140,19 @@ async def _get_scoped_session(
     scope: SessionScope,
 ) -> Any:
     session = await store.get_session(session_id)
-    if session is None or (not scope.is_empty() and not scope.matches(session.scopes)):
+    if session is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Session not found: {session_id}",
+        )
+    if not scope.is_empty() and not scope.matches(session.scopes):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=(
+                f"Scope mismatch: session '{session_id}' was created with scope "
+                f"{session.scopes}, but request has scope {scope.get_all()}. "
+                "Session scope is immutable after creation."
+            ),
         )
     return session
 
