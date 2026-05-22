@@ -52,6 +52,19 @@ def _agent_to_response(agent: AgentDefinition) -> AgentResponse:
         tools=agent.tools or [],
         skills=agent.skills or [],
         system_prompt=agent.system_prompt,
+        subagents=[
+            {
+                "name": s.name,
+                "description": s.description,
+                "system_prompt": s.system_prompt,
+                "tools": s.tools,
+                "permissions": [
+                    p.model_dump() if hasattr(p, "model_dump") else dict(p)
+                    for p in (s.permissions or [])
+                ],
+            }
+            for s in agent.subagents or []
+        ],
     )
 
 
@@ -109,7 +122,7 @@ async def create_agent(
             "tools": body.tools,
             "skills": body.skills,
             "memory": body.memory,
-            "subagents": [],
+            "subagents": body.subagents,
             "interrupt_on": {
                 name: config.model_dump(exclude_none=True)
                 for name, config in body.interrupt_on.items()

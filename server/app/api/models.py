@@ -925,6 +925,7 @@ class AgentCreate(BaseModel):
     provider: str | None = Field(default=None)
     timeout_seconds: float | None = Field(default=None)
     middleware: list[Any] = Field(default_factory=list)
+    subagents: list[dict[str, Any]] = Field(default_factory=list)
     scope: dict[str, str] = Field(default_factory=dict)
 
 
@@ -940,6 +941,7 @@ class AgentUpdate(BaseModel):
     memory: list[str] | None = None
     interrupt_on: dict[str, HumanInTheLoopConfig] | None = None
     permissions: list[FilesystemPermissionConfig] | None = None
+    subagents: list[dict[str, Any]] | None = None
     response_format: str | None = None
     model: str | None = None
     temperature: float | None = None
