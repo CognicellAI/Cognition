@@ -101,6 +101,8 @@ async def agent_event_stream(
         SSE events as dictionaries. The final 'done' event contains
         the assistant message data for persistence.
     """
+    scope_keys: list[str] | None = list(scope.keys()) if scope else None
+
     try:
         # Get or create agent service for this session
         service = agent_manager.get_service(session_id)
@@ -124,7 +126,6 @@ async def agent_event_stream(
         tool_calls = []
         _current_tool_call = None
         token_count: int | float = 0
-        model_used: str | None = None
         metadata: dict[str, Any] = {}
 
         # Drain sandbox lifecycle events queued during agent setup
@@ -191,7 +192,9 @@ async def agent_event_stream(
                     status=SessionStatus.WAITING_FOR_APPROVAL.value,
                 )
                 yield EventBuilder.run_state(
-                    from_status="active", to_status=SessionStatus.WAITING_FOR_APPROVAL.value
+                    from_status="active",
+                    to_status=SessionStatus.WAITING_FOR_APPROVAL.value,
+                    scope_keys=scope_keys,
                 )
                 yield EventBuilder.interrupt(
                     tool_call_id=event.tool_call_id,
@@ -199,6 +202,7 @@ async def agent_event_stream(
                     args=event.args,
                     session_id=session_id,
                     action_requests=event.action_requests,
+                    scope_keys=scope_keys,
                 )
 
             elif isinstance(event, DelegationEvent):
@@ -224,7 +228,6 @@ async def agent_event_stream(
 
             elif isinstance(event, UsageEvent):
                 token_count = event.output_tokens
-                model_used = event.model
                 metadata["input_tokens"] = event.input_tokens
                 metadata["output_tokens"] = event.output_tokens
                 metadata["estimated_cost"] = event.estimated_cost
@@ -244,17 +247,6 @@ async def agent_event_stream(
                 yield EventBuilder.run_state(
                     from_status="active", to_status=SessionStatus.DONE.value
                 )
-                # ISSUE-019: Generate message_id upfront and include in done event
-                # This allows clients to correlate with persisted message without extra API call
-                message_id = event.message_id or str(uuid.uuid4())
-                assistant_data = {
-                    "content": "".join(accumulated_content),
-                    "tool_calls": tool_calls if tool_calls else None,
-                    "token_count": token_count,
-                    "model_used": model_used,
-                    "metadata": metadata if metadata else None,
-                }
-                yield EventBuilder.done(assistant_data=assistant_data, message_id=message_id)
 
             elif isinstance(event, ErrorEvent):
                 if event.code == "ABORTED":
@@ -262,16 +254,20 @@ async def agent_event_stream(
                         session_id=session_id, status=SessionStatus.ABORTED.value
                     )
                     yield EventBuilder.run_state(
-                        from_status="active", to_status=SessionStatus.ABORTED.value,
+                        from_status="active",
+                        to_status=SessionStatus.ABORTED.value,
                         reason="Execution aborted",
+                        scope_keys=scope_keys,
                     )
                 else:
                     await store.update_session(
                         session_id=session_id, status=SessionStatus.FAILED.value
                     )
                     yield EventBuilder.run_state(
-                        from_status="active", to_status=SessionStatus.FAILED.value,
+                        from_status="active",
+                        to_status=SessionStatus.FAILED.value,
                         reason=event.message,
+                        scope_keys=scope_keys,
                     )
                 yield EventBuilder.error(event.message, code=event.code)
 
@@ -289,6 +285,7 @@ async def agent_event_stream(
                     from_status=event.from_status,
                     to_status=event.to_status,
                     reason=event.reason,
+                    scope_keys=scope_keys,
                 )
 
             elif isinstance(event, CallbackEvent):
