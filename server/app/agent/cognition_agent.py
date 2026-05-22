@@ -595,11 +595,12 @@ async def create_cognition_agent(params: CognitionAgentParams) -> CognitionAgent
             "skills": agent_skills,
             "subagents": cast(Any, agent_subagents),
             "interrupt_on": cast(Any, agent_interrupt_on),
-            "permissions": _resolve_filesystem_permissions(agent_permissions),
             "response_format": resolved_response_format,
             "middleware": agent_middleware,
         },
     )
+    if agent_permissions is not None:
+        create_kwargs["permissions"] = _resolve_filesystem_permissions(agent_permissions)
     if agent_tool_token_limit_before_evict is not None:
         create_kwargs["tool_token_limit_before_evict"] = agent_tool_token_limit_before_evict
 
