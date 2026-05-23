@@ -18,6 +18,7 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Context controls MVP: `ContextPolicy` on agent config/global defaults, `context` SSE events, `GET /sessions/{id}/context` redacted debug metadata, Deep Agents summarization-tool middleware alignment, and `cognition_context_events_total` Prometheus metric.
 - Canonical builder-defined `effective_scope: dict[str, str]` propagation across API, persistence, runtime context, memory/artifacts, MCP, sandbox labels, callbacks, logs, metrics, and SSE events.
 - Scope-aware SSE metadata via `scope_keys` on terminal/state/interrupt events, redacting raw builder scope values.
 - Tool-safety middleware stack: trusted runtime context injection, schema-aware tool argument validation/repair feedback, and enhanced per-tool blocklist auditing.
@@ -54,6 +55,7 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- Context/token debug accounting now uses Deep Agents' `count_tokens_approximately()` wrapper instead of Cognition's previous word-count heuristic. `ContextPolicy.max_input_tokens`, `tool_token_limit_before_evict`, `summarizer_model`, `offload_large_tool_outputs`, and `retention` are surfaced for policy visibility/future enforcement; only summarization middleware attachment is enforced in this slice.
 - Session/run scope mismatch now returns `403 Forbidden` with explicit scope mismatch detail instead of hiding the resource as `404 Not Found`.
 - `CognitionContext` now uses canonical `effective_scope` instead of fixed `user_id`/`org_id`/`project_id` fields.
 - Deep Agents filesystem permissions are passed only when configured, avoiding upstream `FilesystemMiddleware` incompatibility with execution-capable sandbox backends for default agents.
@@ -68,6 +70,7 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Testing
 
+- `tests/e2e/test_scenarios/long_running_agents/test_context_controls.py` — scenario coverage for context policy API round-trip, `context` SSE events, and redacted session context debug metadata.
 - `tests/e2e/test_scenarios/long_running_agents/test_tool_safety_config.py` — 7 scenario tests covering HITL config, filesystem permissions, subagent permissions, and agent-cache invalidation.
 - Wave 2B pre-release image `0.10.0-w2b` validated on dev K8s with `46 passed, 2 skipped` across long-running agent scenarios and API-level lifecycle/artifact/streaming e2e tests.
 - `tests/e2e/test_session_lifecycle.py` — 9 tests: idempotency, 11-state enum, pause/cancel/abort, SSE heartbeat/status events.

@@ -8,6 +8,7 @@ from langchain_core.messages import AIMessageChunk
 from server.app.agent.cognition_agent import CognitionContext, _resolve_response_format
 from server.app.agent.resolver import RuntimeResolver
 from server.app.agent.runtime import (
+    ContextEvent,
     DeepAgentRuntime,
     HitlDecisionEvent,
     PlanningEvent,
@@ -76,6 +77,35 @@ class TestTodoStreamingTranslation:
 
         assert any(isinstance(event, PlanningEvent) for event in events)
         assert any(isinstance(event, StepCompleteEvent) for event in events)
+
+    @pytest.mark.asyncio
+    async def test_updates_emit_context_event_for_summarization_state(self) -> None:
+        agent = MagicMock()
+
+        async def _astream(*args, **kwargs):
+            yield {
+                "type": "updates",
+                "ns": (),
+                "data": {
+                    "model": {
+                        "_summarization_event": {
+                            "cutoff_index": 8,
+                            "file_path": "/conversation_history/summary-1",
+                        }
+                    }
+                },
+            }
+
+        agent.astream = _astream
+        runtime = DeepAgentRuntime(agent=agent, checkpointer=MagicMock(), thread_id="thread-1")
+
+        events = [event async for event in runtime.astream_events("hello", thread_id="thread-1")]
+
+        context_event = next(event for event in events if isinstance(event, ContextEvent))
+        assert context_event.action == "summarized"
+        assert context_event.run_id == "thread-1"
+        assert context_event.summarized_messages == 8
+        assert context_event.summary_id == "/conversation_history/summary-1"
 
 
 class TestProviderModelPlumbing:

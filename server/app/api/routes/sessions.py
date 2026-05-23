@@ -22,6 +22,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from fastapi.responses import StreamingResponse
 
 from server.app.agent.resolver import RuntimeResolver
+from server.app.agent.token_counter import count_text_tokens
 from server.app.api.dependencies import (
     get_config_store,
     get_scope_dep,
@@ -30,6 +31,8 @@ from server.app.api.dependencies import (
     get_storage_backend_dep,
 )
 from server.app.api.models import (
+    ContextDebugResponse,
+    ContextMessageDebug,
     ErrorResponse,
     SessionCreate,
     SessionList,
@@ -40,6 +43,7 @@ from server.app.api.models import (
 from server.app.api.scoping import SessionScope
 from server.app.api.sse import EventBuilder, SSEStream, get_last_event_id
 from server.app.llm.deep_agent_service import (
+    ContextEvent,
     DoneEvent,
     HitlDecisionEvent,
     SessionAgentManager,
@@ -75,6 +79,42 @@ def _as_session_provider(provider: str) -> SessionProvider | None:
 
 def _unprocessable_entity(detail: str) -> HTTPException:
     return HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=detail)
+
+
+def _policy_dict(policy: Any | None) -> dict[str, Any]:
+    if policy is None:
+        return {}
+    if hasattr(policy, "model_dump"):
+        return cast(dict[str, Any], policy.model_dump(exclude_none=True, mode="json"))
+    if isinstance(policy, dict):
+        return dict(policy)
+    return {}
+
+
+async def _resolve_context_policy(
+    session: Any,
+    config_store: ConfigStore,
+    scope: dict[str, str] | None,
+) -> dict[str, Any]:
+    agent_def = await config_store.get_agent_definition(session.agent_name, scope)
+    policy: dict[str, Any] = {}
+    if agent_def is not None:
+        policy = _policy_dict(agent_def.config.context_policy)
+        if agent_def.config.tool_token_limit_before_evict is not None:
+            policy.setdefault(
+                "tool_token_limit_before_evict",
+                agent_def.config.tool_token_limit_before_evict,
+            )
+
+    defaults = await config_store.get_global_agent_defaults(scope)
+    if not policy:
+        policy = _policy_dict(defaults.context_policy)
+    if defaults.tool_token_limit_before_evict is not None:
+        policy.setdefault(
+            "tool_token_limit_before_evict",
+            defaults.tool_token_limit_before_evict,
+        )
+    return policy
 
 
 async def _normalize_session_config(
@@ -282,6 +322,48 @@ async def get_session(
     return SessionResponse.from_core(session)
 
 
+@router.get(
+    "/{session_id}/context",
+    response_model=ContextDebugResponse,
+    responses={
+        404: {"model": ErrorResponse, "description": "Session not found"},
+    },
+)
+async def get_session_context(
+    session_id: str,
+    scope: SessionScope = Depends(get_scope_dep),
+    config_store: ConfigStore = Depends(get_config_store),  # noqa: B008
+    store: StorageBackend = Depends(get_storage_backend_dep),  # noqa: B008
+) -> ContextDebugResponse:
+    """Return scoped, redacted context policy and token-accounting metadata."""
+    session = await _get_scoped_session(session_id, store, scope)
+    scope_dict = scope.get_all() if not scope.is_empty() else session.scopes
+    messages = await store.list_messages_for_session(session_id)
+    debug_messages = [
+        ContextMessageDebug(
+            id=message.id,
+            role=message.role,
+            token_count=message.token_count,
+            estimated_tokens=message.token_count
+            if message.token_count is not None
+            else count_text_tokens(message.content),
+            created_at=message.created_at,
+        )
+        for message in messages
+    ]
+
+    return ContextDebugResponse(
+        session_id=session.id,
+        thread_id=session.thread_id,
+        agent_name=session.agent_name,
+        scope_keys=sorted(scope_dict),
+        policy=await _resolve_context_policy(session, config_store, scope_dict or None),
+        message_count=len(messages),
+        estimated_tokens=sum(message.estimated_tokens for message in debug_messages),
+        messages=debug_messages,
+    )
+
+
 @router.patch(
     "/{session_id}",
     response_model=SessionResponse,
@@ -468,6 +550,23 @@ async def resume_session(
                     estimated_cost=event.estimated_cost,
                     provider=event.provider,
                     model=event.model,
+                )
+            elif isinstance(event, ContextEvent):
+                yield EventBuilder.context(
+                    action=event.action,
+                    session_id=event.session_id,
+                    run_id=event.run_id,
+                    scope_keys=event.scope_keys,
+                    policy=event.policy,
+                    input_tokens=event.input_tokens,
+                    output_tokens=event.output_tokens,
+                    message_count=event.message_count,
+                    retained_messages=event.retained_messages,
+                    evicted_messages=event.evicted_messages,
+                    summarized_messages=event.summarized_messages,
+                    offloaded_messages=event.offloaded_messages,
+                    summary_id=event.summary_id,
+                    artifact_id=event.artifact_id,
                 )
             elif isinstance(event, DoneEvent):
                 yield EventBuilder.done(

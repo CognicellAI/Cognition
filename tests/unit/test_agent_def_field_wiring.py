@@ -392,6 +392,37 @@ class TestStructuredOutputAndContextControls:
         assert params is not None
         assert params.tool_token_limit_before_evict == 12345
 
+    @pytest.mark.asyncio
+    async def test_context_policy_passed_to_create_cognition_agent(self):
+        """context_policy from AgentConfig must be forwarded for Deep Agents alignment."""
+        from server.app.agent.definition import AgentConfig, AgentDefinition, ContextPolicy
+
+        session = _make_session()
+        mock_runtime = _make_mock_runtime(DoneEvent())
+        patches = _base_patches(mock_runtime, session)
+
+        policy = ContextPolicy(
+            max_input_tokens=32000,
+            tool_token_limit_before_evict=4096,
+            summarization_enabled=True,
+            offload_large_tool_outputs=True,
+            retention={"search": "summarize"},
+        )
+        agent_def = AgentDefinition(
+            name="test-agent",
+            system_prompt="test",
+            config=AgentConfig(context_policy=policy),
+        )
+        mock_def_registry = MagicMock()
+        mock_def_registry.get = MagicMock(return_value=agent_def)
+        mock_def_registry.subagents = MagicMock(return_value=[])
+
+        _, create_agent_mock = await _run(patches, session, mock_def_registry=mock_def_registry)
+
+        params = _get_params(create_agent_mock)
+        assert params is not None
+        assert params.context_policy == policy
+
 
 # ---------------------------------------------------------------------------
 # middleware wiring

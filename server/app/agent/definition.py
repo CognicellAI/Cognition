@@ -31,6 +31,46 @@ except ImportError:
     HAS_YAML = False
 
 
+class ContextPolicy(BaseModel):
+    """Declarative context management policy for an agent.
+
+    Cognition uses this as the builder-visible policy surface and maps the
+    supported pieces onto Deep Agents primitives. It is intentionally metadata
+    and policy only; it does not expose raw prompt contents.
+    """
+
+    max_input_tokens: int | None = Field(
+        default=None,
+        gt=0,
+        description="Advisory input-token budget surfaced in context events/debug APIs.",
+    )
+    tool_token_limit_before_evict: int | None = Field(
+        default=None,
+        gt=0,
+        description=(
+            "Advisory per-tool token budget. Deep Agents 0.6.2 no longer accepts "
+            "this as a create_deep_agent kwarg; Cognition surfaces it for policy "
+            "visibility and future enforcement."
+        ),
+    )
+    summarization_enabled: bool = Field(
+        default=True,
+        description="Whether Cognition should attach Deep Agents summarization middleware.",
+    )
+    summarizer_model: str | None = Field(
+        default=None,
+        description="Reserved model/profile hint for future summarizer selection.",
+    )
+    offload_large_tool_outputs: bool = Field(
+        default=True,
+        description="Reserved policy hint for future artifact offload enforcement.",
+    )
+    retention: dict[str, str] = Field(
+        default_factory=dict,
+        description="Reserved per-source retention hints for future enforcement.",
+    )
+
+
 class AgentConfig(BaseModel):
     """Agent runtime configuration.
 
@@ -46,6 +86,7 @@ class AgentConfig(BaseModel):
     max_tokens: int | None = Field(default=None, gt=0)
     recursion_limit: int | None = Field(default=None, gt=0)
     tool_token_limit_before_evict: int | None = Field(default=None, gt=0)
+    context_policy: ContextPolicy | None = Field(default=None)
     provider: str | None = Field(default=None)
     model: str | None = Field(default=None)
     timeout_seconds: float | None = Field(default=None, gt=0)
@@ -504,6 +545,7 @@ def load_agent_definition_from_markdown(path: str | Path) -> AgentDefinition:
             "max_tokens",
             "recursion_limit",
             "tool_token_limit_before_evict",
+            "context_policy",
             "provider",
             "model",
             "timeout_seconds",

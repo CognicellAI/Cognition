@@ -3,13 +3,16 @@
 Tests for the Phase 5 REST API implementation with workspace-based sessions.
 """
 
+import asyncio
 import tempfile
+import uuid
 from unittest.mock import AsyncMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
 
-from server.app.api.dependencies import set_config_store
+from server.app.agent.token_counter import count_text_tokens
+from server.app.api.dependencies import get_storage_backend_dep, set_config_store
 from server.app.main import app
 
 # Create test client
@@ -118,6 +121,54 @@ class TestSessionEndpoints:
         """Test getting a non-existent session."""
         response = client.get("/sessions/non-existent-id")
         assert response.status_code == 404
+
+    def test_get_session_context_debug_metadata(self):
+        """Context debug endpoint returns redacted policy/token metadata."""
+        create_resp = client.post("/sessions", json={"title": "context-debug"})
+        session_id = create_resp.json()["id"]
+
+        response = client.get(f"/sessions/{session_id}/context")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["session_id"] == session_id
+        assert data["agent_name"] == "default"
+        assert data["scope_keys"] == []
+        assert data["policy"] == {}
+        assert data["message_count"] == 0
+        assert data["estimated_tokens"] == 0
+        assert data["messages"] == []
+
+    def test_get_session_context_debug_redacts_message_content(self):
+        """Context debug endpoint returns counts and IDs, not raw message content."""
+        create_resp = client.post("/sessions", json={"title": "context-debug-redaction"})
+        session_id = create_resp.json()["id"]
+        message_id = str(uuid.uuid4())
+
+        async def _create_message() -> None:
+            store = get_storage_backend_dep()
+            await store.create_message(
+                message_id=message_id,
+                session_id=session_id,
+                role="user",
+                content="secret customer content should not appear",
+                token_count=None,
+            )
+
+        asyncio.run(_create_message())
+
+        response = client.get(f"/sessions/{session_id}/context")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["message_count"] == 1
+        assert data["estimated_tokens"] == count_text_tokens(
+            "secret customer content should not appear"
+        )
+        assert data["messages"][0]["id"] == message_id
+        assert data["messages"][0]["role"] == "user"
+        assert "content" not in data["messages"][0]
+        assert "secret customer content" not in response.text
 
     def test_update_session(self):
         """Test updating a session."""

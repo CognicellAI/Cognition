@@ -21,6 +21,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
+from server.app.agent.definition import ContextPolicy
+
 PROVIDER_TYPES = {
     "openai",
     "anthropic",
@@ -428,6 +430,7 @@ class GlobalAgentDefaults(BaseModel):
     permissions: list[dict[str, Any]] = Field(default_factory=list)
     response_format: str | None = Field(default=None)
     tool_token_limit_before_evict: int | None = Field(default=None, gt=0)
+    context_policy: ContextPolicy | None = Field(default=None)
     recursion_limit: int = Field(default=1000, gt=0)
     mcp_servers: dict[str, Any] = Field(default_factory=dict)
 

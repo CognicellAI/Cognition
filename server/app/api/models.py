@@ -11,7 +11,11 @@ from typing import Any, Literal
 
 from pydantic import AnyHttpUrl, BaseModel, Field
 
-from server.app.agent.definition import FilesystemPermissionConfig, HumanInTheLoopConfig
+from server.app.agent.definition import (
+    ContextPolicy,
+    FilesystemPermissionConfig,
+    HumanInTheLoopConfig,
+)
 from server.app.models import Session as CoreSession
 from server.app.models import SessionConfig
 
@@ -167,6 +171,29 @@ class MessageList(BaseModel):
     has_more: bool = Field(False, description="Whether more messages exist")
 
 
+class ContextMessageDebug(BaseModel):
+    """Redacted message metadata used for context debugging."""
+
+    id: str
+    role: str
+    token_count: int | None = None
+    estimated_tokens: int
+    created_at: datetime
+
+
+class ContextDebugResponse(BaseModel):
+    """Scoped context policy and token-accounting debug response."""
+
+    session_id: str
+    thread_id: str
+    agent_name: str
+    scope_keys: list[str] = Field(default_factory=list)
+    policy: dict[str, Any] = Field(default_factory=dict)
+    message_count: int
+    estimated_tokens: int
+    messages: list[ContextMessageDebug] = Field(default_factory=list)
+
+
 # ============================================================================
 # SSE Event Models
 # ============================================================================
@@ -209,6 +236,16 @@ class ToolSafetyEvent(BaseModel):
 
     event: Literal["tool_safety"] = "tool_safety"
     data: dict = Field(..., description="Tool safety action, fields, errors, and message")
+
+
+class ContextEvent(BaseModel):
+    """Server-sent event: context policy, budget, and lifecycle signal."""
+
+    event: Literal["context"] = "context"
+    data: dict = Field(
+        ...,
+        description="Context action with policy, token budget, and redacted scope metadata",
+    )
 
 
 class ErrorEvent(BaseModel):
@@ -520,6 +557,7 @@ class GlobalAgentDefaultsResponse(BaseModel):
     permissions: list[dict[str, Any]] = Field(default_factory=list)
     response_format: str | None = None
     tool_token_limit_before_evict: int | None = None
+    context_policy: ContextPolicy | None = None
     recursion_limit: int
     mcp_servers: dict[str, Any] = Field(default_factory=dict)
 
@@ -534,6 +572,7 @@ class GlobalAgentDefaultsUpdate(BaseModel):
     permissions: list[FilesystemPermissionConfig] | None = None
     response_format: str | None = None
     tool_token_limit_before_evict: int | None = None
+    context_policy: ContextPolicy | None = None
     recursion_limit: int | None = None
     mcp_servers: dict[str, Any] | None = None
 
@@ -596,6 +635,7 @@ class AgentConfigResponse(BaseModel):
     max_tokens: int | None = None
     recursion_limit: int | None = None
     tool_token_limit_before_evict: int | None = None
+    context_policy: ContextPolicy | None = None
     provider: str | None = None
     model: str | None = None
     timeout_seconds: float | None = None
@@ -926,6 +966,7 @@ class AgentCreate(BaseModel):
     max_tokens: int | None = Field(default=None)
     recursion_limit: int | None = Field(default=None)
     tool_token_limit_before_evict: int | None = Field(default=None)
+    context_policy: ContextPolicy | None = Field(default=None)
     provider: str | None = Field(default=None)
     timeout_seconds: float | None = Field(default=None)
     middleware: list[Any] = Field(default_factory=list)
@@ -952,6 +993,7 @@ class AgentUpdate(BaseModel):
     max_tokens: int | None = None
     recursion_limit: int | None = None
     tool_token_limit_before_evict: int | None = None
+    context_policy: ContextPolicy | None = None
     provider: str | None = None
     timeout_seconds: float | None = None
     middleware: list[Any] | None = None

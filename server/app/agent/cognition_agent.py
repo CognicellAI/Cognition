@@ -116,6 +116,7 @@ class RuntimeContext:
     permissions: tuple[tuple[tuple[str, ...], tuple[str, ...], str], ...]
     response_format: str
     tool_token_limit_before_evict: int | None
+    context_policy: str
     middleware_count: int
     tools_count: int
     sandbox_backend: str
@@ -135,6 +136,7 @@ class RuntimeContext:
         permissions: Sequence[Any] | None,
         response_format: str | type[Any] | None,
         tool_token_limit_before_evict: int | None,
+        context_policy: Any | None,
         middleware: Sequence[Any] | None,
         tools: Sequence[Any] | None,
         settings: Settings,
@@ -158,6 +160,7 @@ class RuntimeContext:
             if response_format
             else "None",
             tool_token_limit_before_evict=tool_token_limit_before_evict,
+            context_policy=_json_cache_key(context_policy),
             middleware_count=len(middleware) if middleware else 0,
             tools_count=len(tools) if tools else 0,
             sandbox_backend=settings.sandbox_backend,
@@ -194,6 +197,24 @@ def _mapping_cache_key(mapping: Mapping[str, Any] | None) -> tuple[tuple[str, st
             for key, value in mapping.items()
         )
     )
+
+
+def _json_cache_key(value: Any | None) -> str:
+    if value is None:
+        return "None"
+    if hasattr(value, "model_dump"):
+        value = value.model_dump(exclude_none=True)
+    return json.dumps(value, sort_keys=True, default=str)
+
+
+def _context_policy_enables_summarization_tool(context_policy: Any | None) -> bool:
+    if context_policy is None:
+        return False
+    if hasattr(context_policy, "summarization_enabled"):
+        return bool(context_policy.summarization_enabled)
+    if isinstance(context_policy, Mapping):
+        return bool(context_policy.get("summarization_enabled", False))
+    return False
 
 
 def _permission_dict(permission: Any) -> dict[str, Any]:
@@ -293,6 +314,7 @@ class CognitionAgentParams:
     permissions: Sequence[Any] | None = None
     response_format: str | type[Any] | None = None
     tool_token_limit_before_evict: int | None = None
+    context_policy: Any | None = None
     middleware: Sequence[Any] | None = None
     tools: Sequence[Any] | None = None
     settings: Settings | None = None
@@ -398,6 +420,7 @@ async def create_cognition_agent(params: CognitionAgentParams) -> CognitionAgent
         permissions=params.permissions,
         response_format=params.response_format,
         tool_token_limit_before_evict=params.tool_token_limit_before_evict,
+        context_policy=params.context_policy,
         middleware=params.middleware,
         tools=params.tools,
         settings=settings,
@@ -489,7 +512,7 @@ async def create_cognition_agent(params: CognitionAgentParams) -> CognitionAgent
     agent_interrupt_on: dict[str, Any]
     agent_permissions: Sequence[Any] | None
     agent_response_format: str | type[Any] | None = params.response_format
-    agent_tool_token_limit_before_evict = params.tool_token_limit_before_evict
+    agent_context_policy = params.context_policy
 
     if params.permissions is not None:
         agent_permissions = list(params.permissions)
@@ -503,12 +526,15 @@ async def create_cognition_agent(params: CognitionAgentParams) -> CognitionAgent
         defaults = await _defaults()
         if defaults:
             agent_interrupt_on = dict(defaults.interrupt_on)
-            if agent_response_format is None:
-                agent_response_format = defaults.response_format
-            if agent_tool_token_limit_before_evict is None:
-                agent_tool_token_limit_before_evict = defaults.tool_token_limit_before_evict
         else:
             agent_interrupt_on = {}
+
+    defaults = await _defaults()
+    if defaults:
+        if agent_response_format is None:
+            agent_response_format = defaults.response_format
+        if agent_context_policy is None:
+            agent_context_policy = defaults.context_policy
 
     if params.system_prompt:
         prompt = params.system_prompt
@@ -551,6 +577,18 @@ async def create_cognition_agent(params: CognitionAgentParams) -> CognitionAgent
                 logger.info("Added MCP tools", server=server_name, count=len(mcp_tools))
         except Exception as e:
             logger.error("Failed to initialize MCP tools", error=str(e))
+
+    if _context_policy_enables_summarization_tool(agent_context_policy):
+        try:
+            from deepagents.middleware.summarization import (
+                create_summarization_tool_middleware,
+            )
+
+            agent_middleware.append(
+                create_summarization_tool_middleware(params.model, backend)
+            )
+        except Exception as e:
+            logger.warning("Failed to add Deep Agents summarization tool", error=str(e))
 
     agent_middleware.extend(
         [
@@ -601,8 +639,6 @@ async def create_cognition_agent(params: CognitionAgentParams) -> CognitionAgent
     )
     if agent_permissions is not None:
         create_kwargs["permissions"] = _resolve_filesystem_permissions(agent_permissions)
-    if agent_tool_token_limit_before_evict is not None:
-        create_kwargs["tool_token_limit_before_evict"] = agent_tool_token_limit_before_evict
 
     agent = cast(Any, create_deep_agent)(**create_kwargs)
 

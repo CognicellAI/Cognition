@@ -158,6 +158,30 @@ class ToolSafetyEvent(AgentEvent):
 
 
 @dataclass
+class ContextEvent(AgentEvent):
+    """Context policy, budget, and lifecycle signal.
+
+    Context events intentionally expose counts, policy knobs, and scope key
+    names only. They must not include raw message content or raw scope values.
+    """
+
+    action: str
+    session_id: str | None = None
+    run_id: str | None = None
+    scope_keys: list[str] = field(default_factory=list)
+    policy: dict[str, Any] = field(default_factory=dict)
+    input_tokens: int | None = None
+    output_tokens: int | None = None
+    message_count: int | None = None
+    retained_messages: int | None = None
+    evicted_messages: int | None = None
+    summarized_messages: int | None = None
+    offloaded_messages: int | None = None
+    summary_id: str | None = None
+    artifact_id: str | None = None
+
+
+@dataclass
 class StatusEvent(AgentEvent):
     """Agent status update."""
 
@@ -310,6 +334,7 @@ StreamEvent = (
     | ToolCallEvent
     | ToolResultEvent
     | ToolSafetyEvent
+    | ContextEvent
     | StatusEvent
     | DoneEvent
     | ErrorEvent
@@ -351,6 +376,22 @@ def _extract_todos_from_update(update: Any) -> list[dict[str, Any]] | None:
         todos = state_update.get("todos")
         if isinstance(todos, list):
             return [_normalize_todo_item(todo) for todo in todos]
+    return None
+
+
+def _extract_summarization_event_from_update(update: Any) -> Mapping[str, Any] | None:
+    """Extract Deep Agents summarization state from an updates-mode chunk."""
+    if not isinstance(update, Mapping):
+        return None
+
+    candidates: list[Any] = [update]
+    candidates.extend(value for value in update.values() if isinstance(value, Mapping))
+    for candidate in candidates:
+        if not isinstance(candidate, Mapping):
+            continue
+        event = candidate.get("_summarization_event")
+        if isinstance(event, Mapping):
+            return event
     return None
 
 
@@ -870,6 +911,19 @@ class DeepAgentRuntime:
                         for step_event in _completed_step_events(previous_todos, todos):
                             yield step_event
                         previous_todos = todos
+
+                    summarization_event = _extract_summarization_event_from_update(data)
+                    if summarization_event is not None:
+                        file_path = summarization_event.get("file_path")
+                        cutoff_index = summarization_event.get("cutoff_index")
+                        yield ContextEvent(
+                            action="summarized",
+                            run_id=tid,
+                            summarized_messages=int(cutoff_index)
+                            if isinstance(cutoff_index, int)
+                            else None,
+                            summary_id=str(file_path) if file_path is not None else None,
+                        )
 
                     is_subagent = any(s.startswith("tools:") for s in ns)
 
