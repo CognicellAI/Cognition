@@ -72,6 +72,13 @@ def test_patch_agent_defaults() -> None:
                     "mode": "allow",
                 }
             ],
+            "async_subagents": [
+                {
+                    "name": "researcher",
+                    "description": "Runs long research tasks",
+                    "graph_id": "research_graph",
+                }
+            ],
             "context_policy": {
                 "max_input_tokens": 64000,
                 "summarization_enabled": False,
@@ -86,6 +93,8 @@ def test_patch_agent_defaults() -> None:
     assert data["memory"] == ["AGENTS.md", "TEAM.md"]
     assert data["interrupt_on"]["execute"]["allowed_decisions"] == ["approve", "reject"]
     assert data["permissions"][0]["operations"] == ["read"]
+    assert data["async_subagents"][0]["name"] == "researcher"
+    assert data["async_subagents"][0]["graph_id"] == "research_graph"
     assert data["context_policy"]["max_input_tokens"] == 64000
     assert data["context_policy"]["summarization_enabled"] is False
     assert data["context_policy"]["retention"] == {"search": "retain"}

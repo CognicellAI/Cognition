@@ -66,6 +66,7 @@ def _agent_to_response(agent: AgentDefinition) -> AgentResponse:
             }
             for s in agent.subagents or []
         ],
+        async_subagents=list(agent.async_subagents or []),
     )
 
 
@@ -124,6 +125,9 @@ async def create_agent(
             "skills": body.skills,
             "memory": body.memory,
             "subagents": body.subagents,
+            "async_subagents": [
+                spec.model_dump(exclude_none=True) for spec in body.async_subagents
+            ],
             "interrupt_on": {
                 name: config.model_dump(exclude_none=True)
                 for name, config in body.interrupt_on.items()

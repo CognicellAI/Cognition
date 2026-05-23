@@ -157,6 +157,7 @@ class ResolvedAgentConfig:
     tool_token_limit_before_evict: int | None = None
     context_policy: Any | None = None
     subagents: list[Any] = field(default_factory=list)
+    async_subagents: list[Any] = field(default_factory=list)
     agent_def: Any = None
 
 
@@ -271,6 +272,12 @@ class DeepAgentStreamingService:
             if s.name != agent_def.name
         ]
 
+        if agent_def.async_subagents:
+            resolved.async_subagents = [
+                spec.model_dump(exclude_none=True) if hasattr(spec, "model_dump") else dict(spec)
+                for spec in agent_def.async_subagents
+            ]
+
         if agent_def.memory:
             resolved.memory = list(agent_def.memory)
 
@@ -379,6 +386,7 @@ class DeepAgentStreamingService:
                 system_prompt=agent_cfg.system_prompt,
                 skills=agent_cfg.skills if agent_cfg.skills else None,
                 subagents=agent_cfg.subagents,
+                async_subagents=agent_cfg.async_subagents,
                 memory=agent_cfg.memory,
                 interrupt_on=agent_cfg.interrupt_on,
                 permissions=agent_cfg.permissions,
@@ -580,6 +588,7 @@ class DeepAgentStreamingService:
                 system_prompt=agent_cfg.system_prompt,
                 skills=agent_cfg.skills if agent_cfg.skills else None,
                 subagents=agent_cfg.subagents,
+                async_subagents=agent_cfg.async_subagents,
                 memory=agent_cfg.memory,
                 interrupt_on=agent_cfg.interrupt_on,
                 permissions=agent_cfg.permissions,

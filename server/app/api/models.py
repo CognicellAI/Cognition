@@ -12,6 +12,7 @@ from typing import Any, Literal
 from pydantic import AnyHttpUrl, BaseModel, Field
 
 from server.app.agent.definition import (
+    AsyncSubagentConfig,
     ContextPolicy,
     FilesystemPermissionConfig,
     HumanInTheLoopConfig,
@@ -553,6 +554,7 @@ class GlobalAgentDefaultsResponse(BaseModel):
     memory: list[str] = Field(default_factory=list)
     skills: list[str] = Field(default_factory=list)
     subagents: list[dict[str, Any]] = Field(default_factory=list)
+    async_subagents: list[AsyncSubagentConfig] = Field(default_factory=list)
     interrupt_on: dict[str, Any] = Field(default_factory=dict)
     permissions: list[dict[str, Any]] = Field(default_factory=list)
     response_format: str | None = None
@@ -568,6 +570,7 @@ class GlobalAgentDefaultsUpdate(BaseModel):
     memory: list[str] | None = None
     skills: list[str] | None = None
     subagents: list[dict[str, Any]] | None = None
+    async_subagents: list[AsyncSubagentConfig] | None = None
     interrupt_on: dict[str, HumanInTheLoopConfig] | None = None
     permissions: list[FilesystemPermissionConfig] | None = None
     response_format: str | None = None
@@ -617,6 +620,13 @@ class AgentResponse(BaseModel):
     subagents: list[dict[str, Any]] = Field(
         default_factory=list,
         description="Subagent definitions for this agent",
+    )
+    async_subagents: list[AsyncSubagentConfig] = Field(
+        default_factory=list,
+        description=(
+            "Experimental remote Agent Protocol async subagents exposed as "
+            "background task tools"
+        ),
     )
     # ISSUE-009: Added tools and skills for better agent introspection
     tools: list[str] = Field(
@@ -971,6 +981,7 @@ class AgentCreate(BaseModel):
     timeout_seconds: float | None = Field(default=None)
     middleware: list[Any] = Field(default_factory=list)
     subagents: list[dict[str, Any]] = Field(default_factory=list)
+    async_subagents: list[AsyncSubagentConfig] = Field(default_factory=list)
     scope: dict[str, str] = Field(default_factory=dict)
 
 
@@ -987,6 +998,7 @@ class AgentUpdate(BaseModel):
     interrupt_on: dict[str, HumanInTheLoopConfig] | None = None
     permissions: list[FilesystemPermissionConfig] | None = None
     subagents: list[dict[str, Any]] | None = None
+    async_subagents: list[AsyncSubagentConfig] | None = None
     response_format: str | None = None
     model: str | None = None
     temperature: float | None = None

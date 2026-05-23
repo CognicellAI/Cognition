@@ -21,7 +21,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
-from server.app.agent.definition import ContextPolicy
+from server.app.agent.definition import AsyncSubagentConfig, ContextPolicy
 
 PROVIDER_TYPES = {
     "openai",
@@ -426,6 +426,7 @@ class GlobalAgentDefaults(BaseModel):
     memory: list[str] = Field(default_factory=lambda: ["AGENTS.md"])
     skills: list[str] = Field(default_factory=list)
     subagents: list[dict[str, Any]] = Field(default_factory=list)
+    async_subagents: list[AsyncSubagentConfig] = Field(default_factory=list)
     interrupt_on: dict[str, Any] = Field(default_factory=dict)
     permissions: list[dict[str, Any]] = Field(default_factory=list)
     response_format: str | None = Field(default=None)

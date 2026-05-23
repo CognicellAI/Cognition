@@ -18,6 +18,7 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Experimental async subagent configuration MVP: agents and global defaults can declare remote Agent Protocol async subagents (`name`, `description`, `graph_id`, optional `url`) that are wired into Deep Agents async task tools without adding a header/secret injection surface. This is remote Agent Protocol delegation, not Cognition's simple in-process supervisor/subagent pattern.
 - Context controls MVP: `ContextPolicy` on agent config/global defaults, `context` SSE events, `GET /sessions/{id}/context` redacted debug metadata, Deep Agents summarization-tool middleware alignment, and `cognition_context_events_total` Prometheus metric.
 - Canonical builder-defined `effective_scope: dict[str, str]` propagation across API, persistence, runtime context, memory/artifacts, MCP, sandbox labels, callbacks, logs, metrics, and SSE events.
 - Scope-aware SSE metadata via `scope_keys` on terminal/state/interrupt events, redacting raw builder scope values.
@@ -70,6 +71,7 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Testing
 
+- `tests/e2e/test_scenarios/long_running_agents/test_async_subagents_config.py` — scenario coverage for experimental async subagent API round-trip and header-free config surface.
 - `tests/e2e/test_scenarios/long_running_agents/test_context_controls.py` — scenario coverage for context policy API round-trip, `context` SSE events, and redacted session context debug metadata.
 - `tests/e2e/test_scenarios/long_running_agents/test_tool_safety_config.py` — 7 scenario tests covering HITL config, filesystem permissions, subagent permissions, and agent-cache invalidation.
 - Wave 2B pre-release image `0.10.0-w2b` validated on dev K8s with `46 passed, 2 skipped` across long-running agent scenarios and API-level lifecycle/artifact/streaming e2e tests.

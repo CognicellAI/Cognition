@@ -1355,6 +1355,7 @@ async def create_agent_runtime(
             tools=tools if tools else None,
             memory=definition.memory,
             skills=definition.skills,
+            async_subagents=definition.async_subagents,
             middleware=resolved_middleware if resolved_middleware else None,
             checkpointer=checkpointer,
             settings=settings,

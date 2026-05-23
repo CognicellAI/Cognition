@@ -114,6 +114,14 @@ class TestCreateAgent:
                     "mode": "allow",
                 }
             ],
+            "async_subagents": [
+                {
+                    "name": "researcher",
+                    "description": "Runs long research tasks",
+                    "graph_id": "research_graph",
+                    "url": "https://agents.example.com",
+                }
+            ],
         }
         response = client.post("/agents", json=payload)
         assert response.status_code == 201
@@ -131,6 +139,8 @@ class TestCreateAgent:
         assert data["config"]["timeout_seconds"] == 45
         assert data["interrupt_on"]["execute"]["allowed_decisions"] == ["approve", "reject"]
         assert data["permissions"][0]["paths"] == ["/workspace/repo/**"]
+        assert data["async_subagents"][0]["name"] == "researcher"
+        assert data["async_subagents"][0]["graph_id"] == "research_graph"
 
     def test_get_preserves_top_level_provider(self):
         client.post(

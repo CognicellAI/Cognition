@@ -114,6 +114,22 @@ class HumanInTheLoopConfig(BaseModel):
     args_schema: dict[str, Any] | None = None
 
 
+class AsyncSubagentConfig(BaseModel):
+    """Experimental remote Agent Protocol async subagent.
+
+    This v0.10 surface intentionally excludes arbitrary request headers to avoid
+    introducing a new secret-reference or secret-injection path. Builders can use
+    trusted networks or gateway-level authentication until a scoped credential
+    mechanism exists. This is distinct from simple in-process supervisor/subagent
+    patterns; it requires an Agent Protocol-compatible worker deployment.
+    """
+
+    name: str = Field(..., min_length=1, max_length=100)
+    description: str = Field(..., min_length=1)
+    graph_id: str = Field(..., min_length=1)
+    url: str | None = Field(default=None, min_length=1)
+
+
 class SubagentDefinition(BaseModel):
     """Definition of a subagent.
 
@@ -172,6 +188,7 @@ class AgentDefinition(BaseModel):
     skills: list[str] = Field(default_factory=list)
     memory: list[str] = Field(default_factory=list)
     subagents: list[SubagentDefinition] = Field(default_factory=list)
+    async_subagents: list[AsyncSubagentConfig] = Field(default_factory=list)
     interrupt_on: dict[str, HumanInTheLoopConfig] = Field(default_factory=dict)
     permissions: list[FilesystemPermissionConfig] = Field(default_factory=list)
     response_format: str | None = Field(default=None)
@@ -563,6 +580,7 @@ def load_agent_definition_from_markdown(path: str | Path) -> AgentDefinition:
         tools=frontmatter.get("tools", []),
         skills=frontmatter.get("skills", []),
         memory=frontmatter.get("memory", []),
+        async_subagents=frontmatter.get("async_subagents", []),
         config=AgentConfig(**config_kwargs),
     )
 
@@ -572,6 +590,7 @@ def load_agent_definition_from_markdown(path: str | Path) -> AgentDefinition:
 __all__ = [
     "AgentConfig",
     "AgentDefinition",
+    "AsyncSubagentConfig",
     "SubagentDefinition",
     "create_default_agent_definition",
     "load_agent_definition",
