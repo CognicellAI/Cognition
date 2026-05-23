@@ -625,6 +625,33 @@ class McpServerList(BaseModel):
 
 
 # ============================================================================
+# Capability Models
+# ============================================================================
+
+
+class VersionInfo(BaseModel):
+    """Version information for installed runtime packages."""
+
+    cognition: str
+    deepagents: str
+    langgraph: str
+    langchain: str
+    langchain_core: str
+
+
+class CapabilityResponse(BaseModel):
+    """Deployment capability and compatibility report."""
+
+    versions: VersionInfo
+    stream_protocols: list[str]
+    sandbox_backends: list[str]
+    features: dict[str, bool]
+    middleware: list[str]
+    scope_keys: list[str]
+    deployment: dict[str, Any]
+
+
+# ============================================================================
 # Agent Models
 # ============================================================================
 
