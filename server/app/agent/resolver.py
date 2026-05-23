@@ -420,6 +420,7 @@ class RuntimeResolver:
                     url=s.url,
                     headers=s.headers,
                     enabled=s.enabled,
+                    transport=s.transport,
                 )
                 for s in servers
                 if s.enabled

@@ -33,8 +33,7 @@ from deepagents import create_deep_agent as _create_deep_agent
 
 logger = structlog.get_logger(__name__)
 
-from server.app.agent.mcp_adapter import create_mcp_tools  # noqa: E402
-from server.app.agent.mcp_client import McpManager, McpServerConfig  # noqa: E402
+from server.app.agent.mcp_client import McpServerConfig, create_mcp_client  # noqa: E402
 from server.app.agent.middleware import (  # noqa: E402
     CognitionObservabilityMiddleware,
     CognitionStreamingMiddleware,
@@ -622,23 +621,26 @@ async def create_cognition_agent(params: CognitionAgentParams) -> CognitionAgent
     agent_tools.extend(built_in_tools)
 
     if params.mcp_configs:
-        mcp_manager = McpManager()
-        for config in params.mcp_configs:
-            if config.enabled:
-                try:
-                    mcp_manager.add_server(config)
-                except ValueError as e:
-                    logger.warning("Failed to add MCP server", server=config.name, error=str(e))
+        from server.app.agent.mcp_client import (
+            _build_mcp_callbacks,
+            _build_mcp_interceptors,
+        )
 
-        try:
-            await mcp_manager.connect_all()
-            all_mcp_tools = await mcp_manager.get_all_tools()
-            for server_name, tool_infos in all_mcp_tools.items():
-                mcp_tools = create_mcp_tools(mcp_manager.clients[server_name], tool_infos)
+        enabled_configs = [c for c in params.mcp_configs if c.enabled]
+        if enabled_configs:
+            try:
+                mcp_callbacks = _build_mcp_callbacks()
+                mcp_interceptors = _build_mcp_interceptors(params.scope)
+                mcp_client = create_mcp_client(
+                    enabled_configs,
+                    callbacks=mcp_callbacks,
+                    tool_interceptors=mcp_interceptors,
+                )
+                mcp_tools = await mcp_client.get_tools()
                 agent_tools.extend(mcp_tools)
-                logger.info("Added MCP tools", server=server_name, count=len(mcp_tools))
-        except Exception as e:
-            logger.error("Failed to initialize MCP tools", error=str(e))
+                logger.info("MCP tools loaded", count=len(mcp_tools))
+            except Exception as e:
+                logger.error("Failed to initialize MCP tools", error=str(e))
 
     if _context_policy_enables_summarization_tool(agent_context_policy):
         try:

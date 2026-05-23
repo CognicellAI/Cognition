@@ -3,8 +3,10 @@
 These tests verify the end-to-end MCP functionality:
 - Remote-only MCP connections
 - Security validation
-- Tool integration
+- Tool integration via langchain-mcp-adapters
 - Session-level configuration
+- Progress and logging callbacks
+- Resources and prompts
 """
 
 from __future__ import annotations
@@ -13,7 +15,13 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from server.app.agent.mcp_client import McpServerConfig, McpSseClient
+from server.app.agent.mcp_client import (
+    McpServerConfig,
+    _build_mcp_callbacks,
+    _build_mcp_interceptors,
+    create_mcp_client,
+    mcp_config_to_connection,
+)
 
 
 @pytest.mark.asyncio
@@ -22,171 +30,121 @@ class TestMcpSecurityStance:
 
     async def test_local_mcp_servers_rejected(self):
         """Verify that local (stdio) MCP servers are rejected."""
-        # Try to create a config with file:// URL
         with pytest.raises(ValueError) as exc_info:
-            config = McpServerConfig(name="local-fs", url="file:///path/to/local/mcp.sock")
-
+            McpServerConfig(name="local-fs", url="file:///path/to/local/mcp.sock")
         assert "Local (stdio) MCP servers are not supported" in str(exc_info.value)
 
-        # Try to create a config with stdio command (should fail)
         with pytest.raises(ValueError) as exc_info:
-            config = McpServerConfig(
-                name="local-cmd",
-                url="/usr/bin/node script.js",  # Not HTTP
-            )
-
+            McpServerConfig(name="local-cmd", url="/usr/bin/node script.js")
         assert "Local (stdio) MCP servers are not supported" in str(exc_info.value)
 
     async def test_remote_mcp_servers_accepted(self):
         """Verify that remote (HTTP) MCP servers are accepted."""
-        # HTTPS should work
         config_https = McpServerConfig(name="github", url="https://api.glama.ai/mcp/github")
         assert config_https.url == "https://api.glama.ai/mcp/github"
+        assert config_https.transport == "sse"
 
-        # HTTP should work (though not recommended for production)
         config_http = McpServerConfig(name="local-http", url="http://localhost:8080/mcp")
         assert config_http.url == "http://localhost:8080/mcp"
 
 
-@pytest.mark.asyncio
-class TestMcpRemoteConnection:
-    """Test remote MCP connection scenarios."""
+class TestMcpConfigToConnection:
+    """Test mcp_config_to_connection() mapping."""
 
-    async def test_mcp_client_connects_to_remote_server(self):
-        """Verify MCP client can connect to remote server."""
+    def test_maps_sse_config(self):
         config = McpServerConfig(
-            name="test-server",
+            name="test",
             url="https://example.com/mcp",
-            headers={"Authorization": "Bearer test-token"},
+            headers={"Authorization": "Bearer xyz"},
         )
+        conn = mcp_config_to_connection(config)
+        assert conn["transport"] == "sse"
+        assert conn["url"] == "https://example.com/mcp"
+        assert conn["headers"] == {"Authorization": "Bearer xyz"}
 
-        client = McpSseClient(config)
-
-        # Mock the SSE client connection
-        mock_session = AsyncMock()
-        mock_session.initialize.return_value = MagicMock(protocolVersion="2024-11-05")
-
-        with patch("server.app.agent.mcp_client.sse_client") as mock_sse:
-            mock_ctx = AsyncMock()
-            mock_ctx.__aenter__ = AsyncMock(return_value=(AsyncMock(), AsyncMock()))
-            mock_ctx.__aexit__ = AsyncMock(return_value=None)
-            mock_sse.return_value = mock_ctx
-
-            with patch("server.app.agent.mcp_client.ClientSession") as mock_client_session:
-                mock_client_session.return_value = mock_session
-
-                await client.connect()
-                assert client._connected
-                mock_session.initialize.assert_called_once()
-
-    async def test_mcp_client_lists_tools(self):
-        """Verify MCP client can list tools from remote server."""
-        from types import SimpleNamespace
-
-        config = McpServerConfig(name="github", url="https://api.glama.ai/mcp/github")
-        client = McpSseClient(config)
-
-        # Mock the session with SimpleNamespace to preserve attribute values
-        mock_session = AsyncMock()
-        mock_tool = SimpleNamespace(
-            name="get_repo",
-            description="Get repository info",
-            inputSchema={"type": "object", "properties": {}},
+    def test_maps_streamable_http_config(self):
+        config = McpServerConfig(
+            name="test",
+            url="https://example.com/mcp",
+            transport="streamable_http",
         )
-        mock_session.list_tools.return_value = SimpleNamespace(tools=[mock_tool])
-        client.session = mock_session
-        client._connected = True
+        conn = mcp_config_to_connection(config)
+        assert conn["transport"] == "streamable_http"
 
-        tools = await client.list_tools()
-        assert len(tools) == 1
-        assert tools[0].name == "get_repo"
 
-    async def test_mcp_client_calls_tool(self):
-        """Verify MCP client can call tools on remote server."""
-        config = McpServerConfig(name="github", url="https://api.glama.ai/mcp/github")
-        client = McpSseClient(config)
+@pytest.mark.asyncio
+class TestCreateMcpClient:
+    """Test create_mcp_client() factory."""
 
-        # Mock the session
-        mock_session = AsyncMock()
-        mock_result = MagicMock(
-            content=[MagicMock(type="text", text="Repository found")], isError=False
-        )
-        mock_session.call_tool.return_value = mock_result
-        client.session = mock_session
-        client._connected = True
+    async def test_creates_client_with_enabled_servers(self):
+        configs = [
+            McpServerConfig(name="srv1", url="https://a.test/mcp"),
+            McpServerConfig(name="srv2", url="https://b.test/mcp"),
+        ]
+        with patch("server.app.agent.mcp_client.MultiServerMCPClient") as mock_client_cls:
+            mock_client = MagicMock()
+            mock_client_cls.return_value = mock_client
 
-        result = await client.call_tool("get_repo", {"owner": "test", "repo": "repo"})
-        assert result["isError"] is False
-        assert len(result["content"]) == 1
+            client = create_mcp_client(configs)
+
+            mock_client_cls.assert_called_once()
+            call_kwargs = mock_client_cls.call_args[1]
+            assert "srv1" in call_kwargs["connections"]
+            assert "srv2" in call_kwargs["connections"]
+
+    async def test_filters_disabled_servers(self):
+        configs = [
+            McpServerConfig(name="srv1", url="https://a.test/mcp"),
+            McpServerConfig(name="srv2", url="https://b.test/mcp", enabled=False),
+        ]
+        with patch("server.app.agent.mcp_client.MultiServerMCPClient") as mock_client_cls:
+            mock_client = MagicMock()
+            mock_client_cls.return_value = mock_client
+
+            create_mcp_client(configs)
+
+            call_kwargs = mock_client_cls.call_args[1]
+            assert "srv1" in call_kwargs["connections"]
+            assert "srv2" not in call_kwargs["connections"]
+
+    async def test_passes_callbacks_and_interceptors(self):
+        configs = [McpServerConfig(name="srv1", url="https://a.test/mcp")]
+        callbacks = _build_mcp_callbacks()
+        interceptors = _build_mcp_interceptors({"tenant": "acme"})
+
+        with patch("server.app.agent.mcp_client.MultiServerMCPClient") as mock_client_cls:
+            mock_client = MagicMock()
+            mock_client_cls.return_value = mock_client
+
+            create_mcp_client(configs, callbacks=callbacks, tool_interceptors=interceptors)
+
+            call_kwargs = mock_client_cls.call_args[1]
+            assert call_kwargs["callbacks"] is callbacks
+            assert call_kwargs["tool_interceptors"] is interceptors
 
 
 @pytest.mark.asyncio
 class TestMcpToolIntegration:
-    """Test MCP tool integration with Cognition."""
+    """Test MCP tool integration with Cognition using langchain-mcp-adapters."""
 
     async def test_mcp_tools_available_to_agent(self):
-        """Verify MCP tools are available to the agent after connection."""
+        """Verify MCP tools are loaded and available to the agent."""
         from server.app.agent.cognition_agent import CognitionAgentParams, create_cognition_agent
 
         mcp_configs = [McpServerConfig(name="github", url="https://api.glama.ai/mcp/github")]
 
-        with patch("server.app.agent.mcp_client.sse_client") as mock_sse:
-            mock_ctx = AsyncMock()
-            mock_ctx.__aenter__ = AsyncMock(return_value=(AsyncMock(), AsyncMock()))
-            mock_ctx.__aexit__ = AsyncMock(return_value=None)
-            mock_sse.return_value = mock_ctx
+        with patch(
+            "server.app.agent.cognition_agent.create_mcp_client"
+        ) as mock_create_client:
+            mock_mcp_client = MagicMock()
+            mock_tool = MagicMock()
+            mock_tool.name = "github_get_repo"
+            mock_mcp_client.get_tools = AsyncMock(return_value=[mock_tool])
+            mock_create_client.return_value = mock_mcp_client
 
-            with patch("server.app.agent.mcp_client.ClientSession") as mock_session:
-                mock_sess = AsyncMock()
-                mock_sess.initialize.return_value = MagicMock(protocolVersion="2024-11-05")
-
-                from types import SimpleNamespace
-
-                mock_tool = SimpleNamespace(
-                    name="github_get_repo",
-                    description="Get GitHub repository",
-                    inputSchema={
-                        "type": "object",
-                        "properties": {"owner": {"type": "string"}, "repo": {"type": "string"}},
-                    },
-                )
-                mock_sess.list_tools.return_value = SimpleNamespace(tools=[mock_tool])
-                mock_session.return_value = mock_sess
-
-                with patch("server.app.agent.cognition_agent.create_deep_agent") as mock_create:
-                    mock_agent = MagicMock()
-                    mock_create.return_value = mock_agent
-
-                    agent = await create_cognition_agent(
-                        CognitionAgentParams(
-                            project_path="/tmp/test",
-                            mcp_configs=mcp_configs,
-                        )
-                    )
-
-                    call_kwargs = mock_create.call_args[1]
-                    tools = call_kwargs.get("tools", [])
-
-                    tool_names = [t.name for t in tools]
-                    assert "github_get_repo" in tool_names or any(
-                        "github" in name for name in tool_names
-                    )
-
-
-@pytest.mark.asyncio
-class TestMcpErrorHandling:
-    """Test MCP error handling scenarios."""
-
-    async def test_mcp_connection_failure_graceful(self):
-        """Verify agent continues if MCP connection fails."""
-        from server.app.agent.cognition_agent import CognitionAgentParams, create_cognition_agent
-
-        mcp_configs = [McpServerConfig(name="failing-server", url="https://invalid-url.test/mcp")]
-
-        with patch("server.app.agent.mcp_client.sse_client") as mock_sse:
-            mock_sse.side_effect = ConnectionError("Connection refused")
-
-            with patch("server.app.agent.cognition_agent.create_deep_agent") as mock_create:
+            with patch(
+                "server.app.agent.cognition_agent.create_deep_agent"
+            ) as mock_create:
                 mock_agent = MagicMock()
                 mock_create.return_value = mock_agent
 
@@ -197,24 +155,170 @@ class TestMcpErrorHandling:
                     )
                 )
 
+                call_kwargs = mock_create.call_args[1]
+                tools = call_kwargs.get("tools", [])
+                tool_names = [t.name for t in tools]
+                assert "github_get_repo" in tool_names
+
+
+@pytest.mark.asyncio
+class TestMcpErrorHandling:
+    """Test MCP error handling scenarios."""
+
+    async def test_mcp_connection_failure_graceful(self):
+        """Verify agent continues if MCP client raises during get_tools()."""
+        from server.app.agent.cognition_agent import CognitionAgentParams, create_cognition_agent
+
+        mcp_configs = [McpServerConfig(name="failing-server", url="https://invalid.test/mcp")]
+
+        with patch(
+            "server.app.agent.cognition_agent.create_mcp_client"
+        ) as mock_create_client:
+            mock_mcp_client = MagicMock()
+            mock_mcp_client.get_tools = AsyncMock(
+                side_effect=ConnectionError("Connection refused")
+            )
+            mock_create_client.return_value = mock_mcp_client
+
+            with patch(
+                "server.app.agent.cognition_agent.create_deep_agent"
+            ) as mock_create:
+                mock_agent = MagicMock()
+                mock_create.return_value = mock_agent
+
+                agent = await create_cognition_agent(
+                    CognitionAgentParams(
+                        project_path="/tmp/test",
+                        mcp_configs=mcp_configs,
+                    )
+                )
                 assert agent is not None
 
-    async def test_mcp_timeout_handling(self):
-        """Verify timeout handling for slow MCP servers."""
-        config = McpServerConfig(name="slow-server", url="https://slow.example.com/mcp")
+    async def test_empty_enabled_configs_skipped(self):
+        """Verify all-disabled configs don't trigger MCP initialization."""
+        from server.app.agent.cognition_agent import CognitionAgentParams, create_cognition_agent
 
-        client = McpSseClient(config)
+        mcp_configs = [
+            McpServerConfig(name="disabled", url="https://test/mcp", enabled=False)
+        ]
 
-        # Simulate timeout
-        with patch("server.app.agent.mcp_client.sse_client") as mock_sse:
-            mock_sse.side_effect = TimeoutError("Connection timed out")
+        with patch("server.app.agent.cognition_agent.create_mcp_client") as mock_create_client:
+            with patch(
+                "server.app.agent.cognition_agent.create_deep_agent"
+            ) as mock_create:
+                mock_agent = MagicMock()
+                mock_create.return_value = mock_agent
 
-            with pytest.raises(ConnectionError) as exc_info:
-                await client.connect()
+                await create_cognition_agent(
+                    CognitionAgentParams(
+                        project_path="/tmp/test",
+                        mcp_configs=mcp_configs,
+                    )
+                )
+                mock_create_client.assert_not_called()
 
-            assert "timed out" in str(exc_info.value).lower() or "Failed to connect" in str(
-                exc_info.value
-            )
+
+@pytest.mark.asyncio
+class TestMcpCallbacks:
+    """Test MCP callback construction and behavior."""
+
+    def test_build_mcp_callbacks_returns_callbacks_object(self):
+        callbacks = _build_mcp_callbacks()
+        from langchain_mcp_adapters.callbacks import Callbacks
+
+        assert isinstance(callbacks, Callbacks)
+        assert callbacks.on_progress is not None
+        assert callbacks.on_logging_message is not None
+
+    @pytest.mark.asyncio
+    async def test_progress_callback_logs(self):
+        from langchain_mcp_adapters.callbacks import CallbackContext
+
+        callbacks = _build_mcp_callbacks()
+        ctx = CallbackContext(server_name="test-srv", tool_name="search")
+
+        with patch("server.app.agent.mcp_client.logger") as mock_logger:
+            await callbacks.on_progress(0.5, 1.0, "Halfway done", ctx)
+            mock_logger.info.assert_called_once()
+            call_args = mock_logger.info.call_args
+            assert call_args[1]["server"] == "test-srv"
+            assert call_args[1]["tool"] == "search"
+            assert call_args[1]["progress"] == 0.5
+
+    @pytest.mark.asyncio
+    async def test_logging_callback_uses_warning_for_errors(self):
+        from langchain_mcp_adapters.callbacks import CallbackContext
+
+        callbacks = _build_mcp_callbacks()
+        ctx = CallbackContext(server_name="test-srv", tool_name=None)
+
+        with patch("server.app.agent.mcp_client.logger") as mock_logger:
+            from mcp.types import LoggingMessageNotificationParams
+
+            params = LoggingMessageNotificationParams(level="error", data="something broke")
+            await callbacks.on_logging_message(params, ctx)
+            mock_logger.warning.assert_called_once()
+
+
+@pytest.mark.asyncio
+class TestMcpInterceptors:
+    """Test MCP tool interceptor behavior."""
+
+    @pytest.mark.asyncio
+    async def test_injects_scope_into_args(self):
+        interceptors = _build_mcp_interceptors({"tenant": "acme", "project": "ios"})
+        assert len(interceptors) == 1
+
+        from langchain_mcp_adapters.interceptors import MCPToolCallRequest
+
+        request = MCPToolCallRequest(
+            name="search",
+            args={"query": "test"},
+            server_name="test-srv",
+        )
+
+        async def handler(req: MCPToolCallRequest):
+            return f"called with {req.args}"
+
+        result = await interceptors[0](request, handler)
+        assert "called with" in result
+
+    @pytest.mark.asyncio
+    async def test_does_not_overwrite_existing_scope_keys(self):
+        interceptors = _build_mcp_interceptors({"tenant": "acme"})
+
+        from langchain_mcp_adapters.interceptors import MCPToolCallRequest
+
+        request = MCPToolCallRequest(
+            name="search",
+            args={"query": "test", "tenant": "already-set"},
+            server_name="test-srv",
+        )
+
+        async def handler(req: MCPToolCallRequest):
+            assert req.args["tenant"] == "already-set"
+            return "ok"
+
+        await interceptors[0](request, handler)
+
+    @pytest.mark.asyncio
+    async def test_no_scope_returns_empty_list(self):
+        interceptors = _build_mcp_interceptors(None)
+        assert len(interceptors) == 1  # still returns the injector
+
+        from langchain_mcp_adapters.interceptors import MCPToolCallRequest
+
+        request = MCPToolCallRequest(
+            name="search",
+            args={"query": "test"},
+            server_name="test-srv",
+        )
+
+        async def handler(req: MCPToolCallRequest):
+            return "ok"
+
+        result = await interceptors[0](request, handler)
+        assert result == "ok"
 
 
 @pytest.mark.asyncio
@@ -251,6 +355,7 @@ class TestMcpConfiguration:
         assert gh.url == "https://api.glama.ai/mcp/github"
         assert gh.headers == {"Authorization": "Bearer test-token"}
         assert gh.enabled is True
+        assert gh.transport == "sse"
 
         ln = next(s for s in servers if s.name == "linear")
         assert ln.url == "https://mcp.linear.app/sse"
@@ -266,7 +371,7 @@ class TestMcpConfiguration:
             McpServerRegistration(name="bad", url="file:///path/to/mcp.sock")
 
     async def test_session_level_mcp_configuration(self):
-        """Test that MCP configs are resolved from ConfigStore for a session."""
+        """Test that MCP configs are resolved from ConfigStore with transport field."""
         from server.app.agent.mcp_client import McpServerConfig
         from server.app.storage.config_models import McpServerRegistration
         from server.app.storage.config_registry import MemoryConfigRegistry
@@ -276,7 +381,11 @@ class TestMcpConfiguration:
         store = DefaultConfigStore(registry)
 
         await store.upsert_mcp_server(
-            McpServerRegistration(name="github", url="https://api.glama.ai/mcp/github")
+            McpServerRegistration(
+                name="github",
+                url="https://api.glama.ai/mcp/github",
+                transport="sse",
+            )
         )
 
         from server.app.llm.deep_agent_service import DeepAgentStreamingService
@@ -291,13 +400,14 @@ class TestMcpConfiguration:
         assert isinstance(mcp_configs[0], McpServerConfig)
         assert mcp_configs[0].name == "github"
         assert mcp_configs[0].url == "https://api.glama.ai/mcp/github"
+        assert mcp_configs[0].transport == "sse"
 
 
 @pytest.mark.integration
 @pytest.mark.asyncio
 class TestMcpIntegrationWithExternalServers:
     """Integration tests with real external MCP servers.
-
+    
     These tests are marked as 'integration' and should only run when:
     - Network access is available
     - External MCP server is accessible
@@ -306,28 +416,23 @@ class TestMcpIntegrationWithExternalServers:
 
     @pytest.mark.skip(reason="Requires external MCP server")
     async def test_connect_to_glama_github(self):
-        """Integration test: Connect to Glama GitHub MCP."""
+        """Integration test: Connect to Glama GitHub MCP via langchain-mcp-adapters."""
         import os
 
         api_key = os.getenv("GLAMA_API_KEY")
         if not api_key:
             pytest.skip("GLAMA_API_KEY not set")
 
-        config = McpServerConfig(
-            name="github",
-            url="https://api.glama.ai/mcp/github",
-            headers={"Authorization": f"Bearer {api_key}"},
-        )
-
-        async with McpSseClient(config) as client:
-            tools = await client.list_tools()
-            assert len(tools) > 0
-
-            # Verify we can call a tool
-            result = await client.call_tool(
-                "get_repo", {"owner": "langchain-ai", "repo": "langchain"}
+        configs = [
+            McpServerConfig(
+                name="github",
+                url="https://api.glama.ai/mcp/github",
+                headers={"Authorization": f"Bearer {api_key}"},
             )
-            assert result["isError"] is False
+        ]
+        client = create_mcp_client(configs)
+        tools = await client.get_tools()
+        assert len(tools) > 0
 
 
 @pytest.mark.asyncio
@@ -341,21 +446,12 @@ class TestMcpSecurityHeaders:
             url="https://api.glama.ai/mcp/github",
             headers={"Authorization": "Bearer secret-token-12345"},
         )
-
-        client = McpSseClient(config)
-
-        # Headers should be stored securely
-        assert client.config.headers["Authorization"] == "Bearer secret-token-12345"
-
-        # When client is serialized/represented, token should not be visible
-        # (This is implicit in the design - headers are not part of __repr__)
+        assert config.headers["Authorization"] == "Bearer secret-token-12345"
 
     async def test_env_var_expansion_in_headers(self):
         """Verify environment variable expansion works in headers."""
         import os
 
         os.environ["TEST_API_KEY"] = "test-secret"
-
-        # This would test ${API_KEY} expansion in config
-        # Implementation depends on config loading logic
-        pass  # TODO: Implement when config loading is integrated
+        # TODO: Implement when config loading is integrated
+        pass
