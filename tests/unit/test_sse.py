@@ -389,6 +389,28 @@ class TestEventBuilder:
         assert event["data"]["run_id"] == "run-1"
         assert event["data"]["scope_keys"] == ["tenant"]
 
+    def test_context_event(self) -> None:
+        """Test creating a redacted context policy/budget event."""
+        event = EventBuilder.context(
+            action="policy_resolved",
+            session_id="session-1",
+            run_id="run-1",
+            scope_keys=["tenant"],
+            policy={"tool_token_limit_before_evict": 4096},
+            input_tokens=12,
+            message_count=3,
+        )
+
+        assert event["event"] == "context"
+        assert event["data"]["action"] == "policy_resolved"
+        assert event["data"]["session_id"] == "session-1"
+        assert event["data"]["run_id"] == "run-1"
+        assert event["data"]["scope_keys"] == ["tenant"]
+        assert event["data"]["policy"]["tool_token_limit_before_evict"] == 4096
+        assert event["data"]["input_tokens"] == 12
+        assert event["data"]["message_count"] == 3
+        assert "acme" not in str(event)
+
     def test_error_event(self) -> None:
         """Test creating error event."""
         event = EventBuilder.error("Something went wrong", code="ERR_001")

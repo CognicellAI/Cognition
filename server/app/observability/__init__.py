@@ -89,6 +89,12 @@ if PROMETHEUS_AVAILABLE:
         ["action", "tool_name"],
     )
 
+    CONTEXT_EVENT_COUNT = Counter(
+        "cognition_context_events_total",
+        "Total context policy and budget events",
+        ["action"],
+    )
+
     HITL_DECISION_COUNT = Counter(
         "cognition_hitl_decisions_total",
         "Total human-in-the-loop decisions",
@@ -118,6 +124,7 @@ else:
     LLM_CALL_DURATION = DummyMetric()  # type: ignore[assignment]
     TOOL_CALL_COUNT = DummyMetric()  # type: ignore[assignment]
     TOOL_SAFETY_EVENT_COUNT = DummyMetric()  # type: ignore[assignment]
+    CONTEXT_EVENT_COUNT = DummyMetric()  # type: ignore[assignment]
     HITL_DECISION_COUNT = DummyMetric()  # type: ignore[assignment]
     SESSION_COUNT = DummyMetric()  # type: ignore[assignment]
 

@@ -42,6 +42,7 @@ from server.app.api.scoping import SessionScope
 from server.app.api.sse import EventBuilder, SSEStream, get_last_event_id
 from server.app.llm.deep_agent_service import (
     CallbackEvent,
+    ContextEvent,
     DelegationEvent,
     DoneEvent,
     ErrorEvent,
@@ -123,10 +124,8 @@ async def agent_event_stream(
             system_prompt = session.config.system_prompt
 
         # Accumulate assistant message data for persistence
-        accumulated_content = []
         tool_calls = []
         _current_tool_call = None
-        token_count: int | float = 0
         metadata: dict[str, Any] = {}
 
         # Drain sandbox lifecycle events queued during agent setup
@@ -152,8 +151,6 @@ async def agent_event_stream(
             scope=scope,
         ):
             if isinstance(event, TokenEvent):
-                accumulated_content.append(event.content)
-                token_count += len(event.content.split())
                 yield EventBuilder.token(event.content)
 
             elif isinstance(event, ToolCallEvent):
@@ -189,6 +186,24 @@ async def agent_event_stream(
                     session_id=event.session_id,
                     run_id=event.run_id,
                     scope_keys=event.scope_keys or scope_keys,
+                )
+
+            elif isinstance(event, ContextEvent):
+                yield EventBuilder.context(
+                    action=event.action,
+                    session_id=event.session_id,
+                    run_id=event.run_id,
+                    scope_keys=event.scope_keys or scope_keys,
+                    policy=event.policy,
+                    input_tokens=event.input_tokens,
+                    output_tokens=event.output_tokens,
+                    message_count=event.message_count,
+                    retained_messages=event.retained_messages,
+                    evicted_messages=event.evicted_messages,
+                    summarized_messages=event.summarized_messages,
+                    offloaded_messages=event.offloaded_messages,
+                    summary_id=event.summary_id,
+                    artifact_id=event.artifact_id,
                 )
 
             elif isinstance(event, PlanningEvent):
@@ -242,7 +257,6 @@ async def agent_event_stream(
                 yield EventBuilder.status(event.status)
 
             elif isinstance(event, UsageEvent):
-                token_count = event.output_tokens
                 metadata["input_tokens"] = event.input_tokens
                 metadata["output_tokens"] = event.output_tokens
                 metadata["estimated_cost"] = event.estimated_cost

@@ -33,6 +33,7 @@ from server.app.api.models import (
 from server.app.config_loader import load_config
 from server.app.llm.model_catalog import ModelCatalog
 from server.app.settings import Settings
+from server.app.storage.config_models import GlobalAgentDefaults
 from server.app.storage.config_store import ConfigStore
 
 router = APIRouter(prefix="/config", tags=["config"])
@@ -132,6 +133,7 @@ def _agent_defaults_response(defaults: Any) -> GlobalAgentDefaultsResponse:
         permissions=list(defaults.permissions),
         response_format=defaults.response_format,
         tool_token_limit_before_evict=defaults.tool_token_limit_before_evict,
+        context_policy=defaults.context_policy,
         recursion_limit=defaults.recursion_limit,
         mcp_servers=dict(defaults.mcp_servers),
     )
@@ -283,6 +285,11 @@ async def patch_agent_defaults(
 ) -> GlobalAgentDefaultsResponse:
     """Partially update global agent defaults in ConfigStore."""
     current = await config_store.get_global_agent_defaults()
-    merged = current.model_copy(update=updates.model_dump(exclude_none=True, mode="json"))
+    merged = GlobalAgentDefaults.model_validate(
+        {
+            **current.model_dump(mode="json"),
+            **updates.model_dump(exclude_none=True, mode="json"),
+        }
+    )
     await config_store.set_global_agent_defaults(merged)
     return _agent_defaults_response(merged)

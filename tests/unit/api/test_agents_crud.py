@@ -91,6 +91,14 @@ class TestCreateAgent:
             "recursion_limit": 500,
             "provider": "bedrock",
             "tool_token_limit_before_evict": 2000,
+            "context_policy": {
+                "max_input_tokens": 32000,
+                "tool_token_limit_before_evict": 4096,
+                "summarization_enabled": True,
+                "summarizer_model": "fast-summarizer",
+                "offload_large_tool_outputs": True,
+                "retention": {"logs": "summarize"},
+            },
             "timeout_seconds": 45,
             "middleware": [{"name": "tool_retry", "max_retries": 2}],
             "interrupt_on": {
@@ -116,6 +124,10 @@ class TestCreateAgent:
         assert data["config"]["recursion_limit"] == 500
         assert data["config"]["provider"] == "bedrock"
         assert data["config"]["tool_token_limit_before_evict"] == 2000
+        assert data["config"]["context_policy"]["max_input_tokens"] == 32000
+        assert data["config"]["context_policy"]["tool_token_limit_before_evict"] == 4096
+        assert data["config"]["context_policy"]["summarizer_model"] == "fast-summarizer"
+        assert data["config"]["context_policy"]["retention"] == {"logs": "summarize"}
         assert data["config"]["timeout_seconds"] == 45
         assert data["interrupt_on"]["execute"]["allowed_decisions"] == ["approve", "reject"]
         assert data["permissions"][0]["paths"] == ["/workspace/repo/**"]

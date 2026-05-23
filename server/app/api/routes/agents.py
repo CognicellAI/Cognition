@@ -34,6 +34,7 @@ def _agent_to_response(agent: AgentDefinition) -> AgentResponse:
             max_tokens=agent.config.max_tokens,
             recursion_limit=agent.config.recursion_limit,
             tool_token_limit_before_evict=agent.config.tool_token_limit_before_evict,
+            context_policy=agent.config.context_policy,
             provider=agent.config.provider,
             model=agent.config.model,
             timeout_seconds=agent.config.timeout_seconds,
@@ -136,6 +137,11 @@ async def create_agent(
                 "max_tokens": body.max_tokens,
                 "recursion_limit": body.recursion_limit,
                 "tool_token_limit_before_evict": body.tool_token_limit_before_evict,
+                "context_policy": (
+                    body.context_policy.model_dump(exclude_none=True)
+                    if body.context_policy
+                    else None
+                ),
                 "provider": body.provider,
                 "timeout_seconds": body.timeout_seconds,
             },
@@ -201,6 +207,7 @@ async def update_agent(
             "max_tokens",
             "recursion_limit",
             "tool_token_limit_before_evict",
+            "context_policy",
             "provider",
             "timeout_seconds",
         }

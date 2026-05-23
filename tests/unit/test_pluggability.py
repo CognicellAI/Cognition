@@ -7,6 +7,7 @@ from server.app.agent.cognition_agent import (
     clear_agent_cache,
     create_cognition_agent,
 )
+from server.app.agent.definition import ContextPolicy
 
 
 @pytest.mark.asyncio
@@ -47,6 +48,113 @@ async def test_create_cognition_agent_pluggability():
         middleware_names = [m.name for m in kwargs["middleware"]]
         assert "cognition_observability" in middleware_names
         assert "cognition_streaming" in middleware_names
+    clear_agent_cache()
+
+
+@pytest.mark.asyncio
+async def test_context_policy_adds_deep_agents_summarization_tool_middleware():
+    """ContextPolicy should align to Deep Agents' summarization tool primitive."""
+    clear_agent_cache()
+    summarization_tool = object()
+    with (
+        patch("server.app.agent.cognition_agent.create_deep_agent") as mock_create,
+        patch(
+            "deepagents.middleware.summarization.create_summarization_tool_middleware",
+            return_value=summarization_tool,
+        ) as mock_summarization,
+    ):
+        mock_create.return_value = AsyncMock()
+
+        await create_cognition_agent(
+            CognitionAgentParams(
+                project_path=".",
+                model="mock:model",
+                context_policy=ContextPolicy(summarization_enabled=True),
+            )
+        )
+
+        _, kwargs = mock_create.call_args
+        assert summarization_tool in kwargs["middleware"]
+        mock_summarization.assert_called_once()
+    clear_agent_cache()
+
+
+@pytest.mark.asyncio
+async def test_context_policy_can_disable_summarization_tool_middleware():
+    """summarization_enabled=False should not attach summarization middleware."""
+    clear_agent_cache()
+    with (
+        patch("server.app.agent.cognition_agent.create_deep_agent") as mock_create,
+        patch(
+            "deepagents.middleware.summarization.create_summarization_tool_middleware"
+        ) as mock_summarization,
+    ):
+        mock_create.return_value = AsyncMock()
+
+        await create_cognition_agent(
+            CognitionAgentParams(
+                project_path=".",
+                model="mock:model",
+                context_policy=ContextPolicy(summarization_enabled=False),
+            )
+        )
+
+        mock_summarization.assert_not_called()
+    clear_agent_cache()
+
+
+@pytest.mark.asyncio
+async def test_context_policy_does_not_pass_removed_tool_token_kwarg():
+    """Deep Agents 0.6.2 removed tool_token_limit_before_evict from create_deep_agent."""
+    clear_agent_cache()
+    with patch("server.app.agent.cognition_agent.create_deep_agent") as mock_create:
+        mock_create.return_value = AsyncMock()
+
+        await create_cognition_agent(
+            CognitionAgentParams(
+                project_path=".",
+                model="mock:model",
+                context_policy=ContextPolicy(
+                    summarization_enabled=False,
+                    tool_token_limit_before_evict=4096,
+                ),
+            )
+        )
+
+        _, kwargs = mock_create.call_args
+        assert "tool_token_limit_before_evict" not in kwargs
+    clear_agent_cache()
+
+
+@pytest.mark.asyncio
+async def test_context_policy_changes_agent_cache_key():
+    """Context policy changes should recompile the Deep Agents graph."""
+    clear_agent_cache()
+    with patch("server.app.agent.cognition_agent.create_deep_agent") as mock_create:
+        mock_create.return_value = AsyncMock()
+
+        await create_cognition_agent(
+            CognitionAgentParams(
+                project_path=".",
+                model="mock:model",
+                context_policy=ContextPolicy(
+                    summarization_enabled=False,
+                    max_input_tokens=32000,
+                ),
+            )
+        )
+        await create_cognition_agent(
+            CognitionAgentParams(
+                project_path=".",
+                model="mock:model",
+                context_policy=ContextPolicy(
+                    summarization_enabled=False,
+                    max_input_tokens=64000,
+                ),
+            )
+        )
+
+        assert mock_create.call_count == 2
     clear_agent_cache()
 
 

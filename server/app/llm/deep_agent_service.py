@@ -25,6 +25,7 @@ from server.app.agent.cognition_agent import CognitionAgentParams, create_cognit
 from server.app.agent.resolver import RuntimeResolver
 from server.app.agent.runtime import (
     CallbackEvent,  # noqa: F401 — re-exported for consumers of this module
+    ContextEvent,
     DeepAgentRuntime,
     DelegationEvent,
     DoneEvent,
@@ -47,12 +48,75 @@ from server.app.agent.runtime import (
 from server.app.agent.runtime import (
     _resolve_middleware as _resolve_single_middleware,
 )
+from server.app.agent.token_counter import count_text_tokens
 from server.app.exceptions import LLMProviderConfigError
+from server.app.observability import CONTEXT_EVENT_COUNT
+from server.app.observability import span as trace_span
 from server.app.settings import Settings
 from server.app.storage.config_store import ConfigStore
 from server.app.storage.factory import create_storage_backend
 
 logger = structlog.get_logger(__name__)
+
+
+def _context_policy_dict(policy: Any | None) -> dict[str, Any]:
+    if policy is None:
+        return {}
+    if hasattr(policy, "model_dump"):
+        return cast(dict[str, Any], policy.model_dump(exclude_none=True, mode="json"))
+    if isinstance(policy, dict):
+        return dict(policy)
+    return {}
+
+
+def _effective_context_policy(
+    policy: Any | None,
+    tool_token_limit_before_evict: int | None,
+) -> dict[str, Any]:
+    effective = _context_policy_dict(policy)
+    if tool_token_limit_before_evict is not None:
+        effective.setdefault("tool_token_limit_before_evict", tool_token_limit_before_evict)
+    return effective
+
+
+def _audit_context_event(event: ContextEvent) -> None:
+    """Record context signals without raw content or raw scope values."""
+    logger.info(
+        "context_event",
+        action=event.action,
+        session_id=event.session_id,
+        run_id=event.run_id,
+        scope_keys=event.scope_keys,
+        policy_keys=sorted(event.policy),
+        input_tokens=event.input_tokens,
+        output_tokens=event.output_tokens,
+        message_count=event.message_count,
+        retained_messages=event.retained_messages,
+        evicted_messages=event.evicted_messages,
+        summarized_messages=event.summarized_messages,
+        offloaded_messages=event.offloaded_messages,
+        summary_id=event.summary_id,
+        artifact_id=event.artifact_id,
+    )
+    CONTEXT_EVENT_COUNT.labels(action=event.action).inc()
+    with trace_span(
+        "cognition.context",
+        {
+            "cognition.context.action": event.action,
+            "cognition.session_id": event.session_id or "",
+            "cognition.run_id": event.run_id or "",
+            "cognition.scope_keys": ",".join(event.scope_keys),
+            "cognition.context.policy_keys": ",".join(sorted(event.policy)),
+            "cognition.context.input_tokens": event.input_tokens or 0,
+            "cognition.context.output_tokens": event.output_tokens or 0,
+            "cognition.context.message_count": event.message_count or 0,
+            "cognition.context.retained_messages": event.retained_messages or 0,
+            "cognition.context.evicted_messages": event.evicted_messages or 0,
+            "cognition.context.summarized_messages": event.summarized_messages or 0,
+            "cognition.context.offloaded_messages": event.offloaded_messages or 0,
+        },
+    ):
+        pass
 
 
 def _resolve_middleware(specs: list[str | dict[str, Any]]) -> list[Any]:
@@ -91,6 +155,7 @@ class ResolvedAgentConfig:
     middleware: list[Any] | None = None
     response_format: str | None = None
     tool_token_limit_before_evict: int | None = None
+    context_policy: Any | None = None
     subagents: list[Any] = field(default_factory=list)
     agent_def: Any = None
 
@@ -105,8 +170,8 @@ class StreamAccumulator:
     _current_tool_call: str | None = field(default=None, repr=False)
 
     def record_token(self, content: str) -> None:
-        self.output_tokens += len(content.split())
         self.accumulated_content += content
+        self.output_tokens = count_text_tokens(self.accumulated_content)
 
     def set_tool_call(self, tool_call_id: str | None) -> None:
         self._current_tool_call = tool_call_id
@@ -229,6 +294,9 @@ class DeepAgentStreamingService:
         if agent_def.config.tool_token_limit_before_evict is not None:
             resolved.tool_token_limit_before_evict = agent_def.config.tool_token_limit_before_evict
 
+        if agent_def.config.context_policy is not None:
+            resolved.context_policy = agent_def.config.context_policy
+
         if agent_def.middleware:
             resolved.middleware = _resolve_middleware(agent_def.middleware)
 
@@ -285,6 +353,21 @@ class DeepAgentStreamingService:
             )
 
             mcp_configs = await self._resolve_mcp_configs(scope=scope)
+            context_policy = _effective_context_policy(
+                agent_cfg.context_policy,
+                agent_cfg.tool_token_limit_before_evict,
+            )
+            context_event = ContextEvent(
+                action="policy_resolved",
+                session_id=session.id if session else session_id,
+                run_id=thread_id,
+                scope_keys=sorted((scope or {}).keys()),
+                policy=context_policy,
+                input_tokens=count_text_tokens(content),
+                message_count=getattr(session, "message_count", None),
+            )
+            _audit_context_event(context_event)
+            yield context_event
 
             agent_params = CognitionAgentParams(
                 project_path=project_path,
@@ -304,6 +387,7 @@ class DeepAgentStreamingService:
                 )
                 or agent_cfg.response_format,
                 tool_token_limit_before_evict=agent_cfg.tool_token_limit_before_evict,
+                context_policy=agent_cfg.context_policy,
                 middleware=agent_cfg.middleware,
                 mcp_configs=mcp_configs or None,
                 scope=scope,
@@ -327,7 +411,7 @@ class DeepAgentStreamingService:
             # Build message input (system prompt already embedded in agent graph)
             messages = self._build_messages(content, None)
 
-            acc = StreamAccumulator(input_tokens=len(content.split()))
+            acc = StreamAccumulator(input_tokens=count_text_tokens(content))
 
             runtime_exception: Exception | None = None
 
@@ -357,6 +441,7 @@ class DeepAgentStreamingService:
                                 StepCompleteEvent,
                                 InterruptEvent,
                                 ToolSafetyEvent,
+                                ContextEvent,
                             ),
                         ):
                             yield event
@@ -391,6 +476,22 @@ class DeepAgentStreamingService:
                     provider=provider,
                     model=model_id,
                 )
+                usage_context_event = ContextEvent(
+                    action="usage_snapshot",
+                    session_id=session.id if session else session_id,
+                    run_id=thread_id,
+                    scope_keys=sorted((scope or {}).keys()),
+                    policy=context_policy,
+                    input_tokens=acc.input_tokens,
+                    output_tokens=acc.output_tokens,
+                    message_count=getattr(session, "message_count", None),
+                    retained_messages=getattr(session, "message_count", None),
+                    evicted_messages=0,
+                    summarized_messages=0,
+                    offloaded_messages=0,
+                )
+                _audit_context_event(usage_context_event)
+                yield usage_context_event
                 yield DoneEvent()
 
             finally:
@@ -453,6 +554,21 @@ class DeepAgentStreamingService:
                 metadata=session.metadata,
             )
             mcp_configs = await self._resolve_mcp_configs(scope=scope)
+            context_policy = _effective_context_policy(
+                agent_cfg.context_policy,
+                agent_cfg.tool_token_limit_before_evict,
+            )
+            context_event = ContextEvent(
+                action="policy_resolved",
+                session_id=session.id,
+                run_id=thread_id,
+                scope_keys=sorted((scope or {}).keys()),
+                policy=context_policy,
+                input_tokens=0,
+                message_count=getattr(session, "message_count", None),
+            )
+            _audit_context_event(context_event)
+            yield context_event
 
             agent_params = CognitionAgentParams(
                 project_path=project_path,
@@ -470,6 +586,7 @@ class DeepAgentStreamingService:
                 response_format=(session.config.response_format if session.config else None)
                 or agent_cfg.response_format,
                 tool_token_limit_before_evict=agent_cfg.tool_token_limit_before_evict,
+                context_policy=agent_cfg.context_policy,
                 middleware=agent_cfg.middleware,
                 mcp_configs=mcp_configs or None,
                 scope=scope,
@@ -512,6 +629,7 @@ class DeepAgentStreamingService:
                         ToolCallEvent,
                         ToolResultEvent,
                         ToolSafetyEvent,
+                        ContextEvent,
                         HitlDecisionEvent,
                         StatusEvent,
                         ErrorEvent,

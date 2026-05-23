@@ -434,6 +434,50 @@ class EventBuilder:
         }
 
     @staticmethod
+    def context(
+        action: str,
+        session_id: str | None = None,
+        run_id: str | None = None,
+        scope_keys: list[str] | None = None,
+        policy: dict[str, Any] | None = None,
+        input_tokens: int | None = None,
+        output_tokens: int | None = None,
+        message_count: int | None = None,
+        retained_messages: int | None = None,
+        evicted_messages: int | None = None,
+        summarized_messages: int | None = None,
+        offloaded_messages: int | None = None,
+        summary_id: str | None = None,
+        artifact_id: str | None = None,
+    ) -> dict:
+        """Create a context policy/budget event.
+
+        The payload is safe for builders and end users: it contains policy
+        values, counts, IDs, and scope key names, but no raw message content or
+        raw scope values.
+        """
+        data: dict[str, Any] = {
+            "action": action,
+            "session_id": session_id,
+            "run_id": run_id,
+            "scope_keys": scope_keys or [],
+            "policy": policy or {},
+        }
+        optional = {
+            "input_tokens": input_tokens,
+            "output_tokens": output_tokens,
+            "message_count": message_count,
+            "retained_messages": retained_messages,
+            "evicted_messages": evicted_messages,
+            "summarized_messages": summarized_messages,
+            "offloaded_messages": offloaded_messages,
+            "summary_id": summary_id,
+            "artifact_id": artifact_id,
+        }
+        data.update({key: value for key, value in optional.items() if value is not None})
+        return {"event": "context", "data": data}
+
+    @staticmethod
     def error(message: str, code: str | None = None) -> dict:
         """Create an error event."""
         data = {"message": message}

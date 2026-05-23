@@ -72,6 +72,11 @@ def test_patch_agent_defaults() -> None:
                     "mode": "allow",
                 }
             ],
+            "context_policy": {
+                "max_input_tokens": 64000,
+                "summarization_enabled": False,
+                "retention": {"search": "retain"},
+            },
         },
     )
 
@@ -81,3 +86,6 @@ def test_patch_agent_defaults() -> None:
     assert data["memory"] == ["AGENTS.md", "TEAM.md"]
     assert data["interrupt_on"]["execute"]["allowed_decisions"] == ["approve", "reject"]
     assert data["permissions"][0]["operations"] == ["read"]
+    assert data["context_policy"]["max_input_tokens"] == 64000
+    assert data["context_policy"]["summarization_enabled"] is False
+    assert data["context_policy"]["retention"] == {"search": "retain"}
