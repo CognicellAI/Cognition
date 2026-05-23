@@ -872,7 +872,7 @@ class PostgresConfigRegistry:
                 "DELETE FROM config_entities WHERE entity_type=%s AND name=%s AND scope=%s",
                 (entity_type, name, self._jsonb_param(self._serialize_scope(scope or {}))),
             )
-            deleted = bool(result != "DELETE 0")
+            deleted = result.rowcount is not None and result.rowcount > 0
             if deleted:
                 await self._record_change(conn, entity_type, name, scope or {}, "delete")
         return deleted

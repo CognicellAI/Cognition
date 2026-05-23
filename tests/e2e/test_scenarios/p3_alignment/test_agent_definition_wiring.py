@@ -22,7 +22,11 @@ import uuid
 
 import pytest
 
-from tests.e2e.test_scenarios.conftest import ScenarioTestClient
+from tests.e2e.test_scenarios.conftest import (
+    ScenarioTestClient,
+    is_terminal_stream_event,
+    stream_completed,
+)
 
 
 def _unique(prefix: str = "agent") -> str:
@@ -61,7 +65,7 @@ async def _collect_events(
                         if current_event_type:
                             payload["event"] = current_event_type
                         events.append(payload)
-                        if current_event_type == "done":
+                        if is_terminal_stream_event(payload):
                             break
                         current_event_type = None
                     except json.JSONDecodeError:
@@ -117,8 +121,7 @@ class TestAgentSystemPrompt:
                 events = await _collect_events(api_client, session_id, "Hello")
                 response_text = _assembled_response(events)
 
-                done_events = [e for e in events if e.get("event") == "done"]
-                assert len(done_events) > 0, "Stream did not complete"
+                assert stream_completed(events), "Stream did not complete"
 
                 assert marker in response_text, (
                     f"Expected marker '{marker}' in response but got: {response_text[:200]}"
@@ -219,8 +222,7 @@ class TestAgentFallback:
         try:
             events = await _collect_events(api_client, session_id, "Say: pong")
 
-            done_events = [e for e in events if e.get("event") == "done"]
-            assert len(done_events) > 0, "Default agent session stream did not complete"
+            assert stream_completed(events), "Default agent session stream did not complete"
         finally:
             await api_client.delete(f"/sessions/{session_id}")
 
@@ -278,7 +280,7 @@ class TestAgentSkills:
             session_id = await api_client.create_session(_unique("session"), agent_name=agent_name)
             try:
                 events = await _collect_events(api_client, session_id, "Say: ok")
-                done_events = [e for e in events if e.get("event") == "done"]
+                done_events = [e for e in events if is_terminal_stream_event(e)]
                 error_events = [e for e in events if e.get("event") == "error"]
 
                 assert len(done_events) > 0 or len(error_events) > 0, (

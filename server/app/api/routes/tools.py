@@ -40,6 +40,7 @@ async def list_tools(
 async def register_tool(
     body: ToolCreate,
     config_store: ConfigStore = Depends(get_config_store),  # noqa: B008
+    scope: SessionScope = Depends(get_scope_dep),  # noqa: B008
 ) -> ToolResponse:
     """Register a tool in the ConfigStore.
 
@@ -61,7 +62,8 @@ async def register_tool(
             detail="Provide either 'path' or 'code', not both.",
         )
 
-    existing = await config_store.get_tool(body.name, scope=body.scope or None)
+    effective_scope = scope.get_all() or body.scope
+    existing = await config_store.get_tool(body.name, scope=effective_scope or None)
     if existing is not None and existing.source == "file":
         raise HTTPException(
             status_code=409,
@@ -76,7 +78,7 @@ async def register_tool(
             "enabled": body.enabled,
             "description": body.description,
             "interrupt_on": body.interrupt_on,
-            "scope": body.scope,
+            "scope": effective_scope,
             "source": "api",
         }
         await config_store.upsert_tool_from_dict(tool_data)

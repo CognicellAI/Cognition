@@ -37,38 +37,21 @@ async def _scoping_enabled(api_client) -> bool:
 class TestScopeIsolation:
     """Verify that scope headers isolate config entities per user."""
 
-    async def test_global_skill_visible_to_all_users(self, api_client) -> None:
-        """A skill created without a scope header is visible to any user."""
+    async def test_unscoped_skill_create_rejected_when_scoping_enabled(self, api_client) -> None:
+        """A skill cannot be created without scope headers when scoping is enabled."""
         if not await _scoping_enabled(api_client):
             pytest.skip("Scoping not enabled on this server")
 
         name = _unique("global")
 
-        # Create WITHOUT scope header (global) — use raw client to bypass
-        # the api_client's default scope_header set by setup_scoping().
+        # Create WITHOUT scope header — use raw client to bypass the
+        # api_client's default scope_header set by setup_scoping().
         create_resp = await api_client.client.post(
             f"{api_client.base_url}/skills",
             json={"name": name, "path": "global.md"},
             headers={"Content-Type": "application/json"},
         )
-        assert create_resp.status_code == 201
-
-        # Alice can see it
-        alice_resp = await api_client.client.get(
-            f"{api_client.base_url}/skills/{name}",
-            headers={"X-Cognition-Scope-User": "alice"},
-        )
-        assert alice_resp.status_code == 200
-
-        # Bob can see it too
-        bob_resp = await api_client.client.get(
-            f"{api_client.base_url}/skills/{name}",
-            headers={"X-Cognition-Scope-User": "bob"},
-        )
-        assert bob_resp.status_code == 200
-
-        # Cleanup
-        await api_client.delete(f"/skills/{name}")
+        assert create_resp.status_code == 403
 
     async def test_user_scoped_skill_invisible_to_other_user(self, api_client) -> None:
         """A skill created under Alice's scope is not visible when queried as Bob."""

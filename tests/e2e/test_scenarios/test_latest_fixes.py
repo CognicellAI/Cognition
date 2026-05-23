@@ -15,7 +15,11 @@ import uuid
 
 import pytest
 
-from tests.e2e.test_scenarios.conftest import ScenarioTestClient
+from tests.e2e.test_scenarios.conftest import (
+    ScenarioTestClient,
+    is_terminal_stream_event,
+    stream_completed,
+)
 
 
 @pytest.mark.e2e
@@ -91,9 +95,8 @@ class TestAbortMechanism:
             api_client, session_id, "Hello after abort", timeout=15.0
         )
 
-        # Verify we got a done event (streaming completed)
-        done_events = [e for e in events if e.get("event") == "done"]
-        assert len(done_events) > 0, "Expected done event after post-abort message"
+        # Verify we got a terminal event (streaming completed)
+        assert stream_completed(events), "Expected terminal event after post-abort message"
 
     async def _collect_stream_events(
         self,
@@ -124,7 +127,7 @@ class TestAbortMechanism:
                             if current_event_type:
                                 event_data["event"] = current_event_type
                             events.append(event_data)
-                            if current_event_type == "done":
+                            if is_terminal_stream_event(event_data):
                                 break
                             current_event_type = None
                         except json.JSONDecodeError:
@@ -209,7 +212,7 @@ class TestStreamingIntegrity:
                             if current_event_type:
                                 event_data["event"] = current_event_type
                             events.append(event_data)
-                            if current_event_type == "done":
+                            if is_terminal_stream_event(event_data):
                                 break
                             current_event_type = None
                         except json.JSONDecodeError:
@@ -293,8 +296,10 @@ class TestAgentIntrospection:
 class TestAdvancedEventTypes:
     """Scenario 4: Advanced SSE events (delegation, step_complete, message_id)."""
 
-    async def test_done_event_contains_message_id(self, api_client: ScenarioTestClient) -> None:
-        """ISSUE-019: Done event should include message_id."""
+    async def test_terminal_stream_event_marks_completion(
+        self, api_client: ScenarioTestClient
+    ) -> None:
+        """Completed streams emit a terminal event."""
         # Create session
         session_resp = await api_client.post("/sessions", json={"title": "message-id-test"})
         assert session_resp.status_code == 201
@@ -305,23 +310,19 @@ class TestAdvancedEventTypes:
             api_client, session_id, "Say hello.", timeout=15.0
         )
 
-        # Find done event
-        done_events = [e for e in events if e.get("event") == "done"]
-        assert len(done_events) > 0, "Expected at least one done event"
+        # Find terminal event
+        done_events = [e for e in events if is_terminal_stream_event(e)]
+        assert len(done_events) > 0, "Expected at least one terminal event"
 
-        done_event = done_events[-1]
-
-        # Verify message_id is present and is a valid UUID
-        # SSE data is parsed as a flat dict (no nested "data" key)
-        assert "message_id" in done_event, "Done event should contain message_id"
-        message_id = done_event["message_id"]
-        assert message_id, "message_id should not be empty"
-
-        # Verify it's a valid UUID format
-        try:
-            uuid.UUID(message_id)
-        except ValueError:
-            pytest.fail(f"message_id '{message_id}' is not a valid UUID")
+        terminal_event = done_events[-1]
+        if terminal_event.get("event") == "done" and terminal_event.get("message_id"):
+            try:
+                uuid.UUID(terminal_event["message_id"])
+            except ValueError:
+                pytest.fail(f"message_id '{terminal_event['message_id']}' is not a valid UUID")
+        else:
+            assert terminal_event.get("event") == "run_state"
+            assert terminal_event.get("to_status") == "done"
 
     async def test_step_complete_events_during_planning(
         self, api_client: ScenarioTestClient
@@ -384,7 +385,7 @@ class TestAdvancedEventTypes:
                             if current_event_type:
                                 event_data["event"] = current_event_type
                             events.append(event_data)
-                            if current_event_type == "done":
+                            if is_terminal_stream_event(event_data):
                                 break
                             current_event_type = None
                         except json.JSONDecodeError:

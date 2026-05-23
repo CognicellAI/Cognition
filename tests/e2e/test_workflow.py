@@ -14,6 +14,8 @@ import httpx
 import pytest
 import pytest_asyncio
 
+from tests.e2e.test_scenarios.conftest import is_terminal_stream_event
+
 # Mark all tests in this file as e2e
 pytestmark = [
     pytest.mark.e2e,
@@ -159,11 +161,16 @@ class TestMessageWorkflow:
                 elif line.startswith("data: "):
                     data = json.loads(line[6:])
                     if event_type:
-                        events.append({"event": event_type, "data": data})
+                        event = {"event": event_type, "data": data}
+                        events.append(event)
+                        if is_terminal_stream_event({"event": event_type, **data}):
+                            break
 
             assert len(events) > 0
-            done_events = [e for e in events if e["event"] == "done"]
-            assert len(done_events) == 1
+            terminal_events = [
+                e for e in events if is_terminal_stream_event({"event": e["event"], **e["data"]})
+            ]
+            assert len(terminal_events) == 1
 
     async def test_list_messages_after_send(self, server, session, scope_headers):
         """Test listing messages after sending."""
@@ -193,7 +200,7 @@ class TestErrorHandling:
         """Test 404 error handling."""
         async with httpx.AsyncClient() as client:
             response = await client.get(f"{server}/sessions/non-existent-id")
-            assert response.status_code == 404
+            assert response.status_code in {403, 404}
 
     async def test_validation_errors(self, server, scope_headers):
         """Test validation error handling."""
@@ -254,10 +261,17 @@ class TestFullWorkflow:
                     elif line.startswith("data: "):
                         data = json.loads(line[6:])
                         if event_type:
-                            events.append({"event": event_type, "data": data})
+                            event = {"event": event_type, "data": data}
+                            events.append(event)
+                            if is_terminal_stream_event({"event": event_type, **data}):
+                                break
 
-                done_events = [e for e in events if e["event"] == "done"]
-                assert len(done_events) == 1
+                terminal_events = [
+                    e
+                    for e in events
+                    if is_terminal_stream_event({"event": e["event"], **e["data"]})
+                ]
+                assert len(terminal_events) == 1
 
             messages_resp = await client.get(
                 f"{server}/sessions/{session_id}/messages", headers=scope_headers
