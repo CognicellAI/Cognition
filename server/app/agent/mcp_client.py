@@ -1,33 +1,34 @@
-"""Remote MCP (Model Context Protocol) client for Cognition.
+"""MCP (Model Context Protocol) adapter for Cognition.
 
-This module provides a remote-only MCP client that connects to external MCP servers
-via HTTP/SSE. Cognition does NOT support local (stdio) MCP servers for security reasons.
+Wraps langchain-mcp-adapters for Cognition's remote-only MCP server integration.
+Replaces the previous custom McpSseClient / McpManager / McpAdapterTool layer.
 
 Security stance:
-- Remote MCP servers: Allowed for accessing external information (GitHub, Jira, docs)
-- Local MCP servers: NOT supported. Use built-in tools for local execution.
-
-Usage:
-    client = McpSseClient("https://api.glama.ai/mcp/github")
-    await client.connect()
-    tools = await client.list_tools()
-    result = await client.call_tool("get_repo", {"owner": "org", "repo": "name"})
+- Remote MCP servers: Allowed (SSE transport, HTTP/HTTPS URLs only).
+- Local (stdio) MCP servers: NOT supported for security reasons.
 """
 
 from __future__ import annotations
 
-from typing import Any
+from collections.abc import Sequence
+from typing import Any, Literal
 
 import structlog
-from mcp import ClientSession
-from mcp.client.sse import sse_client
+from langchain_mcp_adapters.callbacks import CallbackContext, Callbacks
+from langchain_mcp_adapters.client import MultiServerMCPClient
+from langchain_mcp_adapters.interceptors import MCPToolCallRequest, ToolCallInterceptor
+from langchain_mcp_adapters.sessions import (
+    SSEConnection,
+    StreamableHttpConnection,
+)
+from mcp.types import LoggingMessageNotificationParams
 from pydantic import BaseModel, Field, field_validator
 
 logger = structlog.get_logger(__name__)
 
 
 class McpServerConfig(BaseModel):
-    """Configuration for an MCP server connection."""
+    """Configuration for a remote MCP server connection."""
 
     name: str = Field(..., description="Unique name for this MCP server")
     url: str = Field(..., description="MCP server URL (must be HTTP/SSE endpoint)")
@@ -35,11 +36,13 @@ class McpServerConfig(BaseModel):
         default_factory=dict, description="Headers to include in requests"
     )
     enabled: bool = Field(default=True, description="Whether this server is enabled")
+    transport: Literal["sse", "streamable_http"] = Field(
+        default="sse", description="Transport protocol"
+    )
 
     @field_validator("url")
     @classmethod
     def validate_url(cls, v: str, info: Any) -> str:
-        """Validate that the URL is HTTP/HTTPS."""
         if not v.startswith(("http://", "https://")):
             raise ValueError(
                 f"MCP server '{info.data.get('name', 'unknown')}' has invalid URL: {v}. "
@@ -50,250 +53,87 @@ class McpServerConfig(BaseModel):
 
 
 class McpToolInfo(BaseModel):
-    """Information about an MCP tool."""
+    """Information about an MCP tool, including upstream annotations."""
 
     name: str
     description: str | None
     input_schema: dict[str, Any]
+    output_schema: dict[str, Any] | None = None
+    annotations: dict[str, Any] | None = None
+    task_support: str | None = None
 
 
-class McpSseClient:
-    """Client for connecting to Remote MCP servers via HTTP/SSE.
-
-        This client implements the Model Context Protocol for connecting to external
-    tools and services. It ONLY supports remote (HTTP/SSE) connections.
-
-        Security features:
-        - Only configured headers are sent (no automatic env var leakage)
-        - URL validation (must be HTTP/HTTPS)
-        - Timeout protection on all operations
-
-        Example:
-            config = McpServerConfig(
-                name="github",
-                url="https://api.glama.ai/mcp/github",
-                headers={"Authorization": "Bearer token"}
-            )
-            client = McpSseClient(config)
-            await client.connect()
-            tools = await client.list_tools()
-            await client.close()
-    """
-
-    def __init__(self, config: McpServerConfig):
-        """Initialize the MCP client.
-
-        Args:
-            config: Configuration for the MCP server connection
-        """
-        self.config = config
-        self.session: ClientSession | None = None
-        self._client_ctx: Any = None
-        self._connected = False
-
-    async def connect(self) -> None:
-        """Connect to the MCP server.
-
-        Establishes the SSE connection and performs the initialization handshake.
-
-        Raises:
-            ConnectionError: If connection fails
-            TimeoutError: If connection times out
-        """
-        if self._connected:
-            return
-
-        try:
-            # Create SSE client context
-            self._client_ctx = sse_client(self.config.url, headers=self.config.headers)
-            streams = await self._client_ctx.__aenter__()
-
-            # Create and initialize session
-            self.session = ClientSession(*streams)
-            await self.session.__aenter__()
-
-            # Perform initialization handshake
-            init_result = await self.session.initialize()
-            logger.info(
-                "MCP server connected",
-                server=self.config.name,
-                url=self.config.url,
-                protocol_version=init_result.protocolVersion,
-            )
-            self._connected = True
-
-        except Exception as e:
-            logger.error(
-                "Failed to connect to MCP server",
-                server=self.config.name,
-                url=self.config.url,
-                error=str(e),
-            )
-            await self.close()
-            raise ConnectionError(
-                f"Failed to connect to MCP server '{self.config.name}': {e}"
-            ) from e
-
-    async def list_tools(self) -> list[McpToolInfo]:
-        """List available tools from the MCP server.
-
-        Returns:
-            List of tool information objects
-
-        Raises:
-            RuntimeError: If not connected
-        """
-        if not self._connected or self.session is None:
-            raise RuntimeError("MCP client not connected. Call connect() first.")
-
-        try:
-            tools_result = await self.session.list_tools()
-            return [
-                McpToolInfo(
-                    name=tool.name,
-                    description=tool.description,
-                    input_schema=tool.inputSchema,
-                )
-                for tool in tools_result.tools
-            ]
-        except Exception as e:
-            logger.error(
-                "Failed to list MCP tools",
-                server=self.config.name,
-                error=str(e),
-            )
-            raise
-
-    async def call_tool(self, tool_name: str, arguments: dict[str, Any]) -> dict[str, Any]:
-        """Call a tool on the MCP server.
-
-        Args:
-            tool_name: Name of the tool to call
-            arguments: Arguments to pass to the tool
-
-        Returns:
-            Tool execution result
-
-        Raises:
-            RuntimeError: If not connected
-            Exception: If tool execution fails
-        """
-        if not self._connected or self.session is None:
-            raise RuntimeError("MCP client not connected. Call connect() first.")
-
-        try:
-            result = await self.session.call_tool(tool_name, arguments)
-            return {
-                "content": [
-                    {"type": content.type, "text": content.text}
-                    for content in result.content
-                    if hasattr(content, "text")
-                ],
-                "isError": result.isError,
-            }
-        except Exception as e:
-            logger.error(
-                "MCP tool call failed",
-                server=self.config.name,
-                tool=tool_name,
-                error=str(e),
-            )
-            raise
-
-    async def close(self) -> None:
-        """Close the MCP connection."""
-        try:
-            if self.session:
-                await self.session.__aexit__(None, None, None)
-                self.session = None
-        except Exception:
-            pass
-
-        try:
-            if self._client_ctx:
-                await self._client_ctx.__aexit__(None, None, None)
-                self._client_ctx = None
-        except Exception:
-            pass
-
-        self._connected = False
-        logger.info("MCP client closed", server=self.config.name)
-
-    async def __aenter__(self) -> McpSseClient:
-        """Async context manager entry."""
-        await self.connect()
-        return self
-
-    async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
-        """Async context manager exit."""
-        await self.close()
+def mcp_config_to_connection(config: McpServerConfig) -> SSEConnection | StreamableHttpConnection:
+    transport: Literal["sse", "streamable_http"] = config.transport
+    if transport == "sse":
+        return {"transport": "sse", "url": config.url, "headers": dict(config.headers)}
+    return {"transport": "streamable_http", "url": config.url, "headers": dict(config.headers)}
 
 
-class McpManager:
-    """Manager for multiple MCP server connections."""
+def create_mcp_client(
+    configs: Sequence[McpServerConfig],
+    callbacks: Callbacks | None = None,
+    tool_interceptors: list[ToolCallInterceptor] | None = None,
+) -> MultiServerMCPClient:
+    connections: dict[str, Any] = {
+        c.name: mcp_config_to_connection(c) for c in configs if c.enabled
+    }
+    return MultiServerMCPClient(
+        connections=connections or None,
+        callbacks=callbacks,
+        tool_interceptors=tool_interceptors,
+        tool_name_prefix=True,
+    )
 
-    def __init__(self) -> None:
-        """Initialize the MCP manager."""
-        self.clients: dict[str, McpSseClient] = {}
 
-    def add_server(self, config: McpServerConfig) -> None:
-        """Add an MCP server configuration.
+def _build_mcp_callbacks() -> Callbacks:
+    async def on_progress(
+        progress: float,
+        total: float | None,
+        message: str | None,
+        context: CallbackContext,
+    ) -> None:
+        logger.info(
+            "mcp_tool_progress",
+            server=context.server_name,
+            tool=context.tool_name,
+            progress=progress,
+            total=total,
+            message=message,
+        )
 
-        Args:
-            config: Server configuration
+    async def on_logging_message(
+        params: LoggingMessageNotificationParams,
+        context: CallbackContext,
+    ) -> None:
+        log_method = logger.warning if params.level == "error" else logger.info
+        log_method(
+            "mcp_server_log",
+            server=context.server_name,
+            level=params.level,
+            data=str(params.data),
+        )
 
-        Raises:
-            ValueError: If server name already exists
-        """
-        if config.name in self.clients:
-            raise ValueError(f"MCP server '{config.name}' already configured")
+    return Callbacks(
+        on_progress=on_progress,
+        on_logging_message=on_logging_message,
+    )
 
-        self.clients[config.name] = McpSseClient(config)
 
-    async def connect_all(self) -> None:
-        """Connect to all configured MCP servers."""
-        for name, client in self.clients.items():
-            if client.config.enabled:
-                try:
-                    await client.connect()
-                except Exception as e:
-                    logger.error(
-                        "Failed to connect to MCP server",
-                        server=name,
-                        error=str(e),
-                    )
+def _build_mcp_interceptors(
+    scope: dict[str, str] | None = None,
+) -> list[ToolCallInterceptor]:
 
-    async def close_all(self) -> None:
-        """Close all MCP connections."""
-        for client in self.clients.values():
-            await client.close()
-        self.clients.clear()
+    async def inject_scope_context(
+        request: MCPToolCallRequest,
+        handler: Any,
+    ) -> Any:
+        if scope:
+            modified_args = {**request.args}
+            for key, value in scope.items():
+                if key not in modified_args:
+                    modified_args[key] = value
+            request = request.override(args=modified_args)
+        return await handler(request)
 
-    async def get_all_tools(self) -> dict[str, list[McpToolInfo]]:
-        """Get tools from all connected servers.
-
-        Returns:
-            Dict mapping server name to list of tools
-        """
-        all_tools = {}
-        for name, client in self.clients.items():
-            if client._connected:
-                try:
-                    tools = await client.list_tools()
-                    all_tools[name] = tools
-                except Exception as e:
-                    logger.error(
-                        "Failed to get tools from MCP server",
-                        server=name,
-                        error=str(e),
-                    )
-        return all_tools
-
-    async def __aenter__(self) -> McpManager:
-        """Async context manager entry."""
-        await self.connect_all()
-        return self
-
-    async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
-        """Async context manager exit."""
-        await self.close_all()
+    return [inject_scope_context]

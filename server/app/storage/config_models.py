@@ -240,6 +240,7 @@ class McpServerRegistration(BaseModel):
         enabled: Whether this server is active.
         scope: Scope this entry applies to.
         source: "file" or "api".
+        transport: Transport protocol ("sse" or "streamable_http").
     """
 
     name: str = Field(..., min_length=1, max_length=100)
@@ -248,6 +249,7 @@ class McpServerRegistration(BaseModel):
     enabled: bool = Field(default=True)
     scope: dict[str, str] = Field(default_factory=dict)
     source: Literal["file", "api"] = Field(default="file")
+    transport: Literal["sse", "streamable_http"] = Field(default="sse")
 
     @field_validator("url")
     @classmethod

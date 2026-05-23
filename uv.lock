@@ -539,10 +539,10 @@ dependencies = [
     { name = "httpx" },
     { name = "langchain" },
     { name = "langchain-core" },
+    { name = "langchain-mcp-adapters" },
     { name = "langgraph" },
     { name = "langgraph-checkpoint-sqlite" },
     { name = "langsmith", extra = ["otel"] },
-    { name = "mcp" },
     { name = "opentelemetry-api" },
     { name = "opentelemetry-exporter-otlp" },
     { name = "opentelemetry-instrumentation-fastapi" },
@@ -644,6 +644,7 @@ requires-dist = [
     { name = "langchain-core", specifier = ">=1.4.0" },
     { name = "langchain-k8s-sandbox", extras = ["k8s"], marker = "extra == 'all'", editable = "packages/langchain-k8s-sandbox" },
     { name = "langchain-k8s-sandbox", extras = ["k8s"], marker = "extra == 'k8s'", editable = "packages/langchain-k8s-sandbox" },
+    { name = "langchain-mcp-adapters", specifier = ">=0.2.0" },
     { name = "langchain-openai", marker = "extra == 'all'", specifier = ">=0.2.0" },
     { name = "langchain-openai", marker = "extra == 'dev'", specifier = ">=0.2.0" },
     { name = "langchain-openai", marker = "extra == 'openai'", specifier = ">=0.2.0" },
@@ -652,7 +653,6 @@ requires-dist = [
     { name = "langgraph-checkpoint-postgres", marker = "extra == 'deploy'", specifier = ">=2.0.0" },
     { name = "langgraph-checkpoint-sqlite", specifier = ">=1.0.0" },
     { name = "langsmith", extras = ["otel"], specifier = ">=0.4.25" },
-    { name = "mcp", specifier = ">=1.2.0" },
     { name = "mlflow", extras = ["genai"], marker = "extra == 'all'", specifier = ">=2.19.0" },
     { name = "mlflow", extras = ["genai"], marker = "extra == 'deploy'", specifier = ">=2.19.0" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.13.0" },
@@ -2044,6 +2044,20 @@ requires-dist = [
     { name = "pytest-asyncio", marker = "extra == 'test'", specifier = ">=0.24.0" },
 ]
 provides-extras = ["k8s", "test"]
+
+[[package]]
+name = "langchain-mcp-adapters"
+version = "0.2.2"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "langchain-core" },
+    { name = "mcp" },
+    { name = "typing-extensions" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/0e/66/1cc7039e2daaddcdea9d8887851fe6eb67401925999b2aa394aa855c7132/langchain_mcp_adapters-0.2.2.tar.gz", hash = "sha256:12d39e91ae4389c54b61b221094e53850b6e152934d8bc10c80665d600e76530", size = 37942, upload-time = "2026-03-16T17:13:30.35Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/7d/2f/15d5e6c1765d8404a9cce38d8c81d7b33fb3392f9db5b992c000dddbd2a3/langchain_mcp_adapters-0.2.2-py3-none-any.whl", hash = "sha256:d08e64954e86281002653071b7430e0377c9a577cb4ac3143abfeb3e24ef8797", size = 23288, upload-time = "2026-03-16T17:13:29.073Z" },
+]
 
 [[package]]
 name = "langchain-openai"

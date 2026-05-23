@@ -27,6 +27,7 @@ from server.app.api.routes import (
     agents,
     artifacts,
     config,
+    mcp_servers,
     messages,
     models,
     sessions,
@@ -244,6 +245,7 @@ app.add_middleware(ObservabilityMiddleware)
 app.include_router(sessions.router)
 app.include_router(messages.router)
 app.include_router(config.router)
+app.include_router(mcp_servers.router)
 app.include_router(agents.router)
 app.include_router(skills.router)
 app.include_router(models.router)
