@@ -218,7 +218,6 @@ class TestMcpErrorHandling:
                 mock_create_client.assert_not_called()
 
 
-@pytest.mark.asyncio
 class TestMcpCallbacks:
     """Test MCP callback construction and behavior."""
 
@@ -407,7 +406,7 @@ class TestMcpConfiguration:
 @pytest.mark.asyncio
 class TestMcpIntegrationWithExternalServers:
     """Integration tests with real external MCP servers.
-    
+
     These tests are marked as 'integration' and should only run when:
     - Network access is available
     - External MCP server is accessible

@@ -82,6 +82,7 @@ def create_mcp_client(
         connections=connections or None,
         callbacks=callbacks,
         tool_interceptors=tool_interceptors,
+        tool_name_prefix=True,
     )
 
 

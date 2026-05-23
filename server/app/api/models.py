@@ -580,6 +580,45 @@ class GlobalAgentDefaultsUpdate(BaseModel):
     mcp_servers: dict[str, Any] | None = None
 
 
+class McpServerCreate(BaseModel):
+    """Request to register a remote MCP server."""
+
+    name: str = Field(..., min_length=1, max_length=100)
+    url: str = Field(..., min_length=1)
+    headers: dict[str, str] = Field(default_factory=dict)
+    enabled: bool = True
+    transport: Literal["sse", "streamable_http"] = "sse"
+    scope: dict[str, str] | None = None
+
+
+class McpServerUpdate(BaseModel):
+    """Partial update request for a remote MCP server."""
+
+    url: str | None = Field(default=None, min_length=1)
+    headers: dict[str, str] | None = None
+    enabled: bool | None = None
+    transport: Literal["sse", "streamable_http"] | None = None
+
+
+class McpServerResponse(BaseModel):
+    """Registered remote MCP server response."""
+
+    name: str
+    url: str
+    headers: dict[str, str] = Field(default_factory=dict)
+    enabled: bool
+    transport: Literal["sse", "streamable_http"]
+    scope: dict[str, str] = Field(default_factory=dict)
+    source: Literal["file", "api"]
+
+
+class McpServerList(BaseModel):
+    """List of remote MCP servers visible in scope."""
+
+    servers: list[McpServerResponse]
+    count: int
+
+
 # ============================================================================
 # Agent Models
 # ============================================================================
