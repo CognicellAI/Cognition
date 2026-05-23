@@ -7,7 +7,7 @@ from server.app.agent.cognition_agent import (
     clear_agent_cache,
     create_cognition_agent,
 )
-from server.app.agent.definition import ContextPolicy
+from server.app.agent.definition import AsyncSubagentConfig, ContextPolicy
 
 
 @pytest.mark.asyncio
@@ -189,6 +189,38 @@ async def test_rich_interrupt_on_changes_agent_cache_key():
         )
 
         assert mock_create.call_count == 2
+    clear_agent_cache()
+
+
+@pytest.mark.asyncio
+async def test_async_subagents_are_passed_to_deep_agents_subagents():
+    """Async subagent specs should use Deep Agents' native subagents input."""
+    clear_agent_cache()
+    with patch("server.app.agent.cognition_agent.create_deep_agent") as mock_create:
+        mock_create.return_value = AsyncMock()
+
+        await create_cognition_agent(
+            CognitionAgentParams(
+                project_path=".",
+                model="mock:model",
+                async_subagents=[
+                    AsyncSubagentConfig(
+                        name="researcher",
+                        description="Runs long research tasks",
+                        graph_id="research_graph",
+                        url="https://agents.example.com",
+                    )
+                ],
+            )
+        )
+
+        _, kwargs = mock_create.call_args
+        assert {
+            "name": "researcher",
+            "description": "Runs long research tasks",
+            "graph_id": "research_graph",
+            "url": "https://agents.example.com",
+        } in kwargs["subagents"]
     clear_agent_cache()
 
 

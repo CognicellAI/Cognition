@@ -423,6 +423,45 @@ class TestStructuredOutputAndContextControls:
         assert params is not None
         assert params.context_policy == policy
 
+    @pytest.mark.asyncio
+    async def test_async_subagents_passed_to_create_cognition_agent(self):
+        """async_subagents from AgentDefinition must be forwarded."""
+        from server.app.agent.definition import AgentDefinition, AsyncSubagentConfig
+
+        session = _make_session()
+        mock_runtime = _make_mock_runtime(DoneEvent())
+        patches = _base_patches(mock_runtime, session)
+
+        async_subagents = [
+            AsyncSubagentConfig(
+                name="researcher",
+                description="Runs long research tasks",
+                graph_id="research_graph",
+                url="https://agents.example.com",
+            )
+        ]
+        agent_def = AgentDefinition(
+            name="test-agent",
+            system_prompt="test",
+            async_subagents=async_subagents,
+        )
+        mock_def_registry = MagicMock()
+        mock_def_registry.get = MagicMock(return_value=agent_def)
+        mock_def_registry.subagents = MagicMock(return_value=[])
+
+        _, create_agent_mock = await _run(patches, session, mock_def_registry=mock_def_registry)
+
+        params = _get_params(create_agent_mock)
+        assert params is not None
+        assert params.async_subagents == [
+            {
+                "name": "researcher",
+                "description": "Runs long research tasks",
+                "graph_id": "research_graph",
+                "url": "https://agents.example.com",
+            }
+        ]
+
 
 # ---------------------------------------------------------------------------
 # middleware wiring

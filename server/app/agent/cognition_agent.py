@@ -112,6 +112,7 @@ class RuntimeContext:
     memory: tuple[str, ...]
     skills: tuple[str, ...]
     subagent_count: int
+    async_subagents: tuple[tuple[str, str, str, str], ...]
     interrupt_on: tuple[tuple[str, str], ...]
     permissions: tuple[tuple[tuple[str, ...], tuple[str, ...], str], ...]
     response_format: str
@@ -132,6 +133,7 @@ class RuntimeContext:
         memory: Sequence[str] | None,
         skills: Sequence[str] | None,
         subagents: Sequence[Any] | None,
+        async_subagents: Sequence[Any] | None,
         interrupt_on: Mapping[str, Any] | None,
         permissions: Sequence[Any] | None,
         response_format: str | type[Any] | None,
@@ -150,6 +152,7 @@ class RuntimeContext:
             memory=tuple(sorted(memory)) if memory else (),
             skills=tuple(sorted(skills)) if skills else (),
             subagent_count=len(subagents) if subagents else 0,
+            async_subagents=_async_subagents_cache_key(async_subagents),
             interrupt_on=_mapping_cache_key(interrupt_on),
             permissions=_permissions_cache_key(permissions),
             response_format=(
@@ -205,6 +208,54 @@ def _json_cache_key(value: Any | None) -> str:
     if hasattr(value, "model_dump"):
         value = value.model_dump(exclude_none=True)
     return json.dumps(value, sort_keys=True, default=str)
+
+
+def _async_subagent_dict(async_subagent: Any) -> dict[str, Any]:
+    if hasattr(async_subagent, "model_dump"):
+        return cast(dict[str, Any], async_subagent.model_dump(exclude_none=True))
+    if isinstance(async_subagent, Mapping):
+        return dict(async_subagent)
+    return {
+        "name": getattr(async_subagent, "name", ""),
+        "description": getattr(async_subagent, "description", ""),
+        "graph_id": getattr(async_subagent, "graph_id", ""),
+        "url": getattr(async_subagent, "url", ""),
+    }
+
+
+def _async_subagents_cache_key(
+    async_subagents: Sequence[Any] | None,
+) -> tuple[tuple[str, str, str, str], ...]:
+    if not async_subagents:
+        return ()
+    return tuple(
+        sorted(
+            (
+                str(data.get("name", "")),
+                str(data.get("description", "")),
+                str(data.get("graph_id", "")),
+                str(data.get("url", "")),
+            )
+            for data in (_async_subagent_dict(item) for item in async_subagents)
+        )
+    )
+
+
+def _resolve_async_subagents(async_subagents: Sequence[Any] | None) -> list[dict[str, Any]]:
+    if not async_subagents:
+        return []
+    resolved: list[dict[str, Any]] = []
+    for item in async_subagents:
+        data = _async_subagent_dict(item)
+        spec = {
+            "name": str(data["name"]),
+            "description": str(data["description"]),
+            "graph_id": str(data["graph_id"]),
+        }
+        if data.get("url"):
+            spec["url"] = str(data["url"])
+        resolved.append(spec)
+    return resolved
 
 
 def _context_policy_enables_summarization_tool(context_policy: Any | None) -> bool:
@@ -310,6 +361,7 @@ class CognitionAgentParams:
     memory: Sequence[str] | None = None
     skills: Sequence[str] | None = None
     subagents: Sequence[Any] | None = None
+    async_subagents: Sequence[Any] | None = None
     interrupt_on: Mapping[str, Any] | None = None
     permissions: Sequence[Any] | None = None
     response_format: str | type[Any] | None = None
@@ -364,6 +416,9 @@ def _inject_subagent_middleware(subagents: list[Any], middleware: list[Any]) -> 
     result: list[Any] = []
     for s in subagents:
         if isinstance(s, dict):
+            if "graph_id" in s:
+                result.append(s)
+                continue
             existing = s.get("middleware") or []
             existing_types = {type(m).__name__ for m in existing}
             for m in security_middleware:
@@ -416,6 +471,7 @@ async def create_cognition_agent(params: CognitionAgentParams) -> CognitionAgent
         memory=params.memory,
         skills=params.skills,
         subagents=params.subagents,
+        async_subagents=params.async_subagents,
         interrupt_on=params.interrupt_on,
         permissions=params.permissions,
         response_format=params.response_format,
@@ -508,6 +564,12 @@ async def create_cognition_agent(params: CognitionAgentParams) -> CognitionAgent
     else:
         defaults = await _defaults()
         raw_subagents = list(defaults.subagents) if defaults else []
+
+    if params.async_subagents is not None:
+        raw_async_subagents = list(params.async_subagents)
+    else:
+        defaults = await _defaults()
+        raw_async_subagents = list(defaults.async_subagents) if defaults else []
 
     agent_interrupt_on: dict[str, Any]
     agent_permissions: Sequence[Any] | None
@@ -604,6 +666,7 @@ async def create_cognition_agent(params: CognitionAgentParams) -> CognitionAgent
         {**s, "description": s.get("description", "")} if isinstance(s, dict) else s
         for s in raw_subagents
     ]
+    agent_subagents.extend(_resolve_async_subagents(raw_async_subagents))
 
     agent_subagents = _inject_subagent_middleware(agent_subagents, agent_middleware)
 

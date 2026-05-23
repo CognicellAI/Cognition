@@ -124,6 +124,7 @@ def _agent_defaults_response(defaults: Any) -> GlobalAgentDefaultsResponse:
         memory=list(defaults.memory),
         skills=list(defaults.skills),
         subagents=list(defaults.subagents),
+        async_subagents=list(defaults.async_subagents),
         interrupt_on={
             name: config.model_dump(exclude_none=True)
             if hasattr(config, "model_dump")
