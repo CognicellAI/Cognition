@@ -26,6 +26,7 @@ from server.app.api.models import HealthStatus, ReadyStatus
 from server.app.api.routes import (
     agents,
     artifacts,
+    capabilities,
     config,
     mcp_servers,
     messages,
@@ -251,6 +252,7 @@ app.include_router(skills.router)
 app.include_router(models.router)
 app.include_router(tools.router)
 app.include_router(artifacts.router)
+app.include_router(capabilities.router)
 
 
 @app.get("/health", response_model=HealthStatus, tags=["health"])
