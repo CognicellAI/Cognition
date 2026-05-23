@@ -20,7 +20,7 @@ def _to_response(server: McpServerRegistration) -> McpServerResponse:
     return McpServerResponse(
         name=server.name,
         url=server.url,
-        headers=dict(server.headers),
+        headers={},
         enabled=server.enabled,
         transport=server.transport,
         scope=dict(server.scope),

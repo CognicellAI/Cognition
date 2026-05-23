@@ -601,7 +601,12 @@ class McpServerUpdate(BaseModel):
 
 
 class McpServerResponse(BaseModel):
-    """Registered remote MCP server response."""
+    """Registered remote MCP server response.
+
+    Headers are intentionally redacted from responses — they may contain
+    bearer tokens or other sensitive values. Builders who need to view or
+    rotate header values should manage them through their own infrastructure.
+    """
 
     name: str
     url: str
