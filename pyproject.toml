@@ -54,6 +54,8 @@ dependencies = [
     "langgraph-checkpoint-sqlite>=1.0.0",
     # MCP (Model Context Protocol) - Remote-only support via langchain-mcp-adapters
     "langchain-mcp-adapters>=0.2.0",
+    # A2A (Agent-to-Agent Protocol) - Inbound server adapter
+    "a2a-sdk>=1.0.0",
 ]
 
 [project.optional-dependencies]
