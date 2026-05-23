@@ -10,6 +10,8 @@ import httpx
 import pytest
 import pytest_asyncio
 
+from tests.e2e.test_scenarios.conftest import is_terminal_stream_event
+
 # Mark all tests in this file as e2e
 pytestmark = [
     pytest.mark.e2e,
@@ -110,6 +112,8 @@ class TestPluggabilityE2E:
                     elif line.startswith("data: "):
                         data = json.loads(line[6:])
                         events.append({"event": event_type, "data": data})
+                        if is_terminal_stream_event({"event": event_type, **data}):
+                            break
 
                 # Check for status events
                 status_events = [e for e in events if e["event"] == "status"]

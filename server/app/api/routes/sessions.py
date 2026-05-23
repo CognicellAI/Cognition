@@ -40,7 +40,6 @@ from server.app.api.models import (
 from server.app.api.scoping import SessionScope
 from server.app.api.sse import EventBuilder, SSEStream, get_last_event_id
 from server.app.llm.deep_agent_service import (
-    DeepAgentStreamingService,
     DoneEvent,
     HitlDecisionEvent,
     SessionAgentManager,
@@ -398,6 +397,7 @@ async def resume_session(
     settings: Settings = Depends(get_settings_dep),
     scope: SessionScope = Depends(get_scope_dep),
     store: StorageBackend = Depends(get_storage_backend_dep),  # noqa: B008
+    agent_manager: SessionAgentManager = Depends(get_session_agent_manager_dep),  # noqa: B008
 ) -> dict[str, str | bool] | StreamingResponse:
     """Resume an interrupted Deep Agents session using native Command(resume=...)."""
     session = await _get_scoped_session(session_id, store, scope)
@@ -408,7 +408,9 @@ async def resume_session(
             detail=f"Session {session_id} is not waiting for approval",
         )
 
-    service = DeepAgentStreamingService(settings)
+    service = agent_manager.get_service(session_id)
+    if service is None:
+        service = agent_manager.register_session(session_id, session.workspace_path)
 
     accept_header = http_request.headers.get("accept", "")
     wants_stream = "text/event-stream" in accept_header.lower()

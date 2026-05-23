@@ -538,7 +538,12 @@ class DeepAgentStreamingService:
             )
             yield ErrorEvent(message=str(e), code="PROVIDER_CONFIG_ERROR")
         except Exception as e:
-            logger.error("DeepAgents resume error", error=str(e), session_id=session_id)
+            logger.error(
+                "DeepAgents resume error",
+                error=str(e),
+                session_id=session_id,
+                exc_info=True,
+            )
             yield ErrorEvent(message=str(e), code="RESUME_ERROR")
 
     async def rebuild_message_projection(

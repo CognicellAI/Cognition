@@ -7,7 +7,7 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
-## [Unreleased] — v0.10.0 Wave 1
+## [Unreleased] — v0.10.0 Waves 1-2B
 
 ### Highlights
 
@@ -18,6 +18,12 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Canonical builder-defined `effective_scope: dict[str, str]` propagation across API, persistence, runtime context, memory/artifacts, MCP, sandbox labels, callbacks, logs, metrics, and SSE events.
+- Scope-aware SSE metadata via `scope_keys` on terminal/state/interrupt events, redacting raw builder scope values.
+- Tool-safety middleware stack: trusted runtime context injection, schema-aware tool argument validation/repair feedback, and enhanced per-tool blocklist auditing.
+- `ToolSafetyEvent` and `HitlDecisionEvent` domain events plus matching SSE builders.
+- Agent definition support for rich `interrupt_on` HITL policy objects, filesystem `permissions`, and subagent permissions.
+- Prometheus counters for tool-safety and HITL decision events.
 - `SessionStatus` enum with 11 states, `can_transition()`, and `is_terminal()` validators (`server/app/models.py`).
 - `POST /sessions/{id}/pause` — transitions active → idle.
 - `POST /sessions/{id}/cancel` — transitions → aborting → aborted (terminal).
@@ -48,6 +54,9 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- Session/run scope mismatch now returns `403 Forbidden` with explicit scope mismatch detail instead of hiding the resource as `404 Not Found`.
+- `CognitionContext` now uses canonical `effective_scope` instead of fixed `user_id`/`org_id`/`project_id` fields.
+- Deep Agents filesystem permissions are passed only when configured, avoiding upstream `FilesystemMiddleware` incompatibility with execution-capable sandbox backends for default agents.
 - `DoneEvent` transitions to `DONE` (was `ACTIVE`). `ErrorEvent` transitions to `FAILED` (was `ERROR`). `ErrorEvent(code=ABORTED)` → `ABORTED`.
 - Session creation with `idempotency_key` returns HTTP 200/201 for existing session.
 
@@ -59,6 +68,8 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Testing
 
+- `tests/e2e/test_scenarios/long_running_agents/test_tool_safety_config.py` — 7 scenario tests covering HITL config, filesystem permissions, subagent permissions, and agent-cache invalidation.
+- Wave 2B pre-release image `0.10.0-w2b` validated on dev K8s with `46 passed, 2 skipped` across long-running agent scenarios and API-level lifecycle/artifact/streaming e2e tests.
 - `tests/e2e/test_session_lifecycle.py` — 9 tests: idempotency, 11-state enum, pause/cancel/abort, SSE heartbeat/status events.
 - `tests/e2e/test_artifacts.py` — 10 tests: CRUD across 6 types, version history, type validation, scope isolation.
 - `tests/e2e/test_agent_streaming.py` — 9 tests: done, token, heartbeat, run_state, sandbox_lifecycle, error events.

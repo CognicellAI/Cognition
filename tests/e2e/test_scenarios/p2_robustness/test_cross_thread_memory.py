@@ -34,7 +34,11 @@ import uuid
 
 import pytest
 
-from tests.e2e.test_scenarios.conftest import ScenarioTestClient
+from tests.e2e.test_scenarios.conftest import (
+    ScenarioTestClient,
+    is_terminal_stream_event,
+    stream_completed,
+)
 
 
 def _unique(prefix: str = "session") -> str:
@@ -80,7 +84,7 @@ async def _collect_events(
                         if current_event_type:
                             payload["event"] = current_event_type
                         events.append(payload)
-                        if current_event_type == "done":
+                        if is_terminal_stream_event(payload):
                             break
                         current_event_type = None
                     except json.JSONDecodeError:
@@ -110,10 +114,9 @@ class TestStorePlumbingDoesNotBreakStreaming:
         try:
             events = await _collect_events(api_client, session_id, "Say: ok")
 
-            done_events = [e for e in events if e.get("event") == "done"]
             error_events = [e for e in events if e.get("event") == "error"]
 
-            assert len(done_events) > 0 or len(error_events) > 0, (
+            assert stream_completed(events), (
                 "Stream did not terminate — Store wiring may have hung the agent"
             )
 
@@ -131,8 +134,7 @@ class TestStorePlumbingDoesNotBreakStreaming:
         try:
             for prompt in ["Say: one", "Say: two", "Say: three"]:
                 events = await _collect_events(api_client, session_id, prompt)
-                terminal = [e for e in events if e.get("event") in ("done", "error")]
-                assert len(terminal) > 0, (
+                assert stream_completed(events), (
                     f"Message '{prompt}' stream did not terminate with Store wired"
                 )
         finally:
@@ -171,11 +173,8 @@ class TestMultipleSessionsSameUser:
             events_a = await _collect_events(api_client, session_a, "Say: alpha")
             events_b = await _collect_events(api_client, session_b, "Say: beta")
 
-            done_a = [e for e in events_a if e.get("event") in ("done", "error")]
-            done_b = [e for e in events_b if e.get("event") in ("done", "error")]
-
-            assert len(done_a) > 0, "Session A stream did not terminate"
-            assert len(done_b) > 0, "Session B stream did not terminate"
+            assert stream_completed(events_a), "Session A stream did not terminate"
+            assert stream_completed(events_b), "Session B stream did not terminate"
         finally:
             await api_client.delete(f"/sessions/{session_a}")
             await api_client.delete(f"/sessions/{session_b}")
@@ -294,11 +293,8 @@ class TestUserScopeIsolation:
                 events_a = await _collect_events(client_a, session_a, "Say: alice-ok")
                 events_b = await _collect_events(client_b, session_b, "Say: bob-ok")
 
-                terminal_a = [e for e in events_a if e.get("event") in ("done", "error")]
-                terminal_b = [e for e in events_b if e.get("event") in ("done", "error")]
-
-                assert len(terminal_a) > 0, "User A stream did not terminate"
-                assert len(terminal_b) > 0, "User B stream did not terminate"
+                assert stream_completed(events_a), "User A stream did not terminate"
+                assert stream_completed(events_b), "User B stream did not terminate"
             finally:
                 await client_a.delete(f"/sessions/{session_a}")
                 await client_b.delete(f"/sessions/{session_b}")
