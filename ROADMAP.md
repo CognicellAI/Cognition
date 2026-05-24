@@ -411,8 +411,8 @@ This section tracks the v0.10.0 long-running agents release. See `localdocs/v0.1
 | ROADMAP.md populated | All feature entries | Complete |
 | `server/version.py` → `"0.10.0"` | Version bump on release branch | Complete |
 | `localdocs/v0.10.0-plan.md` | Agent reference document | Complete |
-| CHANGELOG.md updated | Waves 1-3 documented | In Progress |
-| Pre-release image gate | `0.10.0-w3` validated | Pending |
+| CHANGELOG.md updated | Waves 1-3 documented | Complete |
+| Pre-release image gate | `0.10.0-w3` validated | Complete -- 48 passed, 2 skipped (local Docker Compose) |
 
 ### Done Criteria
 
