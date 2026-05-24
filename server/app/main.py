@@ -139,20 +139,24 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     set_session_agent_manager_dep(session_agent_manager)
     logger.info("SessionAgentManager initialized")
 
-    # Mount A2A protocol adapter
-    try:
-        from server.app.protocols.a2a.routes import mount_a2a_routes
+    # Mount A2A protocol adapter (requires COGNITION_A2A_ENABLED=true)
+    if settings.a2a_enabled:
+        try:
+            from server.app.protocols.a2a.routes import mount_a2a_routes
 
-        await mount_a2a_routes(
-            app=app,
-            settings=settings,
-            config_store=config_store,
-            session_agent_manager=session_agent_manager,
-            store=storage_backend,
-            version=VERSION,
-        )
-    except Exception as e:
-        logger.warning("A2A adapter not mounted", error=str(e))
+            await mount_a2a_routes(
+                app=app,
+                settings=settings,
+                config_store=config_store,
+                session_agent_manager=session_agent_manager,
+                store=storage_backend,
+                version=VERSION,
+            )
+            logger.info("A2A protocol adapter mounted")
+        except Exception as e:
+            logger.warning("A2A adapter not mounted", error=str(e))
+    else:
+        logger.info("A2A protocol adapter disabled (COGNITION_A2A_ENABLED=false)")
 
     # Initialize ModelCatalog for DI
     from server.app.llm.model_catalog import ModelCatalog

@@ -41,6 +41,8 @@ async def get_capabilities(
         sandbox_backends.append("docker")
     sandbox_backends.append("kubernetes")
 
+    a2a_enabled = settings.a2a_enabled
+
     features: dict[str, bool] = {
         "async_subagents": True,
         "mcp": True,
@@ -58,10 +60,10 @@ async def get_capabilities(
         "provider_config_crud": True,
         "agent_config_crud": True,
         "model_catalog": True,
-        "a2a": True,
-        "a2a_jsonrpc": True,
-        "a2a_streaming": True,
-        "a2a_per_agent_cards": True,
+        "a2a": a2a_enabled,
+        "a2a_jsonrpc": a2a_enabled,
+        "a2a_streaming": a2a_enabled,
+        "a2a_per_agent_cards": a2a_enabled,
         "a2a_push_notifications": False,
         "a2a_grpc": False,
     }
