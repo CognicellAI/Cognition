@@ -9,6 +9,8 @@ Cognition uses a convention-over-configuration model. Most extensions require ze
 | Agents | `.cognition/agents/` YAML or Markdown | No | Yes |
 | Tools | Python functions | Yes | Yes |
 | Middleware | Python classes | Yes | No |
+| MCP servers | Remote HTTP/SSE endpoints | No | Yes |
+| A2A exposure | `a2a_exposed: true` on agent definition | No | Yes |
 | Custom LLM providers | Python factories | Yes | No |
 
 ---
@@ -403,7 +405,7 @@ String entries are imported directly; dict entries with a `name` key are treated
 
 ## 6. MCP Tool Servers
 
-Connect to any remote Model Context Protocol (MCP) server. MCP servers expose tools over HTTP SSE.
+Connect to any remote Model Context Protocol (MCP) server. MCP servers expose tools over HTTP.
 
 ```yaml
 # .cognition/config.yaml
@@ -411,17 +413,136 @@ mcp:
   servers:
     - name: github-tools
       url: https://mcp.github.example.com/sse
+      transport: sse  # or "streamable_http"
     - name: internal-db
       url: http://db-tools.internal:8080/sse
 ```
 
-All tools exposed by the MCP server become available to the agent under the server name as a namespace prefix (e.g. `github-tools/create_pr`).
+All tools exposed by the MCP server become available to the agent under the server name as a namespace prefix (e.g. `github-tools/create_pr`). The `tool_name_prefix=True` setting on `MultiServerMCPClient` prevents tool name collisions between servers.
+
+### How It Works
+
+Cognition uses [`langchain-mcp-adapters`](https://github.com/langchain-ai/langchain-mcp-adapters) to connect to MCP servers. The adapter:
+
+1. Connects to each configured remote server using SSE or Streamable HTTP transport
+2. Converts MCP tools into LangChain `BaseTool` instances
+3. Applies a **scope injection interceptor** that adds `X-Cognition-Scope-*` headers to every MCP request
+4. Registers progress and logging callbacks for observability
+5. Returns tools that participate in the full Deep Agents middleware stack (tool safety, HITL, permissions)
+
+### Transport Options
+
+| Transport | Description |
+|---|---|
+| `sse` | Server-Sent Events (default). Best for long-lived connections. |
+| `streamable_http` | HTTP with streaming. Best for serverless or short-lived connections. |
+
+### Managing MCP Servers via API
+
+MCP servers can also be managed at runtime via the REST API:
+
+```bash
+# List registered servers
+curl http://localhost:8000/mcp-servers
+
+# Register a new server
+curl -X POST http://localhost:8000/mcp-servers \
+  -H "Content-Type: application/json" \
+  -d '{"name": "my-tools", "url": "https://tools.example.com/sse", "transport": "sse"}'
+
+# Update a server
+curl -X PATCH http://localhost:8000/mcp-servers/my-tools \
+  -H "Content-Type: application/json" \
+  -d '{"enabled": false}'
+
+# Delete a server
+curl -X DELETE http://localhost:8000/mcp-servers/my-tools
+```
+
+> **Note:** MCP server `headers` (containing credentials) are redacted in API responses — `GET /mcp-servers` returns an empty `headers` dict to prevent credential leakage. File-managed servers (from `.cognition/config.yaml`) are read-only via the API — mutation attempts return `409 Conflict`.
 
 Only HTTP/HTTPS URLs are accepted — stdio-based MCP servers are not supported for security reasons.
 
 ---
 
-## 7. Custom LLM Providers
+## 7. Exposing Agents via A2A
+
+Cognition can expose agents via the [Agent-to-Agent (A2A)](https://google.github.io/A2A/) protocol, allowing external systems to discover and invoke your agents.
+
+### Opting In
+
+Set `a2a_exposed: true` on any agent definition:
+
+```yaml
+# .cognition/agents/deploy-agent.yaml
+name: deploy-agent
+mode: primary
+a2a_exposed: true
+description: Handles deployment workflows
+system_prompt: |
+  You are a deployment agent. Deploy applications safely and report results.
+```
+
+Or via the API:
+
+```bash
+curl -X POST http://localhost:8000/agents \
+  -H "Content-Type: application/json" \
+  -d '{"name": "deploy-agent", "system_prompt": "...", "a2a_exposed": true}'
+```
+
+### How It Works
+
+1. **Agent card discovery** — `GET /.well-known/agent-card.json` returns A2A `AgentCard` objects for all agents with `a2a_exposed=True`, filtered by the caller's scope.
+2. **JSON-RPC endpoint** — Each agent gets a dedicated endpoint at `POST /a2a/{agent_name}`. The agent is resolved at request time, so agents created after server startup are immediately available.
+3. **Scope-aware** — A2A requests must include `X-Cognition-Scope-*` headers. Only agents visible in the caller's scope are discoverable and invocable.
+4. **Bridging** — The `CognitionA2AExecutor` bridges A2A requests to Cognition's `service.stream_response()`, reusing the full agent runtime, tools, middleware, and persistence.
+
+### A2A Client Example
+
+```python
+import httpx
+
+# Discover agents
+resp = httpx.get(
+    "http://localhost:8000/.well-known/agent-card.json",
+    headers={"X-Cognition-Scope-User": "alice"},
+)
+cards = resp.json()["cards"]
+
+# Send a message to an agent
+resp = httpx.post(
+    "http://localhost:8000/a2a/deploy-agent",
+    json={
+        "jsonrpc": "2.0",
+        "id": "1",
+        "method": "SendMessage",
+        "params": {
+            "message": {
+                "role": "user",
+                "parts": [{"type": "text", "text": "Deploy staging"}],
+            }
+        },
+    },
+    headers={
+        "A2A-Version": "1.0",
+        "X-Cognition-Scope-User": "alice",
+    },
+)
+```
+
+### Constraints
+
+- Built-in agents (`default`, `readonly`) have `a2a_exposed=False` by default
+- Only `primary` and `all` mode agents can be exposed via A2A
+- The `A2A-Version: 1.0` header is required (without it, the SDK defaults to v0.3 which is unsupported)
+- A2A does not add any additional services — endpoints are part of the main Cognition server
+
+For full A2A protocol details, see the [A2A SDK documentation](https://github.com/a2aproject/a2a-python).
+
+---
+
+## 8. Custom LLM Providers
 
 Cognition uses LangChain's `init_chat_model()` under the hood, which supports any provider that has a LangChain integration. The built-in provider types are:
 

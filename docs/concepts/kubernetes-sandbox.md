@@ -144,15 +144,15 @@ This is the same pattern used by `ModalSandbox` (the reference deepagents integr
 
 ## Scoping Labels
 
-CognitionContext fields are mapped to `cognition.io/*` labels on the Sandbox CR, enabling multi-tenant visibility:
+`CognitionContext.effective_scope` fields are mapped to `cognition.io/*` labels on the Sandbox CR, enabling multi-tenant visibility:
 
 ```python
 labels = {
-    "cognition.io/user": context.user_id,
-    "cognition.io/org": context.org_id,
-    "cognition.io/project": context.project_id,
     "cognition.io/session": session_id,
 }
+# Add all effective_scope keys as labels
+for key, value in context.effective_scope.items():
+    labels[f"cognition.io/{key}"] = value
 ```
 
 Queryable with kubectl:

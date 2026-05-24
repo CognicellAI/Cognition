@@ -34,7 +34,7 @@ Defined in `server/app/models.py:Session`:
 | `status` | `SessionStatus` | `active`, `inactive`, or `error` |
 | `agent_name` | `str` | Name of the bound agent (default: `"default"`) |
 | `config` | `SessionConfig` | Per-session LLM overrides (provider, model, temperature) |
-| `scopes` | `dict[str, str]` | Tenant isolation values (e.g. `{"user": "alice"}`) |
+| `scopes` | `dict[str, str]` | Builder-defined scope key-value pairs (e.g. `{"user": "alice", "project": "proj-123"}`) |
 | `metadata` | `dict[str, str]` | Arbitrary builder-defined correlation metadata |
 | `created_at` | `datetime` | Creation timestamp |
 | `updated_at` | `datetime` | Last-modified timestamp |

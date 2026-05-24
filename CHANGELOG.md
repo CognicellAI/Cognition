@@ -60,6 +60,7 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `create_artifact_store()` factory in storage factory (`server/app/storage/factory.py`).
 - Sandbox runtime verification: workspace, writable paths, env vars, GitHub auth (`server/app/agent/sandbox_backend.py`).
 - `COGNITION_BLOCKED_TOOLS` environment variable for per-name tool blocklisting.
+- `COGNITION_A2A_ENABLED` environment variable to enable/disable the A2A protocol adapter (default `true`). When false, `/.well-known/agent-card.json` and `/a2a/{agent_name}` endpoints are not mounted.
 - `settings.run_heartbeat_interval_seconds` and `settings.run_stall_timeout_seconds`.
 
 ### Changed

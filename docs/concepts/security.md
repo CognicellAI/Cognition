@@ -8,15 +8,18 @@ Cognition is designed to run untrusted agent workloads in multi-tenant environme
 
 Implemented in `server/app/api/scoping.py`.
 
-Session scoping is Cognition's multi-tenancy mechanism. When enabled, every session carries a set of key-value pairs (its scope), and API requests must supply matching headers. Scopes prevent one tenant's sessions from being visible or accessible to another tenant.
+Session scoping is Cognition's multi-tenancy mechanism. When enabled, every session carries a set of key-value pairs (its `effective_scope`), and API requests must supply matching headers. Scopes prevent one tenant's sessions from being visible or accessible to another tenant.
+
+Scope keys are **builder-defined** — Cognition does not hardcode a vocabulary. Choose keys that match your application's tenancy model (e.g. `user`, `tenant`, `project`, `env`).
 
 ### How It Works
 
 1. `COGNITION_SCOPING_ENABLED=true` activates scope enforcement.
-2. `COGNITION_SCOPE_KEYS` defines which dimensions are required (default: `["user"]`).
+2. `COGNITION_SCOPE_KEYS` defines which key names are required (default: `["user"]`).
 3. For each key in `scope_keys`, the request must include an `x-cognition-scope-{key}` header.
 4. Missing headers return `403 Forbidden` immediately — **fail-closed**.
 5. When listing sessions, results are filtered to only sessions whose scope values match the request headers.
+6. The resulting `effective_scope` dict propagates through `CognitionContext` → LangGraph `runtime.context` → middleware → tools.
 
 ### Configuration
 
@@ -103,7 +106,7 @@ Tool source code (both file-discovered and API-registered) executes with full Py
 | Process isolation | Docker sandbox backend — container per session |
 | Network isolation | Docker `network_mode=none` |
 | Filesystem isolation | `CognitionLocalSandboxBackend` protected paths |
-| Memory isolation | LangGraph Store namespaces scoped per user via `CognitionContext` |
+| Memory isolation | LangGraph Store namespaces scoped per tenant via `CognitionContext.effective_scope` |
 
 `POST /tools` (API-registered tools) executes arbitrary Python with full privileges. **Restrict this endpoint to authorized administrators at the Gateway/proxy layer.**
 
@@ -142,13 +145,31 @@ MCP (Model Context Protocol) tool servers must be remote HTTP/HTTPS servers. Std
 
 ```python
 @field_validator("url")
-def validate_url_is_remote(cls, v: str) -> str:
+def validate_url(cls, v: str) -> str:
     if not v.startswith(("http://", "https://")):
         raise ValueError("MCP server URL must be HTTP or HTTPS (no stdio)")
     return v
 ```
 
 This policy ensures MCP tool servers cannot be used to execute arbitrary local processes.
+
+Additional MCP security measures:
+- **Header redaction** — `GET /mcp-servers` returns empty `headers` dicts to prevent credential leakage
+- **File-managed immutability** — servers from `.cognition/config.yaml` cannot be modified via API (409 on mutation)
+- **Scope injection** — `X-Cognition-Scope-*` headers are automatically added to MCP requests via `ToolCallInterceptor`
+- **Tool name prefixing** — `tool_name_prefix=True` on `MultiServerMCPClient` prevents tool name collisions
+
+---
+
+## A2A Protocol Boundary
+
+The A2A (Agent-to-Agent) protocol adapter is a Cognition protocol surface, not an app-layer concern.
+
+**Security boundary**: A2A requests must include `X-Cognition-Scope-*` headers. Agent card discovery and JSON-RPC endpoints are both scope-filtered — only agents visible in the caller's scope are discoverable and invocable.
+
+**Builder responsibility**: Cognition does not perform end-user authentication on A2A requests. Authorization must be handled at the gateway/proxy layer before requests reach Cognition. The `a2a_exposed` flag on `AgentDefinition` controls which agents are visible — set it explicitly to `True` only for agents intended for external A2A access.
+
+**Global disable**: Set `COGNITION_A2A_ENABLED=false` to prevent the A2A protocol surface from being mounted at all. When disabled, the endpoints do not exist and `GET /capabilities` reports `a2a: false`.
 
 ---
 
@@ -219,7 +240,7 @@ These prevent MIME sniffing, clickjacking, and reflected XSS attacks in browser 
 
 ## Production Security Checklist
 
-- [ ] Set `COGNITION_SCOPING_ENABLED=true` and configure `COGNITION_SCOPE_KEYS`
+- [ ] Set `COGNITION_SCOPING_ENABLED=true` and configure `COGNITION_SCOPE_KEYS` (builder-defined keys matching your tenancy model)
 - [ ] Set `COGNITION_SANDBOX_BACKEND=docker`
 - [ ] Set `COGNITION_DOCKER_NETWORK=none`
 - [ ] Restrict `POST /tools` to authorized administrators at the Gateway/proxy layer
@@ -229,3 +250,5 @@ These prevent MIME sniffing, clickjacking, and reflected XSS attacks in browser 
 - [ ] Never commit API keys; use `.env` or secrets management (Vault, AWS Secrets Manager)
 - [ ] Run the sandbox image from a minimal, audited base image
 - [ ] Set `COGNITION_PROTECTED_PATHS` to include any sensitive directories
+- [ ] Review which agents have `a2a_exposed: true` — only expose agents intended for external A2A access
+- [ ] Restrict `/mcp-servers` CRUD to authorized administrators (MCP server headers contain credentials)
