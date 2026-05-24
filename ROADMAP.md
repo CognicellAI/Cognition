@@ -369,7 +369,7 @@ All write endpoints respect `X-Cognition-Scope-{key}` headers for multi-tenant s
 | Evaluation framework | Layer 7 | Pending | Automated benchmark runs on agent performance | 5 days | P1: Production-Ready |
 | Builder boundary documentation | Layer 6 | Completed | A builder-facing guide clearly defines Cognition Core vs app-layer responsibilities, gives decision rules, and links from the main docs index and root README | 0.25 days | None |
 | `app = Cognition(agent); app.run()` | All | Pending | Single-line instantiation provides all features | 5 days | All above |
-| **v0.10.0: Protocol adapters (ACP/A2A)** | Layer 4/6/7 | Planned | Optional ACP adapter for Agent Client Protocol clients; optional A2A adapter for agent-to-agent workflows; clear mapping between protocol events and Cognition run/session/event models; adapters preserve Cognition scoping, audit, permissions, and event semantics; native API remains canonical. | 2–3 days | P1: runner-lifecycle |
+| **v0.10.0: A2A server adapter** | Layer 4/6/7 | Completed | Cognition exposes itself as an A2A Server via `a2a-sdk`. Per-agent Agent Cards and JSON-RPC endpoints at `/a2a/{agent_name}`. Builders opt agents into A2A via `a2a_exposed` field. Catch-all dynamic dispatch — agents created at runtime are immediately available without restart. Scope-aware card discovery — callers see only agents visible to their `X-Cognition-Scope-*` headers. `contextId` maps to `session_id`; `taskId` maps to `run_id`. HITL pauses surface as `INPUT_REQUIRED`. Push notifications, gRPC, outbound A2A client, and file/media parts deferred. | 2–3 days | P1: runner-lifecycle |
 
 ### Explicitly Deferred
 
@@ -397,8 +397,8 @@ This section tracks the v0.10.0 long-running agents release. See `localdocs/v0.1
 |------|----------|-----------------|------|
 | 1 | `runner-lifecycle`, `artifacts-handoffs`, `sandbox-hardening` | `0.10.0-w1` | Complete -- 27/28 API tests + 13/13 scenario tests pass on dev K8s |
 | 2A | `scope-alignment` | `0.10.0-w2a` | Complete -- P0 scope propagation merged into release branch; Wave 2B unblocked |
-| 2B | `tool-safety`, `context-controls`, `async-subagents`, `model-profiles` | `0.10.0-w2b` | Partial complete -- `tool-safety` merged and validated on dev K8s (`46 passed`, `2 skipped`), then stabilized by PR #123 against local Docker Compose (`58 passed`, `1 skipped` focused e2e); `context-controls` merged via PR #124; experimental `async-subagents` merged via PR #126; `model-profiles` deferred to last |
-| 3 | `mcp-alignment`, `capability-registry`, `protocol-adapters` | `0.10.0-w3` | Scenarios pass |
+| 2B | `tool-safety`, `context-controls`, `async-subagents`, `model-profiles` | `0.10.0-w2b` | Partial complete -- `tool-safety` merged and validated on dev K8s (`46 passed`, `2 skipped`), then stabilized by PR #123 against local Docker Compose (`58 passed`, `1 skipped` focused e2e); `context-controls` merged via PR #124; experimental `async-subagents` merged via PR #126; `model-profiles` deferred to v0.11.0 |
+| 3 | `mcp-alignment`, `capability-registry`, `protocol-adapters` | `0.10.0-w3` | Partial complete -- `mcp-alignment` merged (PR #128); `capability-registry` merged (PR #129); `protocol-adapters` (A2A adapter) in progress |
 | *Deferred* | `harness-eval`, `scoped-memory`, `code-interpreter` | N/A | Deferred to v0.11.0. Full eval orchestration design in `localdocs/v0.10.0-eval-orchestration-shaping.md`. |
 
 ### Release Gates And Phase 0 Blockers
@@ -429,4 +429,4 @@ Per AGENTS.md requirements:
    - Features/Architectural: Before starting work
    - Security/Bug/Performance/Dependency: As part of PR
 
-**Last Updated**: 2026-05-23 (v0.10.0 Wave 3/4 collapse — deferred harness-eval, scoped-memory, code-interpreter to v0.11.0)
+**Last Updated**: 2026-05-23 (v0.10.0 Wave 3 — A2A adapter complete, mcp-alignment and capability-registry merged)

@@ -664,6 +664,7 @@ class AgentResponse(BaseModel):
     mode: Literal["primary", "subagent", "all"] = Field(..., description="Agent mode")
     hidden: bool = Field(..., description="Whether agent is hidden from listings")
     native: bool = Field(..., description="Whether agent is built-in")
+    a2a_exposed: bool = Field(default=False, description="Whether agent is exposed via A2A protocol")
     provider: str | None = Field(
         None,
         description="Deprecated compatibility field. Use config.provider instead.",
@@ -1034,6 +1035,7 @@ class AgentCreate(BaseModel):
     description: str | None = Field(default=None)
     mode: Literal["primary", "subagent", "all"] = Field(default="primary")
     hidden: bool = Field(default=False)
+    a2a_exposed: bool = Field(default=False, description="Expose agent via A2A protocol")
     tools: list[str] = Field(default_factory=list)
     skills: list[str] = Field(default_factory=list)
     memory: list[str] = Field(default_factory=list)
@@ -1063,6 +1065,7 @@ class AgentUpdate(BaseModel):
     description: str | None = None
     mode: Literal["primary", "subagent", "all"] | None = None
     hidden: bool | None = None
+    a2a_exposed: bool | None = None
     tools: list[str] | None = None
     skills: list[str] | None = None
     memory: list[str] | None = None
