@@ -2,10 +2,9 @@
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock
 
-import pytest
-from a2a.types import Role, TaskState
+from a2a.types import TaskState
 
 from server.app.agent.definition import AgentDefinition
 from server.app.agent.runtime import (

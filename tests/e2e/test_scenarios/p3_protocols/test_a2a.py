@@ -32,8 +32,9 @@ async def _ensure_a2a_agent():
     Uses catch-all dynamic dispatch — the agent is immediately available
     via A2A after creation. No server restart needed.
     """
-    import httpx
     import os
+
+    import httpx
 
     base_url = os.environ.get("COGNITION_E2E_URL", "http://localhost:8000").rstrip("/")
     async with httpx.AsyncClient(base_url=base_url) as client:
