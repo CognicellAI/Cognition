@@ -7,7 +7,7 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
-## [Unreleased] — v0.10.0 Waves 1-2B
+## [Unreleased] — v0.10.0 Waves 1-3
 
 ### Highlights
 
@@ -15,9 +15,17 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **Persistent artifacts**: blob-store semantics over SQL with pluggable `ArtifactStore` (Sqlite/Postgres/Memory), 6 typed categories, version history, scope-aware visibility.
 - **SSE event surface**: heartbeat, run_state, callback, sandbox_lifecycle, delegation, and status events for full run observability.
 - **Session idempotency**: `idempotency_key` on `POST /sessions` prevents duplicate creation.
+- **A2A server adapter**: Cognition agents discoverable and invokable via the Agent-to-Agent protocol. Per-agent Agent Cards, scope-aware discovery, catch-all dynamic dispatch.
+- **MCP alignment**: Custom MCP layer replaced with `langchain-mcp-adapters`. MCP tools now participate in Deep Agents middleware stack (tool safety, HITL, permissions). Remote-only policy preserved.
+- **Capability registry**: `GET /capabilities` exposes runtime versions, features, middleware, stream protocols, and sandbox backends for client discovery.
 
 ### Added
 
+- A2A (Agent-to-Agent) protocol adapter: `POST /a2a/{agent_name}` JSON-RPC endpoint for `SendMessage` and `SendStreamingMessage`. Per-agent Agent Cards at `GET /.well-known/agent-card.json?assistant_id={name}`. Scope-aware card discovery — callers see only agents visible to their `X-Cognition-Scope-*` headers. `a2a_exposed` field on `AgentDefinition` controls A2A exposure (default `false`). Catch-all dynamic dispatch — agents created at runtime are immediately available without server restart. `contextId` maps to `session_id`; `taskId` maps to `run_id`. HITL pauses surface as `INPUT_REQUIRED` task state.
+- `GET /capabilities` endpoint returning runtime package versions (Cognition, Deep Agents, LangGraph, LangChain), stream protocols, sandbox backends, feature flags, middleware types, scope keys, and deployment config.
+- MCP alignment: custom `McpSseClient`/`McpManager`/`McpAdapterTool` replaced with `langchain-mcp-adapters` `MultiServerMCPClient`. MCP tools now participate in Deep Agents middleware stack (tool safety, HITL, permissions, context injection). Scope injection interceptor adds effective scope to MCP tool call args. Progress and logging callbacks from MCP servers forwarded to Cognition structured logs. `tool_name_prefix=True` prevents MCP tool names from colliding with native tools (e.g., `coingecko_execute` instead of `execute`). `transport` field on `McpServerConfig`/`McpServerRegistration` for future StreamableHTTP support. MCP server headers redacted from API responses.
+- `POST/GET/PATCH/DELETE /mcp-servers` CRUD endpoints for remote MCP server registration, scope-aware, with `McpServerCreate`/`McpServerUpdate`/`McpServerResponse`/`McpServerList` API models.
+- `McpServerRegistration.transport` field (`"sse"` or `"streamable_http"`, default `"sse"`).
 - Experimental async subagent configuration MVP: agents and global defaults can declare remote Agent Protocol async subagents (`name`, `description`, `graph_id`, optional `url`) that are wired into Deep Agents async task tools without adding a header/secret injection surface. This is remote Agent Protocol delegation, not Cognition's simple in-process supervisor/subagent pattern.
 - Context controls MVP: `ContextPolicy` on agent config/global defaults, `context` SSE events, `GET /sessions/{id}/context` redacted debug metadata, Deep Agents summarization-tool middleware alignment, and `cognition_context_events_total` Prometheus metric.
 - Canonical builder-defined `effective_scope: dict[str, str]` propagation across API, persistence, runtime context, memory/artifacts, MCP, sandbox labels, callbacks, logs, metrics, and SSE events.
@@ -71,6 +79,11 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Testing
 
+- `tests/unit/test_a2a_adapter.py` — 35 unit tests: A2A exposed field, per-agent card generation, scope extraction, event mapping, executor agent name, filtering logic.
+- `tests/e2e/test_scenarios/p3_protocols/test_a2a.py` — 9 e2e tests: card discovery, per-agent card, 404 for unknown agents, SendMessage/SendStreamingMessage, artifact verification, capabilities.
+- `tests/unit/test_capability_registry.py` — 10 unit tests: version resolution, feature flags, middleware, scope keys, deployment info.
+- `tests/e2e/test_scenarios/p3_tools/test_mcp_coingecko_scenario.py` — 2 e2e tests: CoinGecko MCP server registration and agent tool call via `coingecko_search_docs`/`coingecko_execute`.
+- `tests/e2e/test_scenarios/p3_tools/test_mcp.py` — 21 unit tests: security stance, config-to-connection mapping, client factory, callbacks, interceptors, configuration.
 - `tests/e2e/test_scenarios/long_running_agents/test_async_subagents_config.py` — scenario coverage for experimental async subagent API round-trip and header-free config surface.
 - `tests/e2e/test_scenarios/long_running_agents/test_context_controls.py` — scenario coverage for context policy API round-trip, `context` SSE events, and redacted session context debug metadata.
 - `tests/e2e/test_scenarios/long_running_agents/test_tool_safety_config.py` — 7 scenario tests covering HITL config, filesystem permissions, subagent permissions, and agent-cache invalidation.

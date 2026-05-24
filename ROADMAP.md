@@ -397,20 +397,22 @@ This section tracks the v0.10.0 long-running agents release. See `localdocs/v0.1
 |------|----------|-----------------|------|
 | 1 | `runner-lifecycle`, `artifacts-handoffs`, `sandbox-hardening` | `0.10.0-w1` | Complete -- 27/28 API tests + 13/13 scenario tests pass on dev K8s |
 | 2A | `scope-alignment` | `0.10.0-w2a` | Complete -- P0 scope propagation merged into release branch; Wave 2B unblocked |
-| 2B | `tool-safety`, `context-controls`, `async-subagents`, `model-profiles` | `0.10.0-w2b` | Partial complete -- `tool-safety` merged and validated on dev K8s (`46 passed`, `2 skipped`), then stabilized by PR #123 against local Docker Compose (`58 passed`, `1 skipped` focused e2e); `context-controls` merged via PR #124; experimental `async-subagents` merged via PR #126; `model-profiles` deferred to v0.11.0 |
-| 3 | `mcp-alignment`, `capability-registry`, `protocol-adapters` | `0.10.0-w3` | Partial complete -- `mcp-alignment` merged (PR #128); `capability-registry` merged (PR #129); `protocol-adapters` (A2A adapter) in progress |
-| *Deferred* | `harness-eval`, `scoped-memory`, `code-interpreter` | N/A | Deferred to v0.11.0. Full eval orchestration design in `localdocs/v0.10.0-eval-orchestration-shaping.md`. |
+| 2B | `tool-safety`, `context-controls`, `async-subagents`, `model-profiles` | `0.10.0-w2b` | Complete -- `tool-safety` merged (PR #121, stabilized PR #123); `context-controls` merged (PR #124); `async-subagents` merged (PR #126); `model-profiles` deferred to v0.11.0 |
+| 3 | `mcp-alignment`, `capability-registry`, `protocol-adapters` | `0.10.0-w3` | Complete -- `mcp-alignment` merged (PR #128); `capability-registry` merged (PR #129); `protocol-adapters` A2A adapter merged (PR #130) |
+| *Deferred* | `harness-eval`, `scoped-memory`, `code-interpreter`, `model-profiles` | N/A | Deferred to v0.11.0. Full eval orchestration design in `localdocs/v0.10.0-eval-orchestration-shaping.md`. |
 
 ### Release Gates And Phase 0 Blockers
 
 | Task | Target | Status |
 |------|--------|--------|
-| `feat/runtime-upgrade` → `main` | deepagents 0.6.3 + langchain-core >=1.4.0 | PR #115 |
-| `feat/k8s-security` → `main` | Shell injection, thread safety, dead code, error accuracy | PR #116 |
+| `feat/runtime-upgrade` → `main` | deepagents 0.6.3 + langchain-core >=1.4.0 | Merged (PR #115) |
+| `feat/k8s-security` → `main` | Shell injection, thread safety, dead code, error accuracy | Merged (PR #116) |
 | Canonical scope propagation | P0 feature entry + dedicated Wave 2A implementation gate | Complete |
-| ROADMAP.md populated | 4 security + 1 dependency + 10 feature entries | Complete |
+| ROADMAP.md populated | All feature entries | Complete |
 | `server/version.py` → `"0.10.0"` | Version bump on release branch | Complete |
 | `localdocs/v0.10.0-plan.md` | Agent reference document | Complete |
+| CHANGELOG.md updated | Waves 1-3 documented | In Progress |
+| Pre-release image gate | `0.10.0-w3` validated | Pending |
 
 ### Done Criteria
 
@@ -429,4 +431,4 @@ Per AGENTS.md requirements:
    - Features/Architectural: Before starting work
    - Security/Bug/Performance/Dependency: As part of PR
 
-**Last Updated**: 2026-05-23 (v0.10.0 Wave 3 — A2A adapter complete, mcp-alignment and capability-registry merged)
+**Last Updated**: 2026-05-24 (v0.10.0 Wave 3 complete — all waves merged, CHANGELOG updated, pre-release gate pending)
