@@ -61,6 +61,7 @@ async def get_capabilities(
         "a2a": True,
         "a2a_jsonrpc": True,
         "a2a_streaming": True,
+        "a2a_per_agent_cards": True,
         "a2a_push_notifications": False,
         "a2a_grpc": False,
     }

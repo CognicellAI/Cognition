@@ -1,8 +1,8 @@
-"""Agent Card generation from Cognition agent definitions.
+"""Per-agent A2A Agent Card generation from Cognition agent definitions.
 
-Derives A2A AgentCard, AgentSkill, and AgentCapabilities from the agents
-registered in Cognition's ConfigRegistry. The card is auto-generated and
-does not require manual maintenance.
+Each A2A-exposed agent gets its own AgentCard with a dedicated JSON-RPC
+endpoint at /a2a/{agent_name}. Builders control exposure via the
+a2a_exposed field on AgentDefinition. No agent is exposed by default.
 """
 
 from __future__ import annotations
@@ -15,50 +15,32 @@ from server.app.agent.definition import AgentDefinition
 logger = structlog.get_logger(__name__)
 
 
-def build_agent_card(
-    agents: list[AgentDefinition],
+def build_agent_card_for_agent(
+    agent: AgentDefinition,
     base_url: str,
     version: str,
 ) -> AgentCard:
-    """Build an A2A AgentCard from configured Cognition agents.
+    """Build an A2A AgentCard for a single Cognition agent.
 
-    Only primary, non-hidden agents become A2A skills. Subagent-only
-    and hidden agents are excluded from the public card.
+    The card's supportedInterfaces URL points to /a2a/{agent_name}.
+    The card name includes the agent name for client-side identification.
+
+    The card does NOT expose: system prompt, tool list, skill contents,
+    scope values, secrets, or subagent details.
     """
-    skills: list[AgentSkill] = []
-    for agent in agents:
-        if agent.mode == "subagent" or agent.hidden:
-            continue
-        skill = AgentSkill(
-            id=agent.name,
-            name=agent.name,
-            description=agent.description or f"Cognition agent: {agent.name}",
-            tags=["cognition", agent.mode],
-            input_modes=["text/plain"],
-            output_modes=["text/plain", "application/json"],
-            examples=[],
-        )
-        skills.append(skill)
-
-    if not skills:
-        skills.append(
-            AgentSkill(
-                id="default",
-                name="default",
-                description="Cognition default coding assistant",
-                tags=["cognition", "primary"],
-                input_modes=["text/plain"],
-                output_modes=["text/plain", "application/json"],
-                examples=[],
-            )
-        )
+    skill = AgentSkill(
+        id=agent.name,
+        name=agent.name,
+        description=agent.description or f"Cognition agent: {agent.name}",
+        tags=["cognition", agent.mode],
+        input_modes=["text/plain"],
+        output_modes=["text/plain", "application/json"],
+        examples=[],
+    )
 
     card = AgentCard(
-        name="Cognition",
-        description=(
-            "AI-powered coding assistant with tools, sandbox execution, "
-            "and long-running task support"
-        ),
+        name=f"Cognition ({agent.name})",
+        description=agent.description or f"Cognition agent: {agent.name}",
         version=version,
         default_input_modes=["text/plain"],
         default_output_modes=["text/plain", "application/json"],
@@ -66,15 +48,15 @@ def build_agent_card(
         supported_interfaces=[
             AgentInterface(
                 protocol_binding="JSONRPC",
-                url=f"{base_url}/a2a",
+                url=f"{base_url}/a2a/{agent.name}",
             )
         ],
-        skills=skills,
+        skills=[skill],
     )
 
     logger.info(
         "A2A Agent Card built",
-        skill_count=len(skills),
-        skills=[s.id for s in skills],
+        agent_name=agent.name,
+        endpoint=f"/a2a/{agent.name}",
     )
     return card

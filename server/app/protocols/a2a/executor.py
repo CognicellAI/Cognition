@@ -42,6 +42,10 @@ class CognitionA2AExecutor(AgentExecutor):
     Uses Cognition's existing session model, agent_event_stream(),
     and event types. Each A2A message creates a new Cognition run
     within the session identified by the A2A contextId.
+
+    The agent_name parameter determines which Cognition agent is used
+    for sessions created by this executor. Each per-agent A2A endpoint
+    gets its own executor with the correct agent_name.
     """
 
     def __init__(
@@ -49,10 +53,12 @@ class CognitionA2AExecutor(AgentExecutor):
         settings: Settings,
         session_agent_manager: SessionAgentManager,
         store: StorageBackend,
+        agent_name: str = "default",
     ) -> None:
         self._settings = settings
         self._agent_manager = session_agent_manager
         self._store = store
+        self._agent_name = agent_name
 
     async def execute(
         self,
@@ -101,7 +107,7 @@ class CognitionA2AExecutor(AgentExecutor):
                 config=SessionConfig(),
                 title=f"A2A session {context_id[:8]}",
                 scopes=scope,
-                agent_name="default",
+                agent_name=self._agent_name,
                 metadata={"a2a_context_id": context_id},
                 workspace_path=workspace_path,
             )

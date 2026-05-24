@@ -200,6 +200,7 @@ class AgentDefinition(BaseModel):
     description: str | None = Field(default=None)
     hidden: bool = Field(default=False)
     native: bool = Field(default=False)
+    a2a_exposed: bool = Field(default=False)
 
     @field_validator("name")
     @classmethod
