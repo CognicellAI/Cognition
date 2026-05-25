@@ -19,6 +19,8 @@ from server.app.agent.definition import (
 )
 from server.app.models import Session as CoreSession
 from server.app.models import SessionConfig
+from server.app.models import SessionEvent as CoreSessionEvent
+from server.app.models import SessionRun as CoreSessionRun
 
 # ============================================================================
 # Session Models
@@ -69,6 +71,18 @@ class SessionResponse(BaseModel):
         default_factory=dict,
         description="Arbitrary key-value metadata attached to the session",
     )
+    active_run_id: str | None = Field(
+        default=None, description="Currently active run, if any"
+    )
+    latest_run_id: str | None = Field(
+        default=None, description="Most recent run associated with the session"
+    )
+    last_activity_at: str | None = Field(
+        default=None, description="Most recent runtime activity timestamp"
+    )
+    latest_event_type: str | None = Field(
+        default=None, description="Most recent durable runtime event type"
+    )
 
     @classmethod
     def from_core(cls, session: CoreSession) -> SessionResponse:
@@ -84,6 +98,12 @@ class SessionResponse(BaseModel):
             agent_name=session.agent_name,
             idempotency_key=session.metadata.get("idempotency_key") if session.metadata else None,
             metadata=session.metadata,
+            active_run_id=session.metadata.get("active_run_id") if session.metadata else None,
+            latest_run_id=session.metadata.get("latest_run_id") if session.metadata else None,
+            last_activity_at=session.metadata.get("last_activity_at") if session.metadata else None,
+            latest_event_type=session.metadata.get("latest_event_type")
+            if session.metadata
+            else None,
         )
 
 
@@ -119,6 +139,99 @@ class SessionResumeRequest(BaseModel):
     )
 
 
+class SessionRunResponse(BaseModel):
+    """Durable run state for one execution attempt inside a session."""
+
+    id: str
+    session_id: str
+    thread_id: str
+    status: str
+    attempt: int
+    scope_keys: list[str] = Field(default_factory=list)
+    idempotency_key: str | None = None
+    parent_run_id: str | None = None
+    started_at: str | None = None
+    last_activity_at: str | None = None
+    completed_at: str | None = None
+    error_code: str | None = None
+    status_reason: str | None = None
+    trace_id: str | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    created_at: str
+    updated_at: str
+
+    @classmethod
+    def from_core(cls, run: CoreSessionRun) -> SessionRunResponse:
+        """Create from core domain model."""
+        return cls(
+            id=run.id,
+            session_id=run.session_id,
+            thread_id=run.thread_id,
+            status=run.status.value,
+            attempt=run.attempt,
+            scope_keys=sorted(run.effective_scope),
+            idempotency_key=run.idempotency_key,
+            parent_run_id=run.parent_run_id,
+            started_at=run.started_at,
+            last_activity_at=run.last_activity_at,
+            completed_at=run.completed_at,
+            error_code=run.error_code,
+            status_reason=run.status_reason,
+            trace_id=run.trace_id,
+            metadata=run.metadata,
+            created_at=run.created_at,
+            updated_at=run.updated_at,
+        )
+
+
+class SessionRunList(BaseModel):
+    """List of durable runs for a session."""
+
+    runs: list[SessionRunResponse] = Field(default_factory=list)
+    total: int
+
+
+class SessionEventResponse(BaseModel):
+    """Durable runtime event response."""
+
+    id: str
+    session_id: str
+    run_id: str
+    sequence: int
+    event_type: str
+    visibility: Literal["internal", "builder", "end_user"]
+    payload: dict[str, Any] = Field(default_factory=dict)
+    scope_keys: list[str] = Field(default_factory=list)
+    trace_id: str | None = None
+    span_id: str | None = None
+    created_at: str
+
+    @classmethod
+    def from_core(cls, event: CoreSessionEvent) -> SessionEventResponse:
+        """Create from core domain model."""
+        return cls(
+            id=event.id,
+            session_id=event.session_id,
+            run_id=event.run_id,
+            sequence=event.sequence,
+            event_type=event.event_type,
+            visibility=event.visibility,
+            payload=event.payload,
+            scope_keys=sorted(event.effective_scope),
+            trace_id=event.trace_id,
+            span_id=event.span_id,
+            created_at=event.created_at,
+        )
+
+
+class SessionEventList(BaseModel):
+    """List of durable runtime events."""
+
+    events: list[SessionEventResponse] = Field(default_factory=list)
+    total: int
+    has_more: bool = False
+
+
 # ============================================================================
 # Message Models
 # ============================================================================
@@ -144,6 +257,11 @@ class MessageCreate(BaseModel):
     callback_url: AnyHttpUrl | None = Field(
         default=None,
         description="If provided, Cognition POSTs the final completion payload to this URL when the run finishes.",
+    )
+    idempotency_key: str | None = Field(
+        default=None,
+        max_length=200,
+        description="Client-provided key for idempotent run creation within the session.",
     )
 
 

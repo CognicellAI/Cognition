@@ -5,7 +5,16 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from typing import Any, Literal
 
-from server.app.models import Message, Session, SessionConfig, SessionStatus, ToolCall
+from server.app.models import (
+    Message,
+    RunStatus,
+    Session,
+    SessionConfig,
+    SessionEvent,
+    SessionRun,
+    SessionStatus,
+    ToolCall,
+)
 
 
 def now_utc() -> datetime:
@@ -104,6 +113,80 @@ def make_message(
     )
 
 
+def make_session_run(
+    *,
+    run_id: str,
+    session_id: str,
+    thread_id: str,
+    status: RunStatus = RunStatus.QUEUED,
+    effective_scope: dict[str, str] | None = None,
+    attempt: int = 1,
+    idempotency_key: str | None = None,
+    parent_run_id: str | None = None,
+    started_at: str | None = None,
+    last_activity_at: str | None = None,
+    completed_at: str | None = None,
+    error_code: str | None = None,
+    status_reason: str | None = None,
+    trace_id: str | None = None,
+    metadata: dict[str, Any] | None = None,
+    created_at: str | None = None,
+    updated_at: str | None = None,
+) -> SessionRun:
+    """Create a SessionRun with consistent timestamps."""
+    created = created_at or now_utc_iso()
+    updated = updated_at or created
+    return SessionRun(
+        id=run_id,
+        session_id=session_id,
+        thread_id=thread_id,
+        status=status,
+        effective_scope=effective_scope or {},
+        attempt=attempt,
+        idempotency_key=idempotency_key,
+        parent_run_id=parent_run_id,
+        started_at=started_at,
+        last_activity_at=last_activity_at,
+        completed_at=completed_at,
+        error_code=error_code,
+        status_reason=status_reason,
+        trace_id=trace_id,
+        metadata=metadata or {},
+        created_at=created,
+        updated_at=updated,
+    )
+
+
+def make_session_event(
+    *,
+    event_id: str,
+    session_id: str,
+    run_id: str,
+    sequence: int,
+    event_type: str,
+    payload: dict[str, Any] | None = None,
+    effective_scope: dict[str, str] | None = None,
+    visibility: Literal["internal", "builder", "end_user"] = "builder",
+    trace_id: str | None = None,
+    span_id: str | None = None,
+    created_at: str | None = None,
+) -> SessionEvent:
+    """Create a SessionEvent with consistent timestamps."""
+    return SessionEvent(
+        id=event_id,
+        session_id=session_id,
+        run_id=run_id,
+        sequence=sequence,
+        event_type=event_type,
+        visibility=visibility,
+        payload=payload or {},
+        effective_scope=effective_scope or {},
+        trace_id=trace_id,
+        span_id=span_id,
+        created_at=created_at or now_utc_iso(),
+    )
+
+
 def filter_sessions(
     sessions: list[Session],
     filter_scopes: dict[str, str] | None = None,
@@ -129,6 +212,8 @@ __all__ = [
     "filter_sessions",
     "make_message",
     "make_session",
+    "make_session_event",
+    "make_session_run",
     "merge_session_config",
     "now_utc",
     "now_utc_iso",

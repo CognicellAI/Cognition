@@ -91,6 +91,64 @@ class TestCognitionKubernetesSandboxBackendExecute:
         mock_inner.execute.assert_called_once_with("long-cmd", timeout=120)
 
 
+class TestCognitionKubernetesSandboxBackendFilesystemApi:
+    def test_ls_uses_new_result_api(self, tmp_path):
+        from deepagents.backends.protocol import LsResult
+
+        backend = CognitionKubernetesSandboxBackend(root_dir=tmp_path)
+        mock_inner = MagicMock()
+        mock_inner.ls.return_value = LsResult(
+            entries=[{"path": "/workspace/app", "is_dir": True}]
+        )
+        backend._backend = mock_inner
+
+        result = backend.ls("/workspace")
+
+        mock_inner.ls.assert_called_once_with("/workspace")
+        mock_inner.ls_info.assert_not_called()
+        assert result.error is None
+        assert result.entries == [{"path": "/workspace/app", "is_dir": True}]
+
+    def test_ls_result_errors_do_not_raise_deprecated_api_error(self, tmp_path):
+        from deepagents.backends.protocol import LsResult
+
+        backend = CognitionKubernetesSandboxBackend(root_dir=tmp_path)
+        mock_inner = MagicMock()
+        mock_inner.ls.return_value = LsResult(error="Path '/missing': path_not_found")
+        backend._backend = mock_inner
+
+        result = backend.ls("/missing")
+
+        assert result.error == "Path '/missing': path_not_found"
+        mock_inner.ls_info.assert_not_called()
+
+    def test_glob_and_grep_use_new_result_api(self, tmp_path):
+        from deepagents.backends.protocol import GlobResult, GrepResult
+
+        backend = CognitionKubernetesSandboxBackend(root_dir=tmp_path)
+        mock_inner = MagicMock()
+        mock_inner.glob.return_value = GlobResult(
+            matches=[{"path": "/workspace/main.py", "is_dir": False}]
+        )
+        mock_inner.grep.return_value = GrepResult(
+            matches=[{"path": "/workspace/main.py", "line": 1, "text": "TODO"}]
+        )
+        backend._backend = mock_inner
+
+        glob_result = backend.glob("*.py", path="/workspace")
+        grep_result = backend.grep("TODO", path="/workspace", glob="*.py")
+
+        mock_inner.glob.assert_called_once_with("*.py", path="/workspace")
+        mock_inner.glob_info.assert_not_called()
+        assert glob_result.matches == [{"path": "/workspace/main.py", "is_dir": False}]
+
+        mock_inner.grep.assert_called_once_with("TODO", path="/workspace", glob="*.py")
+        mock_inner.grep_raw.assert_not_called()
+        assert grep_result.matches == [
+            {"path": "/workspace/main.py", "line": 1, "text": "TODO"}
+        ]
+
+
 class TestCognitionKubernetesSandboxBackendTerminate:
     def test_terminate_delegates(self, tmp_path):
         backend = CognitionKubernetesSandboxBackend(root_dir=tmp_path)

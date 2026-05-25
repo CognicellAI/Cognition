@@ -458,8 +458,7 @@ class DeepAgentStreamingService:
 
                         elif isinstance(event, ErrorEvent):
                             yield event
-                            if event.code == "ABORTED":
-                                return
+                            return
 
                     # DoneEvent from the runtime is absorbed here; we emit our own below.
 
@@ -475,7 +474,11 @@ class DeepAgentStreamingService:
                     runtime_exception = exc
 
                 if runtime_exception is not None:
-                    yield ErrorEvent(message=f"Agent execution failed: {runtime_exception}", code="STREAMING_ERROR")
+                    yield ErrorEvent(
+                        message=f"Agent execution failed: {runtime_exception}",
+                        code="STREAMING_ERROR",
+                    )
+                    return
 
                 yield UsageEvent(
                     input_tokens=acc.input_tokens,
@@ -687,6 +690,11 @@ class DeepAgentStreamingService:
         checkpoint_messages = checkpoint.get("channel_values", {}).get("messages", [])
         if not isinstance(checkpoint_messages, list):
             return 0
+        if not checkpoint_messages:
+            existing_messages = await self.storage_backend.list_messages_for_session(
+                session_id
+            )
+            return len(existing_messages)
 
         rebuilt_count = await self.storage_backend.rebuild_message_projection(
             session_id=session_id,

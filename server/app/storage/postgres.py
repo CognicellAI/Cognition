@@ -21,9 +21,25 @@ from langgraph.store.base import BaseStore
 from langgraph.store.postgres.aio import AsyncPostgresStore
 from psycopg_pool import AsyncConnectionPool
 
-from server.app.models import Message, Session, SessionConfig, SessionStatus, ToolCall
+from server.app.models import (
+    Message,
+    RunStatus,
+    Session,
+    SessionConfig,
+    SessionEvent,
+    SessionRun,
+    SessionStatus,
+    ToolCall,
+)
 from server.app.storage.backend import StorageBackend
-from server.app.storage.common import make_message, make_session, merge_session_config, now_utc
+from server.app.storage.common import (
+    make_message,
+    make_session,
+    make_session_event,
+    make_session_run,
+    merge_session_config,
+    now_utc,
+)
 from server.app.storage.message_projection import project_checkpoint_messages
 
 logger = structlog.get_logger(__name__)
@@ -600,6 +616,321 @@ class PostgresStorageBackend:
                 )
             return deleted_count
 
+    # Runtime operations
+    async def create_run(
+        self,
+        run_id: str,
+        session_id: str,
+        thread_id: str,
+        status: RunStatus = RunStatus.QUEUED,
+        effective_scope: dict[str, str] | None = None,
+        idempotency_key: str | None = None,
+        parent_run_id: str | None = None,
+        trace_id: str | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> SessionRun:
+        """Create a durable run for a session."""
+        runs = await self.list_runs(session_id)
+        now = now_utc()
+        run = make_session_run(
+            run_id=run_id,
+            session_id=session_id,
+            thread_id=thread_id,
+            status=status,
+            effective_scope=effective_scope,
+            attempt=len(runs) + 1,
+            idempotency_key=idempotency_key,
+            parent_run_id=parent_run_id,
+            trace_id=trace_id,
+            metadata=metadata,
+            started_at=now.isoformat()
+            if status in {RunStatus.STARTING, RunStatus.ACTIVE}
+            else None,
+            last_activity_at=now.isoformat(),
+            created_at=now.isoformat(),
+            updated_at=now.isoformat(),
+        )
+        async with self._pool.acquire() as conn:
+            await conn.execute(
+                """
+                INSERT INTO session_runs (
+                    id, session_id, thread_id, status, effective_scope,
+                    idempotency_key, attempt, parent_run_id, started_at,
+                    last_activity_at, completed_at, error_code, status_reason,
+                    trace_id, metadata, created_at, updated_at
+                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
+                          $11, $12, $13, $14, $15, $16, $17)
+                """,
+                run.id,
+                run.session_id,
+                run.thread_id,
+                run.status.value,
+                json.dumps(run.effective_scope),
+                run.idempotency_key,
+                run.attempt,
+                run.parent_run_id,
+                datetime.fromisoformat(run.started_at) if run.started_at else None,
+                datetime.fromisoformat(run.last_activity_at) if run.last_activity_at else None,
+                datetime.fromisoformat(run.completed_at) if run.completed_at else None,
+                run.error_code,
+                run.status_reason,
+                run.trace_id,
+                json.dumps(run.metadata),
+                datetime.fromisoformat(run.created_at),
+                datetime.fromisoformat(run.updated_at),
+            )
+        return run
+
+    async def get_run(self, run_id: str) -> SessionRun | None:
+        """Get a run by ID."""
+        async with self._pool.acquire() as conn:
+            row = await conn.fetchrow("SELECT * FROM session_runs WHERE id = $1", run_id)
+            if row:
+                return self._row_to_run(row)
+        return None
+
+    async def get_run_by_idempotency_key(
+        self,
+        session_id: str,
+        idempotency_key: str,
+    ) -> SessionRun | None:
+        """Get an existing run by session and idempotency key."""
+        async with self._pool.acquire() as conn:
+            row = await conn.fetchrow(
+                """
+                SELECT * FROM session_runs
+                WHERE session_id = $1 AND idempotency_key = $2
+                ORDER BY created_at DESC
+                LIMIT 1
+                """,
+                session_id,
+                idempotency_key,
+            )
+            if row:
+                return self._row_to_run(row)
+        return None
+
+    async def list_runs(self, session_id: str) -> list[SessionRun]:
+        """List runs for a session, newest first."""
+        async with self._pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT * FROM session_runs
+                WHERE session_id = $1
+                ORDER BY created_at DESC
+                """,
+                session_id,
+            )
+            return [self._row_to_run(row) for row in rows]
+
+    async def get_active_run(self, session_id: str) -> SessionRun | None:
+        """Get the active foreground run for a session."""
+        active_statuses = [
+            RunStatus.QUEUED.value,
+            RunStatus.STARTING.value,
+            RunStatus.ACTIVE.value,
+            RunStatus.WAITING_FOR_APPROVAL.value,
+            RunStatus.STALLED.value,
+            RunStatus.ABORTING.value,
+        ]
+        async with self._pool.acquire() as conn:
+            row = await conn.fetchrow(
+                """
+                SELECT * FROM session_runs
+                WHERE session_id = $1 AND status = ANY($2::text[])
+                ORDER BY created_at DESC
+                LIMIT 1
+                """,
+                session_id,
+                active_statuses,
+            )
+            if row:
+                return self._row_to_run(row)
+        return None
+
+    async def update_run(
+        self,
+        run_id: str,
+        status: RunStatus | str | None = None,
+        last_activity_at: str | None = None,
+        completed_at: str | None = None,
+        error_code: str | None = None,
+        status_reason: str | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> SessionRun | None:
+        """Update durable run state."""
+        run = await self.get_run(run_id)
+        if run is None:
+            return None
+
+        updates: list[str] = []
+        params: list[Any] = []
+        param_idx = 1
+        now = now_utc()
+        if status is not None:
+            run_status = status if isinstance(status, RunStatus) else RunStatus(status)
+            updates.append(f"status = ${param_idx}")
+            params.append(run_status.value)
+            param_idx += 1
+            if run.started_at is None and run_status in {RunStatus.STARTING, RunStatus.ACTIVE}:
+                updates.append(f"started_at = ${param_idx}")
+                params.append(now)
+                param_idx += 1
+            if RunStatus.is_terminal(run_status) and completed_at is None:
+                completed_at = now.isoformat()
+        if last_activity_at is not None:
+            updates.append(f"last_activity_at = ${param_idx}")
+            params.append(datetime.fromisoformat(last_activity_at))
+            param_idx += 1
+        if completed_at is not None:
+            updates.append(f"completed_at = ${param_idx}")
+            params.append(datetime.fromisoformat(completed_at))
+            param_idx += 1
+        if error_code is not None:
+            updates.append(f"error_code = ${param_idx}")
+            params.append(error_code)
+            param_idx += 1
+        if status_reason is not None:
+            updates.append(f"status_reason = ${param_idx}")
+            params.append(status_reason)
+            param_idx += 1
+        if metadata is not None:
+            updates.append(f"metadata = ${param_idx}")
+            params.append(json.dumps(metadata))
+            param_idx += 1
+        if not updates:
+            return run
+        updates.append(f"updated_at = ${param_idx}")
+        params.append(now)
+        param_idx += 1
+        params.append(run_id)
+        async with self._pool.acquire() as conn:
+            await conn.execute(
+                f"UPDATE session_runs SET {', '.join(updates)} WHERE id = ${param_idx}",
+                *params,
+            )
+        return await self.get_run(run_id)
+
+    async def append_event(
+        self,
+        event_id: str,
+        session_id: str,
+        run_id: str,
+        event_type: str,
+        payload: dict[str, Any] | None = None,
+        visibility: Literal["internal", "builder", "end_user"] = "builder",
+        effective_scope: dict[str, str] | None = None,
+        trace_id: str | None = None,
+        span_id: str | None = None,
+    ) -> SessionEvent:
+        """Append a durable runtime event."""
+        async with self._pool.acquire() as conn:
+            async with conn.transaction():
+                await conn.execute("SELECT pg_advisory_xact_lock(hashtext($1))", session_id)
+                sequence = await conn.fetchval(
+                    """
+                    SELECT COALESCE(MAX(sequence), 0) + 1
+                    FROM session_events
+                    WHERE session_id = $1
+                    """,
+                    session_id,
+                )
+                event = make_session_event(
+                    event_id=event_id,
+                    session_id=session_id,
+                    run_id=run_id,
+                    sequence=int(sequence),
+                    event_type=event_type,
+                    visibility=visibility,
+                    payload=payload,
+                    effective_scope=effective_scope,
+                    trace_id=trace_id,
+                    span_id=span_id,
+                )
+                created_at = datetime.fromisoformat(event.created_at)
+                await conn.execute(
+                    """
+                    INSERT INTO session_events (
+                        id, session_id, run_id, sequence, event_type, visibility,
+                        payload, effective_scope, trace_id, span_id, created_at
+                    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+                    """,
+                    event.id,
+                    event.session_id,
+                    event.run_id,
+                    event.sequence,
+                    event.event_type,
+                    event.visibility,
+                    json.dumps(event.payload),
+                    json.dumps(event.effective_scope),
+                    event.trace_id,
+                    event.span_id,
+                    created_at,
+                )
+                metadata_patch = {
+                    "latest_run_id": run_id,
+                    "latest_event_type": event_type,
+                    "last_activity_at": event.created_at,
+                }
+                session = await self.get_session(session_id)
+                if session is not None:
+                    metadata = {**session.metadata, **metadata_patch}
+                    await conn.execute(
+                        """
+                        UPDATE sessions
+                        SET metadata = $1, updated_at = $2
+                        WHERE id = $3
+                        """,
+                        json.dumps(metadata),
+                        created_at,
+                        session_id,
+                    )
+                await conn.execute(
+                    """
+                    UPDATE session_runs
+                    SET last_activity_at = $1, updated_at = $1
+                    WHERE id = $2
+                    """,
+                    created_at,
+                    run_id,
+                )
+        return event
+
+    async def list_events(
+        self,
+        session_id: str,
+        run_id: str | None = None,
+        after_sequence: int | None = None,
+        limit: int = 100,
+        visibility: Literal["internal", "builder", "end_user"] | None = None,
+        event_type: str | None = None,
+    ) -> list[SessionEvent]:
+        """List runtime events for a session using cursor-style filters."""
+        query = "SELECT * FROM session_events WHERE session_id = $1"
+        params: list[Any] = [session_id]
+        param_idx = 2
+        if run_id is not None:
+            query += f" AND run_id = ${param_idx}"
+            params.append(run_id)
+            param_idx += 1
+        if after_sequence is not None:
+            query += f" AND sequence > ${param_idx}"
+            params.append(after_sequence)
+            param_idx += 1
+        if visibility is not None:
+            query += f" AND visibility = ${param_idx}"
+            params.append(visibility)
+            param_idx += 1
+        if event_type is not None:
+            query += f" AND event_type = ${param_idx}"
+            params.append(event_type)
+            param_idx += 1
+        query += f" ORDER BY sequence ASC LIMIT ${param_idx}"
+        params.append(limit)
+        async with self._pool.acquire() as conn:
+            rows = await conn.fetch(query, *params)
+            return [self._row_to_event(row) for row in rows]
+
     # Checkpointer operations
     async def get_checkpointer(self) -> BaseCheckpointSaver:
         """Get the PostgreSQL checkpointer."""
@@ -698,11 +1029,9 @@ class PostgresStorageBackend:
     # Helper methods
     def _row_to_session(self, row: asyncpg.Record) -> Session:
         """Convert a database row to a Session."""
-        config_data = json.loads(row["config"])
-        scopes_data = row.get("scopes")
-        scopes = json.loads(scopes_data) if scopes_data else {}
-        metadata_data = row.get("metadata")
-        metadata = json.loads(metadata_data) if metadata_data else {}
+        config_data = _json_dict(row["config"])
+        scopes = _json_dict(row.get("scopes"))
+        metadata = _json_dict(row.get("metadata"))
         return make_session(
             session_id=row["id"],
             workspace_path=row["workspace_path"],
@@ -737,22 +1066,23 @@ class PostgresStorageBackend:
         tool_calls_data = row.get("tool_calls")
         tool_calls = None
         if tool_calls_data:
+            tc_list: Any
+            if isinstance(tool_calls_data, list):
+                tc_list = tool_calls_data
+            else:
+                try:
+                    tc_list = json.loads(tool_calls_data)
+                except (json.JSONDecodeError, TypeError):
+                    tc_list = None
             try:
-                tc_list = json.loads(tool_calls_data)
                 tool_calls = [
                     ToolCall(name=tc["name"], args=tc.get("args", {}), id=tc["id"])
-                    for tc in tc_list
+                    for tc in tc_list or []
                 ]
-            except (json.JSONDecodeError, KeyError, TypeError):
+            except (KeyError, TypeError):
                 tool_calls = None
 
-        metadata_data = row.get("metadata")
-        metadata = None
-        if metadata_data:
-            try:
-                metadata = json.loads(metadata_data)
-            except json.JSONDecodeError:
-                metadata = None
+        metadata = _json_dict(row.get("metadata")) or None
 
         return make_message(
             message_id=row["id"],
@@ -767,6 +1097,66 @@ class PostgresStorageBackend:
             model_used=row.get("model_used"),
             metadata=metadata,
         )
+
+    def _row_to_run(self, row: asyncpg.Record) -> SessionRun:
+        """Convert a database row to a SessionRun."""
+        return make_session_run(
+            run_id=row["id"],
+            session_id=row["session_id"],
+            thread_id=row["thread_id"],
+            status=RunStatus(row["status"]),
+            effective_scope=_json_dict(row.get("effective_scope")),
+            attempt=row["attempt"],
+            idempotency_key=row.get("idempotency_key"),
+            parent_run_id=row.get("parent_run_id"),
+            started_at=_dt_iso(row.get("started_at")),
+            last_activity_at=_dt_iso(row.get("last_activity_at")),
+            completed_at=_dt_iso(row.get("completed_at")),
+            error_code=row.get("error_code"),
+            status_reason=row.get("status_reason"),
+            trace_id=row.get("trace_id"),
+            metadata=_json_dict(row.get("metadata")),
+            created_at=_dt_iso(row["created_at"]) or now_utc().isoformat(),
+            updated_at=_dt_iso(row["updated_at"]) or now_utc().isoformat(),
+        )
+
+    def _row_to_event(self, row: asyncpg.Record) -> SessionEvent:
+        """Convert a database row to a SessionEvent."""
+        return make_session_event(
+            event_id=row["id"],
+            session_id=row["session_id"],
+            run_id=row["run_id"],
+            sequence=row["sequence"],
+            event_type=row["event_type"],
+            visibility=row["visibility"],
+            payload=_json_dict(row.get("payload")),
+            effective_scope=_json_dict(row.get("effective_scope")),
+            trace_id=row.get("trace_id"),
+            span_id=row.get("span_id"),
+            created_at=_dt_iso(row["created_at"]) or now_utc().isoformat(),
+        )
+
+
+def _dt_iso(value: Any) -> str | None:
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value.isoformat()
+    return str(value)
+
+
+def _json_dict(value: Any) -> dict[str, Any]:
+    if value is None:
+        return {}
+    if isinstance(value, dict):
+        return dict(value)
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+        except json.JSONDecodeError:
+            return {}
+        return dict(parsed) if isinstance(parsed, dict) else {}
+    return {}
 
 
 # Register as implementing the protocol

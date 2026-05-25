@@ -67,7 +67,7 @@ services:
 
       # LLM Provider
       - COGNITION_LLM_PROVIDER=openai_compatible
-      - COGNITION_LLM_MODEL=google/gemini-3-flash-preview
+      - COGNITION_LLM_MODEL=deepseek/deepseek-v4-pro
       - COGNITION_OPENAI_COMPATIBLE_BASE_URL=https://openrouter.ai/api/v1
       - COGNITION_OPENAI_COMPATIBLE_API_KEY=${COGNITION_OPENAI_COMPATIBLE_API_KEY:-}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}

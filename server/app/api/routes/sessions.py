@@ -35,9 +35,13 @@ from server.app.api.models import (
     ContextMessageDebug,
     ErrorResponse,
     SessionCreate,
+    SessionEventList,
+    SessionEventResponse,
     SessionList,
     SessionResponse,
     SessionResumeRequest,
+    SessionRunList,
+    SessionRunResponse,
     SessionUpdate,
 )
 from server.app.api.scoping import SessionScope
@@ -53,7 +57,8 @@ from server.app.llm.deep_agent_service import (
 from server.app.llm.deep_agent_service import (
     ErrorEvent as ResumeErrorEvent,
 )
-from server.app.models import SessionConfig, SessionStatus
+from server.app.models import RunStatus, SessionConfig, SessionStatus
+from server.app.runtime_projection import RuntimeProjectionService
 from server.app.session_manager import build_session_workspace_path, ensure_session_workspace_path
 from server.app.settings import Settings
 from server.app.storage.backend import StorageBackend
@@ -364,6 +369,98 @@ async def get_session_context(
     )
 
 
+@router.get(
+    "/{session_id}/runs",
+    response_model=SessionRunList,
+    responses={
+        404: {"model": ErrorResponse, "description": "Session not found"},
+    },
+)
+async def list_session_runs(
+    session_id: str,
+    scope: SessionScope = Depends(get_scope_dep),
+    store: StorageBackend = Depends(get_storage_backend_dep),  # noqa: B008
+) -> SessionRunList:
+    """List durable runs for a session."""
+    session = await _get_scoped_session(session_id, store, scope)
+    runs = await store.list_runs(session.id)
+    return SessionRunList(
+        runs=[SessionRunResponse.from_core(run) for run in runs],
+        total=len(runs),
+    )
+
+
+@router.get(
+    "/{session_id}/runs/{run_id}",
+    response_model=SessionRunResponse,
+    responses={
+        404: {"model": ErrorResponse, "description": "Run not found"},
+    },
+)
+async def get_session_run(
+    session_id: str,
+    run_id: str,
+    scope: SessionScope = Depends(get_scope_dep),
+    store: StorageBackend = Depends(get_storage_backend_dep),  # noqa: B008
+) -> SessionRunResponse:
+    """Get durable state for one session run."""
+    session = await _get_scoped_session(session_id, store, scope)
+    run = await store.get_run(run_id)
+    if run is None or run.session_id != session.id:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Run not found: {run_id}",
+        )
+    if not scope.is_empty() and run.effective_scope != scope.get_all():
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Scope mismatch: run scope is immutable after creation.",
+        )
+    return SessionRunResponse.from_core(run)
+
+
+@router.get(
+    "/{session_id}/events",
+    response_model=SessionEventList,
+    responses={
+        404: {"model": ErrorResponse, "description": "Session not found"},
+    },
+)
+async def list_session_events(
+    session_id: str,
+    run_id: str | None = None,
+    after_sequence: int | None = None,
+    limit: int = 100,
+    visibility: Literal["internal", "builder", "end_user"] | None = None,
+    event_type: str | None = None,
+    scope: SessionScope = Depends(get_scope_dep),
+    store: StorageBackend = Depends(get_storage_backend_dep),  # noqa: B008
+) -> SessionEventList:
+    """List durable runtime events for a session."""
+    session = await _get_scoped_session(session_id, store, scope)
+    safe_limit = max(1, min(limit, 500))
+    events = await store.list_events(
+        session.id,
+        run_id=run_id,
+        after_sequence=after_sequence,
+        limit=safe_limit + 1,
+        visibility=visibility,
+        event_type=event_type,
+    )
+    visible_events = [
+        event
+        for event in events
+        if scope.is_empty() or event.effective_scope == scope.get_all()
+    ]
+    has_more = len(visible_events) > safe_limit
+    page = visible_events[:safe_limit]
+    return SessionEventList(
+        events=[SessionEventResponse.from_core(event) for event in page],
+        total=len(page),
+        has_more=has_more,
+    )
+
+
 @router.patch(
     "/{session_id}",
     response_model=SessionResponse,
@@ -457,8 +554,24 @@ async def abort_session(
     Cancels any in-progress agent operation.
     """
     session = await _get_scoped_session(session_id, store, scope)
+    active_run = await store.get_active_run(session_id)
+    projection = RuntimeProjectionService(store)
+    if active_run is not None:
+        await projection.transition_run(
+            active_run,
+            RunStatus.ABORTING,
+            reason="Abort requested",
+            session_status=SessionStatus.ABORTING,
+        )
 
     await agent_manager.abort_session(session_id, session.thread_id)
+    if active_run is not None:
+        await projection.transition_run(
+            active_run,
+            RunStatus.ABORTED,
+            reason="Execution aborted",
+            session_status=SessionStatus.ABORTED,
+        )
 
     return {"success": True, "message": "Operation aborted"}
 
@@ -494,6 +607,16 @@ async def resume_session(
     if service is None:
         service = agent_manager.register_session(session_id, session.workspace_path)
 
+    active_run = await store.get_active_run(session_id)
+    projection = RuntimeProjectionService(store)
+    if active_run is not None:
+        active_run = await projection.transition_run(
+            active_run,
+            RunStatus.ACTIVE,
+            reason="Human approval resolved",
+            session_status=SessionStatus.ACTIVE,
+        )
+
     accept_header = http_request.headers.get("accept", "")
     wants_stream = "text/event-stream" in accept_header.lower()
 
@@ -508,11 +631,24 @@ async def resume_session(
             scope=session.scopes,
         ):
             if isinstance(event, ResumeErrorEvent):
+                if active_run is not None:
+                    await projection.transition_run(
+                        active_run,
+                        RunStatus.FAILED,
+                        reason=event.message,
+                        error_code=event.code,
+                        session_status=SessionStatus.FAILED,
+                    )
                 raise HTTPException(
                     status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                     detail=event.message,
                 )
-        await store.update_session(session_id=session_id, status=SessionStatus.ACTIVE.value)
+            if isinstance(event, DoneEvent) and active_run is not None:
+                await projection.transition_run(
+                    active_run,
+                    RunStatus.DONE,
+                    session_status=SessionStatus.DONE,
+                )
         return {"success": True, "message": "Session resumed"}
 
     sse = SSEStream.from_settings(settings)
@@ -534,6 +670,17 @@ async def resume_session(
             if isinstance(event, TokenEvent):
                 yield EventBuilder.token(event.content)
             elif isinstance(event, HitlDecisionEvent):
+                if active_run is not None:
+                    await projection.append_event(
+                        active_run,
+                        "hitl.decision",
+                        payload={
+                            "decision": event.decision,
+                            "tool_name": event.tool_name,
+                            "edited_arg_keys": event.edited_arg_keys,
+                            "has_rejection_message": event.has_rejection_message,
+                        },
+                    )
                 yield EventBuilder.hitl_decision(
                     decision=event.decision,
                     tool_name=event.tool_name,
@@ -569,11 +716,25 @@ async def resume_session(
                     artifact_id=event.artifact_id,
                 )
             elif isinstance(event, DoneEvent):
+                if active_run is not None:
+                    await projection.transition_run(
+                        active_run,
+                        RunStatus.DONE,
+                        session_status=SessionStatus.DONE,
+                    )
                 yield EventBuilder.done(
                     message_id="resume",
                     assistant_data={"content": "resumed", "tool_calls": None, "token_count": 0},
                 )
             elif isinstance(event, ResumeErrorEvent):
+                if active_run is not None:
+                    await projection.transition_run(
+                        active_run,
+                        RunStatus.FAILED,
+                        reason=event.message,
+                        error_code=event.code,
+                        session_status=SessionStatus.FAILED,
+                    )
                 yield EventBuilder.error(event.message, code=event.code)
                 return
 
@@ -609,6 +770,8 @@ async def cancel_session(
     """
     session = await _get_scoped_session(session_id, store, scope)
     current = SessionStatus(session.status)
+    active_run = await store.get_active_run(session_id)
+    projection = RuntimeProjectionService(store)
 
     if SessionStatus.is_terminal(current):
         raise HTTPException(
@@ -618,12 +781,27 @@ async def cancel_session(
 
     # Transition to CANCELLING
     await _transition_status(store, session_id, current, SessionStatus.ABORTING)
+    if active_run is not None:
+        await projection.transition_run(
+            active_run,
+            RunStatus.ABORTING,
+            reason="Cancel requested",
+            session_status=SessionStatus.ABORTING,
+        )
 
     # Abort the agent runtime
     await agent_manager.abort_session(session_id, session.thread_id)
 
     # Transition to CANCELLED
-    await _transition_status(store, session_id, SessionStatus.ABORTING, SessionStatus.ABORTED)
+    if active_run is not None:
+        await projection.transition_run(
+            active_run,
+            RunStatus.ABORTED,
+            reason="Session cancelled",
+            session_status=SessionStatus.ABORTED,
+        )
+    else:
+        await _transition_status(store, session_id, SessionStatus.ABORTING, SessionStatus.ABORTED)
 
     return {
         "success": True,

@@ -60,8 +60,13 @@ from server.app.llm.deep_agent_service import (
     ToolSafetyEvent,
     UsageEvent,
 )
-from server.app.models import SessionStatus, ToolCall
+from server.app.models import RunStatus, SessionRun, SessionStatus, ToolCall
 from server.app.rate_limiter import RateLimiter
+from server.app.runtime_projection import (
+    ActiveRunConflictError,
+    RuntimeProjectionService,
+    enrich_sse_event,
+)
 from server.app.settings import Settings
 from server.app.storage.backend import StorageBackend
 
@@ -108,6 +113,8 @@ async def agent_event_stream(
     store: StorageBackend,
     scope: dict[str, str] | None = None,
     parent_message_id: str | None = None,
+    run: SessionRun | None = None,
+    projection: RuntimeProjectionService | None = None,
 ) -> AsyncGenerator[dict, None]:
     """Generate agent events as SSE using DeepAgents.
 
@@ -185,7 +192,16 @@ async def agent_event_stream(
         ):
             if isinstance(event, TokenEvent):
                 assistant_content_parts.append(event.content)
-                yield EventBuilder.token(event.content)
+                sse = EventBuilder.token(event.content)
+                if projection is not None and run is not None:
+                    durable = await projection.append_event(
+                        run,
+                        "message.assistant.delta",
+                        payload={"length": len(event.content)},
+                        visibility="internal",
+                    )
+                    sse = enrich_sse_event(sse, durable)
+                yield sse
 
             elif isinstance(event, ToolCallEvent):
                 tool_call = {
@@ -212,11 +228,23 @@ async def agent_event_stream(
                     metadata={"projection_source": "runtime_tool_call"},
                 )
                 await _refresh_session_message_count(store, session_id)
-                yield EventBuilder.tool_call(
+                sse = EventBuilder.tool_call(
                     name=event.name,
                     args=event.args,
                     tool_call_id=event.tool_call_id,
                 )
+                if projection is not None and run is not None:
+                    durable = await projection.append_event(
+                        run,
+                        "tool.call.started",
+                        payload={
+                            "tool_name": event.name,
+                            "tool_call_id": event.tool_call_id,
+                            "args": event.args,
+                        },
+                    )
+                    sse = enrich_sse_event(sse, durable)
+                yield sse
 
             elif isinstance(event, ToolResultEvent):
                 await store.create_message(
@@ -232,15 +260,29 @@ async def agent_event_stream(
                     },
                 )
                 await _refresh_session_message_count(store, session_id)
-                yield EventBuilder.tool_result(
+                sse = EventBuilder.tool_result(
                     tool_call_id=event.tool_call_id,
                     output=event.output,
                     exit_code=event.exit_code,
                 )
+                if projection is not None and run is not None:
+                    durable = await projection.append_event(
+                        run,
+                        "tool.call.completed"
+                        if event.exit_code == 0
+                        else "tool.call.failed",
+                        payload={
+                            "tool_call_id": event.tool_call_id,
+                            "exit_code": event.exit_code,
+                            "output_length": len(event.output or ""),
+                        },
+                    )
+                    sse = enrich_sse_event(sse, durable)
+                yield sse
 
             elif isinstance(event, ToolSafetyEvent):
                 await _touch_session_activity(store, session_id)
-                yield EventBuilder.tool_safety(
+                sse = EventBuilder.tool_safety(
                     action=event.action,
                     tool_name=event.tool_name,
                     tool_call_id=event.tool_call_id,
@@ -252,10 +294,26 @@ async def agent_event_stream(
                     run_id=event.run_id,
                     scope_keys=event.scope_keys or scope_keys,
                 )
+                if projection is not None and run is not None:
+                    durable = await projection.append_event(
+                        run,
+                        f"tool.call.{event.action}",
+                        payload={
+                            "tool_name": event.tool_name,
+                            "tool_call_id": event.tool_call_id,
+                            "action": event.action,
+                            "fields": event.fields,
+                            "overwritten_fields": event.overwritten_fields,
+                            "error_count": len(event.errors or []),
+                            "message": event.message,
+                        },
+                    )
+                    sse = enrich_sse_event(sse, durable)
+                yield sse
 
             elif isinstance(event, ContextEvent):
                 await _touch_session_activity(store, session_id)
-                yield EventBuilder.context(
+                sse = EventBuilder.context(
                     action=event.action,
                     session_id=event.session_id,
                     run_id=event.run_id,
@@ -271,30 +329,86 @@ async def agent_event_stream(
                     summary_id=event.summary_id,
                     artifact_id=event.artifact_id,
                 )
+                if projection is not None and run is not None:
+                    durable = await projection.append_event(
+                        run,
+                        "context.summarized"
+                        if event.action == "summarized"
+                        else f"context.{event.action}",
+                        payload={
+                            "action": event.action,
+                            "message_count": event.message_count,
+                            "retained_messages": event.retained_messages,
+                            "evicted_messages": event.evicted_messages,
+                            "summarized_messages": event.summarized_messages,
+                            "summary_id": event.summary_id,
+                            "artifact_id": event.artifact_id,
+                        },
+                    )
+                    sse = enrich_sse_event(sse, durable)
+                yield sse
 
             elif isinstance(event, PlanningEvent):
                 await _touch_session_activity(store, session_id)
-                yield EventBuilder.planning(event.todos)
+                sse = EventBuilder.planning(event.todos)
+                if projection is not None and run is not None:
+                    durable = await projection.append_event(
+                        run,
+                        "planning.updated",
+                        payload={"todo_count": len(event.todos), "todos": event.todos},
+                    )
+                    sse = enrich_sse_event(sse, durable)
+                yield sse
 
             elif isinstance(event, StepCompleteEvent):
                 await _touch_session_activity(store, session_id)
-                yield EventBuilder.step_complete(
+                sse = EventBuilder.step_complete(
                     step_number=event.step_number,
                     total_steps=event.total_steps,
                     description=event.description,
                 )
+                if projection is not None and run is not None:
+                    durable = await projection.append_event(
+                        run,
+                        "step.completed",
+                        payload={
+                            "step_number": event.step_number,
+                            "total_steps": event.total_steps,
+                            "description": event.description,
+                        },
+                    )
+                    sse = enrich_sse_event(sse, durable)
+                yield sse
 
             elif isinstance(event, InterruptEvent):
-                await store.update_session(
-                    session_id=session_id,
-                    status=SessionStatus.WAITING_FOR_APPROVAL.value,
-                )
-                yield EventBuilder.run_state(
-                    from_status="active",
-                    to_status=SessionStatus.WAITING_FOR_APPROVAL.value,
-                    scope_keys=scope_keys,
-                )
-                yield EventBuilder.interrupt(
+                run_state_event: dict[str, Any] | None = None
+                if projection is not None and run is not None:
+                    run, durable_state = await projection.transition_run_with_event(
+                        run,
+                        RunStatus.WAITING_FOR_APPROVAL,
+                        reason="Human approval required",
+                    )
+                    run_state_event = enrich_sse_event(
+                        EventBuilder.run_state(
+                            from_status="active",
+                            to_status=SessionStatus.WAITING_FOR_APPROVAL.value,
+                            scope_keys=scope_keys,
+                        ),
+                        durable_state,
+                    )
+                    await projection.rebuild_messages_from_checkpoint(service, run)
+                else:
+                    await store.update_session(
+                        session_id=session_id,
+                        status=SessionStatus.WAITING_FOR_APPROVAL.value,
+                    )
+                    run_state_event = EventBuilder.run_state(
+                        from_status="active",
+                        to_status=SessionStatus.WAITING_FOR_APPROVAL.value,
+                        scope_keys=scope_keys,
+                    )
+                yield run_state_event
+                sse = EventBuilder.interrupt(
                     tool_call_id=event.tool_call_id,
                     tool_name=event.tool_name,
                     args=event.args,
@@ -302,19 +416,43 @@ async def agent_event_stream(
                     action_requests=event.action_requests,
                     scope_keys=scope_keys,
                 )
+                if projection is not None and run is not None:
+                    durable = await projection.append_event(
+                        run,
+                        "hitl.interrupt",
+                        payload={
+                            "tool_call_id": event.tool_call_id,
+                            "tool_name": event.tool_name,
+                            "action_count": len(event.action_requests or []),
+                        },
+                    )
+                    sse = enrich_sse_event(sse, durable)
+                yield sse
 
             elif isinstance(event, DelegationEvent):
                 # ISSUE-010: Emit delegation event for UI visibility
                 await _touch_session_activity(store, session_id)
-                yield EventBuilder.delegation(
+                sse = EventBuilder.delegation(
                     from_agent=event.from_agent,
                     to_agent=event.to_agent,
                     task=event.task,
                 )
+                if projection is not None and run is not None:
+                    durable = await projection.append_event(
+                        run,
+                        "subagent.started",
+                        payload={
+                            "from_agent": event.from_agent,
+                            "to_agent": event.to_agent,
+                            "task": event.task,
+                        },
+                    )
+                    sse = enrich_sse_event(sse, durable)
+                yield sse
 
             elif isinstance(event, SandboxLifecycleEvent):
                 await _touch_session_activity(store, session_id)
-                yield EventBuilder.sandbox_lifecycle(
+                sse = EventBuilder.sandbox_lifecycle(
                     sandbox_id=event.sandbox_id,
                     phase=event.phase,
                     sandbox_backend=event.sandbox_backend,
@@ -322,10 +460,32 @@ async def agent_event_stream(
                     exit_code=event.exit_code,
                     is_warm_pool_hit=event.is_warm_pool_hit,
                 )
+                if projection is not None and run is not None:
+                    durable = await projection.append_event(
+                        run,
+                        f"sandbox.{event.phase}",
+                        payload={
+                            "sandbox_id": event.sandbox_id,
+                            "sandbox_backend": event.sandbox_backend,
+                            "duration_ms": event.duration_ms,
+                            "exit_code": event.exit_code,
+                            "is_warm_pool_hit": event.is_warm_pool_hit,
+                        },
+                    )
+                    sse = enrich_sse_event(sse, durable)
+                yield sse
 
             elif isinstance(event, StatusEvent):
                 await _touch_session_activity(store, session_id)
-                yield EventBuilder.status(event.status)
+                sse = EventBuilder.status(event.status)
+                if projection is not None and run is not None:
+                    durable = await projection.append_event(
+                        run,
+                        "run.status",
+                        payload={"status": event.status},
+                    )
+                    sse = enrich_sse_event(sse, durable)
+                yield sse
 
             elif isinstance(event, UsageEvent):
                 metadata["input_tokens"] = event.input_tokens
@@ -333,13 +493,27 @@ async def agent_event_stream(
                 metadata["estimated_cost"] = event.estimated_cost
                 metadata["provider"] = event.provider
                 metadata["model"] = event.model
-                yield EventBuilder.usage(
+                sse = EventBuilder.usage(
                     input_tokens=event.input_tokens,
                     output_tokens=event.output_tokens,
                     estimated_cost=event.estimated_cost,
                     provider=event.provider,
                     model=event.model,
                 )
+                if projection is not None and run is not None:
+                    durable = await projection.append_event(
+                        run,
+                        "usage.recorded",
+                        payload={
+                            "input_tokens": event.input_tokens,
+                            "output_tokens": event.output_tokens,
+                            "estimated_cost": event.estimated_cost,
+                            "provider": event.provider,
+                            "model": event.model,
+                        },
+                    )
+                    sse = enrich_sse_event(sse, durable)
+                yield sse
 
             elif isinstance(event, DoneEvent):
                 active_runtime_count = agent_manager.active_runtime_count(session_id)
@@ -348,17 +522,42 @@ async def agent_event_stream(
                     if active_runtime_count > 1
                     else SessionStatus.DONE.value
                 )
-                await store.update_session(session_id=session_id, status=terminal_status)
-                if terminal_status == SessionStatus.DONE.value:
-                    yield EventBuilder.run_state(
+                state_sse: dict[str, Any] | None = None
+                if projection is not None and run is not None:
+                    if terminal_status == SessionStatus.DONE.value:
+                        run, durable_state = await projection.transition_run_with_event(
+                            run,
+                            RunStatus.DONE,
+                        )
+                        state_sse = enrich_sse_event(
+                            EventBuilder.run_state(
+                                from_status="active",
+                                to_status=SessionStatus.DONE.value,
+                                scope_keys=scope_keys,
+                            ),
+                            durable_state,
+                        )
+                        await projection.rebuild_messages_from_checkpoint(service, run)
+                    else:
+                        durable_status = await projection.append_event(
+                            run,
+                            "run.status",
+                            payload={"status": terminal_status},
+                        )
+                        state_sse = enrich_sse_event(
+                            EventBuilder.status("active"),
+                            durable_status,
+                        )
+                else:
+                    await store.update_session(session_id=session_id, status=terminal_status)
+                    state_sse = EventBuilder.run_state(
                         from_status="active",
-                        to_status=SessionStatus.DONE.value,
+                        to_status=terminal_status,
                         scope_keys=scope_keys,
                     )
-                else:
-                    yield EventBuilder.status("active")
+                yield state_sse
                 assistant_content = "".join(assistant_content_parts)
-                yield EventBuilder.done(
+                sse = EventBuilder.done(
                     assistant_data={
                         "content": assistant_content,
                         "tool_calls": tool_calls or None,
@@ -368,54 +567,137 @@ async def agent_event_stream(
                     },
                     scope_keys=scope_keys,
                 )
+                if projection is not None and run is not None:
+                    durable = await projection.append_event(
+                        run,
+                        "message.assistant.completed",
+                        payload={"content_length": len(assistant_content)},
+                    )
+                    sse = enrich_sse_event(sse, durable)
+                yield sse
 
             elif isinstance(event, ErrorEvent):
                 if event.code == "ABORTED":
-                    await store.update_session(
-                        session_id=session_id, status=SessionStatus.ABORTED.value
-                    )
-                    yield EventBuilder.run_state(
-                        from_status="active",
-                        to_status=SessionStatus.ABORTED.value,
-                        reason="Execution aborted",
-                        scope_keys=scope_keys,
-                    )
+                    error_state_sse: dict[str, Any] | None = None
+                    if projection is not None and run is not None:
+                        run, durable_state = await projection.transition_run_with_event(
+                            run,
+                            RunStatus.ABORTED,
+                            reason="Execution aborted",
+                            error_code=event.code,
+                        )
+                        error_state_sse = enrich_sse_event(
+                            EventBuilder.run_state(
+                                from_status="active",
+                                to_status=SessionStatus.ABORTED.value,
+                                reason="Execution aborted",
+                                scope_keys=scope_keys,
+                            ),
+                            durable_state,
+                        )
+                        await projection.rebuild_messages_from_checkpoint(service, run)
+                    else:
+                        await store.update_session(
+                            session_id=session_id, status=SessionStatus.ABORTED.value
+                        )
+                        error_state_sse = EventBuilder.run_state(
+                            from_status="active",
+                            to_status=SessionStatus.ABORTED.value,
+                            reason="Execution aborted",
+                            scope_keys=scope_keys,
+                        )
+                    yield error_state_sse
                 else:
-                    await store.update_session(
-                        session_id=session_id, status=SessionStatus.FAILED.value
+                    error_state_sse = None
+                    if projection is not None and run is not None:
+                        run, durable_state = await projection.transition_run_with_event(
+                            run,
+                            RunStatus.FAILED,
+                            reason=event.message,
+                            error_code=event.code,
+                        )
+                        error_state_sse = enrich_sse_event(
+                            EventBuilder.run_state(
+                                from_status="active",
+                                to_status=SessionStatus.FAILED.value,
+                                reason=event.message,
+                                scope_keys=scope_keys,
+                            ),
+                            durable_state,
+                        )
+                        await projection.rebuild_messages_from_checkpoint(service, run)
+                    else:
+                        await store.update_session(
+                            session_id=session_id, status=SessionStatus.FAILED.value
+                        )
+                        error_state_sse = EventBuilder.run_state(
+                            from_status="active",
+                            to_status=SessionStatus.FAILED.value,
+                            reason=event.message,
+                            scope_keys=scope_keys,
+                        )
+                    yield error_state_sse
+                sse = EventBuilder.error(event.message, code=event.code)
+                if projection is not None and run is not None:
+                    durable = await projection.append_event(
+                        run,
+                        "run.error",
+                        payload={"message": event.message, "code": event.code},
                     )
-                    yield EventBuilder.run_state(
-                        from_status="active",
-                        to_status=SessionStatus.FAILED.value,
-                        reason=event.message,
-                        scope_keys=scope_keys,
-                    )
-                yield EventBuilder.error(event.message, code=event.code)
+                    sse = enrich_sse_event(sse, durable)
+                yield sse
+                return
 
             elif isinstance(event, HeartbeatEvent):
                 await _touch_session_activity(store, session_id)
-                yield EventBuilder.heartbeat(
+                sse = EventBuilder.heartbeat(
                     step_label=event.step_label,
                     last_model_call=event.last_model_call,
                     last_tool_call=event.last_tool_call,
                     active_subagent_count=event.active_subagent_count,
                     sandbox_ready=event.sandbox_ready,
                 )
+                if projection is not None and run is not None:
+                    durable = await projection.append_event(
+                        run,
+                        "run.heartbeat",
+                        payload={
+                            "step_label": event.step_label,
+                            "last_model_call": event.last_model_call,
+                            "last_tool_call": event.last_tool_call,
+                            "active_subagent_count": event.active_subagent_count,
+                            "sandbox_ready": event.sandbox_ready,
+                        },
+                    )
+                    sse = enrich_sse_event(sse, durable)
+                yield sse
 
             elif isinstance(event, RunStateEvent):
                 if event.to_status:
                     await store.update_session(session_id=session_id, status=event.to_status)
                 else:
                     await _touch_session_activity(store, session_id)
-                yield EventBuilder.run_state(
+                sse = EventBuilder.run_state(
                     from_status=event.from_status,
                     to_status=event.to_status,
                     reason=event.reason,
                     scope_keys=scope_keys,
                 )
+                if projection is not None and run is not None:
+                    durable = await projection.append_event(
+                        run,
+                        f"run.{event.to_status or 'state'}",
+                        payload={
+                            "from_status": event.from_status,
+                            "to_status": event.to_status,
+                            "reason": event.reason,
+                        },
+                    )
+                    sse = enrich_sse_event(sse, durable)
+                yield sse
 
             elif isinstance(event, CallbackEvent):
-                yield EventBuilder.callback(
+                sse = EventBuilder.callback(
                     callback_id=event.callback_id,
                     url=event.url,
                     status=event.status,
@@ -423,22 +705,62 @@ async def agent_event_stream(
                     response_status=event.response_status,
                     error_message=event.error_message,
                 )
+                if projection is not None and run is not None:
+                    durable = await projection.append_event(
+                        run,
+                        f"callback.delivery.{event.status}",
+                        payload={
+                            "callback_id": event.callback_id,
+                            "status": event.status,
+                            "attempt": event.attempt,
+                            "response_status": event.response_status,
+                            "has_error": event.error_message is not None,
+                        },
+                    )
+                    sse = enrich_sse_event(sse, durable)
+                yield sse
 
     except Exception as e:
         logger.error("Agent streaming error", error=str(e), session_id=session_id, exc_info=True)
-        yield EventBuilder.error(str(e), code="AGENT_ERROR")
+        error_sse = EventBuilder.error(str(e), code="AGENT_ERROR")
+        if projection is not None and run is not None:
+            run, durable_state = await projection.transition_run_with_event(
+                run,
+                RunStatus.FAILED,
+                reason=str(e),
+                error_code="AGENT_ERROR",
+            )
+            service = agent_manager.get_service(session_id)
+            if service is not None:
+                await projection.rebuild_messages_from_checkpoint(service, run)
+            error_sse = enrich_sse_event(error_sse, durable_state)
+        yield error_sse
 
 
 async def _post_completion_callback(
     callback_url: str,
     payload: dict[str, Any],
     session_id: str,
+    projection: RuntimeProjectionService | None = None,
+    run: SessionRun | None = None,
 ) -> None:
     """POST final completion payload to an external callback URL."""
+    if projection is not None and run is not None:
+        await projection.append_event(
+            run,
+            "callback.delivery.started",
+            payload={"url": callback_url},
+        )
     try:
         async with httpx.AsyncClient(timeout=15.0) as client:
             response = await client.post(callback_url, json=payload)
             response.raise_for_status()
+        if projection is not None and run is not None:
+            await projection.append_event(
+                run,
+                "callback.delivery.completed",
+                payload={"url": callback_url, "response_status": response.status_code},
+            )
         logger.info(
             "message_completion_callback_sent",
             session_id=session_id,
@@ -446,6 +768,12 @@ async def _post_completion_callback(
             status_code=response.status_code,
         )
     except Exception as exc:
+        if projection is not None and run is not None:
+            await projection.append_event(
+                run,
+                "callback.delivery.failed",
+                payload={"url": callback_url, "error": str(exc)},
+            )
         logger.warning(
             "message_completion_callback_failed",
             session_id=session_id,
@@ -518,6 +846,21 @@ async def send_message(
             ),
         )
 
+    if request.idempotency_key:
+        existing_run = await store.get_run_by_idempotency_key(
+            session_id,
+            request.idempotency_key,
+        )
+        if existing_run is not None:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(
+                    f"Run idempotency key '{request.idempotency_key}' was already used "
+                    f"for run '{existing_run.id}'. Poll that run instead of sending "
+                    "the message again."
+                ),
+            )
+
     if agent_manager.active_runtime_count(session_id) > 0:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -527,6 +870,23 @@ async def send_message(
                 "sending another message."
             ),
         )
+
+    projection = RuntimeProjectionService(store)
+    try:
+        run = await projection.begin_run(
+            session=session,
+            effective_scope=scope.get_all() if not scope.is_empty() else session.scopes,
+            idempotency_key=request.idempotency_key,
+            metadata={"source": "message"},
+        )
+    except ActiveRunConflictError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                f"Session '{session_id}' already has active run '{exc.run.id}'. "
+                "Poll the run or wait for it to finish before sending another message."
+            ),
+        ) from exc
 
     # Get thread_id from session for state persistence
     # The session should have a thread_id for DeepAgents checkpointing
@@ -544,8 +904,12 @@ async def send_message(
         parent_id=request.parent_id,
     )
 
-    await store.update_session(session_id=session_id, status=SessionStatus.ACTIVE.value)
-    await _refresh_session_message_count(store, session_id)
+    await projection.append_event(
+        run,
+        "message.user.accepted",
+        payload={"message_id": user_message.id, "content_length": len(request.content)},
+    )
+    await projection.refresh_message_count(session_id)
 
     event_stream = agent_event_stream(
         session_id,
@@ -557,6 +921,8 @@ async def send_message(
         store=store,
         scope=scope.get_all() if not scope.is_empty() else None,
         parent_message_id=user_message.id,
+        run=run,
+        projection=projection,
     )
 
     # Wrap the event stream to persist assistant message on completion
@@ -565,9 +931,12 @@ async def send_message(
         message_id = None
         completion_status = "error"
         callback_error: dict[str, Any] | None = None
+        terminal_error_seen = False
         async for event in event_stream:
             # Capture assistant data and message_id from done event
             if event.get("event") == "done":
+                if terminal_error_seen:
+                    continue
                 if event.get("data", {}).get("assistant_data"):
                     assistant_data = event["data"]["assistant_data"]
                 # ISSUE-019: Capture message_id from done event
@@ -595,6 +964,11 @@ async def send_message(
                             metadata=assistant_data.get("metadata"),
                         )
                         await _refresh_session_message_count(store, session_id)
+                        await projection.append_event(
+                            run,
+                            "message.assistant.persisted",
+                            payload={"message_id": persist_message_id},
+                        )
                         message_id = persist_message_id
                         event_data = dict(event.get("data", {}))
                         event_data["message_id"] = persist_message_id
@@ -607,6 +981,13 @@ async def send_message(
                         )
             elif event.get("event") == "error":
                 callback_error = event.get("data")
+                terminal_error_seen = True
+                error_code = (
+                    callback_error.get("code")
+                    if isinstance(callback_error, dict)
+                    else None
+                )
+                completion_status = "aborted" if error_code == "ABORTED" else "failed"
             yield event
 
         if request.callback_url:
@@ -630,7 +1011,13 @@ async def send_message(
             }
             if callback_error:
                 callback_payload["error"] = callback_error
-            await _post_completion_callback(str(request.callback_url), callback_payload, session_id)
+            await _post_completion_callback(
+                str(request.callback_url),
+                callback_payload,
+                session_id,
+                projection=projection,
+                run=run,
+            )
 
     # Check for Last-Event-ID header for stream resumption
     last_event_id = get_last_event_id(http_request)

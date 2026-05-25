@@ -29,6 +29,7 @@ from sqlalchemy import (
     String,
     Table,
     Text,
+    UniqueConstraint,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.engine.interfaces import Dialect
@@ -129,6 +130,89 @@ messages_table = Table(
 
 # Index on session_id + created_at for efficient message retrieval
 Index("idx_messages_session", messages_table.c.session_id, messages_table.c.created_at)
+
+
+# Durable run table - one execution attempt inside a session.
+session_runs_table = Table(
+    "session_runs",
+    metadata,
+    Column("id", String(36), primary_key=True),
+    Column("session_id", String(36), nullable=False),
+    Column("thread_id", String(100), nullable=False),
+    Column("status", String(30), nullable=False),
+    Column("effective_scope", _JsonbOrJson(), nullable=False, default=dict),
+    Column("idempotency_key", String(200)),
+    Column("attempt", Integer, nullable=False, default=1),
+    Column("parent_run_id", String(36)),
+    Column("started_at", DateTime(timezone=True)),
+    Column("last_activity_at", DateTime(timezone=True)),
+    Column("completed_at", DateTime(timezone=True)),
+    Column("error_code", String(100)),
+    Column("status_reason", Text),
+    Column("trace_id", String(100)),
+    Column("metadata", _JsonbOrJson(), nullable=False, default=dict),
+    Column(
+        "created_at",
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    ),
+    Column(
+        "updated_at",
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    ),
+)
+
+Index("idx_session_runs_session", session_runs_table.c.session_id, session_runs_table.c.created_at)
+Index("idx_session_runs_status", session_runs_table.c.session_id, session_runs_table.c.status)
+Index(
+    "idx_session_runs_idempotency",
+    session_runs_table.c.session_id,
+    session_runs_table.c.idempotency_key,
+)
+
+
+# Append-only runtime events used by builders and observability integrations.
+session_events_table = Table(
+    "session_events",
+    metadata,
+    Column("id", String(36), primary_key=True),
+    Column("session_id", String(36), nullable=False),
+    Column("run_id", String(36), nullable=False),
+    Column("sequence", Integer, nullable=False),
+    Column("event_type", String(100), nullable=False),
+    Column("visibility", String(30), nullable=False),
+    Column("payload", _JsonbOrJson(), nullable=False, default=dict),
+    Column("effective_scope", _JsonbOrJson(), nullable=False, default=dict),
+    Column("trace_id", String(100)),
+    Column("span_id", String(100)),
+    Column(
+        "created_at",
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    ),
+    UniqueConstraint("session_id", "sequence", name="uq_session_events_sequence"),
+)
+
+Index("idx_session_events_session_sequence", session_events_table.c.session_id, session_events_table.c.sequence)
+Index("idx_session_events_run_sequence", session_events_table.c.run_id, session_events_table.c.sequence)
+Index(
+    "idx_session_events_session_run_sequence",
+    session_events_table.c.session_id,
+    session_events_table.c.run_id,
+    session_events_table.c.sequence,
+)
+Index(
+    "idx_session_events_visibility_sequence",
+    session_events_table.c.session_id,
+    session_events_table.c.visibility,
+    session_events_table.c.sequence,
+)
+Index("idx_session_events_type_created", session_events_table.c.event_type, session_events_table.c.created_at)
 
 # ---------------------------------------------------------------------------
 # ConfigRegistry tables

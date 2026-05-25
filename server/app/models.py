@@ -71,6 +71,26 @@ class SessionStatus(StrEnum):
         return status_str in {"done", "aborted", "failed", "expired"}
 
 
+class RunStatus(StrEnum):
+    """Durable execution status for a single session run."""
+
+    QUEUED = "queued"
+    STARTING = "starting"
+    ACTIVE = "active"
+    WAITING_FOR_APPROVAL = "waiting_for_approval"
+    STALLED = "stalled"
+    ABORTING = "aborting"
+    ABORTED = "aborted"
+    FAILED = "failed"
+    DONE = "done"
+
+    @classmethod
+    def is_terminal(cls, status: RunStatus | str) -> bool:
+        """Check whether a run status is terminal."""
+        status_str = status.value if isinstance(status, RunStatus) else status
+        return status_str in {"aborted", "failed", "done"}
+
+
 class PromptConfig(BaseModel):
     """Prompt configuration with explicit type and value.
 
@@ -260,6 +280,46 @@ class Message:
     token_count: int | None = None
     model_used: str | None = None
     metadata: dict[str, Any] | None = None
+
+
+@dataclass
+class SessionRun:
+    """Durable execution attempt inside a session."""
+
+    id: str
+    session_id: str
+    thread_id: str
+    status: RunStatus
+    effective_scope: dict[str, str]
+    attempt: int
+    created_at: str
+    updated_at: str
+    idempotency_key: str | None = None
+    parent_run_id: str | None = None
+    started_at: str | None = None
+    last_activity_at: str | None = None
+    completed_at: str | None = None
+    error_code: str | None = None
+    status_reason: str | None = None
+    trace_id: str | None = None
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class SessionEvent:
+    """Append-only durable runtime event for a session run."""
+
+    id: str
+    session_id: str
+    run_id: str
+    sequence: int
+    event_type: str
+    visibility: Literal["internal", "builder", "end_user"]
+    payload: dict[str, Any]
+    effective_scope: dict[str, str]
+    created_at: str
+    trace_id: str | None = None
+    span_id: str | None = None
 
 
 @dataclass
