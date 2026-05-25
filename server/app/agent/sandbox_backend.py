@@ -21,6 +21,9 @@ import structlog
 from deepagents.backends import FilesystemBackend, LocalShellBackend
 from deepagents.backends.protocol import (
     ExecuteResponse,
+    GlobResult,
+    GrepResult,
+    LsResult,
     ReadResult,
     SandboxBackendProtocol,
 )
@@ -431,6 +434,12 @@ class CognitionKubernetesSandboxBackend(SandboxBackendProtocol):
         result: ReadResult = backend.read(file_path, offset=offset, limit=limit)
         return result
 
+    def ls(self, path: str) -> LsResult:
+        """List directory entries using Deep Agents' current result API."""
+        backend = self._get_backend()
+        result: LsResult = backend.ls(path)
+        return result
+
     def ls_info(self, path: str) -> Any:
         """List files and directories in the sandbox.
 
@@ -440,10 +449,28 @@ class CognitionKubernetesSandboxBackend(SandboxBackendProtocol):
         Returns:
             List of FileInfo objects.
         """
-        backend = self._get_backend()
-        return backend.ls_info(path)
+        result = self.ls(path)
+        if result.error is not None:
+            raise NotImplementedError(result.error)
+        return result.entries or []
 
-    def grep_raw(self, pattern: str, path: str | None = None, glob: str | None = None) -> Any:
+    def grep(
+        self,
+        pattern: str,
+        path: str | None = None,
+        glob: str | None = None,
+    ) -> GrepResult:
+        """Search files using Deep Agents' current result API."""
+        backend = self._get_backend()
+        result: GrepResult = backend.grep(pattern, path=path, glob=glob)
+        return result
+
+    def grep_raw(
+        self,
+        pattern: str,
+        path: str | None = None,
+        glob: str | None = None,
+    ) -> Any:
         """Search for a pattern in sandbox files.
 
         Args:
@@ -454,8 +481,16 @@ class CognitionKubernetesSandboxBackend(SandboxBackendProtocol):
         Returns:
             List of GrepMatch objects or string.
         """
+        result = self.grep(pattern, path=path, glob=glob)
+        if result.error is not None:
+            return result.error
+        return result.matches or []
+
+    def glob(self, pattern: str, path: str = "/") -> GlobResult:
+        """Find matching files using Deep Agents' current result API."""
         backend = self._get_backend()
-        return backend.grep_raw(pattern, path=path, glob=glob)
+        result: GlobResult = backend.glob(pattern, path=path)
+        return result
 
     def glob_info(self, pattern: str, path: str = "/") -> Any:
         """Find files matching a glob pattern in the sandbox.
@@ -467,8 +502,10 @@ class CognitionKubernetesSandboxBackend(SandboxBackendProtocol):
         Returns:
             List of FileInfo objects.
         """
-        backend = self._get_backend()
-        return backend.glob_info(pattern, path=path)
+        result = self.glob(pattern, path=path)
+        if result.error is not None:
+            raise NotImplementedError(result.error)
+        return result.matches or []
 
     def edit(
         self, file_path: str, old_string: str, new_string: str, replace_all: bool = False

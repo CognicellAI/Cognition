@@ -82,6 +82,8 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Runtime activity now updates durable session progress: assistant responses are projected into session messages, tool calls/results are persisted as message projection entries, runtime activity advances `updated_at`, tool logs include trusted `session_id`/`run_id`, and overlapping runtime turns no longer mark the session `done` while another turn is still active.
 - SSE correlation fields now treat Cognition's durable runtime event as authoritative, so context and run-state events cannot leak stale upstream `session_id`/`run_id` values from Deep Agents/LangGraph internals.
 - Reused message idempotency keys are rejected instead of reusing a terminal run for new work, and empty checkpoint rebuilds no longer wipe existing projected messages after early runtime failures.
+- K8s sandbox filesystem compatibility now calls Deep Agents' current `ls`/`glob`/`grep` result APIs instead of deprecated `*_info`/`*_raw` compatibility paths, avoiding the "new `ls` API" runtime failure.
+- Runtime errors are terminal for the stream wrapper: once a run emits `error`, later `done` events are suppressed and callbacks report `failed`/`aborted` instead of success.
 - Postgres `ArtifactStore.delete_artifact`: `cur.rowcount` accessed after execute instead of treating `AsyncCursor` as int.
 - Shell injection prevention via `shlex.quote` in K8s sandbox commands.
 - Thread-safe lazy initialization with double-check locking in sandbox backend.

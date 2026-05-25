@@ -15,6 +15,7 @@ from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from server.app.agent.runtime import (
     ContextEvent,
     DoneEvent,
+    ErrorEvent,
     TokenEvent,
     ToolCallEvent,
     ToolResultEvent,
@@ -337,6 +338,68 @@ async def test_context_sse_overwrites_upstream_ids_with_durable_correlation(tmp_
     assert context["data"]["run_id"] == run.id
     assert context["data"]["event_type"] == "context.policy_resolved"
     assert context["data"]["sequence"] >= 1
+
+
+@pytest.mark.asyncio
+async def test_error_event_terminates_run_without_done(tmp_path) -> None:
+    store = MemoryStorageBackend(workspace_path=str(tmp_path))
+    session = await store.create_session(
+        session_id="session-error-terminal",
+        thread_id="thread-error-terminal",
+        config=SessionConfig(),
+    )
+    run = await store.create_run(
+        run_id="run-error-terminal",
+        session_id=session.id,
+        thread_id=session.thread_id,
+        status=RunStatus.ACTIVE,
+    )
+    service = _FakeService(
+        [
+            ErrorEvent(
+                message="This behavior is only available via the new `ls` API.",
+                code="RUNTIME_ERROR",
+            ),
+            DoneEvent(),
+        ]
+    )
+    manager = _FakeAgentManager(service, active_runtime_count=0)
+    projection = RuntimeProjectionService(store)
+
+    events = [
+        event
+        async for event in agent_event_stream(
+            session.id,
+            session.thread_id,
+            "list files",
+            session.workspace_path,
+            _settings(),
+            manager,  # type: ignore[arg-type]
+            store,
+            run=run,
+            projection=projection,
+        )
+    ]
+
+    assert [event["event"] for event in events if event["event"] == "done"] == []
+    assert any(event["event"] == "error" for event in events)
+
+    updated_run = await store.get_run(run.id)
+    assert updated_run is not None
+    assert updated_run.status == RunStatus.FAILED
+    assert updated_run.error_code == "RUNTIME_ERROR"
+
+    updated_session = await store.get_session(session.id)
+    assert updated_session is not None
+    assert updated_session.status == SessionStatus.FAILED
+
+    durable_event_types = [
+        event.event_type
+        for event in await store.list_events(session.id, run_id=run.id)
+    ]
+    assert "run.failed" in durable_event_types
+    assert "run.error" in durable_event_types
+    assert "run.done" not in durable_event_types
 
 
 @pytest.mark.asyncio

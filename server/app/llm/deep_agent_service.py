@@ -458,8 +458,7 @@ class DeepAgentStreamingService:
 
                         elif isinstance(event, ErrorEvent):
                             yield event
-                            if event.code == "ABORTED":
-                                return
+                            return
 
                     # DoneEvent from the runtime is absorbed here; we emit our own below.
 
@@ -475,7 +474,11 @@ class DeepAgentStreamingService:
                     runtime_exception = exc
 
                 if runtime_exception is not None:
-                    yield ErrorEvent(message=f"Agent execution failed: {runtime_exception}", code="STREAMING_ERROR")
+                    yield ErrorEvent(
+                        message=f"Agent execution failed: {runtime_exception}",
+                        code="STREAMING_ERROR",
+                    )
+                    return
 
                 yield UsageEvent(
                     input_tokens=acc.input_tokens,

@@ -646,6 +646,7 @@ async def agent_event_stream(
                     )
                     sse = enrich_sse_event(sse, durable)
                 yield sse
+                return
 
             elif isinstance(event, HeartbeatEvent):
                 await _touch_session_activity(store, session_id)
@@ -930,9 +931,12 @@ async def send_message(
         message_id = None
         completion_status = "error"
         callback_error: dict[str, Any] | None = None
+        terminal_error_seen = False
         async for event in event_stream:
             # Capture assistant data and message_id from done event
             if event.get("event") == "done":
+                if terminal_error_seen:
+                    continue
                 if event.get("data", {}).get("assistant_data"):
                     assistant_data = event["data"]["assistant_data"]
                 # ISSUE-019: Capture message_id from done event
@@ -977,6 +981,13 @@ async def send_message(
                         )
             elif event.get("event") == "error":
                 callback_error = event.get("data")
+                terminal_error_seen = True
+                error_code = (
+                    callback_error.get("code")
+                    if isinstance(callback_error, dict)
+                    else None
+                )
+                completion_status = "aborted" if error_code == "ABORTED" else "failed"
             yield event
 
         if request.callback_url:
