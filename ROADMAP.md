@@ -164,7 +164,7 @@ The following fallback patterns exist and are tracked for removal. They produce 
 | Task | Layer | Status | Acceptance Criteria | Effort | Dependencies |
 |------|-------|--------|---------------------|--------|--------------|
 | **v0.10.0 P0 blocker: Canonical `effective_scope` propagation** | Layer 1/2/3/4/6/7 | Completed | Builder-defined `effective_scope: dict[str, str]` is extracted from trusted ingress and propagated through API, persistence, Deep Agents runtime context, tools, memory, artifacts, MCP, sandboxes, callbacks, events, logs, metrics, and traces; session/run scope is immutable; mismatched-scope runtime access is rejected; config inheritance is separated from exact-scope runtime resource access; tool-safety and external policy hooks receive scope plus action/resource descriptors; scoped isolation tests cover every touched v0.10.0 runtime boundary. Cognition carries builder-authorized scope and enforces returned decisions, but does not own authorization logic. Merged into release branch as Wave 2A gate. | 3–5 days | None |
-| **v0.10.0 P0 blocker: Runtime durability + observability foundation** | Layer 2/4/6/7 | In Progress | Cognition models long-running work as durable `session_runs` plus append-only `session_events`; Deep Agents/LangGraph checkpoint state is the authoritative conversation source; `/messages` becomes a checkpoint-derived projection; every runtime action advances durable run/session activity and emits builder-usable events with `session_id`, `run_id`, `thread_id`, scope-safe fields, and trace correlation; active runs prevent premature session `done`; builders can poll `/runs` and `/events` instead of scraping logs or inferring progress from `message_count`; OTel/log/callback/SSE signals share the same correlation spine. Full design: `localdocs/v0.10.0-runtime-durability-refactor.md`. | 7–10 days | PR #131 hotfix; canonical scope propagation; Deep Agents runtime/checkpoint primitives |
+| **v0.10.0 P0 blocker: Runtime durability + observability foundation** | Layer 2/4/6/7 | Completed | Cognition models long-running work as durable `session_runs` plus append-only `session_events`; Deep Agents/LangGraph checkpoint state is the authoritative conversation source; `/messages` becomes a checkpoint-derived projection; every runtime action advances durable run/session activity and emits builder-usable events with `session_id`, `run_id`, `thread_id`, scope-safe fields, and trace correlation; active runs prevent premature session `done`; builders can poll `/runs` and `/events` instead of scraping logs or inferring progress from `message_count`; OTel/log/callback/SSE signals share the same correlation spine. Full design: `localdocs/v0.10.0-runtime-durability-refactor.md`. | 7–10 days | PR #131 hotfix; canonical scope propagation; Deep Agents runtime/checkpoint primitives |
 | Message persistence (SQLite/Postgres) | Layer 2 | In Progress | Messages survive server restart; SQLite works; Postgres works | 2 days | None |
 | Session lifecycle management | Layer 2 | In Progress | Sessions can be created, listed, retrieved, deleted | 1 day | None |
 | Basic tool execution security | Layer 3 | In Progress | No shell=True; no arbitrary code execution | 1 day | None |
@@ -401,7 +401,7 @@ This section tracks the v0.10.0 long-running agents release. See `localdocs/v0.1
 | 1 | `runner-lifecycle`, `artifacts-handoffs`, `sandbox-hardening` | `0.10.0-w1` | Complete -- 27/28 API tests + 13/13 scenario tests pass on dev K8s |
 | 2A | `scope-alignment` | `0.10.0-w2a` | Complete -- P0 scope propagation merged into release branch; Wave 2B unblocked |
 | 2B | `tool-safety`, `context-controls`, `async-subagents`, `model-profiles` | `0.10.0-w2b` | Complete -- `tool-safety` merged (PR #121, stabilized PR #123); `context-controls` merged (PR #124); `async-subagents` merged (PR #126); `model-profiles` deferred to v0.11.0 |
-| 2C | `runtime-durability-refactor` | `0.10.0-w2c` | Active -- durable `session_runs`/`session_events`, run/event read APIs, scoped access tests, SSE/run/event correlation, OTel metrics/spans, checkpoint projection safety, and long-running e2e acceptance scenarios are implemented on branch `codex/runtime-durability-refactor`; local non-Bedrock unit pass: 717 passed / 4 skipped / 15 deselected; Docker Compose strict runtime/tool durability e2e passes with DeepSeek (`COGNITION_STRICT_TOOL_E2E=1`) |
+| 2C | `runtime-durability-refactor` | `0.10.0-w2c` | Complete -- merged as PR #132; durable `session_runs`/`session_events`, run/event read APIs, scoped access tests, SSE/run/event correlation, OTel metrics/spans, checkpoint projection safety, K8s filesystem API compatibility fix, terminal error handling fix, and long-running e2e acceptance scenarios are included in `release/v0.10.0`; local non-Bedrock unit pass: 717 passed / 4 skipped / 15 deselected; Docker Compose strict runtime/tool durability e2e passes with DeepSeek (`COGNITION_STRICT_TOOL_E2E=1`) |
 | 3 | `mcp-alignment`, `capability-registry`, `protocol-adapters` | `0.10.0-w3` | Complete -- `mcp-alignment` merged (PR #128); `capability-registry` merged (PR #129); `protocol-adapters` A2A adapter merged (PR #130) |
 | *Deferred* | `harness-eval`, `scoped-memory`, `code-interpreter`, `model-profiles` | N/A | Deferred to v0.11.0. Full eval orchestration design in `localdocs/v0.10.0-eval-orchestration-shaping.md`. |
 
@@ -412,12 +412,12 @@ This section tracks the v0.10.0 long-running agents release. See `localdocs/v0.1
 | `feat/runtime-upgrade` → `main` | deepagents 0.6.3 + langchain-core >=1.4.0 | Merged (PR #115) |
 | `feat/k8s-security` → `main` | Shell injection, thread safety, dead code, error accuracy | Merged (PR #116) |
 | Canonical scope propagation | P0 feature entry + dedicated Wave 2A implementation gate | Complete |
-| Runtime durability + observability foundation | P0 feature entry + dedicated Wave 2C implementation gate | Active -- core implementation, scoped API contract tests, SSE durable correlation fix, and Docker Compose strict runtime/tool durability scenario pass locally |
+| Runtime durability + observability foundation | P0 feature entry + dedicated Wave 2C implementation gate | Complete -- merged as PR #132 with core implementation, scoped API contract tests, SSE durable correlation fix, K8s filesystem API compatibility fix, terminal error handling fix, and Docker Compose strict runtime/tool durability scenario pass locally |
 | ROADMAP.md populated | All feature entries | Complete |
 | `server/version.py` → `"0.10.0"` | Version bump on release branch | Complete |
 | `localdocs/v0.10.0-plan.md` | Agent reference document | Complete |
 | CHANGELOG.md updated | Waves 1-3 documented | Complete |
-| Pre-release image gate | `0.10.0-rc1` validated | Pending -- triggering workflow |
+| Pre-release image gate | `0.10.0-rc1` validated | Pending -- dispatch after final release-branch validation |
 
 ### Done Criteria
 
@@ -436,4 +436,4 @@ Per AGENTS.md requirements:
    - Features/Architectural: Before starting work
    - Security/Bug/Performance/Dependency: As part of PR
 
-**Last Updated**: 2026-05-24 (v0.10.0 Wave 3 complete — all waves merged, CHANGELOG updated, pre-release gate pending)
+**Last Updated**: 2026-05-25 (v0.10.0 Wave 2C merged — final release validation and `0.10.0-rc1` image gate pending)

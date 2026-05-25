@@ -7,7 +7,7 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
-## [Unreleased] — v0.10.0 Waves 1-3
+## [0.10.0] — 2026-05-25
 
 ### Highlights
 
