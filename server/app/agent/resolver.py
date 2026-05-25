@@ -397,7 +397,7 @@ class RuntimeResolver:
                     reason="Both AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY must be set together.",
                 )
 
-        return ChatBedrock(**kwargs)
+        return cast(BaseChatModel, ChatBedrock(**kwargs))
 
     async def resolve_mcp_configs(self, scope: dict[str, str] | None = None) -> list[Any]:
         """Load MCP server registrations from ConfigStore as McpServerConfig objects.
