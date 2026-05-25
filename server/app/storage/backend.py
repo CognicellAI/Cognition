@@ -75,14 +75,20 @@ class SessionStore(Protocol):
         self,
         session_id: str,
         title: str | None = None,
+        status: str | None = None,
         config: SessionConfig | None = None,
+        agent_name: str | None = None,
+        metadata: dict[str, str] | None = None,
     ) -> Session | None:
         """Update a session.
 
         Args:
             session_id: The session identifier.
             title: Optional new title.
+            status: Optional lifecycle status update.
             config: Optional configuration updates.
+            agent_name: Optional bound agent definition name.
+            metadata: Optional metadata replacement.
 
         Returns:
             The updated Session if found, None otherwise.

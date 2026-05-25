@@ -60,13 +60,42 @@ from server.app.llm.deep_agent_service import (
     ToolSafetyEvent,
     UsageEvent,
 )
-from server.app.models import SessionStatus
+from server.app.models import SessionStatus, ToolCall
 from server.app.rate_limiter import RateLimiter
 from server.app.settings import Settings
 from server.app.storage.backend import StorageBackend
 
 router = APIRouter(prefix="/sessions/{session_id}/messages", tags=["messages"])
 logger = structlog.get_logger(__name__)
+
+
+async def _refresh_session_message_count(store: StorageBackend, session_id: str) -> int:
+    """Synchronize the durable session message_count projection."""
+    messages_for_session = await store.list_messages_for_session(session_id)
+    count = len(messages_for_session)
+    await store.update_message_count(session_id, count)
+    return count
+
+
+async def _touch_session_activity(
+    store: StorageBackend,
+    session_id: str,
+    *,
+    status_value: str | None = None,
+) -> None:
+    """Advance updated_at for durable runtime activity.
+
+    AEP and other orchestrators use session.updated_at as a progress signal, so
+    streamed runtime activity must update the durable session row even when it
+    does not create a chat message.
+    """
+    if status_value is not None:
+        await store.update_session(session_id=session_id, status=status_value)
+        return
+
+    session = await store.get_session(session_id)
+    if session is not None:
+        await store.update_session(session_id=session_id, status=session.status.value)
 
 
 async def agent_event_stream(
@@ -78,6 +107,7 @@ async def agent_event_stream(
     agent_manager: SessionAgentManager,
     store: StorageBackend,
     scope: dict[str, str] | None = None,
+    parent_message_id: str | None = None,
 ) -> AsyncGenerator[dict, None]:
     """Generate agent events as SSE using DeepAgents.
 
@@ -98,6 +128,8 @@ async def agent_event_stream(
             Propagated to the agent runtime so that scope-aware
             backends (e.g. ConfigRegistrySkillsBackend) can filter
             skills, providers, and other config by tenant.
+        parent_message_id: Optional user message ID used as the parent for
+            projected assistant tool-call messages.
 
     Yields:
         SSE events as dictionaries. The final 'done' event contains
@@ -123,9 +155,10 @@ async def agent_event_stream(
         if session and session.config.system_prompt:
             system_prompt = session.config.system_prompt
 
-        # Accumulate assistant message data for persistence
-        tool_calls = []
-        _current_tool_call = None
+        # Accumulate assistant message data for persistence.
+        assistant_content_parts: list[str] = []
+        tool_calls: list[dict[str, Any]] = []
+        tool_call_message_ids: dict[str, str] = {}
         metadata: dict[str, Any] = {}
 
         # Drain sandbox lifecycle events queued during agent setup
@@ -151,6 +184,7 @@ async def agent_event_stream(
             scope=scope,
         ):
             if isinstance(event, TokenEvent):
+                assistant_content_parts.append(event.content)
                 yield EventBuilder.token(event.content)
 
             elif isinstance(event, ToolCallEvent):
@@ -160,7 +194,24 @@ async def agent_event_stream(
                     "id": event.tool_call_id,
                 }
                 tool_calls.append(tool_call)
-                _current_tool_call = event.tool_call_id
+                tool_call_message_id = str(uuid.uuid4())
+                tool_call_message_ids[event.tool_call_id] = tool_call_message_id
+                await store.create_message(
+                    message_id=tool_call_message_id,
+                    session_id=session_id,
+                    role="assistant",
+                    content=None,
+                    parent_id=parent_message_id,
+                    tool_calls=[
+                        ToolCall(
+                            name=event.name,
+                            args=event.args,
+                            id=event.tool_call_id,
+                        )
+                    ],
+                    metadata={"projection_source": "runtime_tool_call"},
+                )
+                await _refresh_session_message_count(store, session_id)
                 yield EventBuilder.tool_call(
                     name=event.name,
                     args=event.args,
@@ -168,6 +219,19 @@ async def agent_event_stream(
                 )
 
             elif isinstance(event, ToolResultEvent):
+                await store.create_message(
+                    message_id=str(uuid.uuid4()),
+                    session_id=session_id,
+                    role="tool",
+                    content=event.output,
+                    parent_id=tool_call_message_ids.get(event.tool_call_id),
+                    tool_call_id=event.tool_call_id,
+                    metadata={
+                        "exit_code": event.exit_code,
+                        "projection_source": "runtime_tool_result",
+                    },
+                )
+                await _refresh_session_message_count(store, session_id)
                 yield EventBuilder.tool_result(
                     tool_call_id=event.tool_call_id,
                     output=event.output,
@@ -175,6 +239,7 @@ async def agent_event_stream(
                 )
 
             elif isinstance(event, ToolSafetyEvent):
+                await _touch_session_activity(store, session_id)
                 yield EventBuilder.tool_safety(
                     action=event.action,
                     tool_name=event.tool_name,
@@ -189,6 +254,7 @@ async def agent_event_stream(
                 )
 
             elif isinstance(event, ContextEvent):
+                await _touch_session_activity(store, session_id)
                 yield EventBuilder.context(
                     action=event.action,
                     session_id=event.session_id,
@@ -207,9 +273,11 @@ async def agent_event_stream(
                 )
 
             elif isinstance(event, PlanningEvent):
+                await _touch_session_activity(store, session_id)
                 yield EventBuilder.planning(event.todos)
 
             elif isinstance(event, StepCompleteEvent):
+                await _touch_session_activity(store, session_id)
                 yield EventBuilder.step_complete(
                     step_number=event.step_number,
                     total_steps=event.total_steps,
@@ -237,6 +305,7 @@ async def agent_event_stream(
 
             elif isinstance(event, DelegationEvent):
                 # ISSUE-010: Emit delegation event for UI visibility
+                await _touch_session_activity(store, session_id)
                 yield EventBuilder.delegation(
                     from_agent=event.from_agent,
                     to_agent=event.to_agent,
@@ -244,6 +313,7 @@ async def agent_event_stream(
                 )
 
             elif isinstance(event, SandboxLifecycleEvent):
+                await _touch_session_activity(store, session_id)
                 yield EventBuilder.sandbox_lifecycle(
                     sandbox_id=event.sandbox_id,
                     phase=event.phase,
@@ -254,6 +324,7 @@ async def agent_event_stream(
                 )
 
             elif isinstance(event, StatusEvent):
+                await _touch_session_activity(store, session_id)
                 yield EventBuilder.status(event.status)
 
             elif isinstance(event, UsageEvent):
@@ -261,6 +332,7 @@ async def agent_event_stream(
                 metadata["output_tokens"] = event.output_tokens
                 metadata["estimated_cost"] = event.estimated_cost
                 metadata["provider"] = event.provider
+                metadata["model"] = event.model
                 yield EventBuilder.usage(
                     input_tokens=event.input_tokens,
                     output_tokens=event.output_tokens,
@@ -270,11 +342,31 @@ async def agent_event_stream(
                 )
 
             elif isinstance(event, DoneEvent):
-                await store.update_session(
-                    session_id=session_id, status=SessionStatus.DONE.value
+                active_runtime_count = agent_manager.active_runtime_count(session_id)
+                terminal_status = (
+                    SessionStatus.ACTIVE.value
+                    if active_runtime_count > 1
+                    else SessionStatus.DONE.value
                 )
-                yield EventBuilder.run_state(
-                    from_status="active", to_status=SessionStatus.DONE.value
+                await store.update_session(session_id=session_id, status=terminal_status)
+                if terminal_status == SessionStatus.DONE.value:
+                    yield EventBuilder.run_state(
+                        from_status="active",
+                        to_status=SessionStatus.DONE.value,
+                        scope_keys=scope_keys,
+                    )
+                else:
+                    yield EventBuilder.status("active")
+                assistant_content = "".join(assistant_content_parts)
+                yield EventBuilder.done(
+                    assistant_data={
+                        "content": assistant_content,
+                        "tool_calls": tool_calls or None,
+                        "token_count": metadata.get("output_tokens"),
+                        "model_used": metadata.get("model"),
+                        "metadata": metadata,
+                    },
+                    scope_keys=scope_keys,
                 )
 
             elif isinstance(event, ErrorEvent):
@@ -301,6 +393,7 @@ async def agent_event_stream(
                 yield EventBuilder.error(event.message, code=event.code)
 
             elif isinstance(event, HeartbeatEvent):
+                await _touch_session_activity(store, session_id)
                 yield EventBuilder.heartbeat(
                     step_label=event.step_label,
                     last_model_call=event.last_model_call,
@@ -310,6 +403,10 @@ async def agent_event_stream(
                 )
 
             elif isinstance(event, RunStateEvent):
+                if event.to_status:
+                    await store.update_session(session_id=session_id, status=event.to_status)
+                else:
+                    await _touch_session_activity(store, session_id)
                 yield EventBuilder.run_state(
                     from_status=event.from_status,
                     to_status=event.to_status,
@@ -362,6 +459,7 @@ async def _post_completion_callback(
     status_code=status.HTTP_200_OK,
     responses={
         404: {"model": ErrorResponse, "description": "Session not found"},
+        409: {"model": ErrorResponse, "description": "Session already has an active run"},
         500: {"model": ErrorResponse, "description": "Agent error"},
     },
 )
@@ -420,6 +518,16 @@ async def send_message(
             ),
         )
 
+    if agent_manager.active_runtime_count(session_id) > 0:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                f"Session '{session_id}' already has an active runtime turn. "
+                "Poll the session state or wait for the current turn to finish before "
+                "sending another message."
+            ),
+        )
+
     # Get thread_id from session for state persistence
     # The session should have a thread_id for DeepAgents checkpointing
     thread_id = getattr(session, "thread_id", None)
@@ -436,8 +544,8 @@ async def send_message(
         parent_id=request.parent_id,
     )
 
-    messages_for_session, _ = await store.get_messages_by_session(session_id, limit=-1, offset=0)
-    await store.update_message_count(session_id, len(messages_for_session))
+    await store.update_session(session_id=session_id, status=SessionStatus.ACTIVE.value)
+    await _refresh_session_message_count(store, session_id)
 
     event_stream = agent_event_stream(
         session_id,
@@ -448,6 +556,7 @@ async def send_message(
         agent_manager,
         store=store,
         scope=scope.get_all() if not scope.is_empty() else None,
+        parent_message_id=user_message.id,
     )
 
     # Wrap the event stream to persist assistant message on completion
@@ -464,44 +573,41 @@ async def send_message(
                 # ISSUE-019: Capture message_id from done event
                 message_id = event.get("data", {}).get("message_id")
                 completion_status = "done"
+                if assistant_data:
+                    try:
+                        tc_objects = None
+                        if assistant_data.get("tool_calls"):
+                            tc_objects = [
+                                ToolCall(name=tc["name"], args=tc.get("args", {}), id=tc["id"])
+                                for tc in assistant_data["tool_calls"]
+                            ]
+
+                        persist_message_id = message_id or str(uuid.uuid4())
+                        await store.create_message(
+                            message_id=persist_message_id,
+                            session_id=session_id,
+                            role="assistant",
+                            content=assistant_data.get("content"),
+                            parent_id=user_message.id,
+                            tool_calls=tc_objects,
+                            token_count=assistant_data.get("token_count"),
+                            model_used=assistant_data.get("model_used"),
+                            metadata=assistant_data.get("metadata"),
+                        )
+                        await _refresh_session_message_count(store, session_id)
+                        message_id = persist_message_id
+                        event_data = dict(event.get("data", {}))
+                        event_data["message_id"] = persist_message_id
+                        event = {**event, "data": event_data}
+                    except Exception as e:
+                        logger.error(
+                            "Failed to persist assistant message",
+                            error=str(e),
+                            session_id=session_id,
+                        )
             elif event.get("event") == "error":
                 callback_error = event.get("data")
             yield event
-
-        # Persist assistant message after stream completes
-        if assistant_data:
-            try:
-                from server.app.models import ToolCall
-
-                # Convert tool_calls dicts to ToolCall objects
-                tc_objects = None
-                if assistant_data.get("tool_calls"):
-                    tc_objects = [
-                        ToolCall(name=tc["name"], args=tc.get("args", {}), id=tc["id"])
-                        for tc in assistant_data["tool_calls"]
-                    ]
-
-                persist_message_id = message_id or str(uuid.uuid4())
-                await store.create_message(
-                    message_id=persist_message_id,
-                    session_id=session_id,
-                    role="assistant",
-                    content=assistant_data.get("content"),
-                    parent_id=user_message.id,
-                    tool_calls=tc_objects,
-                    token_count=assistant_data.get("token_count"),
-                    model_used=assistant_data.get("model_used"),
-                    metadata=assistant_data.get("metadata"),
-                )
-
-                messages_for_session, _ = await store.get_messages_by_session(
-                    session_id, limit=-1, offset=0
-                )
-                await store.update_message_count(session_id, len(messages_for_session))
-            except Exception as e:
-                logger.error(
-                    "Failed to persist assistant message", error=str(e), session_id=session_id
-                )
 
         if request.callback_url:
             callback_payload = {

@@ -74,12 +74,14 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- Runtime activity now updates durable session progress: assistant responses are projected into session messages, tool calls/results are persisted as message projection entries, runtime activity advances `updated_at`, tool logs include trusted `session_id`/`run_id`, and overlapping runtime turns no longer mark the session `done` while another turn is still active.
 - Postgres `ArtifactStore.delete_artifact`: `cur.rowcount` accessed after execute instead of treating `AsyncCursor` as int.
 - Shell injection prevention via `shlex.quote` in K8s sandbox commands.
 - Thread-safe lazy initialization with double-check locking in sandbox backend.
 
 ### Testing
 
+- `tests/unit/api/test_message_runtime_persistence.py` — regression coverage for assistant `done` persistence data, tool-call/tool-result message projection, durable `updated_at` movement, and overlapping runtime turns staying active.
 - `tests/unit/test_a2a_adapter.py` — 35 unit tests: A2A exposed field, per-agent card generation, scope extraction, event mapping, executor agent name, filtering logic.
 - `tests/e2e/test_scenarios/p3_protocols/test_a2a.py` — 9 e2e tests: card discovery, per-agent card, 404 for unknown agents, SendMessage/SendStreamingMessage, artifact verification, capabilities.
 - `tests/unit/test_capability_registry.py` — 10 unit tests: version resolution, feature flags, middleware, scope keys, deployment info.
