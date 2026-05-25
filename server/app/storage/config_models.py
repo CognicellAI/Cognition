@@ -21,6 +21,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
+from server.app.agent.definition import AsyncSubagentConfig, ContextPolicy
+
 PROVIDER_TYPES = {
     "openai",
     "anthropic",
@@ -238,6 +240,7 @@ class McpServerRegistration(BaseModel):
         enabled: Whether this server is active.
         scope: Scope this entry applies to.
         source: "file" or "api".
+        transport: Transport protocol ("sse" or "streamable_http").
     """
 
     name: str = Field(..., min_length=1, max_length=100)
@@ -246,6 +249,7 @@ class McpServerRegistration(BaseModel):
     enabled: bool = Field(default=True)
     scope: dict[str, str] = Field(default_factory=dict)
     source: Literal["file", "api"] = Field(default="file")
+    transport: Literal["sse", "streamable_http"] = Field(default="sse")
 
     @field_validator("url")
     @classmethod
@@ -253,6 +257,76 @@ class McpServerRegistration(BaseModel):
         """Ensure URL uses HTTP/HTTPS only."""
         if not v.startswith(("http://", "https://")):
             raise ValueError(f"MCP server URL must start with http:// or https://, got: {v!r}")
+        return v
+
+
+# ---------------------------------------------------------------------------
+# Artifact
+# ---------------------------------------------------------------------------
+
+ARTIFACT_TYPES = Literal["scratch", "artifact", "contract", "eval", "memory", "policy"]
+
+
+class ArtifactDefinition(BaseModel):
+    """A persistent artifact stored in the config registry.
+
+    Artifacts are durable, scope-aware files that agents and builders can
+    read, write, list, and diff. They provide explicit state outside the
+    model context window, used for long-running agent handoffs.
+
+    Attributes:
+        id: Unique artifact identifier (UUID).
+        name: Human-readable name (e.g. "feature-list", "progress").
+        artifact_type: Route category (scratch, artifact, contract, eval,
+            memory, policy).
+        path: Virtual path within the type route (e.g. "feature_list.json").
+        content: File content (JSON, Markdown, or plain text).
+        content_type: MIME or type tag (e.g. "application/json").
+        version: Monotonic version number (incremented on update).
+        parent_version: Version this artifact descends from (None for v1).
+        run_id: Optional associated run identifier.
+        checkpoint_id: Optional associated checkpoint identifier.
+        visibility: "private" (scope-only), "run" (visible within session),
+            "public" (visible to all scope members).
+        scope: Scope this artifact belongs to.
+        source: "file" or "api".
+        created_at: Creation timestamp.
+        updated_at: Last update timestamp.
+    """
+
+    id: str = Field(..., min_length=1, max_length=100)
+    name: str = Field(..., min_length=1, max_length=100)
+    artifact_type: ARTIFACT_TYPES = Field(default="scratch")
+    path: str = Field(default="")
+    content: str = Field(default="")
+    content_type: str = Field(default="text/plain")
+    version: int = Field(default=1, ge=1)
+    parent_version: int | None = Field(default=None, ge=1)
+    run_id: str | None = Field(default=None)
+    checkpoint_id: str | None = Field(default=None)
+    visibility: Literal["private", "run", "public"] = Field(default="private")
+    scope: dict[str, str] = Field(default_factory=dict)
+    source: Literal["file", "api"] = Field(default="api")
+    created_at: datetime | None = Field(default=None)
+    updated_at: datetime | None = Field(default=None)
+
+    @field_validator("name")
+    @classmethod
+    def validate_name(cls, v: str) -> str:
+        """Validate artifact name format."""
+        if not v.replace("-", "").replace("_", "").replace(".", "").isalnum():
+            raise ValueError(
+                f"Artifact name must be alphanumeric with hyphens/underscores/dots only: {v}"
+            )
+        return v
+
+    @field_validator("artifact_type")
+    @classmethod
+    def validate_artifact_type(cls, v: str) -> str:
+        """Ensure artifact type is one of the known route categories."""
+        allowed = {"scratch", "artifact", "contract", "eval", "memory", "policy"}
+        if v not in allowed:
+            raise ValueError(f"Artifact type must be one of {sorted(allowed)}, got: {v!r}")
         return v
 
 
@@ -345,7 +419,8 @@ class GlobalAgentDefaults(BaseModel):
         memory: List of memory file paths.
         skills: List of skill directory paths.
         subagents: Subagent specs (list of dicts).
-        interrupt_on: Tool-name -> bool map for human-in-the-loop.
+        interrupt_on: Tool-name -> bool or rich human-in-the-loop config.
+        permissions: Deep Agents filesystem permission rules.
         recursion_limit: Max ReAct recursion depth.
         mcp_servers: MCP server config dicts keyed by name.
     """
@@ -353,14 +428,19 @@ class GlobalAgentDefaults(BaseModel):
     memory: list[str] = Field(default_factory=lambda: ["AGENTS.md"])
     skills: list[str] = Field(default_factory=list)
     subagents: list[dict[str, Any]] = Field(default_factory=list)
-    interrupt_on: dict[str, bool] = Field(default_factory=dict)
+    async_subagents: list[AsyncSubagentConfig] = Field(default_factory=list)
+    interrupt_on: dict[str, Any] = Field(default_factory=dict)
+    permissions: list[dict[str, Any]] = Field(default_factory=list)
     response_format: str | None = Field(default=None)
     tool_token_limit_before_evict: int | None = Field(default=None, gt=0)
+    context_policy: ContextPolicy | None = Field(default=None)
     recursion_limit: int = Field(default=1000, gt=0)
     mcp_servers: dict[str, Any] = Field(default_factory=dict)
 
 
 __all__ = [
+    "ARTIFACT_TYPES",
+    "ArtifactDefinition",
     "ConfigChange",
     "ConfigChangeEvent",
     "EntityType",

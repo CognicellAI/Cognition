@@ -13,6 +13,7 @@ provides K8s-native isolation for production deployments on Kubernetes.
 from __future__ import annotations
 
 import os
+import shlex
 from pathlib import Path
 from typing import Any, cast
 
@@ -20,6 +21,9 @@ import structlog
 from deepagents.backends import FilesystemBackend, LocalShellBackend
 from deepagents.backends.protocol import (
     ExecuteResponse,
+    GlobResult,
+    GrepResult,
+    LsResult,
     ReadResult,
     SandboxBackendProtocol,
 )
@@ -224,7 +228,7 @@ class CognitionKubernetesSandboxBackend(SandboxBackendProtocol):
     with Cognition-specific policy:
 
     - Protected path enforcement (same as CognitionLocalSandboxBackend)
-    - User/org/project labels derived from CognitionContext for multi-tenant scoping
+    - Builder-defined scope labels derived from effective_scope for multi-tenant scoping
     - Session-scoped lifecycle tied to Cognition session creation/destruction
 
     The K8sSandbox is lazily initialized on first ``execute()`` — no Sandbox CR
@@ -306,7 +310,65 @@ class CognitionKubernetesSandboxBackend(SandboxBackendProtocol):
                 template=self._template,
                 namespace=self._namespace,
             )
+
+            # Verify runtime readiness before agent execution
+            self._verify_sandbox_runtime()
+
         return self._backend
+
+    def _verify_sandbox_runtime(self) -> None:
+        """Verify sandbox runtime readiness before agent work begins.
+
+        Checks env vars, workspace root, writable directories, and optional
+        GitHub auth status. Logs warnings for any failures so builders can
+        diagnose issues before an agent run fails mysteriously.
+        """
+        if self._backend is None:
+            return
+
+        checks: list[tuple[str, str, bool | None]] = []
+
+        # Check workspace root
+        expected_root = str(self._root_dir)
+        result = self._backend.execute(f'test -d {shlex.quote(expected_root)} && echo "ok" || echo "missing"')
+        workspace_ok = result.exit_code == 0
+        checks.append(("workspace_root", f"Expected {expected_root}", workspace_ok))
+
+        # Check writable workspace
+        result = self._backend.execute(f'test -w {shlex.quote(expected_root)} && echo "ok" || echo "ro"')
+        writable_ok = result.exit_code == 0
+        checks.append(("workspace_writable", expected_root, writable_ok))
+
+        # Check writable temp
+        result = self._backend.execute('test -w /tmp && echo "ok" || echo "ro"')
+        tmp_ok = result.exit_code == 0
+        checks.append(("temp_writable", "/tmp", tmp_ok))
+
+        # Check env vars
+        result = self._backend.execute("env | grep -c COGNITION_WORKSPACE_ROOT")
+        env_ok = result.exit_code == 0 and result.output.strip().isdigit() and int(result.output.strip()) > 0
+        checks.append(("env_var", "COGNITION_WORKSPACE_ROOT", env_ok))
+
+        # Check GitHub auth if token is expected
+        gh_token = os.environ.get("GH_TOKEN", "") or os.environ.get("GITHUB_TOKEN", "")
+        if gh_token:
+            result = self._backend.execute("gh auth status 2>&1 || echo 'not_authenticated'")
+            gh_ok = "not_authenticated" not in result.output
+            checks.append(("github_auth", "gh auth status", gh_ok))
+
+        failures = [(name, detail) for name, detail, ok in checks if ok is not None and not ok]
+        if failures:
+            logger.warning(
+                "Sandbox runtime verification found issues",
+                sandbox_id=self._id,
+                failures=dict(failures),
+            )
+        else:
+            logger.info(
+                "Sandbox runtime verification passed",
+                sandbox_id=self._id,
+                checks_count=len(checks),
+            )
 
     def _is_protected_path(self, path: str) -> bool:
         """Check if a path is protected.
@@ -372,6 +434,12 @@ class CognitionKubernetesSandboxBackend(SandboxBackendProtocol):
         result: ReadResult = backend.read(file_path, offset=offset, limit=limit)
         return result
 
+    def ls(self, path: str) -> LsResult:
+        """List directory entries using Deep Agents' current result API."""
+        backend = self._get_backend()
+        result: LsResult = backend.ls(path)
+        return result
+
     def ls_info(self, path: str) -> Any:
         """List files and directories in the sandbox.
 
@@ -381,10 +449,28 @@ class CognitionKubernetesSandboxBackend(SandboxBackendProtocol):
         Returns:
             List of FileInfo objects.
         """
-        backend = self._get_backend()
-        return backend.ls_info(path)
+        result = self.ls(path)
+        if result.error is not None:
+            raise NotImplementedError(result.error)
+        return result.entries or []
 
-    def grep_raw(self, pattern: str, path: str | None = None, glob: str | None = None) -> Any:
+    def grep(
+        self,
+        pattern: str,
+        path: str | None = None,
+        glob: str | None = None,
+    ) -> GrepResult:
+        """Search files using Deep Agents' current result API."""
+        backend = self._get_backend()
+        result: GrepResult = backend.grep(pattern, path=path, glob=glob)
+        return result
+
+    def grep_raw(
+        self,
+        pattern: str,
+        path: str | None = None,
+        glob: str | None = None,
+    ) -> Any:
         """Search for a pattern in sandbox files.
 
         Args:
@@ -395,8 +481,16 @@ class CognitionKubernetesSandboxBackend(SandboxBackendProtocol):
         Returns:
             List of GrepMatch objects or string.
         """
+        result = self.grep(pattern, path=path, glob=glob)
+        if result.error is not None:
+            return result.error
+        return result.matches or []
+
+    def glob(self, pattern: str, path: str = "/") -> GlobResult:
+        """Find matching files using Deep Agents' current result API."""
         backend = self._get_backend()
-        return backend.grep_raw(pattern, path=path, glob=glob)
+        result: GlobResult = backend.glob(pattern, path=path)
+        return result
 
     def glob_info(self, pattern: str, path: str = "/") -> Any:
         """Find files matching a glob pattern in the sandbox.
@@ -408,8 +502,10 @@ class CognitionKubernetesSandboxBackend(SandboxBackendProtocol):
         Returns:
             List of FileInfo objects.
         """
-        backend = self._get_backend()
-        return backend.glob_info(pattern, path=path)
+        result = self.glob(pattern, path=path)
+        if result.error is not None:
+            raise NotImplementedError(result.error)
+        return result.matches or []
 
     def edit(
         self, file_path: str, old_string: str, new_string: str, replace_all: bool = False

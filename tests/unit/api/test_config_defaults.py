@@ -50,15 +50,51 @@ def test_get_agent_defaults() -> None:
 
     assert response.status_code == 200
     assert response.json()["recursion_limit"] == 1000
+    assert response.json()["permissions"] == []
 
 
 def test_patch_agent_defaults() -> None:
     response = client.patch(
         "/config/defaults/agent",
-        json={"recursion_limit": 2000, "memory": ["AGENTS.md", "TEAM.md"]},
+        json={
+            "recursion_limit": 2000,
+            "memory": ["AGENTS.md", "TEAM.md"],
+            "interrupt_on": {
+                "execute": {
+                    "allowed_decisions": ["approve", "reject"],
+                    "description": "Review shell commands",
+                }
+            },
+            "permissions": [
+                {
+                    "operations": ["read"],
+                    "paths": ["/workspace/repo/**"],
+                    "mode": "allow",
+                }
+            ],
+            "async_subagents": [
+                {
+                    "name": "researcher",
+                    "description": "Runs long research tasks",
+                    "graph_id": "research_graph",
+                }
+            ],
+            "context_policy": {
+                "max_input_tokens": 64000,
+                "summarization_enabled": False,
+                "retention": {"search": "retain"},
+            },
+        },
     )
 
     assert response.status_code == 200
     data = response.json()
     assert data["recursion_limit"] == 2000
     assert data["memory"] == ["AGENTS.md", "TEAM.md"]
+    assert data["interrupt_on"]["execute"]["allowed_decisions"] == ["approve", "reject"]
+    assert data["permissions"][0]["operations"] == ["read"]
+    assert data["async_subagents"][0]["name"] == "researcher"
+    assert data["async_subagents"][0]["graph_id"] == "research_graph"
+    assert data["context_policy"]["max_input_tokens"] == 64000
+    assert data["context_policy"]["summarization_enabled"] is False
+    assert data["context_policy"]["retention"] == {"search": "retain"}

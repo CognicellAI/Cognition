@@ -109,3 +109,26 @@ async def server():
     except subprocess.TimeoutExpired:
         process.kill()
         process.wait()
+
+
+@pytest_asyncio.fixture
+async def scope_headers(server: str) -> dict[str, str]:
+    """Detect if session scoping is enabled and return appropriate headers.
+
+    Probes the server's /config endpoint to determine whether scoping
+    is active. Returns ``{"X-Cognition-Scope-User": "test-user"}`` when
+    scoping is enabled, ``{}`` otherwise.
+
+    This allows both API-level and scenario tests to work against
+    deployments with and without scoping without per-test changes.
+    """
+    async with httpx.AsyncClient(timeout=httpx.Timeout(5.0)) as client:
+        try:
+            resp = await client.get(f"{server}/config")
+            if resp.status_code == 200:
+                config = resp.json()
+                if config.get("server", {}).get("scoping_enabled", False):
+                    return {"X-Cognition-Scope-User": "test-user"}
+        except Exception:
+            pass
+    return {}

@@ -15,12 +15,80 @@ from pydantic import BaseModel
 
 
 class SessionStatus(StrEnum):
-    """Session status enumeration."""
+    """Session lifecycle status enumeration.
 
+    v0.10.0: Expanded to 11 states for long-running agent lifecycles.
+    """
+
+    QUEUED = "queued"
+    STARTING = "starting"
     ACTIVE = "active"
+    IDLE = "idle"
+    WAITING_FOR_APPROVAL = "waiting_for_approval"
+    STALLED = "stalled"
+    ABORTING = "aborting"
+    ABORTED = "aborted"
+    FAILED = "failed"
+    DONE = "done"
+    EXPIRED = "expired"
+
+    # Legacy aliases for backward compatibility
     INACTIVE = "inactive"
     ERROR = "error"
+
+    @classmethod
+    def can_transition(cls, current: SessionStatus | str, target: SessionStatus | str) -> bool:
+        """Check if a transition from current to target is valid."""
+        current_str = current.value if isinstance(current, SessionStatus) else current
+        target_str = target.value if isinstance(target, SessionStatus) else target
+
+        # Terminal states cannot transition out
+        if current_str in {"done", "expired"}:
+            return False
+
+        # Valid transitions
+        valid: dict[str, set[str]] = {
+            "queued": {"starting", "failed", "expired"},
+            "starting": {"active", "failed"},
+            "active": {"idle", "waiting_for_approval", "stalled", "aborting", "failed", "done"},
+            "idle": {"active", "stalled", "aborting", "failed", "expired"},
+            "waiting_for_approval": {"active", "aborting", "stalled", "failed"},
+            "stalled": {"active", "aborting", "failed", "expired"},
+            "aborting": {"aborted", "failed"},
+            "aborted": set(),
+            "failed": set(),
+            "done": set(),
+            "expired": set(),
+            "inactive": {"active", "expired"},
+            "error": {"active", "failed"},
+        }
+        return target_str in valid.get(current_str, set())
+
+    @classmethod
+    def is_terminal(cls, status: SessionStatus | str) -> bool:
+        """Check if a status is terminal (no further transitions)."""
+        status_str = status.value if isinstance(status, SessionStatus) else status
+        return status_str in {"done", "aborted", "failed", "expired"}
+
+
+class RunStatus(StrEnum):
+    """Durable execution status for a single session run."""
+
+    QUEUED = "queued"
+    STARTING = "starting"
+    ACTIVE = "active"
     WAITING_FOR_APPROVAL = "waiting_for_approval"
+    STALLED = "stalled"
+    ABORTING = "aborting"
+    ABORTED = "aborted"
+    FAILED = "failed"
+    DONE = "done"
+
+    @classmethod
+    def is_terminal(cls, status: RunStatus | str) -> bool:
+        """Check whether a run status is terminal."""
+        status_str = status.value if isinstance(status, RunStatus) else status
+        return status_str in {"aborted", "failed", "done"}
 
 
 class PromptConfig(BaseModel):
@@ -212,6 +280,46 @@ class Message:
     token_count: int | None = None
     model_used: str | None = None
     metadata: dict[str, Any] | None = None
+
+
+@dataclass
+class SessionRun:
+    """Durable execution attempt inside a session."""
+
+    id: str
+    session_id: str
+    thread_id: str
+    status: RunStatus
+    effective_scope: dict[str, str]
+    attempt: int
+    created_at: str
+    updated_at: str
+    idempotency_key: str | None = None
+    parent_run_id: str | None = None
+    started_at: str | None = None
+    last_activity_at: str | None = None
+    completed_at: str | None = None
+    error_code: str | None = None
+    status_reason: str | None = None
+    trace_id: str | None = None
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class SessionEvent:
+    """Append-only durable runtime event for a session run."""
+
+    id: str
+    session_id: str
+    run_id: str
+    sequence: int
+    event_type: str
+    visibility: Literal["internal", "builder", "end_user"]
+    payload: dict[str, Any]
+    effective_scope: dict[str, str]
+    created_at: str
+    trace_id: str | None = None
+    span_id: str | None = None
 
 
 @dataclass

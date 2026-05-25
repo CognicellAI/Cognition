@@ -226,8 +226,10 @@ class TestK8sSandboxDirectBackend:
         )
         try:
             sandbox.write("/workspace/e2e_test.txt", "Hello from K8s e2e!")
-            content = sandbox.read("/workspace/e2e_test.txt")
-            assert "Hello from K8s e2e!" in content
+            result = sandbox.read("/workspace/e2e_test.txt")
+            assert result.error is None
+            assert result.file_data is not None
+            assert "Hello from K8s e2e!" in result.file_data["content"]
         finally:
             sandbox.terminate()
 
@@ -244,7 +246,10 @@ class TestK8sSandboxDirectBackend:
         try:
             sandbox.write("/workspace/edit_test.txt", "original content")
             sandbox.edit("/workspace/edit_test.txt", "original", "modified")
-            content = sandbox.read("/workspace/edit_test.txt")
+            result = sandbox.read("/workspace/edit_test.txt")
+            assert result.error is None
+            assert result.file_data is not None
+            content = result.file_data["content"]
             assert "modified content" in content
             assert "original" not in content or "modified" in content
         finally:

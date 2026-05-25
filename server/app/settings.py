@@ -217,6 +217,17 @@ class Settings(BaseSettings):
         description="How long (in seconds) to cache the model catalog in memory.",
     )
 
+    # A2A protocol adapter
+    a2a_enabled: bool = Field(
+        default=True,
+        alias="COGNITION_A2A_ENABLED",
+        description=(
+            "Enable the A2A (Agent-to-Agent) protocol adapter. "
+            "When true, mounts /.well-known/agent-card.json and /a2a/{agent_name} endpoints. "
+            "Individual agents still require a2a_exposed=true to be visible."
+        ),
+    )
+
     # SSE (Server-Sent Events) settings
     sse_heartbeat_interval_seconds: float = Field(
         default=15.0,

@@ -8,6 +8,7 @@ These examples are intentionally split by purpose:
 - `minimal-config/`: smallest practical starting point.
 - `bedrock-config/`: AWS/Bedrock-oriented example.
 - `scoped-multi-tenant/`: scoping and multi-tenant configuration example.
+- `a2a-exposed-agent/`: A2A protocol exposure for agent-to-agent interoperability.
 
 Use `exhaustive-config/` as documentation, not as a drop-in starter. It shows many options at once so you can discover the full shape of the system.
 
@@ -16,7 +17,7 @@ Use `exhaustive-config/` as documentation, not as a drop-in starter. It shows ma
 Cognition configuration is split across three places:
 
 1. `.cognition/config.yaml`
-   - file-based project config
+   - file-based project config (providers, agents, tools, skills, MCP servers)
    - best for stable project defaults
 
 2. Environment variables / `.env`
@@ -29,6 +30,7 @@ Cognition configuration is split across three places:
    - agent definitions
    - tools
    - skills
+   - MCP servers (`/mcp-servers`)
    - global defaults
 
 The exhaustive example includes all three so the full configuration model is visible in one place.

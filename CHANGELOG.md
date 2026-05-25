@@ -7,6 +7,110 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [0.10.0] — 2026-05-25
+
+### Highlights
+
+- **11-state session lifecycle**: queued → starting → active → idle → stalled → aborting → aborted → failed → done → expired + waiting_for_approval. Pause, cancel, and abort APIs with validated state transitions.
+- **Persistent artifacts**: blob-store semantics over SQL with pluggable `ArtifactStore` (Sqlite/Postgres/Memory), 6 typed categories, version history, scope-aware visibility.
+- **SSE event surface**: heartbeat, run_state, callback, sandbox_lifecycle, delegation, and status events for full run observability.
+- **Durable runtime projection**: long-running Deep Agents turns are modeled as `session_runs` and append-only `session_events`, giving builders pollable progress, replayable evidence, and stable SSE/log/trace correlation.
+- **Session idempotency**: `idempotency_key` on `POST /sessions` prevents duplicate creation.
+- **A2A server adapter**: Cognition agents discoverable and invokable via the Agent-to-Agent protocol. Per-agent Agent Cards, scope-aware discovery, catch-all dynamic dispatch.
+- **MCP alignment**: Custom MCP layer replaced with `langchain-mcp-adapters`. MCP tools now participate in Deep Agents middleware stack (tool safety, HITL, permissions). Remote-only policy preserved.
+- **Capability registry**: `GET /capabilities` exposes runtime versions, features, middleware, stream protocols, and sandbox backends for client discovery.
+
+### Added
+
+- A2A (Agent-to-Agent) protocol adapter: `POST /a2a/{agent_name}` JSON-RPC endpoint for `SendMessage` and `SendStreamingMessage`. Per-agent Agent Cards at `GET /.well-known/agent-card.json?assistant_id={name}`. Scope-aware card discovery — callers see only agents visible to their `X-Cognition-Scope-*` headers. `a2a_exposed` field on `AgentDefinition` controls A2A exposure (default `false`). Catch-all dynamic dispatch — agents created at runtime are immediately available without server restart. `contextId` maps to `session_id`; `taskId` maps to `run_id`. HITL pauses surface as `INPUT_REQUIRED` task state.
+- `GET /capabilities` endpoint returning runtime package versions (Cognition, Deep Agents, LangGraph, LangChain), stream protocols, sandbox backends, feature flags, middleware types, scope keys, and deployment config.
+- MCP alignment: custom `McpSseClient`/`McpManager`/`McpAdapterTool` replaced with `langchain-mcp-adapters` `MultiServerMCPClient`. MCP tools now participate in Deep Agents middleware stack (tool safety, HITL, permissions, context injection). Scope injection interceptor adds effective scope to MCP tool call args. Progress and logging callbacks from MCP servers forwarded to Cognition structured logs. `tool_name_prefix=True` prevents MCP tool names from colliding with native tools (e.g., `coingecko_execute` instead of `execute`). `transport` field on `McpServerConfig`/`McpServerRegistration` for future StreamableHTTP support. MCP server headers redacted from API responses.
+- `POST/GET/PATCH/DELETE /mcp-servers` CRUD endpoints for remote MCP server registration, scope-aware, with `McpServerCreate`/`McpServerUpdate`/`McpServerResponse`/`McpServerList` API models.
+- `McpServerRegistration.transport` field (`"sse"` or `"streamable_http"`, default `"sse"`).
+- Runtime durability foundation: `SessionRun` and `SessionEvent` models, `session_runs`/`session_events` storage tables, memory/SQLite/Postgres implementations, and `RuntimeProjectionService` for run lifecycle transitions, append-only runtime events, checkpoint-derived message projection, and OpenTelemetry/Prometheus correlation.
+- Run and event inspection APIs: `GET /sessions/{id}/runs`, `GET /sessions/{id}/runs/{run_id}`, and `GET /sessions/{id}/events` with `run_id`, `after_sequence`, `limit`, `visibility`, and `event_type` filters.
+- Session summaries now expose durable progress fields including `active_run_id`, `latest_run_id`, `last_activity_at`, and `latest_event_type`.
+- Experimental async subagent configuration MVP: agents and global defaults can declare remote Agent Protocol async subagents (`name`, `description`, `graph_id`, optional `url`) that are wired into Deep Agents async task tools without adding a header/secret injection surface. This is remote Agent Protocol delegation, not Cognition's simple in-process supervisor/subagent pattern.
+- Context controls MVP: `ContextPolicy` on agent config/global defaults, `context` SSE events, `GET /sessions/{id}/context` redacted debug metadata, Deep Agents summarization-tool middleware alignment, and `cognition_context_events_total` Prometheus metric.
+- Canonical builder-defined `effective_scope: dict[str, str]` propagation across API, persistence, runtime context, memory/artifacts, MCP, sandbox labels, callbacks, logs, metrics, and SSE events.
+- Scope-aware SSE metadata via `scope_keys` on terminal/state/interrupt events, redacting raw builder scope values.
+- Tool-safety middleware stack: trusted runtime context injection, schema-aware tool argument validation/repair feedback, and enhanced per-tool blocklist auditing.
+- `ToolSafetyEvent` and `HitlDecisionEvent` domain events plus matching SSE builders.
+- Agent definition support for rich `interrupt_on` HITL policy objects, filesystem `permissions`, and subagent permissions.
+- Prometheus counters for tool-safety and HITL decision events.
+- `SessionStatus` enum with 11 states, `can_transition()`, and `is_terminal()` validators (`server/app/models.py`).
+- `POST /sessions/{id}/pause` — transitions active → idle.
+- `POST /sessions/{id}/cancel` — transitions → aborting → aborted (terminal).
+- `POST /sessions/{id}/abort` — cancels in-progress agent operation.
+- `POST /sessions/{id}/resume` — resumes `waiting_for_approval` sessions.
+- `idempotency_key` field on `SessionCreate` — repeated requests return existing session.
+- `HeartbeatEvent` + background heartbeat task feeding bounded queue, drained non-blocking in event loop (`server/app/agent/runtime.py`, `server/app/llm/deep_agent_service.py`).
+- `RunStateEvent` for state transition streaming; stall detection after stream ends naturally.
+- `CallbackEvent` for detached callback/webhook delivery.
+- `SandboxLifecycleEvent` with phases: provisioned, teardown_started, teardown_complete.
+- `EventBuilder.heartbeat()`, `.run_state()`, `.callback()`, `.sandbox_lifecycle()` (`server/app/api/sse.py`).
+- Sandbox event queue + lifecycle methods on `SessionAgentManager` (`server/app/llm/deep_agent_service.py`).
+- Artifact REST API (`server/app/api/routes/artifacts.py`):
+  - `GET /artifacts` — list with type/run filters
+  - `GET /artifacts/{id}` — latest version
+  - `POST /artifacts` — create
+  - `PUT /artifacts/{id}` — update (auto version bump)
+  - `DELETE /artifacts/{id}` — delete all versions
+  - `GET /artifacts/{id}/versions` — version history
+  - `GET /artifacts/{id}/versions/{v}` — specific version
+- `ArtifactStore` protocol + Sqlite/Postgres/Memory implementations (`server/app/storage/artifact_store.py`).
+- `ArtifactBackend` implementing `BackendProtocol` with 6 typed composite routes (`server/app/agent/artifacts_backend.py`).
+- `artifacts` table in storage schema (`server/app/storage/schema.py`).
+- `create_artifact_store()` factory in storage factory (`server/app/storage/factory.py`).
+- Sandbox runtime verification: workspace, writable paths, env vars, GitHub auth (`server/app/agent/sandbox_backend.py`).
+- `COGNITION_BLOCKED_TOOLS` environment variable for per-name tool blocklisting.
+- `COGNITION_A2A_ENABLED` environment variable to enable/disable the A2A protocol adapter (default `true`). When false, `/.well-known/agent-card.json` and `/a2a/{agent_name}` endpoints are not mounted.
+- `settings.run_heartbeat_interval_seconds` and `settings.run_stall_timeout_seconds`.
+
+### Changed
+
+- Context/token debug accounting now uses Deep Agents' `count_tokens_approximately()` wrapper instead of Cognition's previous word-count heuristic. `ContextPolicy.max_input_tokens`, `tool_token_limit_before_evict`, `summarizer_model`, `offload_large_tool_outputs`, and `retention` are surfaced for policy visibility/future enforcement; only summarization middleware attachment is enforced in this slice.
+- Session/run scope mismatch now returns `403 Forbidden` with explicit scope mismatch detail instead of hiding the resource as `404 Not Found`.
+- `CognitionContext` now uses canonical `effective_scope` instead of fixed `user_id`/`org_id`/`project_id` fields.
+- Deep Agents filesystem permissions are passed only when configured, avoiding upstream `FilesystemMiddleware` incompatibility with execution-capable sandbox backends for default agents.
+- `DoneEvent` transitions to `DONE` (was `ACTIVE`). `ErrorEvent` transitions to `FAILED` (was `ERROR`). `ErrorEvent(code=ABORTED)` → `ABORTED`.
+- Session creation with `idempotency_key` returns HTTP 200/201 for existing session.
+- Docker Compose now defaults the OpenRouter-backed local provider model to `deepseek/deepseek-v4-pro` for stronger tool-call validation during v0.10.0 runtime durability testing.
+
+### Fixed
+
+- Runtime activity now updates durable session progress: assistant responses are projected into session messages, tool calls/results are persisted as message projection entries, runtime activity advances `updated_at`, tool logs include trusted `session_id`/`run_id`, and overlapping runtime turns no longer mark the session `done` while another turn is still active.
+- SSE correlation fields now treat Cognition's durable runtime event as authoritative, so context and run-state events cannot leak stale upstream `session_id`/`run_id` values from Deep Agents/LangGraph internals.
+- Reused message idempotency keys are rejected instead of reusing a terminal run for new work, and empty checkpoint rebuilds no longer wipe existing projected messages after early runtime failures.
+- K8s sandbox filesystem compatibility now calls Deep Agents' current `ls`/`glob`/`grep` result APIs instead of deprecated `*_info`/`*_raw` compatibility paths, avoiding the "new `ls` API" runtime failure.
+- Runtime errors are terminal for the stream wrapper: once a run emits `error`, later `done` events are suppressed and callbacks report `failed`/`aborted` instead of success.
+- Postgres `ArtifactStore.delete_artifact`: `cur.rowcount` accessed after execute instead of treating `AsyncCursor` as int.
+- Shell injection prevention via `shlex.quote` in K8s sandbox commands.
+- Thread-safe lazy initialization with double-check locking in sandbox backend.
+
+### Testing
+
+- `tests/unit/api/test_message_runtime_persistence.py` — regression coverage for assistant `done` persistence data, tool-call/tool-result message projection, durable `updated_at` movement, and overlapping runtime turns staying active.
+- `tests/e2e/test_scenarios/long_running_agents/test_runtime_durability.py` — Docker Compose scenario coverage for stream → session summary → runs → events → messages traceability and strict tool-call durability with `COGNITION_STRICT_TOOL_E2E=1`.
+- Wave 2C local validation: focused runtime durability suite `77 passed`; strict Docker Compose runtime/tool durability scenario `2 passed` against `deepseek/deepseek-v4-pro`.
+- `tests/unit/test_a2a_adapter.py` — 35 unit tests: A2A exposed field, per-agent card generation, scope extraction, event mapping, executor agent name, filtering logic.
+- `tests/e2e/test_scenarios/p3_protocols/test_a2a.py` — 9 e2e tests: card discovery, per-agent card, 404 for unknown agents, SendMessage/SendStreamingMessage, artifact verification, capabilities.
+- `tests/unit/test_capability_registry.py` — 10 unit tests: version resolution, feature flags, middleware, scope keys, deployment info.
+- `tests/e2e/test_scenarios/p3_tools/test_mcp_coingecko_scenario.py` — 2 e2e tests: CoinGecko MCP server registration and agent tool call via `coingecko_search_docs`/`coingecko_execute`.
+- `tests/e2e/test_scenarios/p3_tools/test_mcp.py` — 21 unit tests: security stance, config-to-connection mapping, client factory, callbacks, interceptors, configuration.
+- `tests/e2e/test_scenarios/long_running_agents/test_async_subagents_config.py` — scenario coverage for experimental async subagent API round-trip and header-free config surface.
+- `tests/e2e/test_scenarios/long_running_agents/test_context_controls.py` — scenario coverage for context policy API round-trip, `context` SSE events, and redacted session context debug metadata.
+- `tests/e2e/test_scenarios/long_running_agents/test_tool_safety_config.py` — 7 scenario tests covering HITL config, filesystem permissions, subagent permissions, and agent-cache invalidation.
+- Wave 2B pre-release image `0.10.0-w2b` validated on dev K8s with `46 passed, 2 skipped` across long-running agent scenarios and API-level lifecycle/artifact/streaming e2e tests.
+- `tests/e2e/test_session_lifecycle.py` — 9 tests: idempotency, 11-state enum, pause/cancel/abort, SSE heartbeat/status events.
+- `tests/e2e/test_artifacts.py` — 10 tests: CRUD across 6 types, version history, type validation, scope isolation.
+- `tests/e2e/test_agent_streaming.py` — 9 tests: done, token, heartbeat, run_state, sandbox_lifecycle, error events.
+- `tests/e2e/test_scenarios/long_running_agents/` — 13 scenario tests covering artifact production, session state transitions, and stream event exhaustiveness.
+- `tests/e2e/conftest.py` — `scope_headers` fixture for dynamic scoping detection.
+- All API-level e2e tests (`test_p0_features.py`, `test_workflow.py`) updated to use `scope_headers` fixture.
+
+---
+
 ## [0.9.0] — 2026-05-01
 
 ### Highlights

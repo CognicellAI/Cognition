@@ -217,14 +217,14 @@ COGNITION_DOCKER_TIMEOUT=300
 
 ### Session Scoping
 
-Enable multi-tenant isolation:
+Enable multi-tenant isolation with builder-defined scope keys:
 
 ```env
 COGNITION_SCOPING_ENABLED=true
 COGNITION_SCOPE_KEYS=["user", "project"]
 ```
 
-Your upstream API gateway or reverse proxy must inject the `X-Cognition-Scope-User` and `X-Cognition-Scope-Project` headers based on your authentication layer.
+Scope keys are builder-defined — choose keys that match your tenancy model. Your upstream API gateway or reverse proxy must inject `X-Cognition-Scope-{key}` headers for each configured key based on your authentication layer.
 
 ### TLS / Reverse Proxy
 

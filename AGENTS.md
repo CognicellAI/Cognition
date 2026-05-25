@@ -158,7 +158,8 @@ authentication boundary.
 | Process isolation | Docker sandbox backend — container per session, separate network namespace |
 | Network isolation | `network_mode="none"` on Docker sandbox backend |
 | Filesystem isolation | `CognitionLocalSandboxBackend` protected paths; `virtual_mode=True` |
-| Memory isolation | LangGraph Store namespaces scoped per user via `CognitionContext` |
+| Scope propagation | Builder-authorized `effective_scope: dict[str, str]` carried through API, persistence, runtime context, tools, memory, artifacts, MCP, sandboxes, callbacks, and observability |
+| Memory isolation | LangGraph Store namespaces derived from `effective_scope` via `CognitionContext` |
 
 **What this means for builders:**
 - `POST /tools` executes arbitrary Python with full privileges inside the sandbox.
@@ -171,6 +172,51 @@ authentication boundary.
 **`COGNITION_BLOCKED_TOOLS` (per-name blocklist) is still supported** — this is real
 multi-tenant security enforced by `ToolSecurityMiddleware` at the middleware layer.
 It prevents specific tool names from being called regardless of who registered them.
+
+### Canonical Scope Propagation
+
+Canonical scope propagation is a **P0 blocker for v0.10.0**.
+
+Cognition supports builder-defined scope keys, so the canonical portable shape is:
+
+```python
+effective_scope: dict[str, str]
+```
+
+Examples include `{"tenant": "acme", "project": "ios", "end_user": "user_123"}`.
+Deep Agents does not define a fixed set of known scopes; Cognition passes the
+builder-authorized scope through Deep Agents runtime context and derives
+namespaces from it.
+
+Rules:
+
+- Builders own authentication and authorization. Cognition must not become the
+  builder's IAM, role, team, billing, or entitlement system.
+- Cognition receives already-authorized scope from trusted ingress such as a
+  gateway, signed claims, or an embedding application.
+- Cognition must carry and persist the same `effective_scope` across sessions,
+  runs, messages, events, approvals, artifacts, memory, tools, MCP configs,
+  sandboxes, callbacks, logs, metrics, and traces.
+- Scope keys are builder-defined. Do not hardcode `user`, `org`, or `project` as
+  the only valid vocabulary. Optional aliases like `user_id`, `org_id`, and
+  `project_id` may be derived from configured scope keys for compatibility.
+- Session/run scope is immutable after creation. Requests with a different
+  effective scope must not continue or mutate the existing session/run.
+- Runtime resources use exact effective-scope enforcement by default. Config
+  resolution may use documented scope inheritance, but that must not loosen
+  runtime data access.
+- Tools and middleware must read trusted scope from runtime context, not from
+  model-supplied tool arguments.
+- Tool-safety and external policy hooks must receive effective scope with the
+  action/resource descriptor and correlation ids. Cognition enforces returned
+  `allow`, `deny`, or `approve` decisions but does not own the decision logic.
+- New v0.10.0 features that touch runtime state, tool safety, memory, artifacts,
+  MCP, sandboxing, callbacks, or observability must include scoped isolation
+  tests or document explicit shared-scope behavior.
+- Cognition v0.10.0 must not introduce a secret-reference, secret-resolution, or
+  secret-injection surface. Builders own credential handling and accept the risk
+  of any credentials they provide to their own tools, sandboxes, or
+  infrastructure.
 
 
 # Hard Requirements
@@ -203,8 +249,9 @@ When evaluating ideas from other agent products or codebases, only integrate fea
    - New behavior should be externally configurable and inspectable.
 
 3. **Scope-aware by default**
-   - New persistence, memory, scheduling, and orchestration features must respect user, org, and project boundaries.
-   - Never introduce features that can silently cross tenant boundaries.
+   - New persistence, memory, scheduling, and orchestration features must respect builder-defined `effective_scope: dict[str, str]` boundaries.
+   - Never introduce features that can silently cross tenant, project, user, repo, workspace, or other builder-defined scope boundaries.
+   - Authorization belongs to the builder; Cognition carries authorized scope, exposes it to policy hooks, and enforces returned decisions.
 
 4. **Observable and debuggable**
    - Long-running jobs, delegation flows, memory processes, and approval paths must emit explicit logs, metrics, and streaming events where appropriate.

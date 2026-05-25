@@ -3,14 +3,24 @@
 Tests for the Phase 5 REST API implementation with workspace-based sessions.
 """
 
+import asyncio
 import tempfile
+import uuid
 from unittest.mock import AsyncMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
 
-from server.app.api.dependencies import set_config_store
+from server.app.agent.token_counter import count_text_tokens
+from server.app.api.dependencies import (
+    get_settings_dep,
+    get_storage_backend_dep,
+    set_config_store,
+)
 from server.app.main import app
+from server.app.models import RunStatus
+from server.app.runtime_projection import RuntimeProjectionService
+from server.app.settings import Settings
 
 # Create test client
 client = TestClient(app)
@@ -118,6 +128,54 @@ class TestSessionEndpoints:
         """Test getting a non-existent session."""
         response = client.get("/sessions/non-existent-id")
         assert response.status_code == 404
+
+    def test_get_session_context_debug_metadata(self):
+        """Context debug endpoint returns redacted policy/token metadata."""
+        create_resp = client.post("/sessions", json={"title": "context-debug"})
+        session_id = create_resp.json()["id"]
+
+        response = client.get(f"/sessions/{session_id}/context")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["session_id"] == session_id
+        assert data["agent_name"] == "default"
+        assert data["scope_keys"] == []
+        assert data["policy"] == {}
+        assert data["message_count"] == 0
+        assert data["estimated_tokens"] == 0
+        assert data["messages"] == []
+
+    def test_get_session_context_debug_redacts_message_content(self):
+        """Context debug endpoint returns counts and IDs, not raw message content."""
+        create_resp = client.post("/sessions", json={"title": "context-debug-redaction"})
+        session_id = create_resp.json()["id"]
+        message_id = str(uuid.uuid4())
+
+        async def _create_message() -> None:
+            store = get_storage_backend_dep()
+            await store.create_message(
+                message_id=message_id,
+                session_id=session_id,
+                role="user",
+                content="secret customer content should not appear",
+                token_count=None,
+            )
+
+        asyncio.run(_create_message())
+
+        response = client.get(f"/sessions/{session_id}/context")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["message_count"] == 1
+        assert data["estimated_tokens"] == count_text_tokens(
+            "secret customer content should not appear"
+        )
+        assert data["messages"][0]["id"] == message_id
+        assert data["messages"][0]["role"] == "user"
+        assert "content" not in data["messages"][0]
+        assert "secret customer content" not in response.text
 
     def test_update_session(self):
         """Test updating a session."""
@@ -246,6 +304,22 @@ class TestMessageEndpoints:
         assert response.status_code == 200
         assert "text/event-stream" in response.headers.get("content-type", "")
 
+        session_data = client.get(f"/sessions/{session_id}").json()
+        assert session_data["latest_run_id"] is not None
+        assert session_data["last_activity_at"] is not None
+
+        runs_resp = client.get(f"/sessions/{session_id}/runs")
+        assert runs_resp.status_code == 200
+        runs_data = runs_resp.json()
+        assert runs_data["total"] == 1
+        assert runs_data["runs"][0]["session_id"] == session_id
+
+        events_resp = client.get(f"/sessions/{session_id}/events")
+        assert events_resp.status_code == 200
+        event_types = [event["event_type"] for event in events_resp.json()["events"]]
+        assert "run.started" in event_types
+        assert "message.user.accepted" in event_types
+
     def test_send_message_accepts_callback_url(self):
         """Test sending a message with callback_url returns SSE stream."""
         session_resp = client.post("/sessions", json={"title": "callback-test"})
@@ -267,6 +341,202 @@ class TestMessageEndpoints:
         assert response.status_code == 200
         assert "text/event-stream" in response.headers.get("content-type", "")
         assert mock_callback.await_count == 1
+
+
+class TestRuntimeDurabilityEndpoints:
+    """Test builder-facing run/event durability API contracts."""
+
+    def test_run_and_event_endpoints_enforce_session_scope(self):
+        scoped_settings = Settings(
+            scoping_enabled=True,
+            scope_keys=["tenant", "project"],
+        )
+        app.dependency_overrides[get_settings_dep] = lambda: scoped_settings
+        headers = {
+            "X-Cognition-Scope-Tenant": "acme",
+            "X-Cognition-Scope-Project": "ios",
+        }
+        wrong_headers = {
+            "X-Cognition-Scope-Tenant": "acme",
+            "X-Cognition-Scope-Project": "web",
+        }
+        try:
+            session_resp = client.post(
+                "/sessions",
+                json={"title": "scoped-runtime-contract"},
+                headers=headers,
+            )
+            assert session_resp.status_code == 201
+            session_id = session_resp.json()["id"]
+
+            async def _seed_run() -> str:
+                store = get_storage_backend_dep()
+                session = await store.get_session(session_id)
+                assert session is not None
+                projection = RuntimeProjectionService(store)
+                run = await projection.begin_run(session=session)
+                await projection.append_event(
+                    run,
+                    "tool.call.started",
+                    payload={"tool_name": "execute"},
+                )
+                return run.id
+
+            run_id = asyncio.run(_seed_run())
+
+            runs_resp = client.get(f"/sessions/{session_id}/runs", headers=headers)
+            assert runs_resp.status_code == 200
+            runs_data = runs_resp.json()
+            assert runs_data["total"] == 1
+            assert runs_data["runs"][0]["id"] == run_id
+            assert runs_data["runs"][0]["scope_keys"] == ["project", "tenant"]
+
+            run_resp = client.get(f"/sessions/{session_id}/runs/{run_id}", headers=headers)
+            assert run_resp.status_code == 200
+            assert run_resp.json()["id"] == run_id
+
+            events_resp = client.get(f"/sessions/{session_id}/events", headers=headers)
+            assert events_resp.status_code == 200
+            event_types = [event["event_type"] for event in events_resp.json()["events"]]
+            assert event_types == ["run.started", "tool.call.started"]
+
+            assert (
+                client.get(f"/sessions/{session_id}/runs", headers=wrong_headers).status_code
+                == 403
+            )
+            assert (
+                client.get(f"/sessions/{session_id}/runs/{run_id}", headers=wrong_headers).status_code
+                == 403
+            )
+            assert (
+                client.get(f"/sessions/{session_id}/events", headers=wrong_headers).status_code
+                == 403
+            )
+        finally:
+            app.dependency_overrides.pop(get_settings_dep, None)
+
+    def test_event_endpoint_filters_and_paginates_durable_activity(self):
+        session_resp = client.post("/sessions", json={"title": "runtime-events-filtering"})
+        session_id = session_resp.json()["id"]
+
+        async def _seed_events() -> tuple[str, str]:
+            store = get_storage_backend_dep()
+            session = await store.get_session(session_id)
+            assert session is not None
+            projection = RuntimeProjectionService(store)
+            run = await projection.begin_run(session=session)
+            await projection.append_event(
+                run,
+                "tool.call.started",
+                payload={"tool_name": "execute"},
+                visibility="internal",
+            )
+            await projection.append_event(
+                run,
+                "tool.call.completed",
+                payload={"tool_name": "execute", "ok": True},
+                visibility="builder",
+            )
+            return run.id, "tool.call.completed"
+
+        run_id, expected_event_type = asyncio.run(_seed_events())
+
+        by_run = client.get(f"/sessions/{session_id}/events", params={"run_id": run_id})
+        assert by_run.status_code == 200
+        assert by_run.json()["total"] == 3
+
+        after_first = client.get(
+            f"/sessions/{session_id}/events",
+            params={"after_sequence": 1},
+        )
+        assert after_first.status_code == 200
+        assert [event["event_type"] for event in after_first.json()["events"]] == [
+            "tool.call.started",
+            "tool.call.completed",
+        ]
+
+        builder_only = client.get(
+            f"/sessions/{session_id}/events",
+            params={"visibility": "builder"},
+        )
+        assert builder_only.status_code == 200
+        assert [event["event_type"] for event in builder_only.json()["events"]] == [
+            "run.started",
+            "tool.call.completed",
+        ]
+
+        completed_only = client.get(
+            f"/sessions/{session_id}/events",
+            params={"event_type": expected_event_type},
+        )
+        assert completed_only.status_code == 200
+        completed_data = completed_only.json()
+        assert completed_data["total"] == 1
+        assert completed_data["events"][0]["payload"] == {
+            "tool_name": "execute",
+            "ok": True,
+        }
+
+        first_page = client.get(f"/sessions/{session_id}/events", params={"limit": 1})
+        assert first_page.status_code == 200
+        first_page_data = first_page.json()
+        assert first_page_data["total"] == 1
+        assert first_page_data["has_more"] is True
+
+    def test_terminal_run_clears_active_run_from_session_summary(self):
+        session_resp = client.post("/sessions", json={"title": "runtime-summary"})
+        session_id = session_resp.json()["id"]
+
+        async def _complete_run() -> str:
+            store = get_storage_backend_dep()
+            session = await store.get_session(session_id)
+            assert session is not None
+            projection = RuntimeProjectionService(store)
+            run = await projection.begin_run(session=session)
+            await projection.transition_run(run, RunStatus.DONE, reason="Complete")
+            return run.id
+
+        run_id = asyncio.run(_complete_run())
+
+        session_data = client.get(f"/sessions/{session_id}").json()
+        assert session_data["latest_run_id"] == run_id
+        assert session_data["active_run_id"] is None
+        assert session_data["latest_event_type"] == "run.done"
+        assert session_data["last_activity_at"] is not None
+
+    def test_message_idempotency_key_does_not_reuse_terminal_run_for_new_work(self):
+        session_resp = client.post("/sessions", json={"title": "runtime-idempotency"})
+        session_id = session_resp.json()["id"]
+
+        async def _seed_idempotent_run() -> str:
+            store = get_storage_backend_dep()
+            session = await store.get_session(session_id)
+            assert session is not None
+            projection = RuntimeProjectionService(store)
+            run = await projection.begin_run(
+                session=session,
+                idempotency_key="assignment-1",
+            )
+            await projection.transition_run(run, RunStatus.DONE, reason="Complete")
+            return run.id
+
+        run_id = asyncio.run(_seed_idempotent_run())
+        before = client.get(f"/sessions/{session_id}").json()
+        assert before["latest_run_id"] == run_id
+        assert before["message_count"] == 0
+
+        duplicate = client.post(
+            f"/sessions/{session_id}/messages",
+            json={"content": "Hello twice", "idempotency_key": "assignment-1"},
+            headers={"Accept": "text/event-stream"},
+        )
+
+        assert duplicate.status_code == 409
+        assert "already used" in duplicate.json()["detail"]
+
+        after = client.get(f"/sessions/{session_id}").json()
+        assert after["latest_run_id"] == before["latest_run_id"]
+        assert after["message_count"] == before["message_count"]
 
 
 class TestConfigEndpoints:

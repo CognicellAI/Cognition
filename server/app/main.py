@@ -14,6 +14,7 @@ from fastapi.responses import JSONResponse
 from server.app.agent.resolver import RuntimeResolver
 from server.app.api.dependencies import (
     get_storage_backend_dep,
+    set_artifact_store,
     set_config_store,
     set_model_catalog_dep,
     set_runtime_resolver,
@@ -22,7 +23,18 @@ from server.app.api.dependencies import (
 )
 from server.app.api.middleware import ObservabilityMiddleware, SecurityHeadersMiddleware
 from server.app.api.models import HealthStatus, ReadyStatus
-from server.app.api.routes import agents, config, messages, models, sessions, skills, tools
+from server.app.api.routes import (
+    agents,
+    artifacts,
+    capabilities,
+    config,
+    mcp_servers,
+    messages,
+    models,
+    sessions,
+    skills,
+    tools,
+)
 from server.app.exceptions import RateLimitError
 from server.app.file_watcher import WorkspaceWatcher
 from server.app.observability import setup_metrics, setup_tracing
@@ -91,6 +103,15 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # Seed store-backed agent definitions after ConfigStore is available.
     await config_store.seed_agent_definitions()
 
+    # Initialize ArtifactStore
+    from server.app.storage.factory import create_artifact_store
+
+    artifact_store = create_artifact_store(settings)
+    if hasattr(artifact_store, "initialize"):
+        await artifact_store.initialize()
+    set_artifact_store(artifact_store)
+    logger.info("ArtifactStore initialized")
+
     # Initialize RuntimeResolver (agent runtime bridge)
     runtime_resolver = RuntimeResolver(config_store=config_store, settings=settings)
     set_runtime_resolver(runtime_resolver)
@@ -117,6 +138,25 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     )
     set_session_agent_manager_dep(session_agent_manager)
     logger.info("SessionAgentManager initialized")
+
+    # Mount A2A protocol adapter (requires COGNITION_A2A_ENABLED=true)
+    if settings.a2a_enabled:
+        try:
+            from server.app.protocols.a2a.routes import mount_a2a_routes
+
+            await mount_a2a_routes(
+                app=app,
+                settings=settings,
+                config_store=config_store,
+                session_agent_manager=session_agent_manager,
+                store=storage_backend,
+                version=VERSION,
+            )
+            logger.info("A2A protocol adapter mounted")
+        except Exception as e:
+            logger.warning("A2A adapter not mounted", error=str(e))
+    else:
+        logger.info("A2A protocol adapter disabled (COGNITION_A2A_ENABLED=false)")
 
     # Initialize ModelCatalog for DI
     from server.app.llm.model_catalog import ModelCatalog
@@ -225,10 +265,13 @@ app.add_middleware(ObservabilityMiddleware)
 app.include_router(sessions.router)
 app.include_router(messages.router)
 app.include_router(config.router)
+app.include_router(mcp_servers.router)
 app.include_router(agents.router)
 app.include_router(skills.router)
 app.include_router(models.router)
 app.include_router(tools.router)
+app.include_router(artifacts.router)
+app.include_router(capabilities.router)
 
 
 @app.get("/health", response_model=HealthStatus, tags=["health"])

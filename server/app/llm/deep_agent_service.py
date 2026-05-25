@@ -24,29 +24,99 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from server.app.agent.cognition_agent import CognitionAgentParams, create_cognition_agent
 from server.app.agent.resolver import RuntimeResolver
 from server.app.agent.runtime import (
+    CallbackEvent,  # noqa: F401 — re-exported for consumers of this module
+    ContextEvent,
     DeepAgentRuntime,
     DelegationEvent,
     DoneEvent,
     ErrorEvent,
+    HeartbeatEvent,  # noqa: F401 — re-exported for consumers of this module
+    HitlDecisionEvent,
     InterruptEvent,
     PlanningEvent,
+    RunStateEvent,  # noqa: F401 — re-exported for consumers of this module
+    SandboxLifecycleEvent,
     StatusEvent,
     StepCompleteEvent,  # noqa: F401 — re-exported for consumers of this module
     StreamEvent,
     TokenEvent,
     ToolCallEvent,
     ToolResultEvent,
+    ToolSafetyEvent,
     UsageEvent,
 )
 from server.app.agent.runtime import (
     _resolve_middleware as _resolve_single_middleware,
 )
+from server.app.agent.token_counter import count_text_tokens
 from server.app.exceptions import LLMProviderConfigError
+from server.app.observability import CONTEXT_EVENT_COUNT
+from server.app.observability import span as trace_span
 from server.app.settings import Settings
 from server.app.storage.config_store import ConfigStore
 from server.app.storage.factory import create_storage_backend
 
 logger = structlog.get_logger(__name__)
+
+
+def _context_policy_dict(policy: Any | None) -> dict[str, Any]:
+    if policy is None:
+        return {}
+    if hasattr(policy, "model_dump"):
+        return cast(dict[str, Any], policy.model_dump(exclude_none=True, mode="json"))
+    if isinstance(policy, dict):
+        return dict(policy)
+    return {}
+
+
+def _effective_context_policy(
+    policy: Any | None,
+    tool_token_limit_before_evict: int | None,
+) -> dict[str, Any]:
+    effective = _context_policy_dict(policy)
+    if tool_token_limit_before_evict is not None:
+        effective.setdefault("tool_token_limit_before_evict", tool_token_limit_before_evict)
+    return effective
+
+
+def _audit_context_event(event: ContextEvent) -> None:
+    """Record context signals without raw content or raw scope values."""
+    logger.info(
+        "context_event",
+        action=event.action,
+        session_id=event.session_id,
+        run_id=event.run_id,
+        scope_keys=event.scope_keys,
+        policy_keys=sorted(event.policy),
+        input_tokens=event.input_tokens,
+        output_tokens=event.output_tokens,
+        message_count=event.message_count,
+        retained_messages=event.retained_messages,
+        evicted_messages=event.evicted_messages,
+        summarized_messages=event.summarized_messages,
+        offloaded_messages=event.offloaded_messages,
+        summary_id=event.summary_id,
+        artifact_id=event.artifact_id,
+    )
+    CONTEXT_EVENT_COUNT.labels(action=event.action).inc()
+    with trace_span(
+        "cognition.context",
+        {
+            "cognition.context.action": event.action,
+            "cognition.session_id": event.session_id or "",
+            "cognition.run_id": event.run_id or "",
+            "cognition.scope_keys": ",".join(event.scope_keys),
+            "cognition.context.policy_keys": ",".join(sorted(event.policy)),
+            "cognition.context.input_tokens": event.input_tokens or 0,
+            "cognition.context.output_tokens": event.output_tokens or 0,
+            "cognition.context.message_count": event.message_count or 0,
+            "cognition.context.retained_messages": event.retained_messages or 0,
+            "cognition.context.evicted_messages": event.evicted_messages or 0,
+            "cognition.context.summarized_messages": event.summarized_messages or 0,
+            "cognition.context.offloaded_messages": event.offloaded_messages or 0,
+        },
+    ):
+        pass
 
 
 def _resolve_middleware(specs: list[str | dict[str, Any]]) -> list[Any]:
@@ -81,10 +151,13 @@ class ResolvedAgentConfig:
     skills: list[str] = field(default_factory=list)
     memory: list[str] | None = None
     interrupt_on: dict[str, Any] | None = None
+    permissions: list[Any] | None = None
     middleware: list[Any] | None = None
     response_format: str | None = None
     tool_token_limit_before_evict: int | None = None
+    context_policy: Any | None = None
     subagents: list[Any] = field(default_factory=list)
+    async_subagents: list[Any] = field(default_factory=list)
     agent_def: Any = None
 
 
@@ -98,8 +171,8 @@ class StreamAccumulator:
     _current_tool_call: str | None = field(default=None, repr=False)
 
     def record_token(self, content: str) -> None:
-        self.output_tokens += len(content.split())
         self.accumulated_content += content
+        self.output_tokens = count_text_tokens(self.accumulated_content)
 
     def set_tool_call(self, tool_call_id: str | None) -> None:
         self._current_tool_call = tool_call_id
@@ -199,17 +272,37 @@ class DeepAgentStreamingService:
             if s.name != agent_def.name
         ]
 
+        if agent_def.async_subagents:
+            resolved.async_subagents = [
+                spec.model_dump(exclude_none=True) if hasattr(spec, "model_dump") else dict(spec)
+                for spec in agent_def.async_subagents
+            ]
+
         if agent_def.memory:
             resolved.memory = list(agent_def.memory)
 
         if agent_def.interrupt_on:
-            resolved.interrupt_on = dict(agent_def.interrupt_on)
+            resolved.interrupt_on = {
+                name: config.model_dump(exclude_none=True)
+                if hasattr(config, "model_dump")
+                else dict(config)
+                for name, config in agent_def.interrupt_on.items()
+            }
+
+        if agent_def.permissions:
+            resolved.permissions = [
+                p.model_dump() if hasattr(p, "model_dump") else dict(p)
+                for p in agent_def.permissions
+            ]
 
         if agent_def.response_format:
             resolved.response_format = agent_def.response_format
 
         if agent_def.config.tool_token_limit_before_evict is not None:
             resolved.tool_token_limit_before_evict = agent_def.config.tool_token_limit_before_evict
+
+        if agent_def.config.context_policy is not None:
+            resolved.context_policy = agent_def.config.context_policy
 
         if agent_def.middleware:
             resolved.middleware = _resolve_middleware(agent_def.middleware)
@@ -259,10 +352,29 @@ class DeepAgentStreamingService:
             from server.app.agent.cognition_agent import CognitionContext
 
             invocation_context = CognitionContext.from_scope(
-                session.scopes if session and hasattr(session, "scopes") else scope
+                session.scopes if session and hasattr(session, "scopes") else scope,
+                session_id=session.id if session else session_id,
+                thread_id=session.thread_id if session else thread_id,
+                agent_name=session.agent_name if session else None,
+                metadata=session.metadata if session else None,
             )
 
             mcp_configs = await self._resolve_mcp_configs(scope=scope)
+            context_policy = _effective_context_policy(
+                agent_cfg.context_policy,
+                agent_cfg.tool_token_limit_before_evict,
+            )
+            context_event = ContextEvent(
+                action="policy_resolved",
+                session_id=session.id if session else session_id,
+                run_id=thread_id,
+                scope_keys=sorted((scope or {}).keys()),
+                policy=context_policy,
+                input_tokens=count_text_tokens(content),
+                message_count=getattr(session, "message_count", None),
+            )
+            _audit_context_event(context_event)
+            yield context_event
 
             agent_params = CognitionAgentParams(
                 project_path=project_path,
@@ -274,13 +386,16 @@ class DeepAgentStreamingService:
                 system_prompt=agent_cfg.system_prompt,
                 skills=agent_cfg.skills if agent_cfg.skills else None,
                 subagents=agent_cfg.subagents,
+                async_subagents=agent_cfg.async_subagents,
                 memory=agent_cfg.memory,
                 interrupt_on=agent_cfg.interrupt_on,
+                permissions=agent_cfg.permissions,
                 response_format=(
                     session.config.response_format if session and session.config else None
                 )
                 or agent_cfg.response_format,
                 tool_token_limit_before_evict=agent_cfg.tool_token_limit_before_evict,
+                context_policy=agent_cfg.context_policy,
                 middleware=agent_cfg.middleware,
                 mcp_configs=mcp_configs or None,
                 scope=scope,
@@ -304,7 +419,7 @@ class DeepAgentStreamingService:
             # Build message input (system prompt already embedded in agent graph)
             messages = self._build_messages(content, None)
 
-            acc = StreamAccumulator(input_tokens=len(content.split()))
+            acc = StreamAccumulator(input_tokens=count_text_tokens(content))
 
             runtime_exception: Exception | None = None
 
@@ -327,7 +442,15 @@ class DeepAgentStreamingService:
                             yield event
 
                         elif isinstance(event, PlanningEvent) or isinstance(
-                            event, (DelegationEvent, StatusEvent, StepCompleteEvent, InterruptEvent)
+                            event,
+                            (
+                                DelegationEvent,
+                                StatusEvent,
+                                StepCompleteEvent,
+                                InterruptEvent,
+                                ToolSafetyEvent,
+                                ContextEvent,
+                            ),
                         ):
                             yield event
                             if isinstance(event, InterruptEvent):
@@ -335,8 +458,7 @@ class DeepAgentStreamingService:
 
                         elif isinstance(event, ErrorEvent):
                             yield event
-                            if event.code == "ABORTED":
-                                return
+                            return
 
                     # DoneEvent from the runtime is absorbed here; we emit our own below.
 
@@ -352,7 +474,11 @@ class DeepAgentStreamingService:
                     runtime_exception = exc
 
                 if runtime_exception is not None:
-                    yield ErrorEvent(message=f"Agent execution failed: {runtime_exception}", code="STREAMING_ERROR")
+                    yield ErrorEvent(
+                        message=f"Agent execution failed: {runtime_exception}",
+                        code="STREAMING_ERROR",
+                    )
+                    return
 
                 yield UsageEvent(
                     input_tokens=acc.input_tokens,
@@ -361,11 +487,27 @@ class DeepAgentStreamingService:
                     provider=provider,
                     model=model_id,
                 )
+                usage_context_event = ContextEvent(
+                    action="usage_snapshot",
+                    session_id=session.id if session else session_id,
+                    run_id=thread_id,
+                    scope_keys=sorted((scope or {}).keys()),
+                    policy=context_policy,
+                    input_tokens=acc.input_tokens,
+                    output_tokens=acc.output_tokens,
+                    message_count=getattr(session, "message_count", None),
+                    retained_messages=getattr(session, "message_count", None),
+                    evicted_messages=0,
+                    summarized_messages=0,
+                    offloaded_messages=0,
+                )
+                _audit_context_event(usage_context_event)
+                yield usage_context_event
                 yield DoneEvent()
 
             finally:
                 if manager:
-                    manager.unregister_runtime(session_id)
+                    manager.unregister_runtime(session_id, runtime)
 
         except LLMProviderConfigError as e:
             logger.error(
@@ -416,9 +558,28 @@ class DeepAgentStreamingService:
             from server.app.agent.cognition_agent import CognitionContext
 
             invocation_context = CognitionContext.from_scope(
-                session.scopes if hasattr(session, "scopes") else scope
+                session.scopes if hasattr(session, "scopes") else scope,
+                session_id=session.id,
+                thread_id=session.thread_id,
+                agent_name=session.agent_name,
+                metadata=session.metadata,
             )
             mcp_configs = await self._resolve_mcp_configs(scope=scope)
+            context_policy = _effective_context_policy(
+                agent_cfg.context_policy,
+                agent_cfg.tool_token_limit_before_evict,
+            )
+            context_event = ContextEvent(
+                action="policy_resolved",
+                session_id=session.id,
+                run_id=thread_id,
+                scope_keys=sorted((scope or {}).keys()),
+                policy=context_policy,
+                input_tokens=0,
+                message_count=getattr(session, "message_count", None),
+            )
+            _audit_context_event(context_event)
+            yield context_event
 
             agent_params = CognitionAgentParams(
                 project_path=project_path,
@@ -430,11 +591,14 @@ class DeepAgentStreamingService:
                 system_prompt=agent_cfg.system_prompt,
                 skills=agent_cfg.skills if agent_cfg.skills else None,
                 subagents=agent_cfg.subagents,
+                async_subagents=agent_cfg.async_subagents,
                 memory=agent_cfg.memory,
                 interrupt_on=agent_cfg.interrupt_on,
+                permissions=agent_cfg.permissions,
                 response_format=(session.config.response_format if session.config else None)
                 or agent_cfg.response_format,
                 tool_token_limit_before_evict=agent_cfg.tool_token_limit_before_evict,
+                context_policy=agent_cfg.context_policy,
                 middleware=agent_cfg.middleware,
                 mcp_configs=mcp_configs or None,
                 scope=scope,
@@ -476,6 +640,9 @@ class DeepAgentStreamingService:
                         TokenEvent,
                         ToolCallEvent,
                         ToolResultEvent,
+                        ToolSafetyEvent,
+                        ContextEvent,
+                        HitlDecisionEvent,
                         StatusEvent,
                         ErrorEvent,
                         UsageEvent,
@@ -501,7 +668,12 @@ class DeepAgentStreamingService:
             )
             yield ErrorEvent(message=str(e), code="PROVIDER_CONFIG_ERROR")
         except Exception as e:
-            logger.error("DeepAgents resume error", error=str(e), session_id=session_id)
+            logger.error(
+                "DeepAgents resume error",
+                error=str(e),
+                session_id=session_id,
+                exc_info=True,
+            )
             yield ErrorEvent(message=str(e), code="RESUME_ERROR")
 
     async def rebuild_message_projection(
@@ -518,6 +690,11 @@ class DeepAgentStreamingService:
         checkpoint_messages = checkpoint.get("channel_values", {}).get("messages", [])
         if not isinstance(checkpoint_messages, list):
             return 0
+        if not checkpoint_messages:
+            existing_messages = await self.storage_backend.list_messages_for_session(
+                session_id
+            )
+            return len(existing_messages)
 
         rebuilt_count = await self.storage_backend.rebuild_message_projection(
             session_id=session_id,
@@ -616,8 +793,10 @@ class SessionAgentManager:
         self._config_store = config_store
         self._services: dict[str, DeepAgentStreamingService] = {}
         self._project_paths: dict[str, str] = {}
-        self._active_runtimes: dict[str, Any] = {}
+        self._active_runtimes: dict[str, list[Any]] = {}
         self._sandbox_backends: dict[str, Any] = {}
+        self._sandbox_events: dict[str, asyncio.Queue[SandboxLifecycleEvent]] = {}
+        self._sandbox_backend_type: str = settings.sandbox_backend
 
     def register_session(
         self,
@@ -659,17 +838,52 @@ class SessionAgentManager:
 
     def get_runtime(self, session_id: str) -> Any | None:
         """Get the active runtime for a session, if any."""
-        return self._active_runtimes.get(session_id)
+        runtimes = self._active_runtimes.get(session_id) or []
+        return runtimes[-1] if runtimes else None
+
+    def active_runtime_count(self, session_id: str) -> int:
+        """Return the number of active runtime turns for a session."""
+        return len(self._active_runtimes.get(session_id) or [])
 
     def register_runtime(self, session_id: str, runtime: Any) -> None:
         """Register an active runtime for abort tracking."""
-        self._active_runtimes[session_id] = runtime
-        logger.debug("Runtime registered for abort tracking", session_id=session_id)
+        runtimes = self._active_runtimes.setdefault(session_id, [])
+        runtimes.append(runtime)
+        logger.debug(
+            "Runtime registered for abort tracking",
+            session_id=session_id,
+            active_runtime_count=len(runtimes),
+        )
 
-    def unregister_runtime(self, session_id: str) -> None:
+    def unregister_runtime(self, session_id: str, runtime: Any | None = None) -> None:
         """Unregister a runtime when streaming completes."""
-        self._active_runtimes.pop(session_id, None)
-        logger.debug("Runtime unregistered", session_id=session_id)
+        runtimes = self._active_runtimes.get(session_id)
+        if not runtimes:
+            logger.debug("Runtime unregistered", session_id=session_id, active_runtime_count=0)
+            return
+
+        if runtime is None:
+            runtimes.pop()
+        else:
+            try:
+                runtimes.remove(runtime)
+            except ValueError:
+                logger.debug(
+                    "Runtime unregister skipped for non-current runtime",
+                    session_id=session_id,
+                    active_runtime_count=len(runtimes),
+                )
+                return
+
+        if runtimes:
+            logger.debug(
+                "Runtime unregistered",
+                session_id=session_id,
+                active_runtime_count=len(runtimes),
+            )
+        else:
+            self._active_runtimes.pop(session_id, None)
+            logger.debug("Runtime unregistered", session_id=session_id, active_runtime_count=0)
 
     async def abort_session(self, session_id: str, thread_id: str | None = None) -> bool:
         """Abort the current operation for a session.
@@ -677,7 +891,7 @@ class SessionAgentManager:
         Returns:
             True if abort was signaled, False if no active runtime.
         """
-        runtime = self._active_runtimes.get(session_id)
+        runtime = self.get_runtime(session_id)
         if runtime:
             success = bool(await runtime.abort(thread_id))
             logger.info("Session abort signaled", session_id=session_id, success=success)
@@ -696,6 +910,16 @@ class SessionAgentManager:
             backend: The sandbox backend instance (must have a ``terminate()`` method).
         """
         self._sandbox_backends[session_id] = backend
+        sandbox_id = getattr(backend, "id", str(id(backend)))
+        self._emit_sandbox_event(
+            session_id,
+            SandboxLifecycleEvent(
+                sandbox_id=sandbox_id,
+                phase="provisioned",
+                sandbox_backend=self._sandbox_backend_type,
+                is_warm_pool_hit=getattr(backend, "_warm_pool", None) is not None,
+            ),
+        )
         logger.debug("Sandbox backend registered", session_id=session_id)
 
     def unregister_session(self, session_id: str) -> None:
@@ -705,16 +929,57 @@ class SessionAgentManager:
         self._active_runtimes.pop(session_id, None)
 
         backend = self._sandbox_backends.pop(session_id, None)
-        if backend is not None and hasattr(backend, "terminate"):
-            try:
-                backend.terminate()
-                logger.info("Sandbox backend terminated", session_id=session_id)
-            except Exception as e:
-                logger.warning(
-                    "Sandbox backend terminate failed", session_id=session_id, error=str(e)
-                )
+        if backend is not None:
+            sandbox_id = getattr(backend, "id", str(id(backend)))
+            self._emit_sandbox_event(
+                session_id,
+                SandboxLifecycleEvent(
+                    sandbox_id=sandbox_id,
+                    phase="teardown_started",
+                    sandbox_backend=self._sandbox_backend_type,
+                ),
+            )
+            if hasattr(backend, "terminate"):
+                try:
+                    backend.terminate()
+                    self._emit_sandbox_event(
+                        session_id,
+                        SandboxLifecycleEvent(
+                            sandbox_id=sandbox_id,
+                            phase="teardown_complete",
+                            sandbox_backend=self._sandbox_backend_type,
+                        ),
+                    )
+                    logger.info("Sandbox backend terminated", session_id=session_id)
+                except Exception as e:
+                    logger.warning(
+                        "Sandbox backend terminate failed", session_id=session_id, error=str(e)
+                    )
 
+        self._sandbox_events.pop(session_id, None)
         logger.info("Session unregistered", session_id=session_id)
+
+    def _emit_sandbox_event(self, session_id: str, event: SandboxLifecycleEvent) -> None:
+        """Queue a sandbox lifecycle event for the session."""
+        if session_id not in self._sandbox_events:
+            self._sandbox_events[session_id] = asyncio.Queue(maxsize=20)
+        try:
+            self._sandbox_events[session_id].put_nowait(event)
+        except asyncio.QueueFull:
+            pass
+
+    def drain_sandbox_events(self, session_id: str) -> list[SandboxLifecycleEvent]:
+        """Drain any pending sandbox lifecycle events."""
+        queue = self._sandbox_events.get(session_id)
+        if queue is None:
+            return []
+        events: list[SandboxLifecycleEvent] = []
+        while not queue.empty():
+            try:
+                events.append(queue.get_nowait())
+            except asyncio.QueueEmpty:
+                break
+        return events
 
 
 # Global manager instance

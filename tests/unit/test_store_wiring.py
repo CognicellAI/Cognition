@@ -26,40 +26,31 @@ class TestCognitionContext:
         from server.app.agent.cognition_agent import CognitionContext
 
         ctx = CognitionContext.from_scope({})
-        assert ctx.user_id == "anonymous"
-        assert ctx.org_id is None
-        assert ctx.project_id is None
-        assert ctx.extra == {}
+        assert ctx.effective_scope == {}
 
     def test_from_scope_none(self):
         from server.app.agent.cognition_agent import CognitionContext
 
         ctx = CognitionContext.from_scope(None)
-        assert ctx.user_id == "anonymous"
+        assert ctx.effective_scope == {}
 
     def test_from_scope_all_dims(self):
         from server.app.agent.cognition_agent import CognitionContext
 
         ctx = CognitionContext.from_scope({"user": "alice", "org": "acme", "project": "myapp"})
-        assert ctx.user_id == "alice"
-        assert ctx.org_id == "acme"
-        assert ctx.project_id == "myapp"
-        assert ctx.extra == {}
+        assert ctx.effective_scope == {"user": "alice", "org": "acme", "project": "myapp"}
 
     def test_from_scope_extra_keys(self):
         from server.app.agent.cognition_agent import CognitionContext
 
         ctx = CognitionContext.from_scope({"user": "bob", "tenant": "t1", "region": "us-east-1"})
-        assert ctx.user_id == "bob"
-        assert ctx.extra == {"tenant": "t1", "region": "us-east-1"}
+        assert ctx.effective_scope == {"user": "bob", "tenant": "t1", "region": "us-east-1"}
 
     def test_from_scope_user_only(self):
         from server.app.agent.cognition_agent import CognitionContext
 
         ctx = CognitionContext.from_scope({"user": "carol"})
-        assert ctx.user_id == "carol"
-        assert ctx.org_id is None
-        assert ctx.project_id is None
+        assert ctx.effective_scope == {"user": "carol"}
 
 
 # ---------------------------------------------------------------------------
@@ -216,7 +207,7 @@ class TestRuntimeContextForwarding:
         from server.app.agent.cognition_agent import CognitionContext
         from server.app.agent.runtime import DeepAgentRuntime
 
-        ctx = CognitionContext(user_id="alice", org_id="acme")
+        ctx = CognitionContext(effective_scope={"user": "alice", "org": "acme"})
 
         async def _fake_astream(*args: Any, **kwargs: Any) -> Any:
             if False:
@@ -345,4 +336,4 @@ class TestServiceStoreWiring:
         runtime_kwargs = runtime_cls.call_args.kwargs
         assert "context" in runtime_kwargs
         ctx = runtime_kwargs["context"]
-        assert ctx.user_id == "alice"
+        assert ctx.effective_scope.get("user") == "alice"

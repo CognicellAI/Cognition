@@ -46,6 +46,8 @@ spec:
           mountPath: /tmp
         - name: workspace
           mountPath: /home/cognition
+        - name: workspace
+          mountPath: /workspace
       volumes:
       - name: tmp
         emptyDir:

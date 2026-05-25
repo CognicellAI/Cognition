@@ -22,6 +22,7 @@ compiled graph, enabling targeted invalidation instead of all-or-nothing clears.
 from __future__ import annotations
 
 import importlib
+import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -32,12 +33,13 @@ from deepagents import create_deep_agent as _create_deep_agent
 
 logger = structlog.get_logger(__name__)
 
-from server.app.agent.mcp_adapter import create_mcp_tools  # noqa: E402
-from server.app.agent.mcp_client import McpManager, McpServerConfig  # noqa: E402
+from server.app.agent.mcp_client import McpServerConfig, create_mcp_client  # noqa: E402
 from server.app.agent.middleware import (  # noqa: E402
     CognitionObservabilityMiddleware,
     CognitionStreamingMiddleware,
+    ToolArgumentValidationMiddleware,
     ToolSecurityMiddleware,
+    TrustedRuntimeContextMiddleware,
 )
 from server.app.agent.prompts import SYSTEM_PROMPT  # noqa: E402
 from server.app.agent.sandbox_backend import create_sandbox_backend  # noqa: E402
@@ -54,30 +56,41 @@ class CognitionContext:
     """Invocation context passed to each agent run.
 
     LangGraph threads this through ``runtime.context`` so nodes and middleware
-    can scope Store namespaces to the requesting user/org/project without
-    needing to pass scope explicitly through every tool call.
+    can scope Store namespaces to the builder-authorized effective scope
+    without needing to pass scope explicitly through every tool call.
 
     Attributes:
-        user_id: Primary user identifier for Store namespace isolation.
-        org_id: Optional organisation identifier for org-shared namespaces.
-        project_id: Optional project identifier for project-scoped namespaces.
-        extra: Additional scope dimensions from session.scopes.
+        effective_scope: Builder-defined scope key-value pairs (e.g.
+            ``{"tenant": "acme", "project": "ios", "end_user": "user_123"}``).
+            Cognition does not hardcode a vocabulary — builders own scope keys.
+        session_id: Cognition session identifier, when available.
+        thread_id: LangGraph checkpoint thread id, when available.
+        agent_name: Agent definition bound to the session, when available.
+        metadata: Builder-provided session metadata. This is not a secret channel.
     """
 
-    user_id: str = "anonymous"
-    org_id: str | None = None
-    project_id: str | None = None
-    extra: dict[str, str] = field(default_factory=dict)
+    effective_scope: dict[str, str] = field(default_factory=dict)
+    session_id: str | None = None
+    thread_id: str | None = None
+    agent_name: str | None = None
+    metadata: dict[str, str] = field(default_factory=dict)
 
     @classmethod
-    def from_scope(cls, scope: dict[str, str] | None) -> CognitionContext:
-        if not scope:
-            return cls()
+    def from_scope(
+        cls,
+        scope: dict[str, str] | None,
+        *,
+        session_id: str | None = None,
+        thread_id: str | None = None,
+        agent_name: str | None = None,
+        metadata: dict[str, str] | None = None,
+    ) -> CognitionContext:
         return cls(
-            user_id=scope.get("user", "anonymous"),
-            org_id=scope.get("org"),
-            project_id=scope.get("project"),
-            extra={k: v for k, v in scope.items() if k not in ("user", "org", "project")},
+            effective_scope=dict(scope or {}),
+            session_id=session_id,
+            thread_id=thread_id,
+            agent_name=agent_name,
+            metadata=dict(metadata or {}),
         )
 
 
@@ -98,9 +111,12 @@ class RuntimeContext:
     memory: tuple[str, ...]
     skills: tuple[str, ...]
     subagent_count: int
-    interrupt_on_keys: tuple[str, ...]
+    async_subagents: tuple[tuple[str, str, str, str], ...]
+    interrupt_on: tuple[tuple[str, str], ...]
+    permissions: tuple[tuple[tuple[str, ...], tuple[str, ...], str], ...]
     response_format: str
     tool_token_limit_before_evict: int | None
+    context_policy: str
     middleware_count: int
     tools_count: int
     sandbox_backend: str
@@ -116,9 +132,12 @@ class RuntimeContext:
         memory: Sequence[str] | None,
         skills: Sequence[str] | None,
         subagents: Sequence[Any] | None,
+        async_subagents: Sequence[Any] | None,
         interrupt_on: Mapping[str, Any] | None,
+        permissions: Sequence[Any] | None,
         response_format: str | type[Any] | None,
         tool_token_limit_before_evict: int | None,
+        context_policy: Any | None,
         middleware: Sequence[Any] | None,
         tools: Sequence[Any] | None,
         settings: Settings,
@@ -132,7 +151,9 @@ class RuntimeContext:
             memory=tuple(sorted(memory)) if memory else (),
             skills=tuple(sorted(skills)) if skills else (),
             subagent_count=len(subagents) if subagents else 0,
-            interrupt_on_keys=tuple(sorted(interrupt_on.keys())) if interrupt_on else (),
+            async_subagents=_async_subagents_cache_key(async_subagents),
+            interrupt_on=_mapping_cache_key(interrupt_on),
+            permissions=_permissions_cache_key(permissions),
             response_format=(
                 response_format
                 if isinstance(response_format, str)
@@ -141,6 +162,7 @@ class RuntimeContext:
             if response_format
             else "None",
             tool_token_limit_before_evict=tool_token_limit_before_evict,
+            context_policy=_json_cache_key(context_policy),
             middleware_count=len(middleware) if middleware else 0,
             tools_count=len(tools) if tools else 0,
             sandbox_backend=settings.sandbox_backend,
@@ -163,6 +185,128 @@ def _model_cache_key(model: Any) -> str:
     if model_id:
         return f"{type_name}:{model_id}"
     return type_name
+
+
+def _mapping_cache_key(mapping: Mapping[str, Any] | None) -> tuple[tuple[str, str], ...]:
+    if not mapping:
+        return ()
+    return tuple(
+        sorted(
+            (
+                str(key),
+                json.dumps(value, sort_keys=True, default=str),
+            )
+            for key, value in mapping.items()
+        )
+    )
+
+
+def _json_cache_key(value: Any | None) -> str:
+    if value is None:
+        return "None"
+    if hasattr(value, "model_dump"):
+        value = value.model_dump(exclude_none=True)
+    return json.dumps(value, sort_keys=True, default=str)
+
+
+def _async_subagent_dict(async_subagent: Any) -> dict[str, Any]:
+    if hasattr(async_subagent, "model_dump"):
+        return cast(dict[str, Any], async_subagent.model_dump(exclude_none=True))
+    if isinstance(async_subagent, Mapping):
+        return dict(async_subagent)
+    return {
+        "name": getattr(async_subagent, "name", ""),
+        "description": getattr(async_subagent, "description", ""),
+        "graph_id": getattr(async_subagent, "graph_id", ""),
+        "url": getattr(async_subagent, "url", ""),
+    }
+
+
+def _async_subagents_cache_key(
+    async_subagents: Sequence[Any] | None,
+) -> tuple[tuple[str, str, str, str], ...]:
+    if not async_subagents:
+        return ()
+    return tuple(
+        sorted(
+            (
+                str(data.get("name", "")),
+                str(data.get("description", "")),
+                str(data.get("graph_id", "")),
+                str(data.get("url", "")),
+            )
+            for data in (_async_subagent_dict(item) for item in async_subagents)
+        )
+    )
+
+
+def _resolve_async_subagents(async_subagents: Sequence[Any] | None) -> list[dict[str, Any]]:
+    if not async_subagents:
+        return []
+    resolved: list[dict[str, Any]] = []
+    for item in async_subagents:
+        data = _async_subagent_dict(item)
+        spec = {
+            "name": str(data["name"]),
+            "description": str(data["description"]),
+            "graph_id": str(data["graph_id"]),
+        }
+        if data.get("url"):
+            spec["url"] = str(data["url"])
+        resolved.append(spec)
+    return resolved
+
+
+def _context_policy_enables_summarization_tool(context_policy: Any | None) -> bool:
+    if context_policy is None:
+        return False
+    if hasattr(context_policy, "summarization_enabled"):
+        return bool(context_policy.summarization_enabled)
+    if isinstance(context_policy, Mapping):
+        return bool(context_policy.get("summarization_enabled", False))
+    return False
+
+
+def _permission_dict(permission: Any) -> dict[str, Any]:
+    if hasattr(permission, "model_dump"):
+        return cast(dict[str, Any], permission.model_dump())
+    if isinstance(permission, Mapping):
+        return dict(permission)
+    return {
+        "operations": list(getattr(permission, "operations", [])),
+        "paths": list(getattr(permission, "paths", [])),
+        "mode": getattr(permission, "mode", "allow"),
+    }
+
+
+def _permissions_cache_key(
+    permissions: Sequence[Any] | None,
+) -> tuple[tuple[tuple[str, ...], tuple[str, ...], str], ...]:
+    if not permissions:
+        return ()
+    normalized = []
+    for permission in permissions:
+        data = _permission_dict(permission)
+        normalized.append(
+            (
+                tuple(sorted(str(op) for op in data.get("operations", []))),
+                tuple(sorted(str(path) for path in data.get("paths", []))),
+                str(data.get("mode", "allow")),
+            )
+        )
+    return tuple(sorted(normalized))
+
+
+def _resolve_filesystem_permissions(permissions: Sequence[Any] | None) -> list[Any] | None:
+    if not permissions:
+        return None
+
+    from deepagents.middleware.filesystem import FilesystemPermission
+
+    return [
+        FilesystemPermission(**_permission_dict(permission))
+        for permission in permissions
+    ]
 
 
 def get_cached_agent(ctx: RuntimeContext) -> Any | None:
@@ -216,9 +360,12 @@ class CognitionAgentParams:
     memory: Sequence[str] | None = None
     skills: Sequence[str] | None = None
     subagents: Sequence[Any] | None = None
+    async_subagents: Sequence[Any] | None = None
     interrupt_on: Mapping[str, Any] | None = None
+    permissions: Sequence[Any] | None = None
     response_format: str | type[Any] | None = None
     tool_token_limit_before_evict: int | None = None
+    context_policy: Any | None = None
     middleware: Sequence[Any] | None = None
     tools: Sequence[Any] | None = None
     settings: Settings | None = None
@@ -268,6 +415,9 @@ def _inject_subagent_middleware(subagents: list[Any], middleware: list[Any]) -> 
     result: list[Any] = []
     for s in subagents:
         if isinstance(s, dict):
+            if "graph_id" in s:
+                result.append(s)
+                continue
             existing = s.get("middleware") or []
             existing_types = {type(m).__name__ for m in existing}
             for m in security_middleware:
@@ -295,12 +445,9 @@ async def create_cognition_agent(params: CognitionAgentParams) -> CognitionAgent
     k8s_labels: dict[str, str] | None = None
     if params.scope:
         k8s_labels = {}
-        if "user" in params.scope:
-            k8s_labels["cognition.io/user"] = params.scope["user"]
-        if "org" in params.scope:
-            k8s_labels["cognition.io/org"] = params.scope["org"]
-        if "project" in params.scope:
-            k8s_labels["cognition.io/project"] = params.scope["project"]
+        for key, value in params.scope.items():
+            safe_key = key.replace("_", "-")
+            k8s_labels[f"cognition.io/{safe_key}"] = str(value)
         k8s_labels["cognition.io/session"] = sandbox_id
 
     config_store = params.config_store
@@ -323,9 +470,12 @@ async def create_cognition_agent(params: CognitionAgentParams) -> CognitionAgent
         memory=params.memory,
         skills=params.skills,
         subagents=params.subagents,
+        async_subagents=params.async_subagents,
         interrupt_on=params.interrupt_on,
+        permissions=params.permissions,
         response_format=params.response_format,
         tool_token_limit_before_evict=params.tool_token_limit_before_evict,
+        context_policy=params.context_policy,
         middleware=params.middleware,
         tools=params.tools,
         settings=settings,
@@ -369,7 +519,9 @@ async def create_cognition_agent(params: CognitionAgentParams) -> CognitionAgent
     if config_store is not None:
         from deepagents.backends.composite import CompositeBackend
 
+        from server.app.agent.artifacts_backend import ArtifactBackend
         from server.app.agent.skills_backend import ConfigRegistrySkillsBackend
+        from server.app.api.dependencies import get_artifact_store
 
         reg = getattr(config_store, "config_registry", None)
         if reg is not None:
@@ -378,9 +530,28 @@ async def create_cognition_agent(params: CognitionAgentParams) -> CognitionAgent
                 scope=params.scope,
                 allowed_skill_names=attached_skill_names,
             )
+            try:
+                artifact_store = get_artifact_store()
+            except RuntimeError:
+                artifact_store = None
+
+            routes: dict[str, BackendProtocol] = {"/skills/api/": db_skills_backend}
+            if artifact_store is not None:
+                artifact_backend = ArtifactBackend(
+                    artifact_store=artifact_store,
+                    scope=params.scope,
+                )
+                routes.update({
+                    "/scratch/": artifact_backend,
+                    "/artifacts/": artifact_backend,
+                    "/contracts/": artifact_backend,
+                    "/evals/": artifact_backend,
+                    "/memories/": artifact_backend,
+                    "/policies/": artifact_backend,
+                })
             backend = CompositeBackend(
                 default=sandbox_backend,
-                routes={"/skills/api/": db_skills_backend},
+                routes=routes,
             )
         else:
             backend = sandbox_backend
@@ -393,9 +564,22 @@ async def create_cognition_agent(params: CognitionAgentParams) -> CognitionAgent
         defaults = await _defaults()
         raw_subagents = list(defaults.subagents) if defaults else []
 
+    if params.async_subagents is not None:
+        raw_async_subagents = list(params.async_subagents)
+    else:
+        defaults = await _defaults()
+        raw_async_subagents = list(defaults.async_subagents) if defaults else []
+
     agent_interrupt_on: dict[str, Any]
+    agent_permissions: Sequence[Any] | None
     agent_response_format: str | type[Any] | None = params.response_format
-    agent_tool_token_limit_before_evict = params.tool_token_limit_before_evict
+    agent_context_policy = params.context_policy
+
+    if params.permissions is not None:
+        agent_permissions = list(params.permissions)
+    else:
+        defaults = await _defaults()
+        agent_permissions = list(defaults.permissions) if defaults and defaults.permissions else None
 
     if params.interrupt_on is not None:
         agent_interrupt_on = dict(params.interrupt_on)
@@ -403,12 +587,15 @@ async def create_cognition_agent(params: CognitionAgentParams) -> CognitionAgent
         defaults = await _defaults()
         if defaults:
             agent_interrupt_on = dict(defaults.interrupt_on)
-            if agent_response_format is None:
-                agent_response_format = defaults.response_format
-            if agent_tool_token_limit_before_evict is None:
-                agent_tool_token_limit_before_evict = defaults.tool_token_limit_before_evict
         else:
             agent_interrupt_on = {}
+
+    defaults = await _defaults()
+    if defaults:
+        if agent_response_format is None:
+            agent_response_format = defaults.response_format
+        if agent_context_policy is None:
+            agent_context_policy = defaults.context_policy
 
     if params.system_prompt:
         prompt = params.system_prompt
@@ -434,29 +621,46 @@ async def create_cognition_agent(params: CognitionAgentParams) -> CognitionAgent
     agent_tools.extend(built_in_tools)
 
     if params.mcp_configs:
-        mcp_manager = McpManager()
-        for config in params.mcp_configs:
-            if config.enabled:
-                try:
-                    mcp_manager.add_server(config)
-                except ValueError as e:
-                    logger.warning("Failed to add MCP server", server=config.name, error=str(e))
+        from server.app.agent.mcp_client import (
+            _build_mcp_callbacks,
+            _build_mcp_interceptors,
+        )
 
-        try:
-            await mcp_manager.connect_all()
-            all_mcp_tools = await mcp_manager.get_all_tools()
-            for server_name, tool_infos in all_mcp_tools.items():
-                mcp_tools = create_mcp_tools(mcp_manager.clients[server_name], tool_infos)
+        enabled_configs = [c for c in params.mcp_configs if c.enabled]
+        if enabled_configs:
+            try:
+                mcp_callbacks = _build_mcp_callbacks()
+                mcp_interceptors = _build_mcp_interceptors(params.scope)
+                mcp_client = create_mcp_client(
+                    enabled_configs,
+                    callbacks=mcp_callbacks,
+                    tool_interceptors=mcp_interceptors,
+                )
+                mcp_tools = await mcp_client.get_tools()
                 agent_tools.extend(mcp_tools)
-                logger.info("Added MCP tools", server=server_name, count=len(mcp_tools))
+                logger.info("MCP tools loaded", count=len(mcp_tools))
+            except Exception as e:
+                logger.error("Failed to initialize MCP tools", error=str(e))
+
+    if _context_policy_enables_summarization_tool(agent_context_policy):
+        try:
+            from deepagents.middleware.summarization import (
+                create_summarization_tool_middleware,
+            )
+
+            agent_middleware.append(
+                create_summarization_tool_middleware(params.model, backend)
+            )
         except Exception as e:
-            logger.error("Failed to initialize MCP tools", error=str(e))
+            logger.warning("Failed to add Deep Agents summarization tool", error=str(e))
 
     agent_middleware.extend(
         [
             CognitionObservabilityMiddleware(),
             CognitionStreamingMiddleware(),
+            TrustedRuntimeContextMiddleware(),
             ToolSecurityMiddleware(blocked_tools=blocked_tools),
+            ToolArgumentValidationMiddleware(),
         ]
     )
 
@@ -464,6 +668,7 @@ async def create_cognition_agent(params: CognitionAgentParams) -> CognitionAgent
         {**s, "description": s.get("description", "")} if isinstance(s, dict) else s
         for s in raw_subagents
     ]
+    agent_subagents.extend(_resolve_async_subagents(raw_async_subagents))
 
     agent_subagents = _inject_subagent_middleware(agent_subagents, agent_middleware)
 
@@ -497,8 +702,8 @@ async def create_cognition_agent(params: CognitionAgentParams) -> CognitionAgent
             "middleware": agent_middleware,
         },
     )
-    if agent_tool_token_limit_before_evict is not None:
-        create_kwargs["tool_token_limit_before_evict"] = agent_tool_token_limit_before_evict
+    if agent_permissions is not None:
+        create_kwargs["permissions"] = _resolve_filesystem_permissions(agent_permissions)
 
     agent = cast(Any, create_deep_agent)(**create_kwargs)
 

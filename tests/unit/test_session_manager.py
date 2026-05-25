@@ -256,13 +256,11 @@ class TestSessionManagerContext:
         session = await session_manager.create_session(
             workspace_path="/workspace",
             title="Test",
-            scopes={"user_id": "user123", "project": "proj456"},
+            scopes={"user": "user123", "project": "proj456"},
         )
 
         context = session_manager.create_context(
             session_id=session.id,
-            user_id="user123",
-            org_id="org456",
         )
 
         assert context is not None
@@ -270,9 +268,7 @@ class TestSessionManagerContext:
         assert context.workspace_path.startswith(
             str(session_manager._settings.session_sandboxes_path)
         )
-        assert context.user_id == "user123"
-        assert context.org_id == "org456"
-        assert context.scopes == {"user_id": "user123", "project": "proj456"}
+        assert context.effective_scope == {"user": "user123", "project": "proj456"}
 
 
 class TestSessionWorkspaceIsolation:

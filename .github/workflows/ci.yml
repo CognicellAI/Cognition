@@ -2,9 +2,9 @@ name: CI/CD
 
 on:
   push:
-    branches: [main, pivot]
+    branches: [main, pivot, "release/**"]
   pull_request:
-    branches: [main, pivot]
+    branches: [main, pivot, "release/**"]
   release:
     types: [created]
 

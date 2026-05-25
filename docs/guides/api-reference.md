@@ -64,6 +64,24 @@ All request and response bodies are JSON unless noted. Streaming endpoints retur
   - [`GET /config`](#get-config)
   - [`PATCH /config`](#patch-config)
   - [`POST /config/rollback`](#post-configrollback)
+- [MCP Servers](#mcp-servers)
+  - [`GET /mcp-servers`](#get-mcp-servers)
+  - [`POST /mcp-servers`](#post-mcp-servers)
+  - [`GET /mcp-servers/{name}`](#get-mcp-serversname)
+  - [`PATCH /mcp-servers/{name}`](#patch-mcp-serversname)
+  - [`DELETE /mcp-servers/{name}`](#delete-mcp-serversname)
+- [Artifacts](#artifacts)
+  - [`GET /artifacts`](#get-artifacts)
+  - [`POST /artifacts`](#post-artifacts)
+  - [`GET /artifacts/{artifact_id}`](#get-artifactsartifact_id)
+  - [`PUT /artifacts/{artifact_id}`](#put-artifactsartifact_id)
+  - [`DELETE /artifacts/{artifact_id}`](#delete-artifactsartifact_id)
+  - [`GET /artifacts/{artifact_id}/versions`](#get-artifactsartifact_idversions)
+- [Capabilities](#capabilities)
+  - [`GET /capabilities`](#get-capabilities)
+- [A2A Protocol](#a2a-protocol)
+  - [`GET /.well-known/agent-card.json`](#get-well-knownagent-cardjson)
+  - [`POST /a2a/{agent_name}`](#post-a2aagent_name)
 - [Multi-Tenant Scoping](#multi-tenant-scoping)
 - [Rate Limiting](#rate-limiting)
 - [Error Format](#error-format)
@@ -80,7 +98,7 @@ Returns server health status.
 ```json
 {
   "status": "healthy",
-  "version": "0.6.0",
+  "version": "0.10.0",
   "active_sessions": 3,
   "circuit_breakers": [],
   "timestamp": "2026-03-19T12:00:00Z"
@@ -1145,15 +1163,436 @@ Roll back to the previous configuration backup.
 
 ---
 
+## MCP Servers
+
+Manage remote MCP (Model Context Protocol) tool servers at runtime. File-managed servers (from `.cognition/config.yaml`) have `source: "file"` and cannot be modified via the API (returns `409 Conflict`).
+
+### `GET /mcp-servers`
+
+List all registered MCP servers visible in the current scope.
+
+**Response `200 OK`:**
+```json
+{
+  "servers": [
+    {
+      "name": "github-tools",
+      "url": "https://mcp.github.example.com/sse",
+      "headers": {},
+      "enabled": true,
+      "transport": "sse",
+      "scope": {},
+      "source": "api"
+    }
+  ],
+  "count": 1
+}
+```
+
+> **Note:** `headers` is always returned as an empty `{}` to prevent credential leakage.
+
+### `POST /mcp-servers`
+
+Register a new MCP server.
+
+**Request body:**
+```json
+{
+  "name": "my-tools",
+  "url": "https://tools.example.com/sse",
+  "transport": "sse",
+  "enabled": true,
+  "headers": {"Authorization": "Bearer ..."},
+  "scope": {}
+}
+```
+
+| Field | Type | Required | Default | Description |
+|---|---|---|---|---|
+| `name` | string (1–100) | Yes | — | Unique server identifier |
+| `url` | string | Yes | — | HTTP/HTTPS URL (stdio not supported) |
+| `transport` | `"sse"` \| `"streamable_http"` | No | `"sse"` | Transport protocol |
+| `enabled` | bool | No | `true` | Whether to connect |
+| `headers` | dict | No | `{}` | HTTP headers sent with requests |
+| `scope` | dict | No | `{}` | Scope restriction |
+
+**Response `201 Created`:** MCP server object  
+**Response `422 Unprocessable Entity`:** Validation error
+
+### `GET /mcp-servers/{name}`
+
+Get a specific MCP server by name.
+
+**Response `200 OK`:** MCP server object  
+**Response `404 Not Found`**
+
+### `PATCH /mcp-servers/{name}`
+
+Partially update an MCP server.
+
+**Request body (all fields optional):**
+```json
+{
+  "enabled": false,
+  "url": "https://new-url.example.com/sse"
+}
+```
+
+**Response `200 OK`:** Updated MCP server object  
+**Response `404 Not Found`**  
+**Response `409 Conflict`:** Server is file-managed
+
+### `DELETE /mcp-servers/{name}`
+
+Delete an MCP server.
+
+**Response `204 No Content`**  
+**Response `404 Not Found`**  
+**Response `409 Conflict`:** Server is file-managed
+
+---
+
+## Artifacts
+
+Artifacts are durable, scope-aware files that agents and builders can read, write, list, and diff. They provide explicit state outside the model context window for long-running agent handoffs.
+
+Artifact types: `scratch` (thread-scoped), `artifact` (user-visible), `contract` (done criteria), `eval` (evaluator results), `memory` (scoped memory), `policy` (read-only org policy).
+
+Visibilities: `private` (session-scoped), `run` (run-scoped), `public` (scope-visible).
+
+### `GET /artifacts`
+
+List all artifacts visible in the current scope.
+
+**Query parameters:**
+
+| Parameter | Type | Description |
+|---|---|---|
+| `artifact_type` | string | Filter by type (`scratch`, `artifact`, etc.) |
+| `run_id` | string | Filter by run ID |
+
+**Response `200 OK`:**
+```json
+{
+  "artifacts": [
+    {
+      "id": "art-abc123",
+      "name": "deployment-plan",
+      "artifact_type": "artifact",
+      "path": "/plans/deployment.md",
+      "content": "# Deployment Plan\n...",
+      "content_type": "text/markdown",
+      "version": 3,
+      "parent_version": 2,
+      "run_id": null,
+      "checkpoint_id": null,
+      "visibility": "public",
+      "scope": {"user": "alice"},
+      "source": "api",
+      "created_at": "2026-05-21T10:00:00Z",
+      "updated_at": "2026-05-21T12:00:00Z"
+    }
+  ],
+  "count": 1
+}
+```
+
+### `POST /artifacts`
+
+Create a new artifact.
+
+**Request body:**
+```json
+{
+  "id": "deployment-plan",
+  "name": "Deployment Plan",
+  "artifact_type": "artifact",
+  "content": "# Deployment Plan\n...",
+  "content_type": "text/markdown",
+  "visibility": "public",
+  "scope": {}
+}
+```
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `id` | string | Yes | Unique identifier |
+| `name` | string | Yes | Human-readable name |
+| `artifact_type` | string | Yes | `scratch`, `artifact`, `contract`, `eval`, `memory`, `policy` |
+| `content` | string | Yes | Artifact content |
+| `content_type` | string | No | MIME type (e.g. `text/markdown`, `application/json`) |
+| `path` | string | No | Logical path |
+| `run_id` | string | No | Associated run ID |
+| `checkpoint_id` | string | No | Associated checkpoint ID |
+| `visibility` | string | No | `private`, `run`, or `public` (default: `private`) |
+| `scope` | dict | No | Scope restriction |
+
+**Response `201 Created`:** Artifact object  
+**Response `422 Unprocessable Entity`:** Invalid type or visibility
+
+### `GET /artifacts/{artifact_id}`
+
+Get the latest version of an artifact.
+
+**Response `200 OK`:** Artifact object  
+**Response `404 Not Found`**
+
+### `PUT /artifacts/{artifact_id}`
+
+Update an artifact. Content changes automatically create a new version (version number increments, `parent_version` set to previous version).
+
+**Request body (all fields optional):**
+```json
+{
+  "content": "# Updated plan\n...",
+  "name": "Updated Plan",
+  "visibility": "public"
+}
+```
+
+**Response `200 OK`:** Updated artifact object  
+**Response `404 Not Found`**  
+**Response `409 Conflict`:** Artifact is file-managed
+
+### `DELETE /artifacts/{artifact_id}`
+
+Delete an artifact and all its versions.
+
+**Response `204 No Content`**  
+**Response `404 Not Found`**
+
+### `GET /artifacts/{artifact_id}/versions`
+
+List all versions of an artifact, ordered by version descending.
+
+**Response `200 OK`:**
+```json
+{
+  "artifact_id": "deployment-plan",
+  "versions": [
+    {
+      "version": 3,
+      "parent_version": 2,
+      "content": "# Deployment Plan v3\n...",
+      "content_type": "text/markdown",
+      "created_at": "2026-05-21T12:00:00Z"
+    },
+    {
+      "version": 2,
+      "parent_version": 1,
+      "content": "# Deployment Plan v2\n...",
+      "content_type": "text/markdown",
+      "created_at": "2026-05-21T11:00:00Z"
+    }
+  ],
+  "count": 2
+}
+```
+
+### `GET /artifacts/{artifact_id}/versions/{version}`
+
+Get a specific version of an artifact.
+
+**Response `200 OK`:** Artifact object at that version  
+**Response `404 Not Found`**
+
+---
+
+## Capabilities
+
+### `GET /capabilities`
+
+Returns the deployment's runtime feature set, package versions, and configuration. Use this to discover available features without parsing error messages.
+
+**Response `200 OK`:**
+```json
+{
+  "versions": {
+    "cognition": "0.10.0",
+    "deepagents": "0.6.3",
+    "langgraph": "1.2.0",
+    "langchain": "1.3.1",
+    "langchain_core": "1.4.0"
+  },
+  "stream_protocols": ["sse"],
+  "sandbox_backends": ["local", "docker", "kubernetes"],
+  "features": {
+    "async_subagents": true,
+    "mcp": true,
+    "mcp_tool_name_prefix": true,
+    "hitl": true,
+    "permissions": true,
+    "artifacts": true,
+    "context_policy": true,
+    "context_controls": true,
+    "tool_safety": true,
+    "tool_argument_validation": true,
+    "trusted_runtime_context": true,
+    "checkpoint_apis": true,
+    "scope_propagation": true,
+    "provider_config_crud": true,
+    "agent_config_crud": true,
+    "model_catalog": true,
+    "a2a": true,
+    "a2a_jsonrpc": true,
+    "a2a_streaming": true,
+    "a2a_per_agent_cards": true,
+    "a2a_push_notifications": false,
+    "a2a_grpc": false
+  },
+  "middleware": [
+    "ToolSecurityMiddleware",
+    "ToolArgumentValidationMiddleware",
+    "TrustedRuntimeContextMiddleware",
+    "CognitionObservabilityMiddleware",
+    "CognitionStreamingMiddleware",
+    "HumanInTheLoopMiddleware",
+    "FilesystemMiddleware",
+    "MemoryMiddleware",
+    "SummarizationToolMiddleware"
+  ],
+  "scope_keys": ["user"],
+  "deployment": {
+    "sandbox_backend": "local"
+  }
+}
+```
+
+---
+
+## A2A Protocol
+
+Cognition exposes agents via the [Agent-to-Agent (A2A)](https://google.github.io/A2A/) protocol. Only agents with `a2a_exposed: true` on their definition are visible. The adapter is implemented in `server/app/protocols/a2a/` and uses the `a2a-sdk` for protocol compliance.
+
+The A2A protocol surface can be disabled entirely by setting `COGNITION_A2A_ENABLED=false`. When disabled, the `/.well-known/agent-card.json` and `/a2a/{agent_name}` endpoints are not mounted, and `GET /capabilities` reports `a2a: false`.
+
+### `GET /.well-known/agent-card.json`
+
+Discover available agents. Returns A2A `AgentCard` objects filtered by the request's scope.
+
+**Headers:**
+```
+X-Cognition-Scope-User: alice
+```
+
+**Response `200 OK`:**
+```json
+{
+  "cards": [
+    {
+      "name": "deploy-agent",
+      "description": "Handles deployment workflows",
+      "url": "http://localhost:8000/a2a/deploy-agent",
+      "version": "1.0",
+      "capabilities": {
+        "streaming": true,
+        "pushNotifications": false
+      },
+      "skills": [
+        {
+          "name": "deploy",
+          "description": "Deploy applications to production"
+        }
+      ]
+    }
+  ]
+}
+```
+
+Only agents visible in the caller's scope with `a2a_exposed=True` are returned. Built-in agents are not exposed by default.
+
+### `POST /a2a/{agent_name}`
+
+Send a JSON-RPC request to a specific agent. The `{agent_name}` is resolved at request time — agents created after the server starts are immediately available without restart.
+
+**Headers:**
+```
+Content-Type: application/json
+A2A-Version: 1.0
+X-Cognition-Scope-User: alice
+```
+
+**Request body (JSON-RPC 2.0):**
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "1",
+  "method": "SendMessage",
+  "params": {
+    "message": {
+      "role": "user",
+      "parts": [
+        {"type": "text", "text": "Deploy the staging environment"}
+      ]
+    }
+  }
+}
+```
+
+**Supported methods:**
+
+| Method | Description |
+|---|---|
+| `SendMessage` | Send a message and get the complete response |
+| `SendStreamingMessage` | Send a message and stream the response (SSE) |
+
+**Response `200 OK` (SendMessage):**
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "1",
+  "result": {
+    "taskId": "task-abc123",
+    "status": {
+      "state": "completed",
+      "message": {
+        "role": "agent",
+        "parts": [
+          {"type": "text", "text": "Staging environment deployed successfully."}
+        ]
+      }
+    }
+  }
+}
+```
+
+**Response `200 OK` (SendStreamingMessage):**  
+Content-Type: `text/event-stream` — streams A2A task state events as SSE.
+
+**A2A task state mapping:**
+
+| Cognition Event | A2A TaskState |
+|---|---|
+| `StatusEvent("thinking")` | `working` |
+| `TokenEvent` | `working` (with content part) |
+| `DoneEvent` | `completed` |
+| `ErrorEvent` | `failed` |
+
+**Errors:**
+- `404 Not Found` — Agent not found or not A2A-exposed
+- `422 Unprocessable Entity` — Invalid JSON-RPC request
+- `400 Bad Request` — Unsupported A2A method
+
+For full A2A protocol details, see the [A2A SDK documentation](https://github.com/a2aproject/a2a-python).
+
+---
+
 ## Multi-Tenant Scoping
 
-When `COGNITION_SCOPING_ENABLED=true`, all session endpoints require scope headers. The required headers are determined by `COGNITION_SCOPE_KEYS` (default: `["user"]`).
+When `COGNITION_SCOPING_ENABLED=true`, all session endpoints require scope headers. The required headers are determined by `COGNITION_SCOPE_KEYS` — these are **builder-defined** key names. Cognition does not hardcode a vocabulary.
 
 For `scope_keys: ["user", "project"]`:
 
 ```
 X-Cognition-Scope-User: alice
 X-Cognition-Scope-Project: proj-123
+```
+
+For `scope_keys: ["tenant", "env"]`:
+
+```
+X-Cognition-Scope-Tenant: acme
+X-Cognition-Scope-Env: production
 ```
 
 Missing required headers return `403 Forbidden`:
@@ -1165,7 +1604,7 @@ Missing required headers return `403 Forbidden`:
 }
 ```
 
-Sessions are automatically filtered to match the request's scope values. One tenant cannot read or write another tenant's sessions.
+Sessions are automatically filtered to match the request's scope values. One tenant cannot read or write another tenant's sessions. The `effective_scope` dict propagates through the full runtime stack — ConfigRegistry CRUD, session persistence, `CognitionContext`, middleware, and tools.
 
 ---
 

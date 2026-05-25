@@ -29,6 +29,7 @@ from sqlalchemy import (
     String,
     Table,
     Text,
+    UniqueConstraint,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.engine.interfaces import Dialect
@@ -130,6 +131,89 @@ messages_table = Table(
 # Index on session_id + created_at for efficient message retrieval
 Index("idx_messages_session", messages_table.c.session_id, messages_table.c.created_at)
 
+
+# Durable run table - one execution attempt inside a session.
+session_runs_table = Table(
+    "session_runs",
+    metadata,
+    Column("id", String(36), primary_key=True),
+    Column("session_id", String(36), nullable=False),
+    Column("thread_id", String(100), nullable=False),
+    Column("status", String(30), nullable=False),
+    Column("effective_scope", _JsonbOrJson(), nullable=False, default=dict),
+    Column("idempotency_key", String(200)),
+    Column("attempt", Integer, nullable=False, default=1),
+    Column("parent_run_id", String(36)),
+    Column("started_at", DateTime(timezone=True)),
+    Column("last_activity_at", DateTime(timezone=True)),
+    Column("completed_at", DateTime(timezone=True)),
+    Column("error_code", String(100)),
+    Column("status_reason", Text),
+    Column("trace_id", String(100)),
+    Column("metadata", _JsonbOrJson(), nullable=False, default=dict),
+    Column(
+        "created_at",
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    ),
+    Column(
+        "updated_at",
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    ),
+)
+
+Index("idx_session_runs_session", session_runs_table.c.session_id, session_runs_table.c.created_at)
+Index("idx_session_runs_status", session_runs_table.c.session_id, session_runs_table.c.status)
+Index(
+    "idx_session_runs_idempotency",
+    session_runs_table.c.session_id,
+    session_runs_table.c.idempotency_key,
+)
+
+
+# Append-only runtime events used by builders and observability integrations.
+session_events_table = Table(
+    "session_events",
+    metadata,
+    Column("id", String(36), primary_key=True),
+    Column("session_id", String(36), nullable=False),
+    Column("run_id", String(36), nullable=False),
+    Column("sequence", Integer, nullable=False),
+    Column("event_type", String(100), nullable=False),
+    Column("visibility", String(30), nullable=False),
+    Column("payload", _JsonbOrJson(), nullable=False, default=dict),
+    Column("effective_scope", _JsonbOrJson(), nullable=False, default=dict),
+    Column("trace_id", String(100)),
+    Column("span_id", String(100)),
+    Column(
+        "created_at",
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    ),
+    UniqueConstraint("session_id", "sequence", name="uq_session_events_sequence"),
+)
+
+Index("idx_session_events_session_sequence", session_events_table.c.session_id, session_events_table.c.sequence)
+Index("idx_session_events_run_sequence", session_events_table.c.run_id, session_events_table.c.sequence)
+Index(
+    "idx_session_events_session_run_sequence",
+    session_events_table.c.session_id,
+    session_events_table.c.run_id,
+    session_events_table.c.sequence,
+)
+Index(
+    "idx_session_events_visibility_sequence",
+    session_events_table.c.session_id,
+    session_events_table.c.visibility,
+    session_events_table.c.sequence,
+)
+Index("idx_session_events_type_created", session_events_table.c.event_type, session_events_table.c.created_at)
+
 # ---------------------------------------------------------------------------
 # ConfigRegistry tables
 # ---------------------------------------------------------------------------
@@ -197,6 +281,53 @@ config_changes_table = Table(
 Index("idx_config_changes_changed_at", config_changes_table.c.changed_at)
 Index("idx_config_changes_unprocessed", config_changes_table.c.processed)
 
+# ---------------------------------------------------------------------------
+# Artifacts table — blob-store through SQL
+# ---------------------------------------------------------------------------
+# Flat, denormalized key-value rows. Each version is an independent row.
+# No foreign keys. run_id, checkpoint_id, artifact_type are tags, not constraints.
+# The natural key is (id, scope, version).
+
+artifacts_table = Table(
+    "artifacts",
+    metadata,
+    Column("id", String(200), primary_key=False, nullable=False),
+    Column("version", Integer, primary_key=False, nullable=False),
+    Column("name", String(200), nullable=False),
+    Column("artifact_type", String(50), nullable=False, default="scratch"),
+    Column("content", Text, default=""),
+    Column("content_type", String(100), default="text/plain"),
+    Column("parent_version", Integer),
+    Column("run_id", String(100)),
+    Column("checkpoint_id", String(100)),
+    Column("visibility", String(20), default="private"),
+    Column("scope", _JsonbOrJson(), nullable=False, default=dict),
+    Column("source", String(10), nullable=False, default="api"),
+    Column(
+        "created_at",
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    ),
+    Column(
+        "updated_at",
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    ),
+)
+
+Index(
+    "idx_artifacts_lookup",
+    artifacts_table.c.id,
+    artifacts_table.c.scope,
+    artifacts_table.c.version,
+    unique=True,
+)
+Index("idx_artifacts_type", artifacts_table.c.artifact_type)
+Index("idx_artifacts_run_id", artifacts_table.c.run_id)
+Index("idx_artifacts_name", artifacts_table.c.name)
+
 
 async def create_all_tables(engine: AsyncEngine) -> None:
     """Create all defined tables in the database.
@@ -257,6 +388,7 @@ __all__ = [
     "messages_table",
     "config_entities_table",
     "config_changes_table",
+    "artifacts_table",
     "create_all_tables",
     "drop_all_tables",
     "get_table_names",

@@ -12,11 +12,11 @@ The documentation is organized into two sections: **Concepts** explain how Cogni
 |---|---|
 | [Architecture](./concepts/architecture.md) | The 7-layer architecture, dependency rules, and the batteries-included design |
 | [Sessions & Messages](./concepts/sessions-and-messages.md) | Session lifecycle, message persistence, SSE streaming, and reconnection |
-| [Agent Runtime](./concepts/agent-runtime.md) | AgentRuntime protocol, AgentDefinition model, and the multi-agent registry |
+| [Agent Runtime](./concepts/agent-runtime.md) | AgentRuntime protocol, AgentDefinition model, A2A exposure, and the multi-agent registry |
 | [Storage & Execution](./concepts/storage-and-execution.md) | StorageBackend and ExecutionBackend protocols and their implementations |
 | [Kubernetes Sandbox](./concepts/kubernetes-sandbox.md) | K8s-native sandbox isolation using the agent-sandbox CRD and controller |
 | [Observability](./concepts/observability.md) | OpenTelemetry traces, Prometheus metrics, and MLflow experiment tracking |
-| [Security](./concepts/security.md) | Session scoping, sandbox isolation, tool security, rate limiting, and CORS |
+| [Security](./concepts/security.md) | Session scoping, sandbox isolation, tool security, MCP policy, A2A boundaries, rate limiting, and CORS |
 
 ---
 
@@ -27,9 +27,10 @@ The documentation is organized into two sections: **Concepts** explain how Cogni
 | [Getting Started](./guides/getting-started.md) | Install, configure, and send your first message |
 | [Core vs App Layer](./guides/core-vs-app-layer.md) | Builder responsibilities: what belongs in Cognition versus your product |
 | [Configuration](./guides/configuration.md) | Complete reference for all YAML keys and environment variables |
-| [Extending Agents](./guides/extending-agents.md) | Add memory, skills, tools, subagents, middleware, and custom LLM providers |
+| [Extending Agents](./guides/extending-agents.md) | Add memory, skills, tools, subagents, middleware, MCP servers, A2A exposure, and custom LLM providers |
 | [Deployment](./guides/deployment.md) | Docker Compose stack, PostgreSQL, Alembic migrations, and production hardening |
-| [API Reference](./guides/api-reference.md) | Every REST endpoint, SSE event type, and scoping header |
+| [API Reference](./guides/api-reference.md) | Every REST endpoint, SSE event type, MCP servers, artifacts, A2A protocol, capabilities, and scoping headers |
+| [Release Checklist](./guides/release-checklist.md) | Standard release process for Cognition versions |
 
 ---
 

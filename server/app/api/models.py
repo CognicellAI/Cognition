@@ -11,8 +11,16 @@ from typing import Any, Literal
 
 from pydantic import AnyHttpUrl, BaseModel, Field
 
+from server.app.agent.definition import (
+    AsyncSubagentConfig,
+    ContextPolicy,
+    FilesystemPermissionConfig,
+    HumanInTheLoopConfig,
+)
 from server.app.models import Session as CoreSession
 from server.app.models import SessionConfig
+from server.app.models import SessionEvent as CoreSessionEvent
+from server.app.models import SessionRun as CoreSessionRun
 
 # ============================================================================
 # Session Models
@@ -31,6 +39,12 @@ class SessionCreate(BaseModel):
         default=None,
         description="Arbitrary key-value metadata attached to the session",
     )
+    idempotency_key: str | None = Field(
+        default=None,
+        max_length=200,
+        description="Client-provided key for idempotent session creation. "
+        "Repeated requests with the same key return the existing session.",
+    )
 
 
 class SessionResponse(BaseModel):
@@ -39,16 +53,35 @@ class SessionResponse(BaseModel):
     id: str = Field(..., description="Unique session identifier")
     title: str | None = Field(None, description="Session title")
     thread_id: str = Field(..., description="LangGraph thread ID for checkpointing")
-    status: Literal["active", "inactive", "error", "waiting_for_approval"] = Field(
-        ..., description="Session status"
-    )
+    status: Literal[
+        "queued", "starting", "active", "idle",
+        "waiting_for_approval", "stalled",
+        "aborting", "aborted",
+        "failed", "done", "expired",
+        "inactive", "error",
+    ] = Field(..., description="Session status")
     created_at: str = Field(..., description="Session creation timestamp (ISO format)")
     updated_at: str = Field(..., description="Last activity timestamp (ISO format)")
     message_count: int = Field(0, description="Number of messages in session")
     agent_name: str = Field("default", description="Agent bound to this session")
+    idempotency_key: str | None = Field(
+        default=None, description="Idempotency key used during creation, if any"
+    )
     metadata: dict[str, str] = Field(
         default_factory=dict,
         description="Arbitrary key-value metadata attached to the session",
+    )
+    active_run_id: str | None = Field(
+        default=None, description="Currently active run, if any"
+    )
+    latest_run_id: str | None = Field(
+        default=None, description="Most recent run associated with the session"
+    )
+    last_activity_at: str | None = Field(
+        default=None, description="Most recent runtime activity timestamp"
+    )
+    latest_event_type: str | None = Field(
+        default=None, description="Most recent durable runtime event type"
     )
 
     @classmethod
@@ -63,7 +96,14 @@ class SessionResponse(BaseModel):
             updated_at=session.updated_at,
             message_count=session.message_count,
             agent_name=session.agent_name,
+            idempotency_key=session.metadata.get("idempotency_key") if session.metadata else None,
             metadata=session.metadata,
+            active_run_id=session.metadata.get("active_run_id") if session.metadata else None,
+            latest_run_id=session.metadata.get("latest_run_id") if session.metadata else None,
+            last_activity_at=session.metadata.get("last_activity_at") if session.metadata else None,
+            latest_event_type=session.metadata.get("latest_event_type")
+            if session.metadata
+            else None,
         )
 
 
@@ -99,6 +139,99 @@ class SessionResumeRequest(BaseModel):
     )
 
 
+class SessionRunResponse(BaseModel):
+    """Durable run state for one execution attempt inside a session."""
+
+    id: str
+    session_id: str
+    thread_id: str
+    status: str
+    attempt: int
+    scope_keys: list[str] = Field(default_factory=list)
+    idempotency_key: str | None = None
+    parent_run_id: str | None = None
+    started_at: str | None = None
+    last_activity_at: str | None = None
+    completed_at: str | None = None
+    error_code: str | None = None
+    status_reason: str | None = None
+    trace_id: str | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    created_at: str
+    updated_at: str
+
+    @classmethod
+    def from_core(cls, run: CoreSessionRun) -> SessionRunResponse:
+        """Create from core domain model."""
+        return cls(
+            id=run.id,
+            session_id=run.session_id,
+            thread_id=run.thread_id,
+            status=run.status.value,
+            attempt=run.attempt,
+            scope_keys=sorted(run.effective_scope),
+            idempotency_key=run.idempotency_key,
+            parent_run_id=run.parent_run_id,
+            started_at=run.started_at,
+            last_activity_at=run.last_activity_at,
+            completed_at=run.completed_at,
+            error_code=run.error_code,
+            status_reason=run.status_reason,
+            trace_id=run.trace_id,
+            metadata=run.metadata,
+            created_at=run.created_at,
+            updated_at=run.updated_at,
+        )
+
+
+class SessionRunList(BaseModel):
+    """List of durable runs for a session."""
+
+    runs: list[SessionRunResponse] = Field(default_factory=list)
+    total: int
+
+
+class SessionEventResponse(BaseModel):
+    """Durable runtime event response."""
+
+    id: str
+    session_id: str
+    run_id: str
+    sequence: int
+    event_type: str
+    visibility: Literal["internal", "builder", "end_user"]
+    payload: dict[str, Any] = Field(default_factory=dict)
+    scope_keys: list[str] = Field(default_factory=list)
+    trace_id: str | None = None
+    span_id: str | None = None
+    created_at: str
+
+    @classmethod
+    def from_core(cls, event: CoreSessionEvent) -> SessionEventResponse:
+        """Create from core domain model."""
+        return cls(
+            id=event.id,
+            session_id=event.session_id,
+            run_id=event.run_id,
+            sequence=event.sequence,
+            event_type=event.event_type,
+            visibility=event.visibility,
+            payload=event.payload,
+            scope_keys=sorted(event.effective_scope),
+            trace_id=event.trace_id,
+            span_id=event.span_id,
+            created_at=event.created_at,
+        )
+
+
+class SessionEventList(BaseModel):
+    """List of durable runtime events."""
+
+    events: list[SessionEventResponse] = Field(default_factory=list)
+    total: int
+    has_more: bool = False
+
+
 # ============================================================================
 # Message Models
 # ============================================================================
@@ -125,6 +258,11 @@ class MessageCreate(BaseModel):
         default=None,
         description="If provided, Cognition POSTs the final completion payload to this URL when the run finishes.",
     )
+    idempotency_key: str | None = Field(
+        default=None,
+        max_length=200,
+        description="Client-provided key for idempotent run creation within the session.",
+    )
 
 
 class MessageResponse(BaseModel):
@@ -150,6 +288,29 @@ class MessageList(BaseModel):
     messages: list[MessageResponse] = Field(default_factory=list)
     total: int = Field(..., description="Total number of messages")
     has_more: bool = Field(False, description="Whether more messages exist")
+
+
+class ContextMessageDebug(BaseModel):
+    """Redacted message metadata used for context debugging."""
+
+    id: str
+    role: str
+    token_count: int | None = None
+    estimated_tokens: int
+    created_at: datetime
+
+
+class ContextDebugResponse(BaseModel):
+    """Scoped context policy and token-accounting debug response."""
+
+    session_id: str
+    thread_id: str
+    agent_name: str
+    scope_keys: list[str] = Field(default_factory=list)
+    policy: dict[str, Any] = Field(default_factory=dict)
+    message_count: int
+    estimated_tokens: int
+    messages: list[ContextMessageDebug] = Field(default_factory=list)
 
 
 # ============================================================================
@@ -187,6 +348,23 @@ class ToolResultEvent(BaseModel):
 
     event: Literal["tool_result"] = "tool_result"
     data: dict = Field(..., description="Tool result with 'tool_call_id', 'output', 'exit_code'")
+
+
+class ToolSafetyEvent(BaseModel):
+    """Server-sent event: Tool safety/audit signal."""
+
+    event: Literal["tool_safety"] = "tool_safety"
+    data: dict = Field(..., description="Tool safety action, fields, errors, and message")
+
+
+class ContextEvent(BaseModel):
+    """Server-sent event: context policy, budget, and lifecycle signal."""
+
+    event: Literal["context"] = "context"
+    data: dict = Field(
+        ...,
+        description="Context action with policy, token budget, and redacted scope metadata",
+    )
 
 
 class ErrorEvent(BaseModel):
@@ -262,6 +440,13 @@ class InterruptEvent(BaseModel):
     )
 
 
+class HitlDecisionEvent(BaseModel):
+    """Server-sent event: human approval/edit/reject decision applied."""
+
+    event: Literal["hitl_decision"] = "hitl_decision"
+    data: dict = Field(..., description="HITL decision with redacted audit metadata")
+
+
 class ReconnectedEvent(BaseModel):
     """Server-sent event: Stream reconnection confirmation (ISSUE-012).
 
@@ -287,6 +472,23 @@ class ReconnectedEvent(BaseModel):
 
     event: Literal["reconnected"] = "reconnected"
     data: dict = Field(..., description="Reconnection info with 'last_event_id' and 'resumed' flag")
+
+
+class HeartbeatEventModel(BaseModel):
+    """Server-sent event: periodic heartbeat indicating the run is alive."""
+
+    event: Literal["heartbeat"] = "heartbeat"
+    data: dict = Field(..., description="Heartbeat info with step label, activity timestamps")
+
+
+class RunStateEventModel(BaseModel):
+    """Server-sent event: run lifecycle state transition."""
+
+    event: Literal["run_state"] = "run_state"
+    data: dict = Field(
+        ...,
+        description="Run state transition with from_status, to_status, reason",
+    )
 
 
 # ============================================================================
@@ -470,9 +672,12 @@ class GlobalAgentDefaultsResponse(BaseModel):
     memory: list[str] = Field(default_factory=list)
     skills: list[str] = Field(default_factory=list)
     subagents: list[dict[str, Any]] = Field(default_factory=list)
-    interrupt_on: dict[str, bool] = Field(default_factory=dict)
+    async_subagents: list[AsyncSubagentConfig] = Field(default_factory=list)
+    interrupt_on: dict[str, Any] = Field(default_factory=dict)
+    permissions: list[dict[str, Any]] = Field(default_factory=list)
     response_format: str | None = None
     tool_token_limit_before_evict: int | None = None
+    context_policy: ContextPolicy | None = None
     recursion_limit: int
     mcp_servers: dict[str, Any] = Field(default_factory=dict)
 
@@ -483,11 +688,85 @@ class GlobalAgentDefaultsUpdate(BaseModel):
     memory: list[str] | None = None
     skills: list[str] | None = None
     subagents: list[dict[str, Any]] | None = None
-    interrupt_on: dict[str, bool] | None = None
+    async_subagents: list[AsyncSubagentConfig] | None = None
+    interrupt_on: dict[str, HumanInTheLoopConfig] | None = None
+    permissions: list[FilesystemPermissionConfig] | None = None
     response_format: str | None = None
     tool_token_limit_before_evict: int | None = None
+    context_policy: ContextPolicy | None = None
     recursion_limit: int | None = None
     mcp_servers: dict[str, Any] | None = None
+
+
+class McpServerCreate(BaseModel):
+    """Request to register a remote MCP server."""
+
+    name: str = Field(..., min_length=1, max_length=100)
+    url: str = Field(..., min_length=1)
+    headers: dict[str, str] = Field(default_factory=dict)
+    enabled: bool = True
+    transport: Literal["sse", "streamable_http"] = "sse"
+    scope: dict[str, str] | None = None
+
+
+class McpServerUpdate(BaseModel):
+    """Partial update request for a remote MCP server."""
+
+    url: str | None = Field(default=None, min_length=1)
+    headers: dict[str, str] | None = None
+    enabled: bool | None = None
+    transport: Literal["sse", "streamable_http"] | None = None
+
+
+class McpServerResponse(BaseModel):
+    """Registered remote MCP server response.
+
+    Headers are intentionally redacted from responses — they may contain
+    bearer tokens or other sensitive values. Builders who need to view or
+    rotate header values should manage them through their own infrastructure.
+    """
+
+    name: str
+    url: str
+    headers: dict[str, str] = Field(default_factory=dict)
+    enabled: bool
+    transport: Literal["sse", "streamable_http"]
+    scope: dict[str, str] = Field(default_factory=dict)
+    source: Literal["file", "api"]
+
+
+class McpServerList(BaseModel):
+    """List of remote MCP servers visible in scope."""
+
+    servers: list[McpServerResponse]
+    count: int
+
+
+# ============================================================================
+# Capability Models
+# ============================================================================
+
+
+class VersionInfo(BaseModel):
+    """Version information for installed runtime packages."""
+
+    cognition: str
+    deepagents: str
+    langgraph: str
+    langchain: str
+    langchain_core: str
+
+
+class CapabilityResponse(BaseModel):
+    """Deployment capability and compatibility report."""
+
+    versions: VersionInfo
+    stream_protocols: list[str]
+    sandbox_backends: list[str]
+    features: dict[str, bool]
+    middleware: list[str]
+    scope_keys: list[str]
+    deployment: dict[str, Any]
 
 
 # ============================================================================
@@ -503,6 +782,7 @@ class AgentResponse(BaseModel):
     mode: Literal["primary", "subagent", "all"] = Field(..., description="Agent mode")
     hidden: bool = Field(..., description="Whether agent is hidden from listings")
     native: bool = Field(..., description="Whether agent is built-in")
+    a2a_exposed: bool = Field(default=False, description="Whether agent is exposed via A2A protocol")
     provider: str | None = Field(
         None,
         description="Deprecated compatibility field. Use config.provider instead.",
@@ -519,9 +799,24 @@ class AgentResponse(BaseModel):
         None, description="Full runtime config for this agent"
     )
     response_format: str | None = Field(None, description="Structured output schema path")
-    interrupt_on: dict[str, bool] = Field(
+    interrupt_on: dict[str, dict[str, Any]] = Field(
         default_factory=dict,
-        description="Tool-name to HITL requirement map for this agent",
+        description="Tool-name to HITL requirement or rich approval config map",
+    )
+    permissions: list[dict[str, Any]] = Field(
+        default_factory=list,
+        description="Deep Agents filesystem permission rules for this agent",
+    )
+    subagents: list[dict[str, Any]] = Field(
+        default_factory=list,
+        description="Subagent definitions for this agent",
+    )
+    async_subagents: list[AsyncSubagentConfig] = Field(
+        default_factory=list,
+        description=(
+            "Experimental remote Agent Protocol async subagents exposed as "
+            "background task tools"
+        ),
     )
     # ISSUE-009: Added tools and skills for better agent introspection
     tools: list[str] = Field(
@@ -540,6 +835,7 @@ class AgentConfigResponse(BaseModel):
     max_tokens: int | None = None
     recursion_limit: int | None = None
     tool_token_limit_before_evict: int | None = None
+    context_policy: ContextPolicy | None = None
     provider: str | None = None
     model: str | None = None
     timeout_seconds: float | None = None
@@ -683,6 +979,85 @@ class SkillList(BaseModel):
 
 
 # ============================================================================
+# Artifact Models
+# ============================================================================
+
+
+class ArtifactCreate(BaseModel):
+    """Request to create an artifact."""
+
+    id: str = Field(..., min_length=1, max_length=100, description="Unique artifact identifier")
+    name: str = Field(..., min_length=1, max_length=100, description="Human-readable name")
+    artifact_type: str = Field(default="scratch", description="Route category")
+    path: str = Field(default="", description="Virtual path within the type route")
+    content: str = Field(default="", description="File content")
+    content_type: str = Field(default="text/plain", description="MIME or type tag")
+    run_id: str | None = Field(default=None, description="Associated run identifier")
+    checkpoint_id: str | None = Field(default=None, description="Associated checkpoint")
+    visibility: str = Field(default="private", description="Visibility: private, run, or public")
+    scope: dict[str, str] = Field(default_factory=dict, description="Scope (empty = global)")
+
+
+class ArtifactUpdate(BaseModel):
+    """Request to partially update an artifact.
+
+    Updating content creates a new version automatically.
+    """
+
+    name: str | None = Field(default=None, max_length=100)
+    content: str | None = Field(default=None, description="New file content")
+    content_type: str | None = Field(default=None)
+    run_id: str | None = Field(default=None)
+    checkpoint_id: str | None = Field(default=None)
+    visibility: str | None = Field(default=None)
+
+
+class ArtifactResponse(BaseModel):
+    """Artifact information for API responses."""
+
+    id: str
+    name: str
+    artifact_type: str
+    path: str
+    content: str
+    content_type: str
+    version: int
+    parent_version: int | None = None
+    run_id: str | None = None
+    checkpoint_id: str | None = None
+    visibility: str
+    scope: dict[str, str] = Field(default_factory=dict)
+    source: str = "api"
+    created_at: str | None = None
+    updated_at: str | None = None
+
+
+class ArtifactVersion(BaseModel):
+    """A single version of an artifact."""
+
+    version: int
+    parent_version: int | None = None
+    content: str
+    content_type: str
+    created_at: str | None = None
+
+
+class ArtifactList(BaseModel):
+    """List of artifacts response."""
+
+    artifacts: list[ArtifactResponse] = Field(default_factory=list)
+    count: int = 0
+
+
+class ArtifactVersionList(BaseModel):
+    """List of artifact versions."""
+
+    artifact_id: str
+    versions: list[ArtifactVersion] = Field(default_factory=list)
+    count: int = 0
+
+
+# ============================================================================
 # Provider / Model CRUD Models
 # ============================================================================
 
@@ -778,10 +1153,12 @@ class AgentCreate(BaseModel):
     description: str | None = Field(default=None)
     mode: Literal["primary", "subagent", "all"] = Field(default="primary")
     hidden: bool = Field(default=False)
+    a2a_exposed: bool = Field(default=False, description="Expose agent via A2A protocol")
     tools: list[str] = Field(default_factory=list)
     skills: list[str] = Field(default_factory=list)
     memory: list[str] = Field(default_factory=list)
-    interrupt_on: dict[str, bool] = Field(default_factory=dict)
+    interrupt_on: dict[str, HumanInTheLoopConfig] = Field(default_factory=dict)
+    permissions: list[FilesystemPermissionConfig] = Field(default_factory=list)
     response_format: str | None = Field(
         default=None, description="Dotted path to structured output schema"
     )
@@ -790,9 +1167,12 @@ class AgentCreate(BaseModel):
     max_tokens: int | None = Field(default=None)
     recursion_limit: int | None = Field(default=None)
     tool_token_limit_before_evict: int | None = Field(default=None)
+    context_policy: ContextPolicy | None = Field(default=None)
     provider: str | None = Field(default=None)
     timeout_seconds: float | None = Field(default=None)
     middleware: list[Any] = Field(default_factory=list)
+    subagents: list[dict[str, Any]] = Field(default_factory=list)
+    async_subagents: list[AsyncSubagentConfig] = Field(default_factory=list)
     scope: dict[str, str] = Field(default_factory=dict)
 
 
@@ -803,16 +1183,21 @@ class AgentUpdate(BaseModel):
     description: str | None = None
     mode: Literal["primary", "subagent", "all"] | None = None
     hidden: bool | None = None
+    a2a_exposed: bool | None = None
     tools: list[str] | None = None
     skills: list[str] | None = None
     memory: list[str] | None = None
-    interrupt_on: dict[str, bool] | None = None
+    interrupt_on: dict[str, HumanInTheLoopConfig] | None = None
+    permissions: list[FilesystemPermissionConfig] | None = None
+    subagents: list[dict[str, Any]] | None = None
+    async_subagents: list[AsyncSubagentConfig] | None = None
     response_format: str | None = None
     model: str | None = None
     temperature: float | None = None
     max_tokens: int | None = None
     recursion_limit: int | None = None
     tool_token_limit_before_evict: int | None = None
+    context_policy: ContextPolicy | None = None
     provider: str | None = None
     timeout_seconds: float | None = None
     middleware: list[Any] | None = None

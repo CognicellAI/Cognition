@@ -63,15 +63,12 @@ SessionUpdatedCallback = Callable[[Session], None]
 class SessionContext:
     """Context passed to Deep Agents via context_schema.
 
-    This provides user_id, org_id, and other per-invocation context
-    without polluting the conversation state.
+    Carries builder-authorized scope without hardcoding a vocabulary.
     """
 
-    user_id: str | None = None
-    org_id: str | None = None
+    effective_scope: dict[str, str] = field(default_factory=dict)
     session_id: str = ""
     workspace_path: str = ""
-    scopes: dict[str, str] = field(default_factory=dict)
 
 
 # ============================================================================
@@ -204,9 +201,8 @@ class SessionManager:
         workspace_path: str,
         title: str | None = None,
         config: SessionConfig | None = None,
-        user_id: str | None = None,
-        org_id: str | None = None,
         scopes: dict[str, str] | None = None,
+        metadata: dict[str, str] | None = None,
     ) -> Session:
         """Create a new session.
 
@@ -217,9 +213,8 @@ class SessionManager:
             workspace_path: Path to the project workspace.
             title: Optional session title.
             config: Optional session configuration.
-            user_id: Optional user ID for context scoping.
-            org_id: Optional organization ID for context scoping.
-            scopes: Optional scope key-value pairs.
+            scopes: Builder-defined effective scope key-value pairs.
+            metadata: Optional metadata key-value pairs.
 
         Returns:
             The newly created Session.
@@ -260,8 +255,6 @@ class SessionManager:
             session_id=session_id,
             thread_id=thread_id,
             workspace=session_workspace_path,
-            user_id=user_id,
-            org_id=org_id,
         )
 
         # Notify callbacks
@@ -468,8 +461,6 @@ class SessionManager:
     def create_context(
         self,
         session_id: str,
-        user_id: str | None = None,
-        org_id: str | None = None,
     ) -> SessionContext | None:
         """Create a SessionContext for Deep Agents context_schema.
 
@@ -478,8 +469,6 @@ class SessionManager:
 
         Args:
             session_id: The session identifier.
-            user_id: Optional user ID.
-            org_id: Optional organization ID.
 
         Returns:
             SessionContext if session exists, None otherwise.
@@ -491,11 +480,9 @@ class SessionManager:
         session = managed.session
 
         return SessionContext(
-            user_id=user_id,
-            org_id=org_id,
+            effective_scope=session.scopes,
             session_id=session_id,
             workspace_path=session.workspace_path,
-            scopes=session.scopes,
         )
 
     # ========================================================================

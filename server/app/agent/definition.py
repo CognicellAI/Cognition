@@ -31,6 +31,46 @@ except ImportError:
     HAS_YAML = False
 
 
+class ContextPolicy(BaseModel):
+    """Declarative context management policy for an agent.
+
+    Cognition uses this as the builder-visible policy surface and maps the
+    supported pieces onto Deep Agents primitives. It is intentionally metadata
+    and policy only; it does not expose raw prompt contents.
+    """
+
+    max_input_tokens: int | None = Field(
+        default=None,
+        gt=0,
+        description="Advisory input-token budget surfaced in context events/debug APIs.",
+    )
+    tool_token_limit_before_evict: int | None = Field(
+        default=None,
+        gt=0,
+        description=(
+            "Advisory per-tool token budget. Deep Agents 0.6.2 no longer accepts "
+            "this as a create_deep_agent kwarg; Cognition surfaces it for policy "
+            "visibility and future enforcement."
+        ),
+    )
+    summarization_enabled: bool = Field(
+        default=True,
+        description="Whether Cognition should attach Deep Agents summarization middleware.",
+    )
+    summarizer_model: str | None = Field(
+        default=None,
+        description="Reserved model/profile hint for future summarizer selection.",
+    )
+    offload_large_tool_outputs: bool = Field(
+        default=True,
+        description="Reserved policy hint for future artifact offload enforcement.",
+    )
+    retention: dict[str, str] = Field(
+        default_factory=dict,
+        description="Reserved per-source retention hints for future enforcement.",
+    )
+
+
 class AgentConfig(BaseModel):
     """Agent runtime configuration.
 
@@ -46,9 +86,48 @@ class AgentConfig(BaseModel):
     max_tokens: int | None = Field(default=None, gt=0)
     recursion_limit: int | None = Field(default=None, gt=0)
     tool_token_limit_before_evict: int | None = Field(default=None, gt=0)
+    context_policy: ContextPolicy | None = Field(default=None)
     provider: str | None = Field(default=None)
     model: str | None = Field(default=None)
     timeout_seconds: float | None = Field(default=None, gt=0)
+
+
+class FilesystemPermissionConfig(BaseModel):
+    """Deep Agents filesystem permission rule.
+
+    This is an agent/app-level capability policy for built-in filesystem
+    operations. It is not a tenant authorization mechanism.
+    """
+
+    operations: list[Literal["read", "write"]] = Field(..., min_length=1)
+    paths: list[str] = Field(..., min_length=1)
+    mode: Literal["allow", "deny"] = Field(default="allow")
+
+
+class HumanInTheLoopConfig(BaseModel):
+    """Deep Agents human-in-the-loop policy for a tool."""
+
+    allowed_decisions: list[Literal["approve", "edit", "reject", "respond"]] = Field(
+        ..., min_length=1
+    )
+    description: str | None = None
+    args_schema: dict[str, Any] | None = None
+
+
+class AsyncSubagentConfig(BaseModel):
+    """Experimental remote Agent Protocol async subagent.
+
+    This v0.10 surface intentionally excludes arbitrary request headers to avoid
+    introducing a new secret-reference or secret-injection path. Builders can use
+    trusted networks or gateway-level authentication until a scoped credential
+    mechanism exists. This is distinct from simple in-process supervisor/subagent
+    patterns; it requires an Agent Protocol-compatible worker deployment.
+    """
+
+    name: str = Field(..., min_length=1, max_length=100)
+    description: str = Field(..., min_length=1)
+    graph_id: str = Field(..., min_length=1)
+    url: str | None = Field(default=None, min_length=1)
 
 
 class SubagentDefinition(BaseModel):
@@ -59,15 +138,18 @@ class SubagentDefinition(BaseModel):
 
     Attributes:
         name: Unique name for the subagent.
+        description: Human-readable description of the subagent's purpose.
         system_prompt: System prompt for the subagent.
         tools: Tool module paths available to this subagent.
         config: Runtime configuration overrides.
     """
 
     name: str = Field(..., min_length=1, max_length=100)
+    description: str | None = Field(default=None)
     system_prompt: str = Field(..., min_length=1)
     tools: list[str] = Field(default_factory=list)
     config: AgentConfig | None = Field(default=None)
+    permissions: list[FilesystemPermissionConfig] = Field(default_factory=list)
 
     @field_validator("name")
     @classmethod
@@ -94,7 +176,8 @@ class AgentDefinition(BaseModel):
         skills: List of attached skill names.
         memory: List of memory file paths.
         subagents: Nested subagent definitions.
-        interrupt_on: Tools requiring human confirmation (tool_name -> bool).
+        interrupt_on: Tool-name to HITL policy map.
+        permissions: Deep Agents filesystem permission rules.
         middleware: Middleware class paths.
         config: Runtime configuration (temperature, max_tokens, etc.).
     """
@@ -105,7 +188,9 @@ class AgentDefinition(BaseModel):
     skills: list[str] = Field(default_factory=list)
     memory: list[str] = Field(default_factory=list)
     subagents: list[SubagentDefinition] = Field(default_factory=list)
-    interrupt_on: dict[str, Any] = Field(default_factory=dict)
+    async_subagents: list[AsyncSubagentConfig] = Field(default_factory=list)
+    interrupt_on: dict[str, HumanInTheLoopConfig] = Field(default_factory=dict)
+    permissions: list[FilesystemPermissionConfig] = Field(default_factory=list)
     response_format: str | None = Field(default=None)
     middleware: list[str | dict[str, Any]] = Field(default_factory=list)
 
@@ -115,6 +200,7 @@ class AgentDefinition(BaseModel):
     description: str | None = Field(default=None)
     hidden: bool = Field(default=False)
     native: bool = Field(default=False)
+    a2a_exposed: bool = Field(default=False)
 
     @field_validator("name")
     @classmethod
@@ -287,7 +373,8 @@ class AgentDefinition(BaseModel):
             - tools: list[Any] | None (optional)
             - skills: list[str] | None (optional)
             - middleware: list[Any] | None (optional)
-            - interrupt_on: dict[str, bool | Any] | None (optional)
+            - interrupt_on: dict[str, InterruptOnConfig] | None (optional)
+            - permissions: list[FilesystemPermission] | None (optional)
         """
         spec: dict[str, Any] = {
             "name": self.name,
@@ -312,7 +399,17 @@ class AgentDefinition(BaseModel):
             spec["skills"] = self.skills
 
         if self.interrupt_on:
-            spec["interrupt_on"] = self.interrupt_on
+            spec["interrupt_on"] = {
+                name: config.model_dump(exclude_none=True)
+                for name, config in self.interrupt_on.items()
+            }
+        if self.permissions:
+            from deepagents.middleware.filesystem import FilesystemPermission
+
+            spec["permissions"] = [
+                FilesystemPermission(**permission.model_dump())
+                for permission in self.permissions
+            ]
 
         return spec
 
@@ -466,6 +563,7 @@ def load_agent_definition_from_markdown(path: str | Path) -> AgentDefinition:
             "max_tokens",
             "recursion_limit",
             "tool_token_limit_before_evict",
+            "context_policy",
             "provider",
             "model",
             "timeout_seconds",
@@ -483,6 +581,7 @@ def load_agent_definition_from_markdown(path: str | Path) -> AgentDefinition:
         tools=frontmatter.get("tools", []),
         skills=frontmatter.get("skills", []),
         memory=frontmatter.get("memory", []),
+        async_subagents=frontmatter.get("async_subagents", []),
         config=AgentConfig(**config_kwargs),
     )
 
@@ -492,6 +591,7 @@ def load_agent_definition_from_markdown(path: str | Path) -> AgentDefinition:
 __all__ = [
     "AgentConfig",
     "AgentDefinition",
+    "AsyncSubagentConfig",
     "SubagentDefinition",
     "create_default_agent_definition",
     "load_agent_definition",

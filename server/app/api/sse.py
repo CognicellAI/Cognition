@@ -404,6 +404,80 @@ class EventBuilder:
         }
 
     @staticmethod
+    def tool_safety(
+        action: str,
+        tool_name: str,
+        tool_call_id: str | None = None,
+        fields: list[str] | None = None,
+        overwritten_fields: list[str] | None = None,
+        errors: list[dict[str, Any]] | None = None,
+        message: str | None = None,
+        session_id: str | None = None,
+        run_id: str | None = None,
+        scope_keys: list[str] | None = None,
+    ) -> dict:
+        """Create a tool safety/audit event."""
+        return {
+            "event": "tool_safety",
+            "data": {
+                "action": action,
+                "tool_name": tool_name,
+                "tool_call_id": tool_call_id,
+                "fields": fields or [],
+                "overwritten_fields": overwritten_fields or [],
+                "errors": errors or [],
+                "message": message,
+                "session_id": session_id,
+                "run_id": run_id,
+                "scope_keys": scope_keys or [],
+            },
+        }
+
+    @staticmethod
+    def context(
+        action: str,
+        session_id: str | None = None,
+        run_id: str | None = None,
+        scope_keys: list[str] | None = None,
+        policy: dict[str, Any] | None = None,
+        input_tokens: int | None = None,
+        output_tokens: int | None = None,
+        message_count: int | None = None,
+        retained_messages: int | None = None,
+        evicted_messages: int | None = None,
+        summarized_messages: int | None = None,
+        offloaded_messages: int | None = None,
+        summary_id: str | None = None,
+        artifact_id: str | None = None,
+    ) -> dict:
+        """Create a context policy/budget event.
+
+        The payload is safe for builders and end users: it contains policy
+        values, counts, IDs, and scope key names, but no raw message content or
+        raw scope values.
+        """
+        data: dict[str, Any] = {
+            "action": action,
+            "session_id": session_id,
+            "run_id": run_id,
+            "scope_keys": scope_keys or [],
+            "policy": policy or {},
+        }
+        optional = {
+            "input_tokens": input_tokens,
+            "output_tokens": output_tokens,
+            "message_count": message_count,
+            "retained_messages": retained_messages,
+            "evicted_messages": evicted_messages,
+            "summarized_messages": summarized_messages,
+            "offloaded_messages": offloaded_messages,
+            "summary_id": summary_id,
+            "artifact_id": artifact_id,
+        }
+        data.update({key: value for key, value in optional.items() if value is not None})
+        return {"event": "context", "data": data}
+
+    @staticmethod
     def error(message: str, code: str | None = None) -> dict:
         """Create an error event."""
         data = {"message": message}
@@ -430,18 +504,25 @@ class EventBuilder:
         }
 
     @staticmethod
-    def done(assistant_data: dict[str, Any] | None = None, message_id: str | None = None) -> dict:
+    def done(
+        assistant_data: dict[str, Any] | None = None,
+        message_id: str | None = None,
+        scope_keys: list[str] | None = None,
+    ) -> dict:
         """Create a done event.
 
         Args:
             assistant_data: Optional assistant message data for persistence
             message_id: Optional ID of the persisted assistant message (ISSUE-019)
+            scope_keys: Optional scope key names for UI visibility (values redacted)
         """
         data: dict[str, Any] = {}
         if assistant_data:
             data["assistant_data"] = assistant_data
         if message_id:
             data["message_id"] = message_id
+        if scope_keys:
+            data["scope_keys"] = scope_keys
         return {"event": "done", "data": data}
 
     @staticmethod
@@ -488,16 +569,41 @@ class EventBuilder:
         args: dict[str, Any],
         session_id: str,
         action_requests: list[dict[str, Any]] | None = None,
+        scope_keys: list[str] | None = None,
     ) -> dict:
         """Create an interrupt event for HITL approval."""
+        data: dict[str, Any] = {
+            "tool_call_id": tool_call_id,
+            "tool_name": tool_name,
+            "args": args,
+            "session_id": session_id,
+            "action_requests": action_requests or [],
+        }
+        if scope_keys:
+            data["scope_keys"] = scope_keys
+        return {"event": "interrupt", "data": data}
+
+    @staticmethod
+    def hitl_decision(
+        decision: str,
+        tool_name: str,
+        session_id: str | None = None,
+        run_id: str | None = None,
+        scope_keys: list[str] | None = None,
+        edited_arg_keys: list[str] | None = None,
+        has_rejection_message: bool = False,
+    ) -> dict:
+        """Create a HITL decision audit event."""
         return {
-            "event": "interrupt",
+            "event": "hitl_decision",
             "data": {
-                "tool_call_id": tool_call_id,
+                "decision": decision,
                 "tool_name": tool_name,
-                "args": args,
                 "session_id": session_id,
-                "action_requests": action_requests or [],
+                "run_id": run_id,
+                "scope_keys": scope_keys or [],
+                "edited_arg_keys": edited_arg_keys or [],
+                "has_rejection_message": has_rejection_message,
             },
         }
 
@@ -512,6 +618,87 @@ class EventBuilder:
         return {
             "event": "reconnected",
             "data": {"last_event_id": last_event_id, "resumed": True},
+        }
+
+    @staticmethod
+    def heartbeat(
+        step_label: str | None = None,
+        last_model_call: str | None = None,
+        last_tool_call: str | None = None,
+        active_subagent_count: int = 0,
+        sandbox_ready: bool = False,
+    ) -> dict:
+        """Create a heartbeat event."""
+        return {
+            "event": "heartbeat",
+            "data": {
+                "step_label": step_label,
+                "last_model_call": last_model_call,
+                "last_tool_call": last_tool_call,
+                "active_subagent_count": active_subagent_count,
+                "sandbox_ready": sandbox_ready,
+            },
+        }
+
+    @staticmethod
+    def run_state(
+        from_status: str,
+        to_status: str,
+        reason: str | None = None,
+        scope_keys: list[str] | None = None,
+    ) -> dict:
+        """Create a run state transition event."""
+        data: dict[str, Any] = {
+            "from_status": from_status,
+            "to_status": to_status,
+            "reason": reason,
+        }
+        if scope_keys:
+            data["scope_keys"] = scope_keys
+        return {"event": "run_state", "data": data}
+
+    @staticmethod
+    def callback(
+        callback_id: str,
+        url: str,
+        status: str,
+        attempt: int = 1,
+        response_status: int | None = None,
+        error_message: str | None = None,
+    ) -> dict:
+        """Create a callback delivery event."""
+        return {
+            "event": "callback",
+            "data": {
+                "callback_id": callback_id,
+                "url": url,
+                "status": status,
+                "attempt": attempt,
+                "response_status": response_status,
+                "error_message": error_message,
+            },
+        }
+
+    @staticmethod
+    def sandbox_lifecycle(
+        sandbox_id: str,
+        phase: str,
+        sandbox_backend: str,
+        duration_ms: float | None = None,
+        exit_code: int | None = None,
+        is_warm_pool_hit: bool = False,
+    ) -> dict:
+        """Create a sandbox lifecycle event."""
+        return {
+            "event": "sandbox_lifecycle",
+            "data": {
+                "sandbox_id": sandbox_id,
+                "phase": phase,
+                "sandbox_backend": sandbox_backend,
+                "duration_ms": duration_ms,
+                "exit_code": exit_code,
+                "is_warm_pool_hit": is_warm_pool_hit,
+            },
         }
 
 

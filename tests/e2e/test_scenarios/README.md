@@ -1,10 +1,31 @@
-# Business Scenarios (Python)
+# Business Scenarios
 
-Comprehensive end-to-end tests for P2 (Robustness + GUI Extensibility) and P3 (MLflow Integration) features written in Python using pytest.
+Comprehensive end-to-end tests for Cognition features written in Python using pytest.
+
+## Test Architecture: API-level vs Scenario Tests
+
+Cognition's e2e test suite is organized into two complementary layers:
+
+| Layer | Location | Purpose | Properties |
+|-------|----------|---------|------------|
+| **API-level** | `tests/e2e/test_*.py` | Verify individual endpoints in isolation | Fast, self-contained, mock LLM tolerant |
+| **Scenario** | `tests/e2e/test_scenarios/` | Validate business workflows across multiple APIs | Real workflow, deployed server, uses `ScenarioTestClient` |
+
+**API-level tests** test one endpoint at a time (e.g., `POST /sessions` returns 201). They use the `server` fixture from `tests/e2e/conftest.py` and are designed to run fast against a local mock server.
+
+**Scenario tests** validate end-to-end business flows (e.g., "an agent produces artifacts that persist and are readable via the API"). They use the `ScenarioTestClient` from `tests/e2e/test_scenarios/conftest.py`, which dynamically detects session scoping, and are designed to run against a deployed server (`COGNITION_E2E_URL`).
+
+### Scope Awareness
+
+All tests use dynamic scoping detection:
+- **API-level tests**: Use the `scope_headers` fixture from `tests/e2e/conftest.py`, which probes `/config` to detect if scoping is enabled and returns appropriate headers.
+- **Scenario tests**: Use `ScenarioTestClient.setup_scoping()`, which does the same automatically.
+
+Tests work against both scoping-enabled and scoping-disabled deployments without modification.
 
 ## Overview
 
-These scenarios test Cognition's P2 features from a **business logic perspective** rather than technical implementation details. Each test validates tangible business value.
+These scenarios test Cognition's features from a **business logic perspective** rather than technical implementation details. Each test validates tangible business value.
 
 ## Structure
 
@@ -34,11 +55,16 @@ tests/e2e/test_scenarios/
 │   ├── test_dynamic_capability.py
 │   ├── test_configuration_updates.py
 │   └── test_tool_scaffolding.py
-└── p3_mlflow/                  # MLflow integration scenarios
+├── p3_mlflow/                  # MLflow integration scenarios
+│   ├── __init__.py
+│   ├── test_tracing_integration.py
+│   ├── test_evaluation.py
+│   └── test_feedback_loop.py
+└── long_running_agents/         # v0.10.0 long-running agent scenarios
     ├── __init__.py
-    ├── test_tracing_integration.py
-    ├── test_evaluation.py
-    └── test_feedback_loop.py
+    ├── test_artifact_production.py
+    ├── test_session_state_transitions.py
+    └── test_stream_event_exhaustiveness.py
 ```
 
 ## Quick Start
@@ -159,6 +185,9 @@ pytest tests/e2e/test_scenarios/ -v
 | Tracing Integration | Complete agent observability | P3-1: MLflow Tracing |
 | Evaluation & Scoring | Systematic quality assessment | P3-1: MLflow Evaluation |
 | Human Feedback Loop | Human-in-the-loop improvement | P3-7: MLflow Feedback |
+| Agent Artifact Production | Durable output that survives agent runs | W1: artifacts-handoffs |
+| Session State Transitions | Predictable lifecycle, idempotent creation | W1: runner-lifecycle |
+| Stream Event Exhaustiveness | Full SSE event surface for UI visibility | W1: sandbox-hardening |
 
 ## Fixtures
 
@@ -280,6 +309,14 @@ All scenarios should pass against a properly configured Cognition server:
 - **P3 Total:** 22/22 tests passing (when MLflow enabled)
 
 **Note:** P3 scenarios skip gracefully when MLflow is not available. Core functionality works without MLflow.
+
+### Long-Running Agents (4 scenarios)
+
+Tests v0.10.0 long-running agent features:
+
+1. **Agent Artifact Production** (4 tests) - Agent creates artifacts, version history works, type isolation
+2. **Session State Transitions** (5 tests) - Full lifecycle, idempotency, pause/cancel/abort, terminal state rejection
+3. **Stream Event Exhaustiveness** (4 tests) - done events, run_state events, status events, multiple streams
 
 ## Related Documentation
 

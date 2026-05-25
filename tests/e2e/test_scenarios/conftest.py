@@ -34,6 +34,28 @@ BASE_URL = os.environ.get("COGNITION_E2E_URL", DEFAULT_BASE_URL).rstrip("/")
 TEST_TIMEOUT = httpx.Timeout(30.0, connect=10.0)
 
 
+def is_terminal_stream_event(event: dict[str, Any]) -> bool:
+    """Return whether an SSE event represents stream termination.
+
+    v0.10 normal message streams use ``run_state`` with ``to_status=done`` as
+    the terminal signal. Some older endpoints and resume flows still emit a
+    standalone ``done`` event, and errors are terminal for both shapes.
+    """
+    event_type = event.get("event")
+    if event_type in {"done", "error"}:
+        return True
+    return event_type == "run_state" and event.get("to_status") in {
+        "done",
+        "failed",
+        "aborted",
+    }
+
+
+def stream_completed(events: list[dict[str, Any]]) -> bool:
+    """Return whether collected SSE events include a terminal event."""
+    return any(is_terminal_stream_event(event) for event in events)
+
+
 class ScenarioTestClient:
     """Test client for P2 scenarios with helper methods."""
 

@@ -64,7 +64,7 @@ Verify it's up:
 
 ```bash
 curl -s http://localhost:8000/health
-# {"status": "healthy", "version": "0.6.0", ...}
+# {"status": "healthy", "version": "0.10.0", ...}
 ```
 
 > **Don't want Docker?** Install with `uv sync --extra openai` and run `uv run uvicorn server.app.main:app --reload --port 8000`. See [Deployment](./deployment.md) for production options (PostgreSQL, Kubernetes, multi-instance).
@@ -425,6 +425,8 @@ curl http://localhost:8000/tools
 
 In a multi-user application, you must isolate sessions by user. Cognition enforces this through scope headers.
 
+Scope keys are **builder-defined** — you choose the keys that match your application's tenancy model. Cognition does not hardcode a vocabulary.
+
 Enable scoping in your deployment config:
 
 ```bash
@@ -471,6 +473,8 @@ headers = {
 }
 ```
 
+The scope flows through the full stack: headers → `SessionScope` → `effective_scope` → `CognitionContext` → LangGraph runtime context → middleware → tools. Tools read scope from `runtime.context`, never from model-supplied arguments.
+
 ---
 
 ## What's next
@@ -483,6 +487,10 @@ You have a running Cognition instance, a connected LLM provider, streaming worki
 | Inject project-specific context into every session (AGENTS.md) | [Extending Agents → Memory](./extending-agents.md#1-memory-agentsmd) |
 | Add skills — progressive disclosure docs the agent reads on demand | [Extending Agents → Skills](./extending-agents.md#2-skills-skillmd) |
 | Add retry logic, PII redaction, or call limits to tools | [Configuration → Middleware](./configuration.md#agent-defaults) |
+| Connect remote MCP tool servers | [Extending Agents → MCP Tool Servers](./extending-agents.md#6-mcp-tool-servers) |
+| Expose agents via A2A for external system integration | [Extending Agents → A2A Exposure](./extending-agents.md#7-exposing-agents-via-a2a) |
+| Use artifacts for durable state outside the context window | [API Reference → Artifacts](./api-reference.md#artifacts) |
+| Discover deployment capabilities programmatically | [API Reference → Capabilities](./api-reference.md#capabilities) |
 | Run agent code in a Docker container instead of the server process | [Deployment → Docker Sandbox](./deployment.md) |
 | Move to PostgreSQL and run multiple server instances | [Deployment](./deployment.md) |
 | See every endpoint and SSE event schema | [API Reference](./api-reference.md) |

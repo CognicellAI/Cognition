@@ -241,7 +241,10 @@ class TestInterruptOnWiring:
         agent_def = AgentDefinition(
             name="test-agent",
             system_prompt="test",
-            interrupt_on={"execute": True, "write_file": False},
+            interrupt_on={
+                "execute": {"allowed_decisions": ["approve", "reject"]},
+                "write_file": {"allowed_decisions": ["approve", "edit", "reject"]},
+            },
         )
         mock_def_registry = MagicMock()
         mock_def_registry.get = MagicMock(return_value=agent_def)
@@ -251,7 +254,10 @@ class TestInterruptOnWiring:
 
         params = _get_params(create_agent_mock)
         assert params is not None
-        assert params.interrupt_on == {"execute": True, "write_file": False}
+        assert params.interrupt_on == {
+            "execute": {"allowed_decisions": ["approve", "reject"]},
+            "write_file": {"allowed_decisions": ["approve", "edit", "reject"]},
+        }
 
     @pytest.mark.asyncio
     async def test_empty_interrupt_on_not_passed(self):
@@ -272,6 +278,44 @@ class TestInterruptOnWiring:
         params = _get_params(create_agent_mock)
         assert params is not None
         assert params.interrupt_on is None
+
+
+class TestFilesystemPermissionsWiring:
+    @pytest.mark.asyncio
+    async def test_permissions_passed_to_create_cognition_agent(self):
+        """AgentDefinition permissions are forwarded as app-level filesystem policy."""
+        from server.app.agent.definition import AgentDefinition
+
+        session = _make_session()
+        mock_runtime = _make_mock_runtime(DoneEvent())
+        patches = _base_patches(mock_runtime, session)
+
+        agent_def = AgentDefinition(
+            name="test-agent",
+            system_prompt="test",
+            permissions=[
+                {
+                    "operations": ["read"],
+                    "paths": ["/workspace/repo/**"],
+                    "mode": "allow",
+                }
+            ],
+        )
+        mock_def_registry = MagicMock()
+        mock_def_registry.get = MagicMock(return_value=agent_def)
+        mock_def_registry.subagents = MagicMock(return_value=[])
+
+        _, create_agent_mock = await _run(patches, session, mock_def_registry=mock_def_registry)
+
+        params = _get_params(create_agent_mock)
+        assert params is not None
+        assert params.permissions == [
+            {
+                "operations": ["read"],
+                "paths": ["/workspace/repo/**"],
+                "mode": "allow",
+            }
+        ]
 
 
 class TestStructuredOutputAndContextControls:
@@ -347,6 +391,76 @@ class TestStructuredOutputAndContextControls:
         params = _get_params(create_agent_mock)
         assert params is not None
         assert params.tool_token_limit_before_evict == 12345
+
+    @pytest.mark.asyncio
+    async def test_context_policy_passed_to_create_cognition_agent(self):
+        """context_policy from AgentConfig must be forwarded for Deep Agents alignment."""
+        from server.app.agent.definition import AgentConfig, AgentDefinition, ContextPolicy
+
+        session = _make_session()
+        mock_runtime = _make_mock_runtime(DoneEvent())
+        patches = _base_patches(mock_runtime, session)
+
+        policy = ContextPolicy(
+            max_input_tokens=32000,
+            tool_token_limit_before_evict=4096,
+            summarization_enabled=True,
+            offload_large_tool_outputs=True,
+            retention={"search": "summarize"},
+        )
+        agent_def = AgentDefinition(
+            name="test-agent",
+            system_prompt="test",
+            config=AgentConfig(context_policy=policy),
+        )
+        mock_def_registry = MagicMock()
+        mock_def_registry.get = MagicMock(return_value=agent_def)
+        mock_def_registry.subagents = MagicMock(return_value=[])
+
+        _, create_agent_mock = await _run(patches, session, mock_def_registry=mock_def_registry)
+
+        params = _get_params(create_agent_mock)
+        assert params is not None
+        assert params.context_policy == policy
+
+    @pytest.mark.asyncio
+    async def test_async_subagents_passed_to_create_cognition_agent(self):
+        """async_subagents from AgentDefinition must be forwarded."""
+        from server.app.agent.definition import AgentDefinition, AsyncSubagentConfig
+
+        session = _make_session()
+        mock_runtime = _make_mock_runtime(DoneEvent())
+        patches = _base_patches(mock_runtime, session)
+
+        async_subagents = [
+            AsyncSubagentConfig(
+                name="researcher",
+                description="Runs long research tasks",
+                graph_id="research_graph",
+                url="https://agents.example.com",
+            )
+        ]
+        agent_def = AgentDefinition(
+            name="test-agent",
+            system_prompt="test",
+            async_subagents=async_subagents,
+        )
+        mock_def_registry = MagicMock()
+        mock_def_registry.get = MagicMock(return_value=agent_def)
+        mock_def_registry.subagents = MagicMock(return_value=[])
+
+        _, create_agent_mock = await _run(patches, session, mock_def_registry=mock_def_registry)
+
+        params = _get_params(create_agent_mock)
+        assert params is not None
+        assert params.async_subagents == [
+            {
+                "name": "researcher",
+                "description": "Runs long research tasks",
+                "graph_id": "research_graph",
+                "url": "https://agents.example.com",
+            }
+        ]
 
 
 # ---------------------------------------------------------------------------

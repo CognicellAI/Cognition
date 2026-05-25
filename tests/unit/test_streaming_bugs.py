@@ -267,10 +267,11 @@ class TestContentNotDoubled:
 
     @pytest.mark.asyncio
     async def test_usage_event_output_tokens_not_doubled(self):
-        """output_tokens in UsageEvent must count each token once, not twice."""
+        """output_tokens uses the shared Deep Agents-aligned counter once."""
+        from server.app.agent.token_counter import count_text_tokens
         from server.app.llm.deep_agent_service import DeepAgentStreamingService
 
-        # Two single-word tokens → output_tokens should be 2, not 4
+        # Two chunks should be counted as their assembled output once.
         session = _make_session()
         mock_runtime = _make_mock_runtime(
             TokenEvent(content="Hello"),
@@ -289,8 +290,10 @@ class TestContentNotDoubled:
 
         usage_events = [e for e in collected if isinstance(e, UsageEvent)]
         assert len(usage_events) == 1
-        assert usage_events[0].output_tokens == 2, (
-            f"output_tokens should be 2 (one per token), got {usage_events[0].output_tokens}"
+        expected = count_text_tokens("HelloWorld")
+        assert usage_events[0].output_tokens == expected, (
+            f"output_tokens should match shared counter ({expected}), "
+            f"got {usage_events[0].output_tokens}"
         )
 
 

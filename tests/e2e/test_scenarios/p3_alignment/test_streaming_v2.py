@@ -23,7 +23,11 @@ import uuid
 
 import pytest
 
-from tests.e2e.test_scenarios.conftest import ScenarioTestClient
+from tests.e2e.test_scenarios.conftest import (
+    ScenarioTestClient,
+    is_terminal_stream_event,
+    stream_completed,
+)
 
 
 def _unique(prefix: str = "session") -> str:
@@ -67,7 +71,7 @@ async def _collect_events(
                         if current_event_type:
                             payload["event"] = current_event_type
                         events.append(payload)
-                        if current_event_type == "done":
+                        if is_terminal_stream_event(payload):
                             break
                         current_event_type = None
                     except json.JSONDecodeError:
@@ -97,11 +101,10 @@ class TestStreamTermination:
         try:
             events = await _collect_events(api_client, session_id, "Reply with exactly: pong")
 
-            terminal = [e for e in events if e.get("event") in ("done", "error")]
-            assert len(terminal) >= 1, (
+            terminal = [e for e in events if is_terminal_stream_event(e)]
+            assert terminal, (
                 f"Stream did not terminate. Got event types: {[e.get('event') for e in events]}"
             )
-            assert terminal[-1]["event"] in ("done", "error")
         finally:
             await api_client.delete(f"/sessions/{session_id}")
 
@@ -117,8 +120,7 @@ class TestStreamTermination:
             ]
             for prompt in prompts:
                 events = await _collect_events(api_client, session_id, prompt)
-                terminal = [e for e in events if e.get("event") in ("done", "error")]
-                assert len(terminal) >= 1, (
+                assert stream_completed(events), (
                     f"Stream for '{prompt}' did not terminate. "
                     f"Events: {[e.get('event') for e in events]}"
                 )
@@ -132,16 +134,19 @@ class TestStreamTermination:
         try:
             events = await _collect_events(api_client, session_id, "Say: hi")
 
-            if events and events[-1].get("event") == "done":
-                # done arrived last — as expected
+            if events and is_terminal_stream_event(events[-1]):
+                # terminal event arrived last — as expected
                 pass
             else:
-                # Find the first done and verify nothing comes after it
-                done_indices = [i for i, e in enumerate(events) if e.get("event") == "done"]
-                if done_indices:
-                    first_done = done_indices[0]
-                    assert first_done == len(events) - 1, (
-                        f"done event at index {first_done} but {len(events) - 1 - first_done} "
+                # Find the first terminal event and verify nothing comes after it
+                terminal_indices = [
+                    i for i, e in enumerate(events) if is_terminal_stream_event(e)
+                ]
+                if terminal_indices:
+                    first_terminal = terminal_indices[0]
+                    assert first_terminal == len(events) - 1, (
+                        f"terminal event at index {first_terminal} but "
+                        f"{len(events) - 1 - first_terminal} "
                         f"events followed it"
                     )
         finally:

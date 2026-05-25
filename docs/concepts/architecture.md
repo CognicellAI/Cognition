@@ -210,6 +210,7 @@ class AgentDefinition(BaseModel):
     description: str | None
     hidden: bool
     native: bool                      # True for built-in agents (default, readonly)
+    a2a_exposed: bool                 # Expose via A2A protocol (default: False)
 ```
 
 `AgentConfig` carries per-agent LLM overrides that slot between the global ConfigRegistry default and any session-level override:
@@ -258,61 +259,31 @@ Agent instances are cached by an MD5 hash of their definition. The cache is inva
 ```python
 @dataclass
 class CognitionContext:
-    user_id: str = "anonymous"
-    org_id: str | None = None
-    project_id: str | None = None
-    extra: dict[str, str] = field(default_factory=dict)
+    effective_scope: dict[str, str]  # e.g. {"tenant": "acme", "project": "ios"}
+    session_id: str | None = None
+    thread_id: str | None = None
+    agent_name: str | None = None
+    metadata: dict[str, str] = field(default_factory=dict)
 ```
 
-Nodes and middleware access it via `runtime.context`. It provides the primary key for scoping LangGraph Store namespaces — ensuring user A cannot read user B's cross-session memories.
+`effective_scope` carries the builder-authorized scope as key-value pairs. Cognition does not hardcode a vocabulary — builders own the scope keys (e.g. `user`, `tenant`, `project`, `end_user`). The scope is propagated through LangGraph's `runtime.context` so nodes and middleware can access it without explicit tool-call threading.
 
----
+It provides the primary key for scoping LangGraph Store namespaces — ensuring user A cannot read user B's cross-session memories. See [Security](./security.md) for how scope keys are configured and enforced.
 
-### Layer 5 — LLM Provider
+#### A2A Protocol Adapter
 
-**`server/app/llm/model_catalog.py`** — `ModelCatalog` fetches and caches the models.dev catalog (configurable URL, default 1-hour TTL). Provides enriched model metadata — context windows, tool call support, pricing, modalities — for API responses and validation warnings. The catalog is enrichment only: if unreachable, endpoints degrade gracefully.
+Cognition exposes agents via the [Agent-to-Agent (A2A)](https://google.github.io/A2A/) protocol through a protocol adapter in `server/app/protocols/a2a/`. The adapter is mounted during startup (`mount_a2a_routes()`) and registers two endpoints:
 
-**`server/app/llm/deep_agent_service.py`** — `DeepAgentStreamingService` is the per-session streaming coordinator. It resolves the LLM provider from ConfigRegistry and drives the agent via `DeepAgentRuntime`. Provider resolution follows a strict priority chain — the first match wins, no fallback:
+- **`GET /.well-known/agent-card.json`** — Agent card discovery. Returns A2A-compliant `AgentCard` objects for all agents with `a2a_exposed=True`. Cards are filtered by the request's scope — only agents visible to the caller's scope are listed.
+- **`POST /a2a/{agent_name}`** — JSON-RPC endpoint. Accepts A2A `SendMessage` and `SendStreamingMessage` requests and bridges them to Cognition's `service.stream_response()`. Each agent gets its own card with a dedicated endpoint URL.
 
-1. `SessionConfig.provider_id` — exact `ProviderConfig` lookup by ID from ConfigRegistry
-2. `SessionConfig.provider` + `SessionConfig.model` — direct session override
-3. `AgentDefinition.config.provider` + `.model` — per-agent definition override
-4. First enabled `ProviderConfig` from ConfigRegistry (sorted by `priority` ascending)
+Agents opt in to A2A exposure via the `a2a_exposed` field on `AgentDefinition` (default `False`). Built-in agents are not exposed by default. The adapter uses the A2A SDK (`a2a-sdk>=1.0.0`) for protocol compliance and the `A2A-Version: 1.0` header for version negotiation.
 
-If no provider is resolved, `LLMProviderConfigError` is raised immediately with an actionable message. `_build_model()` uses LangChain's `init_chat_model()` to construct the model instance.
+#### Capability Registry
 
-`SessionAgentManager` is the server-level singleton that manages one `DeepAgentStreamingService` per active session and routes abort signals to the correct session.
+`GET /capabilities` returns the deployment's runtime feature set. This endpoint allows clients and builders to discover what features are available without parsing error messages or checking package versions.
 
----
-
-### Layer 6 — API & Streaming
-
-**`server/app/api/routes/`** — FastAPI route handlers for all resources: sessions, messages, agents, skills, tools, models, config. Routes do not contain business logic; they validate inputs, call into Layer 4 or Layer 2, and serialize outputs.
-
-**Route inventory:**
-
-| Prefix | CRUD | Description |
-|---|---|---|
-| `/sessions` | `POST GET PATCH DELETE` | Session lifecycle |
-| `/sessions/{id}/messages` | `POST GET` | Message send (streaming) and history |
-| `/sessions/{id}/abort` | `POST` | Cancel in-progress execution |
-| `/agents` | `GET POST PUT PATCH DELETE` | Agent definitions (ConfigRegistry) |
-| `/skills` | `GET POST PUT PATCH DELETE` | Skill definitions (ConfigRegistry) |
-| `/tools` | `GET POST DELETE` + `/reload` `/errors` | Tool registry |
-| `/models` | `GET` | Model catalog |
-| `/models/providers` | `GET POST PATCH DELETE` + `/test` | Provider configs (ConfigRegistry) |
-| `/config` | `GET PATCH` + `/rollback` | Infrastructure config |
-| `/health` `/ready` | `GET` | Health and readiness probes |
-
-**`server/app/api/sse.py`** — `SSEStream` implements the SSE protocol with:
-- Automatic reconnection via `Last-Event-ID` header and `EventBuffer` replay
-- Heartbeat comments (`:heartbeat`) every 15 seconds to keep proxies alive
-- Sequential event IDs for ordering and gap detection
-- `EventBuilder` static factory for every event type
-
-**`server/app/api/scoping.py`** — `create_scope_dependency()` builds a FastAPI dependency that reads `x-cognition-scope-{key}` headers for each key in `settings.scope_keys`. When `scoping_enabled=true`, missing headers return `403 Forbidden` (fail-closed). Scope values filter sessions and ConfigRegistry entries to enforce tenant isolation.
-
-**`server/app/api/middleware.py`** — `SecurityHeadersMiddleware` adds `X-Content-Type-Options`, `X-Frame-Options`, and `X-XSS-Protection` to every response. `ObservabilityMiddleware` records request count and duration into Prometheus.
+Response includes: installed package versions, supported stream protocols, available sandbox backends, feature flags (A2A, MCP, HITL, artifacts, etc.), middleware class names, scope key names, and deployment settings.
 
 ---
 

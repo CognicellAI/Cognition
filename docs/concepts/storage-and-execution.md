@@ -90,7 +90,7 @@ Each storage backend also exposes `get_store()`, which returns a LangGraph `Base
 | `SqliteStorageBackend` | `AsyncSqliteStore` (persisted to same database file as checkpointer) |
 | `PostgresStorageBackend` | `AsyncPostgresStore` (separate psycopg connection to same Postgres instance) |
 
-The Store is passed to `create_deep_agent()` and available inside agent nodes and middleware via `runtime.store`. Namespace scoping (via `CognitionContext.user_id`) ensures user A cannot read user B's stored data. See [CognitionContext and Cross-Thread Memory](./agent-runtime.md#cognitioncontext-and-cross-thread-memory) for details.
+The Store is passed to `create_deep_agent()` and available inside agent nodes and middleware via `runtime.store`. Namespace scoping (via `CognitionContext.effective_scope`) ensures one tenant cannot read another's stored data. See [CognitionContext and Cross-Thread Memory](./agent-runtime.md#cognitioncontext-and-cross-thread-memory) for details.
 
 ### Unified StorageBackend
 
@@ -102,6 +102,18 @@ class StorageBackend(SessionStore, MessageStore, CheckpointerStore, Protocol):
     async def close(self) -> None: ...        # Drain connections, release resources
     async def health_check(self) -> dict[str, Any]: ...
 ```
+
+### ArtifactStore
+
+Artifacts are durable, scope-aware files managed separately from session/message data. The `ArtifactStore` provides CRUD and versioning for artifacts with six types: `scratch`, `artifact`, `contract`, `eval`, `memory`, `policy`.
+
+Key properties:
+- **Scope-aware** — artifacts are filtered by `effective_scope` on every read
+- **Versioned** — content changes automatically increment the version number
+- **Type-safe** — artifact types control lifecycle semantics
+- **Visibility-controlled** — `private`, `run`, or `public` visibility levels
+
+Artifacts are accessible via `GET/POST/PUT/DELETE /artifacts` and are exposed to agents through the tool system.
 
 ### Message Projection Recovery
 

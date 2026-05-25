@@ -11,7 +11,11 @@ from typing import Any
 
 import pytest
 
-from tests.e2e.test_scenarios.conftest import ScenarioTestClient
+from tests.e2e.test_scenarios.conftest import (
+    ScenarioTestClient,
+    is_terminal_stream_event,
+    stream_completed,
+)
 
 
 def _unique(prefix: str = "da") -> str:
@@ -48,7 +52,7 @@ async def _collect_events(
                 if current_event_type:
                     payload["event"] = current_event_type
                 events.append(payload)
-                if current_event_type in {"done", "error"}:
+                if is_terminal_stream_event(payload):
                     break
                 current_event_type = None
                 if len(events) >= max_events:
@@ -97,7 +101,7 @@ async def _stream_resume_events(
                 if current_event_type:
                     payload["event"] = current_event_type
                 events.append(payload)
-                if current_event_type in {"done", "error"}:
+                if is_terminal_stream_event(payload):
                     break
                 current_event_type = None
     return events
@@ -202,15 +206,15 @@ class TestDeepAgentsStructuredOutput:
                 timeout=45.0,
             )
 
-            assert any(event.get("event") == "done" for event in events), (
-                f"Expected done event, got {[e.get('event') for e in events]}"
+            assert stream_completed(events), (
+                f"Expected terminal event, got {[e.get('event') for e in events]}"
             )
             response_text = _response_text(events)
             if response_text.strip():
                 assert response_text.strip() != ""
             else:
-                done_event = next(event for event in events if event.get("event") == "done")
-                assistant_data = done_event.get("assistant_data", {})
+                terminal_event = next(event for event in events if is_terminal_stream_event(event))
+                assistant_data = terminal_event.get("assistant_data", {})
                 assert isinstance(assistant_data, dict)
         finally:
             if session_id is not None:
@@ -286,7 +290,7 @@ class TestDeepAgentsInterruptResume:
                 timeout=60.0,
             )
 
-            assert any(event.get("event") == "done" for event in resume_events), resume_events
+            assert stream_completed(resume_events), resume_events
             assert any(event.get("event") == "status" for event in resume_events)
             assert any(event.get("event") == "usage" for event in resume_events)
 
@@ -319,7 +323,7 @@ class TestDeepAgentsInterruptResume:
                 timeout=60.0,
             )
 
-            assert any(event.get("event") == "done" for event in resume_events), resume_events
+            assert stream_completed(resume_events), resume_events
             response_text = _response_text(resume_events)
             if response_text.strip():
                 assert response_text.strip() != ""

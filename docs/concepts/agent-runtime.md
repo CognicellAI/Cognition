@@ -122,6 +122,7 @@ class AgentDefinition(BaseModel):
     description: str | None = None
     hidden: bool = False
     native: bool = False            # True for built-in agents
+    a2a_exposed: bool = False       # Expose via A2A protocol (default: off)
 ```
 
 ### Agent Modes
@@ -131,6 +132,60 @@ class AgentDefinition(BaseModel):
 | `primary` | Can be selected as the main agent for a session via `agent_name` |
 | `subagent` | Can only be invoked by another agent via the `task` tool |
 | `all` | Can function as either |
+
+### A2A Exposure
+
+The `a2a_exposed` field controls whether an agent is exposed via the [A2A (Agent-to-Agent)](https://google.github.io/A2A/) protocol. When `True`:
+
+- The agent appears in `GET /.well-known/agent-card.json` (scope-filtered)
+- The agent gets a dedicated JSON-RPC endpoint at `POST /a2a/{agent_name}`
+- External A2A clients can discover and invoke the agent
+
+Built-in agents (`default`, `readonly`, etc.) have `a2a_exposed=False` by default. Set it to `True` explicitly for agents you want to expose:
+
+```yaml
+# .cognition/agents/deploy-agent.yaml
+name: deploy-agent
+mode: primary
+a2a_exposed: true
+system_prompt: |
+  You are a deployment agent...
+```
+
+Or via the API:
+
+```bash
+curl -X POST http://localhost:8000/agents \
+  -H "Content-Type: application/json" \
+  -d '{"name": "deploy-agent", "system_prompt": "...", "a2a_exposed": true}'
+```
+
+### A2A Exposure
+
+The `a2a_exposed` field controls whether an agent is exposed via the [A2A (Agent-to-Agent)](https://google.github.io/A2A/) protocol. When `True`:
+
+- The agent appears in `GET /.well-known/agent-card.json` (scope-filtered)
+- The agent gets a dedicated JSON-RPC endpoint at `POST /a2a/{agent_name}`
+- External A2A clients can discover and invoke the agent
+
+Built-in agents (`default`, `readonly`, etc.) have `a2a_exposed=False` by default. Set it to `True` explicitly for agents you want to expose:
+
+```yaml
+# .cognition/agents/deploy-agent.yaml
+name: deploy-agent
+mode: primary
+a2a_exposed: true
+system_prompt: |
+  You are a deployment agent...
+```
+
+Or via the API:
+
+```bash
+curl -X POST http://localhost:8000/agents \
+  -H "Content-Type: application/json" \
+  -d '{"name": "deploy-agent", "system_prompt": "...", "a2a_exposed": true}'
+```
 
 ### System Prompt Sources
 
@@ -262,7 +317,16 @@ curl http://localhost:8000/agents
 curl http://localhost:8000/agents/readonly
 ```
 
-Response fields include `name`, `description`, `mode`, `hidden`, `native`, `model`, `temperature`, `response_format`, `interrupt_on`, `tools`, `skills`, and a truncated `system_prompt` (max 500 characters).
+Response fields include `name`, `description`, `mode`, `hidden`, `native`, `a2a_exposed`, `model`, `temperature`, `response_format`, `interrupt_on`, `tools`, `skills`, and a truncated `system_prompt` (max 500 characters).
+
+### Capability Discovery
+
+```bash
+# Get deployment capabilities and feature flags
+curl http://localhost:8000/capabilities
+```
+
+Returns installed package versions, supported stream protocols, sandbox backends, feature flags (including `a2a`, `mcp`, `artifacts`), middleware names, and scope configuration. See [API Reference](../guides/api-reference.md#capabilities) for the full response schema.
 
 ---
 
@@ -310,24 +374,29 @@ Subagents have their own tool sets and system prompts but run within the same se
 ```python
 @dataclass
 class CognitionContext:
-    user_id: str = "anonymous"
-    org_id: str | None = None
-    project_id: str | None = None
-    extra: dict[str, str] = field(default_factory=dict)
+    effective_scope: dict[str, str]  # e.g. {"tenant": "acme", "project": "ios", "end_user": "user_123"}
+    session_id: str | None = None
+    thread_id: str | None = None
+    agent_name: str | None = None
+    metadata: dict[str, str] = field(default_factory=dict)
 ```
+
+`effective_scope` carries the builder-authorized scope. Cognition does not hardcode a vocabulary — builders own the scope keys. The scope is propagated through the full pipeline: HTTP headers → `SessionScope` → `effective_scope` dict → `CognitionContext` → LangGraph `runtime.context` → middleware (trusted) → tools (via runtime context, not model-supplied arguments).
 
 This context serves two purposes:
 
-1. **Store namespace scoping** — `runtime.store` (a LangGraph `BaseStore`) is available inside agent nodes and middleware. `CognitionContext.user_id` is the natural key for building per-user memory namespaces, ensuring user A cannot read user B's stored memories.
+1. **Store namespace scoping** — `runtime.store` (a LangGraph `BaseStore`) is available inside agent nodes and middleware. `effective_scope` is the natural key for building per-tenant memory namespaces, ensuring one tenant cannot read another's stored memories.
 
-2. **Middleware access** — any custom middleware can read `runtime.context` to branch on user, org, or project dimensions without coupling to the HTTP layer.
+2. **Middleware access** — any custom middleware can read `runtime.context` to branch on builder-defined scope dimensions without coupling to the HTTP layer.
 
 ```python
 # Inside a custom tool or middleware
 async def save_to_memory(content: str, config: RunnableConfig) -> str:
     store = config["store"]
     context = config["configurable"].get("cognition_context")
-    namespace = (context.user_id, "memories")
+    # Use a scope key as the namespace prefix
+    tenant = context.effective_scope.get("tenant", "default")
+    namespace = (tenant, "memories")
     await store.aput(namespace, key, {"content": content})
     return "Saved."
 ```

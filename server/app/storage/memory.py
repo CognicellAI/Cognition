@@ -15,11 +15,21 @@ from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.store.base import BaseStore
 from langgraph.store.memory import InMemoryStore
 
-from server.app.models import Message, Session, SessionConfig
+from server.app.models import (
+    Message,
+    RunStatus,
+    Session,
+    SessionConfig,
+    SessionEvent,
+    SessionRun,
+    SessionStatus,
+)
 from server.app.storage.common import (
     filter_sessions,
     make_message,
     make_session,
+    make_session_event,
+    make_session_run,
     merge_session_config,
     now_utc_iso,
 )
@@ -44,6 +54,9 @@ class MemoryStorageBackend:
         self.workspace_path = Path(workspace_path).resolve()
         self._sessions: dict[str, Session] = {}
         self._messages: dict[str, Message] = {}
+        self._runs: dict[str, SessionRun] = {}
+        self._events: dict[str, SessionEvent] = {}
+        self._event_sequences: dict[str, int] = {}
         self._checkpointer: InMemorySaver | None = None
         self._store: InMemoryStore | None = None
 
@@ -63,6 +76,9 @@ class MemoryStorageBackend:
         """Close all connections (no-op for memory)."""
         self._sessions.clear()
         self._messages.clear()
+        self._runs.clear()
+        self._events.clear()
+        self._event_sequences.clear()
         self._checkpointer = None
         logger.debug("Memory storage closed")
 
@@ -132,6 +148,12 @@ class MemoryStorageBackend:
         if title is not None:
             session.title = title
 
+        if status is not None:
+            session.status = SessionStatus(status)
+
+        if agent_name is not None:
+            session.agent_name = agent_name
+
         if config is not None:
             session.config = merge_session_config(session.config, config)
 
@@ -154,6 +176,9 @@ class MemoryStorageBackend:
             del self._sessions[session_id]
             # Also delete associated messages
             self._messages = {k: v for k, v in self._messages.items() if v.session_id != session_id}
+            self._runs = {k: v for k, v in self._runs.items() if v.session_id != session_id}
+            self._events = {k: v for k, v in self._events.items() if v.session_id != session_id}
+            self._event_sequences.pop(session_id, None)
             logger.info(
                 "Session deleted (memory)",
                 session_id=session_id,
@@ -258,6 +283,177 @@ class MemoryStorageBackend:
             session.updated_at = now_utc_iso()
 
         return len(projected_messages)
+
+    # Runtime operations
+    async def create_run(
+        self,
+        run_id: str,
+        session_id: str,
+        thread_id: str,
+        status: RunStatus = RunStatus.QUEUED,
+        effective_scope: dict[str, str] | None = None,
+        idempotency_key: str | None = None,
+        parent_run_id: str | None = None,
+        trace_id: str | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> SessionRun:
+        """Create a durable run for a session."""
+        attempt = len([run for run in self._runs.values() if run.session_id == session_id]) + 1
+        now = now_utc_iso()
+        started_at = now if status in {RunStatus.STARTING, RunStatus.ACTIVE} else None
+        run = make_session_run(
+            run_id=run_id,
+            session_id=session_id,
+            thread_id=thread_id,
+            status=status,
+            effective_scope=effective_scope,
+            attempt=attempt,
+            idempotency_key=idempotency_key,
+            parent_run_id=parent_run_id,
+            trace_id=trace_id,
+            metadata=metadata,
+            started_at=started_at,
+            last_activity_at=now,
+        )
+        self._runs[run_id] = run
+        return run
+
+    async def get_run(self, run_id: str) -> SessionRun | None:
+        """Get a run by ID."""
+        return self._runs.get(run_id)
+
+    async def get_run_by_idempotency_key(
+        self,
+        session_id: str,
+        idempotency_key: str,
+    ) -> SessionRun | None:
+        """Get an existing run by session and idempotency key."""
+        for run in self._runs.values():
+            if run.session_id == session_id and run.idempotency_key == idempotency_key:
+                return run
+        return None
+
+    async def list_runs(self, session_id: str) -> list[SessionRun]:
+        """List runs for a session, newest first."""
+        runs = [run for run in self._runs.values() if run.session_id == session_id]
+        runs.sort(key=lambda run: run.created_at, reverse=True)
+        return runs
+
+    async def get_active_run(self, session_id: str) -> SessionRun | None:
+        """Get the active foreground run for a session."""
+        active_statuses = {
+            RunStatus.QUEUED,
+            RunStatus.STARTING,
+            RunStatus.ACTIVE,
+            RunStatus.WAITING_FOR_APPROVAL,
+            RunStatus.STALLED,
+            RunStatus.ABORTING,
+        }
+        for run in await self.list_runs(session_id):
+            if run.status in active_statuses:
+                return run
+        return None
+
+    async def update_run(
+        self,
+        run_id: str,
+        status: RunStatus | str | None = None,
+        last_activity_at: str | None = None,
+        completed_at: str | None = None,
+        error_code: str | None = None,
+        status_reason: str | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> SessionRun | None:
+        """Update durable run state."""
+        run = self._runs.get(run_id)
+        if run is None:
+            return None
+
+        now = now_utc_iso()
+        if status is not None:
+            run.status = status if isinstance(status, RunStatus) else RunStatus(status)
+            if run.started_at is None and run.status in {RunStatus.STARTING, RunStatus.ACTIVE}:
+                run.started_at = now
+            if RunStatus.is_terminal(run.status) and completed_at is None:
+                completed_at = now
+        if last_activity_at is not None:
+            run.last_activity_at = last_activity_at
+        if completed_at is not None:
+            run.completed_at = completed_at
+        if error_code is not None:
+            run.error_code = error_code
+        if status_reason is not None:
+            run.status_reason = status_reason
+        if metadata is not None:
+            run.metadata = dict(metadata)
+        run.updated_at = now
+        return run
+
+    async def append_event(
+        self,
+        event_id: str,
+        session_id: str,
+        run_id: str,
+        event_type: str,
+        payload: dict[str, Any] | None = None,
+        visibility: Literal["internal", "builder", "end_user"] = "builder",
+        effective_scope: dict[str, str] | None = None,
+        trace_id: str | None = None,
+        span_id: str | None = None,
+    ) -> SessionEvent:
+        """Append a durable runtime event."""
+        sequence = self._event_sequences.get(session_id, 0) + 1
+        self._event_sequences[session_id] = sequence
+        event = make_session_event(
+            event_id=event_id,
+            session_id=session_id,
+            run_id=run_id,
+            sequence=sequence,
+            event_type=event_type,
+            visibility=visibility,
+            payload=payload,
+            effective_scope=effective_scope,
+            trace_id=trace_id,
+            span_id=span_id,
+        )
+        self._events[event_id] = event
+        now = event.created_at
+        await self.update_run(run_id, last_activity_at=now)
+        session = self._sessions.get(session_id)
+        if session is not None:
+            session.updated_at = now
+            session.metadata = {
+                **session.metadata,
+                "latest_run_id": run_id,
+                "latest_event_type": event_type,
+                "last_activity_at": now,
+            }
+            run = await self.get_run(run_id)
+            if run is not None and not RunStatus.is_terminal(run.status):
+                session.metadata["active_run_id"] = run_id
+        return event
+
+    async def list_events(
+        self,
+        session_id: str,
+        run_id: str | None = None,
+        after_sequence: int | None = None,
+        limit: int = 100,
+        visibility: Literal["internal", "builder", "end_user"] | None = None,
+        event_type: str | None = None,
+    ) -> list[SessionEvent]:
+        """List runtime events for a session using cursor-style filters."""
+        events = [event for event in self._events.values() if event.session_id == session_id]
+        if run_id is not None:
+            events = [event for event in events if event.run_id == run_id]
+        if after_sequence is not None:
+            events = [event for event in events if event.sequence > after_sequence]
+        if visibility is not None:
+            events = [event for event in events if event.visibility == visibility]
+        if event_type is not None:
+            events = [event for event in events if event.event_type == event_type]
+        events.sort(key=lambda event: event.sequence)
+        return events[:limit]
 
     # Checkpointer operations
     async def get_checkpointer(self) -> BaseCheckpointSaver:

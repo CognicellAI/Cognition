@@ -20,7 +20,11 @@ from server.app.storage.config_models import (
     SkillDefinition,
     ToolRegistration,
 )
-from server.app.storage.config_registry import MemoryConfigRegistry, SqliteConfigRegistry
+from server.app.storage.config_registry import (
+    MemoryConfigRegistry,
+    PostgresConfigRegistry,
+    SqliteConfigRegistry,
+)
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -459,3 +463,32 @@ class TestSqliteConfigRegistry:
             assert result.model == "claude-3"
         finally:
             await reg.close()
+
+
+class TestPostgresConfigRegistry:
+    @pytest.mark.asyncio
+    async def test_delete_returns_false_for_missing_rowcount(self):
+        class _Cursor:
+            rowcount = 0
+
+        class _Conn:
+            async def execute(self, *_args, **_kwargs):
+                return _Cursor()
+
+        class _ConnectionContext:
+            async def __aenter__(self):
+                return _Conn()
+
+            async def __aexit__(self, *_args):
+                return None
+
+        class _Pool:
+            def connection(self):
+                return _ConnectionContext()
+
+        reg = PostgresConfigRegistry("postgresql://example/test")
+        reg._pool = _Pool()  # type: ignore[assignment]
+
+        deleted = await reg.delete_tool("missing-tool")
+
+        assert deleted is False
