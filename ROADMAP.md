@@ -417,7 +417,7 @@ This section tracks the v0.10.0 long-running agents release. See `localdocs/v0.1
 | `server/version.py` → `"0.10.0"` | Version bump on release branch | Complete |
 | `localdocs/v0.10.0-plan.md` | Agent reference document | Complete |
 | CHANGELOG.md updated | Waves 1-3 documented | Complete |
-| Pre-release image gate | `0.10.0-rc1` validated | Pending -- dispatch after final release-branch validation |
+| Pre-release image gate | `0.10.0-rc1` validated | Complete -- app/sandbox amd64, app/sandbox arm64, and both multi-arch manifests passed in pre-release workflow |
 
 ### Done Criteria
 
@@ -436,4 +436,4 @@ Per AGENTS.md requirements:
    - Features/Architectural: Before starting work
    - Security/Bug/Performance/Dependency: As part of PR
 
-**Last Updated**: 2026-05-25 (v0.10.0 Wave 2C merged — final release validation and `0.10.0-rc1` image gate pending)
+**Last Updated**: 2026-05-25 (v0.10.0 final release validation complete — `0.10.0-rc1` app and sandbox image gate passed)
