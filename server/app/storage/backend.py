@@ -23,7 +23,7 @@ from typing import Any, Literal, Protocol, runtime_checkable
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.store.base import BaseStore
 
-from server.app.models import Message, Session, SessionConfig
+from server.app.models import Message, RunStatus, Session, SessionConfig, SessionEvent, SessionRun
 
 
 @runtime_checkable
@@ -251,6 +251,86 @@ class CheckpointerStore(Protocol):
 
 
 @runtime_checkable
+class RuntimeStore(Protocol):
+    """Protocol for durable run and runtime event storage."""
+
+    async def create_run(
+        self,
+        run_id: str,
+        session_id: str,
+        thread_id: str,
+        status: RunStatus = RunStatus.QUEUED,
+        effective_scope: dict[str, str] | None = None,
+        idempotency_key: str | None = None,
+        parent_run_id: str | None = None,
+        trace_id: str | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> SessionRun:
+        """Create a durable run for a session."""
+        ...
+
+    async def get_run(self, run_id: str) -> SessionRun | None:
+        """Get a run by ID."""
+        ...
+
+    async def get_run_by_idempotency_key(
+        self,
+        session_id: str,
+        idempotency_key: str,
+    ) -> SessionRun | None:
+        """Get an existing run by session and idempotency key."""
+        ...
+
+    async def list_runs(self, session_id: str) -> list[SessionRun]:
+        """List runs for a session, newest first."""
+        ...
+
+    async def get_active_run(self, session_id: str) -> SessionRun | None:
+        """Get the active foreground run for a session, if any."""
+        ...
+
+    async def update_run(
+        self,
+        run_id: str,
+        status: RunStatus | str | None = None,
+        last_activity_at: str | None = None,
+        completed_at: str | None = None,
+        error_code: str | None = None,
+        status_reason: str | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> SessionRun | None:
+        """Update durable run state."""
+        ...
+
+    async def append_event(
+        self,
+        event_id: str,
+        session_id: str,
+        run_id: str,
+        event_type: str,
+        payload: dict[str, Any] | None = None,
+        visibility: Literal["internal", "builder", "end_user"] = "builder",
+        effective_scope: dict[str, str] | None = None,
+        trace_id: str | None = None,
+        span_id: str | None = None,
+    ) -> SessionEvent:
+        """Append a durable runtime event."""
+        ...
+
+    async def list_events(
+        self,
+        session_id: str,
+        run_id: str | None = None,
+        after_sequence: int | None = None,
+        limit: int = 100,
+        visibility: Literal["internal", "builder", "end_user"] | None = None,
+        event_type: str | None = None,
+    ) -> list[SessionEvent]:
+        """List runtime events for a session using cursor-style filters."""
+        ...
+
+
+@runtime_checkable
 class StorageBackend(Protocol):
     """Unified storage backend protocol.
 
@@ -358,6 +438,82 @@ class StorageBackend(Protocol):
         checkpoint_messages: list[Any],
     ) -> int:
         """Rebuild the message projection for a session from checkpoint state."""
+        ...
+
+    # Runtime operations
+    async def create_run(
+        self,
+        run_id: str,
+        session_id: str,
+        thread_id: str,
+        status: RunStatus = RunStatus.QUEUED,
+        effective_scope: dict[str, str] | None = None,
+        idempotency_key: str | None = None,
+        parent_run_id: str | None = None,
+        trace_id: str | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> SessionRun:
+        """Create a durable run for a session."""
+        ...
+
+    async def get_run(self, run_id: str) -> SessionRun | None:
+        """Get a run by ID."""
+        ...
+
+    async def get_run_by_idempotency_key(
+        self,
+        session_id: str,
+        idempotency_key: str,
+    ) -> SessionRun | None:
+        """Get an existing run by session and idempotency key."""
+        ...
+
+    async def list_runs(self, session_id: str) -> list[SessionRun]:
+        """List runs for a session, newest first."""
+        ...
+
+    async def get_active_run(self, session_id: str) -> SessionRun | None:
+        """Get the active foreground run for a session, if any."""
+        ...
+
+    async def update_run(
+        self,
+        run_id: str,
+        status: RunStatus | str | None = None,
+        last_activity_at: str | None = None,
+        completed_at: str | None = None,
+        error_code: str | None = None,
+        status_reason: str | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> SessionRun | None:
+        """Update durable run state."""
+        ...
+
+    async def append_event(
+        self,
+        event_id: str,
+        session_id: str,
+        run_id: str,
+        event_type: str,
+        payload: dict[str, Any] | None = None,
+        visibility: Literal["internal", "builder", "end_user"] = "builder",
+        effective_scope: dict[str, str] | None = None,
+        trace_id: str | None = None,
+        span_id: str | None = None,
+    ) -> SessionEvent:
+        """Append a durable runtime event."""
+        ...
+
+    async def list_events(
+        self,
+        session_id: str,
+        run_id: str | None = None,
+        after_sequence: int | None = None,
+        limit: int = 100,
+        visibility: Literal["internal", "builder", "end_user"] | None = None,
+        event_type: str | None = None,
+    ) -> list[SessionEvent]:
+        """List runtime events for a session using cursor-style filters."""
         ...
 
     # Checkpointer operations

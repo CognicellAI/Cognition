@@ -101,6 +101,18 @@ if PROMETHEUS_AVAILABLE:
         ["decision", "tool_name"],
     )
 
+    RUNTIME_EVENT_COUNT = Counter(
+        "cognition_runtime_events_total",
+        "Total durable runtime events",
+        ["event_type", "visibility"],
+    )
+
+    RUN_TRANSITION_COUNT = Counter(
+        "cognition_run_transitions_total",
+        "Total durable run lifecycle transitions",
+        ["status"],
+    )
+
     SESSION_COUNT = Counter(
         "cognition_sessions_total",
         "Session lifecycle events",
@@ -126,6 +138,8 @@ else:
     TOOL_SAFETY_EVENT_COUNT = DummyMetric()  # type: ignore[assignment]
     CONTEXT_EVENT_COUNT = DummyMetric()  # type: ignore[assignment]
     HITL_DECISION_COUNT = DummyMetric()  # type: ignore[assignment]
+    RUNTIME_EVENT_COUNT = DummyMetric()  # type: ignore[assignment]
+    RUN_TRANSITION_COUNT = DummyMetric()  # type: ignore[assignment]
     SESSION_COUNT = DummyMetric()  # type: ignore[assignment]
 
 
@@ -266,6 +280,17 @@ def get_tracer(name: str) -> Any:
     if not OPENTELEMETRY_AVAILABLE or trace is None:
         return None
     return trace.get_tracer(name)
+
+
+def current_trace_context() -> tuple[str | None, str | None]:
+    """Return current OpenTelemetry trace/span ids as hex strings if available."""
+    if not OPENTELEMETRY_AVAILABLE or trace is None:
+        return None, None
+    span_obj = trace.get_current_span()
+    context = span_obj.get_span_context()
+    if not context.is_valid:
+        return None, None
+    return f"{context.trace_id:032x}", f"{context.span_id:016x}"
 
 
 def traced(name: str | None = None) -> Callable[[F], F]:

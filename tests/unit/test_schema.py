@@ -9,6 +9,8 @@ from server.app.storage.schema import (
     get_table_names,
     messages_table,
     metadata,
+    session_events_table,
+    session_runs_table,
     sessions_table,
 )
 
@@ -25,7 +27,9 @@ class TestSchemaDefinitions:
         assert "config_entities" in table_names
         assert "config_changes" in table_names
         assert "artifacts" in table_names
-        assert len(table_names) == 5
+        assert "session_runs" in table_names
+        assert "session_events" in table_names
+        assert len(table_names) == 7
 
     def test_sessions_table_columns(self) -> None:
         """Test sessions table has expected columns."""
@@ -68,14 +72,61 @@ class TestSchemaDefinitions:
         for col in expected_columns:
             assert col in columns, f"Missing column: {col}"
 
+    def test_session_runs_table_columns(self) -> None:
+        """Test session_runs table has expected columns."""
+        columns = get_column_names("session_runs")
+
+        expected_columns = [
+            "id",
+            "session_id",
+            "thread_id",
+            "status",
+            "effective_scope",
+            "idempotency_key",
+            "attempt",
+            "last_activity_at",
+            "trace_id",
+            "metadata",
+            "created_at",
+            "updated_at",
+        ]
+
+        for col in expected_columns:
+            assert col in columns, f"Missing column: {col}"
+
+    def test_session_events_table_columns(self) -> None:
+        """Test session_events table has expected columns."""
+        columns = get_column_names("session_events")
+
+        expected_columns = [
+            "id",
+            "session_id",
+            "run_id",
+            "sequence",
+            "event_type",
+            "visibility",
+            "payload",
+            "effective_scope",
+            "trace_id",
+            "span_id",
+            "created_at",
+        ]
+
+        for col in expected_columns:
+            assert col in columns, f"Missing column: {col}"
+
     def test_table_access(self) -> None:
         """Test direct table access."""
         assert sessions_table.name == "sessions"
         assert messages_table.name == "messages"
+        assert session_runs_table.name == "session_runs"
+        assert session_events_table.name == "session_events"
 
         # Verify primary keys
         assert "id" in [col.name for col in sessions_table.primary_key.columns]
         assert "id" in [col.name for col in messages_table.primary_key.columns]
+        assert "id" in [col.name for col in session_runs_table.primary_key.columns]
+        assert "id" in [col.name for col in session_events_table.primary_key.columns]
 
 
 class TestSchemaCreation:
@@ -103,6 +154,8 @@ class TestSchemaCreation:
 
             assert "sessions" in tables
             assert "messages" in tables
+            assert "session_runs" in tables
+            assert "session_events" in tables
 
             engine.dispose()
 

@@ -18,9 +18,25 @@ from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from langgraph.store.base import BaseStore
 from langgraph.store.sqlite.aio import AsyncSqliteStore
 
-from server.app.models import Message, Session, SessionConfig, SessionStatus, ToolCall
+from server.app.models import (
+    Message,
+    RunStatus,
+    Session,
+    SessionConfig,
+    SessionEvent,
+    SessionRun,
+    SessionStatus,
+    ToolCall,
+)
 from server.app.storage.backend import StorageBackend
-from server.app.storage.common import make_message, make_session, merge_session_config, now_utc_iso
+from server.app.storage.common import (
+    make_message,
+    make_session,
+    make_session_event,
+    make_session_run,
+    merge_session_config,
+    now_utc_iso,
+)
 from server.app.storage.message_projection import project_checkpoint_messages
 
 logger = structlog.get_logger(__name__)
@@ -513,6 +529,304 @@ class SqliteStorageBackend:
                 )
             return deleted
 
+    # Runtime operations
+    async def create_run(
+        self,
+        run_id: str,
+        session_id: str,
+        thread_id: str,
+        status: RunStatus = RunStatus.QUEUED,
+        effective_scope: dict[str, str] | None = None,
+        idempotency_key: str | None = None,
+        parent_run_id: str | None = None,
+        trace_id: str | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> SessionRun:
+        """Create a durable run for a session."""
+        runs = await self.list_runs(session_id)
+        now = now_utc_iso()
+        run = make_session_run(
+            run_id=run_id,
+            session_id=session_id,
+            thread_id=thread_id,
+            status=status,
+            effective_scope=effective_scope,
+            attempt=len(runs) + 1,
+            idempotency_key=idempotency_key,
+            parent_run_id=parent_run_id,
+            trace_id=trace_id,
+            metadata=metadata,
+            started_at=now if status in {RunStatus.STARTING, RunStatus.ACTIVE} else None,
+            last_activity_at=now,
+        )
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute(
+                """
+                INSERT INTO session_runs (
+                    id, session_id, thread_id, status, effective_scope,
+                    idempotency_key, attempt, parent_run_id, started_at,
+                    last_activity_at, completed_at, error_code, status_reason,
+                    trace_id, metadata, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    run.id,
+                    run.session_id,
+                    run.thread_id,
+                    run.status.value,
+                    json.dumps(run.effective_scope),
+                    run.idempotency_key,
+                    run.attempt,
+                    run.parent_run_id,
+                    run.started_at,
+                    run.last_activity_at,
+                    run.completed_at,
+                    run.error_code,
+                    run.status_reason,
+                    run.trace_id,
+                    json.dumps(run.metadata),
+                    run.created_at,
+                    run.updated_at,
+                ),
+            )
+            await db.commit()
+        return run
+
+    async def get_run(self, run_id: str) -> SessionRun | None:
+        """Get a run by ID."""
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            async with db.execute("SELECT * FROM session_runs WHERE id = ?", (run_id,)) as cursor:
+                row = await cursor.fetchone()
+                if row:
+                    return self._row_to_run(row)
+        return None
+
+    async def get_run_by_idempotency_key(
+        self,
+        session_id: str,
+        idempotency_key: str,
+    ) -> SessionRun | None:
+        """Get an existing run by session and idempotency key."""
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            async with db.execute(
+                """
+                SELECT * FROM session_runs
+                WHERE session_id = ? AND idempotency_key = ?
+                ORDER BY created_at DESC
+                LIMIT 1
+                """,
+                (session_id, idempotency_key),
+            ) as cursor:
+                row = await cursor.fetchone()
+                if row:
+                    return self._row_to_run(row)
+        return None
+
+    async def list_runs(self, session_id: str) -> list[SessionRun]:
+        """List runs for a session, newest first."""
+        runs = []
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            async with db.execute(
+                """
+                SELECT * FROM session_runs
+                WHERE session_id = ?
+                ORDER BY created_at DESC
+                """,
+                (session_id,),
+            ) as cursor:
+                async for row in cursor:
+                    runs.append(self._row_to_run(row))
+        return runs
+
+    async def get_active_run(self, session_id: str) -> SessionRun | None:
+        """Get the active foreground run for a session."""
+        active_statuses = (
+            RunStatus.QUEUED.value,
+            RunStatus.STARTING.value,
+            RunStatus.ACTIVE.value,
+            RunStatus.WAITING_FOR_APPROVAL.value,
+            RunStatus.STALLED.value,
+            RunStatus.ABORTING.value,
+        )
+        placeholders = ", ".join("?" for _ in active_statuses)
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            async with db.execute(
+                f"""
+                SELECT * FROM session_runs
+                WHERE session_id = ? AND status IN ({placeholders})
+                ORDER BY created_at DESC
+                LIMIT 1
+                """,
+                (session_id, *active_statuses),
+            ) as cursor:
+                row = await cursor.fetchone()
+                if row:
+                    return self._row_to_run(row)
+        return None
+
+    async def update_run(
+        self,
+        run_id: str,
+        status: RunStatus | str | None = None,
+        last_activity_at: str | None = None,
+        completed_at: str | None = None,
+        error_code: str | None = None,
+        status_reason: str | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> SessionRun | None:
+        """Update durable run state."""
+        run = await self.get_run(run_id)
+        if run is None:
+            return None
+
+        updates: list[str] = []
+        params: list[Any] = []
+        now = now_utc_iso()
+        if status is not None:
+            run_status = status if isinstance(status, RunStatus) else RunStatus(status)
+            updates.append("status = ?")
+            params.append(run_status.value)
+            if run.started_at is None and run_status in {RunStatus.STARTING, RunStatus.ACTIVE}:
+                updates.append("started_at = ?")
+                params.append(now)
+            if RunStatus.is_terminal(run_status) and completed_at is None:
+                completed_at = now
+        if last_activity_at is not None:
+            updates.append("last_activity_at = ?")
+            params.append(last_activity_at)
+        if completed_at is not None:
+            updates.append("completed_at = ?")
+            params.append(completed_at)
+        if error_code is not None:
+            updates.append("error_code = ?")
+            params.append(error_code)
+        if status_reason is not None:
+            updates.append("status_reason = ?")
+            params.append(status_reason)
+        if metadata is not None:
+            updates.append("metadata = ?")
+            params.append(json.dumps(metadata))
+        if not updates:
+            return run
+        updates.append("updated_at = ?")
+        params.append(now)
+        params.append(run_id)
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute(f"UPDATE session_runs SET {', '.join(updates)} WHERE id = ?", params)
+            await db.commit()
+        return await self.get_run(run_id)
+
+    async def append_event(
+        self,
+        event_id: str,
+        session_id: str,
+        run_id: str,
+        event_type: str,
+        payload: dict[str, Any] | None = None,
+        visibility: Literal["internal", "builder", "end_user"] = "builder",
+        effective_scope: dict[str, str] | None = None,
+        trace_id: str | None = None,
+        span_id: str | None = None,
+    ) -> SessionEvent:
+        """Append a durable runtime event."""
+        async with aiosqlite.connect(self.db_path) as db:
+            async with db.execute(
+                "SELECT COALESCE(MAX(sequence), 0) + 1 FROM session_events WHERE session_id = ?",
+                (session_id,),
+            ) as cursor:
+                row = await cursor.fetchone()
+                sequence = int(row[0]) if row else 1
+            event = make_session_event(
+                event_id=event_id,
+                session_id=session_id,
+                run_id=run_id,
+                sequence=sequence,
+                event_type=event_type,
+                visibility=visibility,
+                payload=payload,
+                effective_scope=effective_scope,
+                trace_id=trace_id,
+                span_id=span_id,
+            )
+            await db.execute(
+                """
+                INSERT INTO session_events (
+                    id, session_id, run_id, sequence, event_type, visibility,
+                    payload, effective_scope, trace_id, span_id, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    event.id,
+                    event.session_id,
+                    event.run_id,
+                    event.sequence,
+                    event.event_type,
+                    event.visibility,
+                    json.dumps(event.payload),
+                    json.dumps(event.effective_scope),
+                    event.trace_id,
+                    event.span_id,
+                    event.created_at,
+                ),
+            )
+            metadata_patch = {
+                "latest_run_id": run_id,
+                "latest_event_type": event_type,
+                "last_activity_at": event.created_at,
+            }
+            session = await self.get_session(session_id)
+            if session is not None:
+                metadata = {**session.metadata, **metadata_patch}
+                await db.execute(
+                    "UPDATE sessions SET metadata = ?, updated_at = ? WHERE id = ?",
+                    (json.dumps(metadata), event.created_at, session_id),
+                )
+            await db.execute(
+                "UPDATE session_runs SET last_activity_at = ?, updated_at = ? WHERE id = ?",
+                (event.created_at, event.created_at, run_id),
+            )
+            await db.commit()
+        return event
+
+    async def list_events(
+        self,
+        session_id: str,
+        run_id: str | None = None,
+        after_sequence: int | None = None,
+        limit: int = 100,
+        visibility: Literal["internal", "builder", "end_user"] | None = None,
+        event_type: str | None = None,
+    ) -> list[SessionEvent]:
+        """List runtime events for a session using cursor-style filters."""
+        query = "SELECT * FROM session_events WHERE session_id = ?"
+        params: list[Any] = [session_id]
+        if run_id is not None:
+            query += " AND run_id = ?"
+            params.append(run_id)
+        if after_sequence is not None:
+            query += " AND sequence > ?"
+            params.append(after_sequence)
+        if visibility is not None:
+            query += " AND visibility = ?"
+            params.append(visibility)
+        if event_type is not None:
+            query += " AND event_type = ?"
+            params.append(event_type)
+        query += " ORDER BY sequence ASC LIMIT ?"
+        params.append(limit)
+
+        events = []
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            async with db.execute(query, params) as cursor:
+                async for row in cursor:
+                    events.append(self._row_to_event(row))
+        return events
+
     # Checkpointer operations
     async def get_checkpointer(self) -> BaseCheckpointSaver:
         """Get the SQLite checkpointer."""
@@ -628,6 +942,44 @@ class SqliteStorageBackend:
             token_count=row["token_count"],
             model_used=row["model_used"],
             metadata=metadata,
+        )
+
+    def _row_to_run(self, row: aiosqlite.Row) -> SessionRun:
+        """Convert a database row to a SessionRun."""
+        return make_session_run(
+            run_id=row["id"],
+            session_id=row["session_id"],
+            thread_id=row["thread_id"],
+            status=RunStatus(row["status"]),
+            effective_scope=json.loads(row["effective_scope"]) if row["effective_scope"] else {},
+            attempt=row["attempt"],
+            idempotency_key=row["idempotency_key"],
+            parent_run_id=row["parent_run_id"],
+            started_at=row["started_at"],
+            last_activity_at=row["last_activity_at"],
+            completed_at=row["completed_at"],
+            error_code=row["error_code"],
+            status_reason=row["status_reason"],
+            trace_id=row["trace_id"],
+            metadata=json.loads(row["metadata"]) if row["metadata"] else {},
+            created_at=row["created_at"],
+            updated_at=row["updated_at"],
+        )
+
+    def _row_to_event(self, row: aiosqlite.Row) -> SessionEvent:
+        """Convert a database row to a SessionEvent."""
+        return make_session_event(
+            event_id=row["id"],
+            session_id=row["session_id"],
+            run_id=row["run_id"],
+            sequence=row["sequence"],
+            event_type=row["event_type"],
+            visibility=row["visibility"],
+            payload=json.loads(row["payload"]) if row["payload"] else {},
+            effective_scope=json.loads(row["effective_scope"]) if row["effective_scope"] else {},
+            trace_id=row["trace_id"],
+            span_id=row["span_id"],
+            created_at=row["created_at"],
         )
 
 

@@ -9,7 +9,7 @@ from datetime import datetime
 import pytest
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
-from server.app.models import SessionConfig
+from server.app.models import RunStatus, SessionConfig
 from server.app.storage.memory import MemoryStorageBackend
 from server.app.storage.message_projection import project_checkpoint_messages
 from server.app.storage.sqlite import SqliteStorageBackend
@@ -256,3 +256,91 @@ class TestMessageProjectionRebuild:
         assert rebuilt == 2
         messages = await storage.list_messages_for_session("session-1")
         assert [message.role for message in messages] == ["user", "assistant"]
+
+
+class TestRuntimeDurabilityStorage:
+    @pytest.mark.asyncio
+    async def test_sqlite_run_and_event_round_trip(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            storage = SqliteStorageBackend(
+                connection_string=f"{tmpdir}/test.db",
+                workspace_path=tmpdir,
+            )
+            await storage.initialize()
+            await storage.create_session(
+                session_id="session-runs",
+                thread_id="thread-runs",
+                config=SessionConfig(),
+            )
+
+            run = await storage.create_run(
+                run_id="run-1",
+                session_id="session-runs",
+                thread_id="thread-runs",
+                status=RunStatus.ACTIVE,
+                effective_scope={"tenant": "acme"},
+                idempotency_key="assignment-1",
+            )
+            assert run.attempt == 1
+            assert run.effective_scope == {"tenant": "acme"}
+
+            event = await storage.append_event(
+                event_id="event-1",
+                session_id="session-runs",
+                run_id=run.id,
+                event_type="tool.call.started",
+                payload={"tool_name": "execute"},
+                effective_scope=run.effective_scope,
+            )
+            assert event.sequence == 1
+
+            active = await storage.get_active_run("session-runs")
+            assert active is not None
+            assert active.id == "run-1"
+
+            existing = await storage.get_run_by_idempotency_key(
+                "session-runs", "assignment-1"
+            )
+            assert existing is not None
+            assert existing.id == "run-1"
+
+            events = await storage.list_events("session-runs", after_sequence=0)
+            assert [item.event_type for item in events] == ["tool.call.started"]
+            assert events[0].payload == {"tool_name": "execute"}
+
+            updated = await storage.update_run("run-1", status=RunStatus.DONE)
+            assert updated is not None
+            assert updated.status == RunStatus.DONE
+            assert await storage.get_active_run("session-runs") is None
+
+            await storage.close()
+
+    @pytest.mark.asyncio
+    async def test_memory_run_event_cursor_filters(self):
+        storage = MemoryStorageBackend(workspace_path="/tmp")
+        await storage.initialize()
+        await storage.create_session(
+            session_id="session-events",
+            thread_id="thread-events",
+            config=SessionConfig(),
+        )
+        run = await storage.create_run(
+            run_id="run-1",
+            session_id="session-events",
+            thread_id="thread-events",
+            status=RunStatus.ACTIVE,
+        )
+        await storage.append_event("event-1", "session-events", run.id, "run.started")
+        await storage.append_event(
+            "event-2",
+            "session-events",
+            run.id,
+            "tool.call.started",
+            visibility="internal",
+        )
+
+        events = await storage.list_events("session-events", after_sequence=1)
+        assert [event.id for event in events] == ["event-2"]
+
+        builder_events = await storage.list_events("session-events", visibility="builder")
+        assert [event.id for event in builder_events] == ["event-1"]
