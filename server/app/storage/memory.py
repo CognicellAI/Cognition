@@ -15,7 +15,7 @@ from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.store.base import BaseStore
 from langgraph.store.memory import InMemoryStore
 
-from server.app.models import Message, Session, SessionConfig
+from server.app.models import Message, Session, SessionConfig, SessionStatus
 from server.app.storage.common import (
     filter_sessions,
     make_message,
@@ -131,6 +131,12 @@ class MemoryStorageBackend:
 
         if title is not None:
             session.title = title
+
+        if status is not None:
+            session.status = SessionStatus(status)
+
+        if agent_name is not None:
+            session.agent_name = agent_name
 
         if config is not None:
             session.config = merge_session_config(session.config, config)

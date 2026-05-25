@@ -356,27 +356,25 @@ class ToolSecurityMiddleware(AgentMiddleware):
         tool_name = (
             request.tool_call.get("name", "unknown") if hasattr(request, "tool_call") else "unknown"
         )
-        session_id = (
-            getattr(request.runtime.config, "configurable", {}).get("thread_id")
-            if hasattr(request, "runtime")
-            else None
-        )
+        safe_context = _safe_tool_event_context(getattr(request, "runtime", None))
+        session_id = safe_context.get("session_id")
+        run_id = safe_context.get("run_id")
 
         logger.info(
             "tool_call",
             tool=tool_name,
             session_id=session_id,
+            run_id=run_id,
         )
 
         if tool_name in self._blocked_tools:
-            logger.warning("tool_blocked", tool=tool_name, session_id=session_id)
+            logger.warning("tool_blocked", tool=tool_name, session_id=session_id, run_id=run_id)
             tool_call_id = (
                 request.tool_call.get("id")
                 if hasattr(request, "tool_call") and isinstance(request.tool_call, dict)
                 else "unknown"
             )
             message = f"Tool '{tool_name}' is disabled by server policy."
-            safe_context = _safe_tool_event_context(getattr(request, "runtime", None))
             _audit_tool_safety(
                 action="blocked",
                 tool_name=tool_name,

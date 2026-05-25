@@ -504,7 +504,7 @@ class DeepAgentStreamingService:
 
             finally:
                 if manager:
-                    manager.unregister_runtime(session_id)
+                    manager.unregister_runtime(session_id, runtime)
 
         except LLMProviderConfigError as e:
             logger.error(
@@ -785,7 +785,7 @@ class SessionAgentManager:
         self._config_store = config_store
         self._services: dict[str, DeepAgentStreamingService] = {}
         self._project_paths: dict[str, str] = {}
-        self._active_runtimes: dict[str, Any] = {}
+        self._active_runtimes: dict[str, list[Any]] = {}
         self._sandbox_backends: dict[str, Any] = {}
         self._sandbox_events: dict[str, asyncio.Queue[SandboxLifecycleEvent]] = {}
         self._sandbox_backend_type: str = settings.sandbox_backend
@@ -830,17 +830,52 @@ class SessionAgentManager:
 
     def get_runtime(self, session_id: str) -> Any | None:
         """Get the active runtime for a session, if any."""
-        return self._active_runtimes.get(session_id)
+        runtimes = self._active_runtimes.get(session_id) or []
+        return runtimes[-1] if runtimes else None
+
+    def active_runtime_count(self, session_id: str) -> int:
+        """Return the number of active runtime turns for a session."""
+        return len(self._active_runtimes.get(session_id) or [])
 
     def register_runtime(self, session_id: str, runtime: Any) -> None:
         """Register an active runtime for abort tracking."""
-        self._active_runtimes[session_id] = runtime
-        logger.debug("Runtime registered for abort tracking", session_id=session_id)
+        runtimes = self._active_runtimes.setdefault(session_id, [])
+        runtimes.append(runtime)
+        logger.debug(
+            "Runtime registered for abort tracking",
+            session_id=session_id,
+            active_runtime_count=len(runtimes),
+        )
 
-    def unregister_runtime(self, session_id: str) -> None:
+    def unregister_runtime(self, session_id: str, runtime: Any | None = None) -> None:
         """Unregister a runtime when streaming completes."""
-        self._active_runtimes.pop(session_id, None)
-        logger.debug("Runtime unregistered", session_id=session_id)
+        runtimes = self._active_runtimes.get(session_id)
+        if not runtimes:
+            logger.debug("Runtime unregistered", session_id=session_id, active_runtime_count=0)
+            return
+
+        if runtime is None:
+            runtimes.pop()
+        else:
+            try:
+                runtimes.remove(runtime)
+            except ValueError:
+                logger.debug(
+                    "Runtime unregister skipped for non-current runtime",
+                    session_id=session_id,
+                    active_runtime_count=len(runtimes),
+                )
+                return
+
+        if runtimes:
+            logger.debug(
+                "Runtime unregistered",
+                session_id=session_id,
+                active_runtime_count=len(runtimes),
+            )
+        else:
+            self._active_runtimes.pop(session_id, None)
+            logger.debug("Runtime unregistered", session_id=session_id, active_runtime_count=0)
 
     async def abort_session(self, session_id: str, thread_id: str | None = None) -> bool:
         """Abort the current operation for a session.
@@ -848,7 +883,7 @@ class SessionAgentManager:
         Returns:
             True if abort was signaled, False if no active runtime.
         """
-        runtime = self._active_runtimes.get(session_id)
+        runtime = self.get_runtime(session_id)
         if runtime:
             success = bool(await runtime.abort(thread_id))
             logger.info("Session abort signaled", session_id=session_id, success=success)

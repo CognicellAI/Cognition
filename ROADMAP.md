@@ -48,6 +48,7 @@ See AGENTS.md for category definitions, DoD requirements, and precedence rules.
 | 2026-03-30 | Fix config loading to honor workspace root and resolve env templates in YAML — `load_config()` now receives workspace-aware cwd at bootstrap/API call sites and `load_yaml_file()` resolves `${VAR}` / `${VAR:-default}` placeholders before provider bootstrap and config reads. | `COGNITION_ISSUE.md` | 1/6 | Completed |
 | 2026-03-30 | Fix agent config flow gaps — wire `AgentConfig.max_tokens` into model builders, parse nested frontmatter `config:` blocks, expose full agent config through API responses/CRUD, and stop truncating `system_prompt` in agent responses. | `COGNITION_ISSUE.md` | 4/5/6 | Completed |
 | 2026-03-30 | Fix runtime streaming error surfacing so graph execution failures emit `ErrorEvent` instead of ending with an empty assistant response. | `COGNITION_ISSUE.md` | 4/6 | In Progress |
+| 2026-05-25 | Fix Deep Agents runtime activity not updating durable session state — assistant responses are streamed but not persisted, tool activity does not advance `updated_at`, tool logs show `session_id=None`, and overlapping turns can mark a session done while earlier runtime work continues. | AEP report: session `2488ce4e-13fa-47c4-95fb-d5120d89f097` | 2/4/6/7 | In Progress |
 
 ---
 
