@@ -260,8 +260,8 @@ class TestInterruptOnWiring:
         }
 
     @pytest.mark.asyncio
-    async def test_empty_interrupt_on_not_passed(self):
-        """Empty interrupt_on → interrupt_on=None passed."""
+    async def test_empty_interrupt_on_is_preserved(self):
+        """Explicit empty interrupt_on disables inherited HITL defaults."""
         from server.app.agent.definition import AgentDefinition
 
         session = _make_session()
@@ -269,6 +269,26 @@ class TestInterruptOnWiring:
         patches = _base_patches(mock_runtime, session)
 
         agent_def = AgentDefinition(name="test-agent", system_prompt="test", interrupt_on={})
+        mock_def_registry = MagicMock()
+        mock_def_registry.get = MagicMock(return_value=agent_def)
+        mock_def_registry.subagents = MagicMock(return_value=[])
+
+        _, create_agent_mock = await _run(patches, session, mock_def_registry=mock_def_registry)
+
+        params = _get_params(create_agent_mock)
+        assert params is not None
+        assert params.interrupt_on == {}
+
+    @pytest.mark.asyncio
+    async def test_omitted_interrupt_on_not_passed(self):
+        """Omitted interrupt_on remains None so global defaults can apply."""
+        from server.app.agent.definition import AgentDefinition
+
+        session = _make_session()
+        mock_runtime = _make_mock_runtime(DoneEvent())
+        patches = _base_patches(mock_runtime, session)
+
+        agent_def = AgentDefinition(name="test-agent", system_prompt="test")
         mock_def_registry = MagicMock()
         mock_def_registry.get = MagicMock(return_value=agent_def)
         mock_def_registry.subagents = MagicMock(return_value=[])
