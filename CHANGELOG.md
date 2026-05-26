@@ -7,6 +7,14 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [0.10.1] — 2026-05-25
+
+### Fixed
+
+- Preserved explicit empty agent `interrupt_on={}` policies so builder agents can opt out of HITL approvals instead of inheriting global defaults for runtime-injected sandbox tools such as `execute`.
+
+---
+
 ## [0.10.0] — 2026-05-25
 
 ### Highlights

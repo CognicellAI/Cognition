@@ -1,3 +1,4 @@
+from typing import Any, cast
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -8,6 +9,19 @@ from server.app.agent.cognition_agent import (
     create_cognition_agent,
 )
 from server.app.agent.definition import AsyncSubagentConfig, ContextPolicy
+from server.app.storage.config_models import GlobalAgentDefaults
+
+
+class _DefaultsOnlyConfigStore:
+    config_registry = None
+
+    def __init__(self, defaults: GlobalAgentDefaults) -> None:
+        self._defaults = defaults
+
+    async def get_global_agent_defaults(
+        self, scope: dict[str, str] | None = None
+    ) -> GlobalAgentDefaults:
+        return self._defaults
 
 
 @pytest.mark.asyncio
@@ -189,6 +203,57 @@ async def test_rich_interrupt_on_changes_agent_cache_key():
         )
 
         assert mock_create.call_count == 2
+    clear_agent_cache()
+
+
+@pytest.mark.asyncio
+async def test_empty_interrupt_on_overrides_global_defaults():
+    """Explicit interrupt_on={} should not inherit default approvals."""
+    clear_agent_cache()
+    defaults = GlobalAgentDefaults(
+        interrupt_on={"execute": {"allowed_decisions": ["approve", "reject"]}}
+    )
+    with patch("server.app.agent.cognition_agent.create_deep_agent") as mock_create:
+        mock_create.return_value = AsyncMock()
+
+        await create_cognition_agent(
+            CognitionAgentParams(
+                project_path=".",
+                model="mock:model",
+                system_prompt="test",
+                interrupt_on={},
+                config_store=cast(Any, _DefaultsOnlyConfigStore(defaults)),
+            )
+        )
+
+        _, kwargs = mock_create.call_args
+        assert kwargs["interrupt_on"] == {}
+    clear_agent_cache()
+
+
+@pytest.mark.asyncio
+async def test_omitted_interrupt_on_inherits_global_defaults():
+    """Absent interrupt_on should continue to inherit default approvals."""
+    clear_agent_cache()
+    defaults = GlobalAgentDefaults(
+        interrupt_on={"execute": {"allowed_decisions": ["approve", "reject"]}}
+    )
+    with patch("server.app.agent.cognition_agent.create_deep_agent") as mock_create:
+        mock_create.return_value = AsyncMock()
+
+        await create_cognition_agent(
+            CognitionAgentParams(
+                project_path=".",
+                model="mock:model",
+                system_prompt="test",
+                config_store=cast(Any, _DefaultsOnlyConfigStore(defaults)),
+            )
+        )
+
+        _, kwargs = mock_create.call_args
+        assert kwargs["interrupt_on"] == {
+            "execute": {"allowed_decisions": ["approve", "reject"]}
+        }
     clear_agent_cache()
 
 

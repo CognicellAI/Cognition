@@ -130,10 +130,6 @@ async def create_agent(
             "async_subagents": [
                 spec.model_dump(exclude_none=True) for spec in body.async_subagents
             ],
-            "interrupt_on": {
-                name: config.model_dump(exclude_none=True)
-                for name, config in body.interrupt_on.items()
-            },
             "permissions": [p.model_dump() for p in body.permissions],
             "response_format": body.response_format,
             "middleware": body.middleware,
@@ -152,6 +148,11 @@ async def create_agent(
                 "timeout_seconds": body.timeout_seconds,
             },
         }
+        if "interrupt_on" in body.model_fields_set:
+            definition_data["interrupt_on"] = {
+                name: config.model_dump(exclude_none=True)
+                for name, config in body.interrupt_on.items()
+            }
         effective_scope = scope.get_all() or body.scope
         await config_store.upsert_agent(body.name, effective_scope, definition_data, "api")
 

@@ -182,6 +182,13 @@ class StreamAccumulator:
         return self._current_tool_call is not None
 
 
+def _has_explicit_agent_field(agent_def: Any, field_name: str) -> bool:
+    fields_set = getattr(agent_def, "model_fields_set", None)
+    if isinstance(fields_set, set):
+        return field_name in fields_set
+    return hasattr(agent_def, field_name)
+
+
 class DeepAgentStreamingService:
     """Streaming service using DeepAgents for multi-step completion.
 
@@ -281,7 +288,7 @@ class DeepAgentStreamingService:
         if agent_def.memory:
             resolved.memory = list(agent_def.memory)
 
-        if agent_def.interrupt_on:
+        if _has_explicit_agent_field(agent_def, "interrupt_on"):
             resolved.interrupt_on = {
                 name: config.model_dump(exclude_none=True)
                 if hasattr(config, "model_dump")
