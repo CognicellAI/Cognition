@@ -16,6 +16,7 @@ See AGENTS.md for category definitions, DoD requirements, and precedence rules.
 
 | Date | Description | Severity | Layer | Status |
 |------|-------------|----------|-------|--------|
+| 2026-05-27 | Resolve open Dependabot alerts in `uv.lock` by upgrading `GitPython`, `Mako`, `urllib3`, `python-multipart`, `idna`, and `langchain-openai` to patched versions | High | 1 | Completed |
 | 2026-05-21 | K8s sandbox shell injection in `_upload_files_via_execute` — file paths interpolated into shell command without `shlex.quote()` | High | 3 | Planned |
 | 2026-05-21 | K8s sandbox thread-unsafe lazy init in `_ensure_sandbox()` — concurrent calls can create duplicate sandbox CRs | Medium | 3 | Planned |
 | 2026-05-21 | Dead unreachable `execute()` return block — duplicate return statements at end of method, second block never reached | Low | 3 | Planned |

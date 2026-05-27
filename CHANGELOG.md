@@ -7,6 +7,14 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [0.10.2] — 2026-05-27
+
+### Security
+
+- Resolved open Dependabot alerts by refreshing locked versions for `GitPython`, `Mako`, `urllib3`, `python-multipart`, `idna`, and `langchain-openai`.
+
+---
+
 ## [0.10.1] — 2026-05-25
 
 ### Fixed
