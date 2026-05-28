@@ -238,6 +238,7 @@ class DefaultConfigStore:
         self._config_registry = config_registry
         self._workspace_path = Path(workspace_path) if workspace_path else Path.cwd()
         self._agent_definitions: dict[str, AgentDefinition] = {}
+        self._file_agent_names: set[str] = set()
         self._init_builtin_agents()
         self.reload_file_agents()
 
@@ -322,6 +323,7 @@ Attempt the exact protected tool call immediately so that human-in-the-loop appr
         self._agent_definitions = {
             name: agent for name, agent in self._agent_definitions.items() if agent.native
         }
+        self._file_agent_names.clear()
         agents_dir = self._workspace_path / ".cognition" / "agents"
         if not agents_dir.exists():
             return
@@ -331,6 +333,7 @@ Attempt the exact protected tool call immediately so that human-in-the-loop appr
                 definition = load_agent_definition(yaml_path)
                 definition.native = False
                 self._agent_definitions[definition.name] = definition
+                self._file_agent_names.add(definition.name)
             except Exception as exc:
                 logger.warning("Failed to load agent from YAML %s: %s", yaml_path, exc)
 
@@ -339,6 +342,7 @@ Attempt the exact protected tool call immediately so that human-in-the-loop appr
                 definition = load_agent_definition(yml_path)
                 definition.native = False
                 self._agent_definitions[definition.name] = definition
+                self._file_agent_names.add(definition.name)
             except Exception as exc:
                 logger.warning("Failed to load agent from YAML %s: %s", yml_path, exc)
 
@@ -346,6 +350,7 @@ Attempt the exact protected tool call immediately so that human-in-the-loop appr
             try:
                 definition = load_agent_definition_from_markdown(md_path)
                 self._agent_definitions[definition.name] = definition
+                self._file_agent_names.add(definition.name)
             except Exception as exc:
                 logger.warning("Failed to load agent from Markdown %s: %s", md_path, exc)
 
@@ -354,10 +359,7 @@ Attempt the exact protected tool call immediately so that human-in-the-loop appr
         for definition in rows:
             if definition.name.startswith("__"):
                 continue
-            existing = self._agent_definitions.get(definition.name)
-            if existing and existing.native:
-                continue
-            self._agent_definitions[definition.name] = definition
+            AgentDefinition.model_validate(definition)
 
     async def on_config_change(self, event: ConfigChangeEvent) -> None:
         if event.entity_type != "agent":
@@ -366,27 +368,13 @@ Attempt the exact protected tool call immediately so that human-in-the-loop appr
             return
         if event.operation == "delete":
             existing = self._agent_definitions.get(event.name)
-            if existing and not existing.native:
+            if existing and not existing.native and event.name not in self._file_agent_names:
                 del self._agent_definitions[event.name]
             return
 
-        data = await self._config_registry.get_agent_raw(event.name, event.scope)
-        if not data:
-            return
-        try:
-            definition = AgentDefinition.model_validate(data)
-        except Exception:
-            logger.warning(
-                "Invalid agent definition in DB for %s — skipping cache update",
-                event.name,
-                exc_info=True,
-            )
-            return
-        definition.native = False
         existing = self._agent_definitions.get(event.name)
-        if existing and existing.native:
-            return
-        self._agent_definitions[event.name] = definition
+        if existing and not existing.native and event.name not in self._file_agent_names:
+            del self._agent_definitions[event.name]
 
     # ------------------------------------------------------------------
     # Provider CRUD
@@ -467,13 +455,13 @@ Attempt the exact protected tool call immediately so that human-in-the-loop appr
         definition: dict[str, Any],
         source: str = "api",
     ) -> None:
-        agent_def = AgentDefinition.model_validate(definition)
-        agent_def.native = False
+        AgentDefinition.model_validate(definition)
         existing = self._agent_definitions.get(name)
         if existing and existing.native:
             return
         await self._config_registry.upsert_agent(name, scope, definition, source)
-        self._agent_definitions[name] = agent_def
+        if name not in self._file_agent_names:
+            self._agent_definitions.pop(name, None)
 
     async def get_agent_raw(
         self, name: str, scope: dict[str, str] | None = None
@@ -493,7 +481,7 @@ Attempt the exact protected tool call immediately so that human-in-the-loop appr
         result = bool(await self._config_registry.delete_agent(name, scope))
         if result:
             existing = self._agent_definitions.get(name)
-            if existing and not existing.native:
+            if existing and not existing.native and name not in self._file_agent_names:
                 del self._agent_definitions[name]
         return result
 
@@ -504,18 +492,37 @@ Attempt the exact protected tool call immediately so that human-in-the-loop appr
     async def get_agent_definition(
         self, name: str, scope: dict[str, str] | None = None
     ) -> AgentDefinition | None:
-        return self._agent_definitions.get(name)
+        existing = self._agent_definitions.get(name)
+        if existing and existing.native:
+            return existing
+
+        raw = await self._config_registry.get_agent_raw(name, scope)
+        if raw is not None:
+            definition = AgentDefinition.model_validate(raw)
+            definition.native = False
+            return definition
+
+        return existing
 
     async def list_agent_definitions(
         self, include_hidden: bool = False, scope: dict[str, str] | None = None
     ) -> list[AgentDefinition]:
-        agents = list(self._agent_definitions.values())
+        agents_by_name = dict(self._agent_definitions)
+        for definition in await self._config_registry.list_agents(scope):
+            if definition.name.startswith("__"):
+                continue
+            existing = agents_by_name.get(definition.name)
+            if existing and existing.native:
+                continue
+            definition.native = False
+            agents_by_name[definition.name] = definition
+        agents = list(agents_by_name.values())
         if not include_hidden:
             agents = [agent for agent in agents if not agent.hidden]
         return sorted(agents, key=lambda agent: agent.name)
 
     async def is_valid_primary(self, name: str, scope: dict[str, str] | None = None) -> bool:
-        agent = self._agent_definitions.get(name)
+        agent = await self.get_agent_definition(name, scope)
         if agent is None or agent.hidden:
             return False
         return agent.mode in ("primary", "all")

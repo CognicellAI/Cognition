@@ -165,7 +165,7 @@ Additional MCP security measures:
 
 The A2A (Agent-to-Agent) protocol adapter is a Cognition protocol surface, not an app-layer concern.
 
-**Security boundary**: A2A requests must include `X-Cognition-Scope-*` headers. Agent card discovery and JSON-RPC endpoints are both scope-filtered — only agents visible in the caller's scope are discoverable and invocable.
+**Security boundary**: A2A requests must include `X-Cognition-Scope-*` headers. Per-agent card discovery at `/a2a/{agent_name}/.well-known/agent-card.json`, root discovery, and JSON-RPC endpoints are scope-filtered — only agents visible in the caller's scope are discoverable and invocable. Dynamically registered agents remain bound to the scope used at creation time, so callers must provide the same trusted scope headers for discovery and invocation.
 
 **Builder responsibility**: Cognition does not perform end-user authentication on A2A requests. Authorization must be handled at the gateway/proxy layer before requests reach Cognition. The `a2a_exposed` flag on `AgentDefinition` controls which agents are visible — set it explicitly to `True` only for agents intended for external A2A access.
 

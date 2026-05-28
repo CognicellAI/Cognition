@@ -80,8 +80,7 @@ class TestAgentCardDiscovery:
         self, api_client: ScenarioTestClient
     ) -> None:
         response = await api_client.client.get(
-            f"{api_client.base_url}/.well-known/agent-card.json",
-            params={"assistant_id": _A2A_AGENT_NAME},
+            f"{api_client.base_url}/a2a/{_A2A_AGENT_NAME}/.well-known/agent-card.json",
             headers=api_client.scope_header,
         )
         assert response.status_code == 200, response.text
@@ -95,8 +94,7 @@ class TestAgentCardDiscovery:
         self, api_client: ScenarioTestClient
     ) -> None:
         response = await api_client.client.get(
-            f"{api_client.base_url}/.well-known/agent-card.json",
-            params={"assistant_id": "nonexistent-agent-xyz"},
+            f"{api_client.base_url}/a2a/nonexistent-agent-xyz/.well-known/agent-card.json",
             headers=api_client.scope_header,
         )
         assert response.status_code == 404
@@ -105,8 +103,7 @@ class TestAgentCardDiscovery:
         self, api_client: ScenarioTestClient
     ) -> None:
         response = await api_client.client.get(
-            f"{api_client.base_url}/.well-known/agent-card.json",
-            params={"assistant_id": _A2A_AGENT_NAME},
+            f"{api_client.base_url}/a2a/{_A2A_AGENT_NAME}/.well-known/agent-card.json",
             headers=api_client.scope_header,
         )
         card = response.json()
@@ -123,14 +120,14 @@ class TestA2AMessageSend:
         self, api_client: ScenarioTestClient
     ) -> None:
         message = {
-            "role": "ROLE_USER",
-            "parts": [{"text": "Say hello in exactly 3 words.", "mediaType": "text/plain"}],
+            "role": "user",
+            "parts": [{"kind": "text", "text": "Say hello in exactly 3 words."}],
             "messageId": str(uuid.uuid4()),
         }
         payload = {
             "jsonrpc": "2.0",
             "id": str(uuid.uuid4()),
-            "method": "SendMessage",
+            "method": "message/send",
             "params": {"message": message},
         }
         response = await api_client.client.post(
@@ -139,7 +136,6 @@ class TestA2AMessageSend:
             headers={
                 "Accept": "application/json",
                 "Content-Type": "application/json",
-                "A2A-Version": "1.0",
                 **api_client.scope_header,
             },
             timeout=60.0,
@@ -147,25 +143,24 @@ class TestA2AMessageSend:
         assert response.status_code == 200, response.text
         result = response.json()
         assert "result" in result, f"No result in response: {result}"
-        wrapper = result["result"]
-        assert "task" in wrapper
-        task = wrapper["task"]
+        task = result["result"]
+        assert task["kind"] == "task"
         assert "id" in task
         assert "contextId" in task
-        assert task["status"]["state"] in ["TASK_STATE_COMPLETED", 3]
+        assert task["status"]["state"] == "completed"
 
     async def test_send_message_returns_artifact(
         self, api_client: ScenarioTestClient
     ) -> None:
         message = {
-            "role": "ROLE_USER",
-            "parts": [{"text": "Reply with exactly: A2A_WORKS", "mediaType": "text/plain"}],
+            "role": "user",
+            "parts": [{"kind": "text", "text": "Reply with exactly: A2A_WORKS"}],
             "messageId": str(uuid.uuid4()),
         }
         payload = {
             "jsonrpc": "2.0",
             "id": str(uuid.uuid4()),
-            "method": "SendMessage",
+            "method": "message/send",
             "params": {"message": message},
         }
         response = await api_client.client.post(
@@ -174,15 +169,13 @@ class TestA2AMessageSend:
             headers={
                 "Accept": "application/json",
                 "Content-Type": "application/json",
-                "A2A-Version": "1.0",
                 **api_client.scope_header,
             },
             timeout=60.0,
         )
         assert response.status_code == 200, response.text
         result = response.json()
-        wrapper = result["result"]
-        task = wrapper.get("task", wrapper)
+        task = result["result"]
         artifacts = task.get("artifacts", [])
         assert len(artifacts) >= 1, f"No artifacts in task: {task}"
         artifact = artifacts[0]
@@ -199,14 +192,14 @@ class TestA2AStreaming:
         self, api_client: ScenarioTestClient
     ) -> None:
         message = {
-            "role": "ROLE_USER",
-            "parts": [{"text": "Count from 1 to 3.", "mediaType": "text/plain"}],
+            "role": "user",
+            "parts": [{"kind": "text", "text": "Count from 1 to 3."}],
             "messageId": str(uuid.uuid4()),
         }
         payload = {
             "jsonrpc": "2.0",
             "id": str(uuid.uuid4()),
-            "method": "SendStreamingMessage",
+            "method": "message/stream",
             "params": {"message": message},
         }
         events = []
@@ -218,7 +211,6 @@ class TestA2AStreaming:
             headers={
                 "Accept": "text/event-stream",
                 "Content-Type": "application/json",
-                "A2A-Version": "1.0",
                 **api_client.scope_header,
             },
             timeout=60.0,
@@ -235,14 +227,14 @@ class TestA2AStreaming:
         self, api_client: ScenarioTestClient
     ) -> None:
         message = {
-            "role": "ROLE_USER",
-            "parts": [{"text": "Say OK.", "mediaType": "text/plain"}],
+            "role": "user",
+            "parts": [{"kind": "text", "text": "Say OK."}],
             "messageId": str(uuid.uuid4()),
         }
         payload = {
             "jsonrpc": "2.0",
             "id": str(uuid.uuid4()),
-            "method": "SendStreamingMessage",
+            "method": "message/stream",
             "params": {"message": message},
         }
         events = []
@@ -254,7 +246,6 @@ class TestA2AStreaming:
             headers={
                 "Accept": "text/event-stream",
                 "Content-Type": "application/json",
-                "A2A-Version": "1.0",
                 **api_client.scope_header,
             },
             timeout=60.0,

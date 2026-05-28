@@ -81,8 +81,8 @@ class CognitionA2AExecutor(AgentExecutor):
 
         # 2. Resolve scope from request metadata/context
         scope: dict[str, str] | None = None
-        if context.call_context and hasattr(context.call_context, "headers"):
-            headers = context.call_context.headers or {}
+        if context.call_context:
+            headers = context.call_context.state.get("headers", {})
             scope_keys = self._settings.scope_keys
             if scope_keys:
                 scope = {}

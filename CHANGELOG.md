@@ -7,6 +7,15 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [0.10.3] — 2026-05-28
+
+### Fixed
+
+- Updated the A2A protocol surface to expose current JSON-RPC method names (`message/send`, `message/stream`), per-agent Agent Card discovery at `/a2a/{agent_name}/.well-known/agent-card.json`, current task/event response shapes, and default handling for omitted `A2A-Version` headers.
+- Fixed scoped dynamic agent lookup for A2A route resolution so same-named agents in different request scopes resolve to the correct scoped definition.
+
+---
+
 ## [0.10.2] — 2026-05-27
 
 ### Security

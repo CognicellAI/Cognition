@@ -493,7 +493,7 @@ curl -X POST http://localhost:8000/agents \
 
 ### How It Works
 
-1. **Agent card discovery** — `GET /.well-known/agent-card.json` returns A2A `AgentCard` objects for all agents with `a2a_exposed=True`, filtered by the caller's scope.
+1. **Agent card discovery** — `GET /a2a/{agent_name}/.well-known/agent-card.json` returns the A2A `AgentCard` for that agent. `GET /.well-known/agent-card.json` also lists exposed agents visible to the caller's scope.
 2. **JSON-RPC endpoint** — Each agent gets a dedicated endpoint at `POST /a2a/{agent_name}`. The agent is resolved at request time, so agents created after server startup are immediately available.
 3. **Scope-aware** — A2A requests must include `X-Cognition-Scope-*` headers. Only agents visible in the caller's scope are discoverable and invocable.
 4. **Bridging** — The `CognitionA2AExecutor` bridges A2A requests to Cognition's `service.stream_response()`, reusing the full agent runtime, tools, middleware, and persistence.
@@ -503,12 +503,12 @@ curl -X POST http://localhost:8000/agents \
 ```python
 import httpx
 
-# Discover agents
+# Discover a specific agent card from the agent's canonical A2A URL
 resp = httpx.get(
-    "http://localhost:8000/.well-known/agent-card.json",
+    "http://localhost:8000/a2a/deploy-agent/.well-known/agent-card.json",
     headers={"X-Cognition-Scope-User": "alice"},
 )
-cards = resp.json()["cards"]
+card = resp.json()
 
 # Send a message to an agent
 resp = httpx.post(
@@ -516,16 +516,15 @@ resp = httpx.post(
     json={
         "jsonrpc": "2.0",
         "id": "1",
-        "method": "SendMessage",
+        "method": "message/send",
         "params": {
             "message": {
                 "role": "user",
-                "parts": [{"type": "text", "text": "Deploy staging"}],
+                "parts": [{"kind": "text", "text": "Deploy staging"}],
             }
         },
     },
     headers={
-        "A2A-Version": "1.0",
         "X-Cognition-Scope-User": "alice",
     },
 )
@@ -535,7 +534,8 @@ resp = httpx.post(
 
 - Built-in agents (`default`, `readonly`) have `a2a_exposed=False` by default
 - Only `primary` and `all` mode agents can be exposed via A2A
-- The `A2A-Version: 1.0` header is required (without it, the SDK defaults to v0.3 which is unsupported)
+- If `A2A-Version` is omitted, Cognition treats the request as the current supported A2A version
+- Dynamically registered agents are scope-bound. Use the same `X-Cognition-Scope-*` headers when creating, discovering, and invoking an agent.
 - A2A does not add any additional services — endpoints are part of the main Cognition server
 
 For full A2A protocol details, see the [A2A SDK documentation](https://github.com/a2aproject/a2a-python).

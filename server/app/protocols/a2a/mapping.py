@@ -66,7 +66,9 @@ def extract_text_from_parts(parts: Any) -> str:
     """Extract text content from A2A Message parts."""
     texts: list[str] = []
     for part in parts:
-        if hasattr(part, "text") and part.text:
+        if isinstance(part, dict) and part.get("text"):
+            texts.append(str(part["text"]))
+        elif hasattr(part, "text") and part.text:
             texts.append(part.text)
     return "\n".join(texts) if texts else ""
 
