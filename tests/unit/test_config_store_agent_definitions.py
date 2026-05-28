@@ -152,6 +152,76 @@ class TestScopePreservation:
         result = await store.get_agent_raw_with_scope("no-such-agent")
         assert result is None
 
+    @pytest.mark.asyncio
+    async def test_get_agent_definition_respects_scope_for_same_name(
+        self, store: DefaultConfigStore
+    ):
+        await store.upsert_agent(
+            "shared-agent",
+            {"user": "alice"},
+            {
+                "name": "shared-agent",
+                "system_prompt": "alice prompt",
+                "mode": "primary",
+                "a2a_exposed": True,
+            },
+            "api",
+        )
+        await store.upsert_agent(
+            "shared-agent",
+            {"user": "bob"},
+            {
+                "name": "shared-agent",
+                "system_prompt": "bob prompt",
+                "mode": "primary",
+                "a2a_exposed": True,
+            },
+            "api",
+        )
+
+        alice_agent = await store.get_agent_definition("shared-agent", {"user": "alice"})
+        bob_agent = await store.get_agent_definition("shared-agent", {"user": "bob"})
+        missing_agent = await store.get_agent_definition("shared-agent", {"user": "carol"})
+
+        assert alice_agent is not None
+        assert bob_agent is not None
+        assert alice_agent.system_prompt == "alice prompt"
+        assert bob_agent.system_prompt == "bob prompt"
+        assert missing_agent is None
+
+    @pytest.mark.asyncio
+    async def test_list_agent_definitions_respects_scope_for_same_name(
+        self, store: DefaultConfigStore
+    ):
+        await store.upsert_agent(
+            "shared-agent",
+            {"user": "alice"},
+            {
+                "name": "shared-agent",
+                "system_prompt": "alice prompt",
+                "mode": "primary",
+            },
+            "api",
+        )
+        await store.upsert_agent(
+            "shared-agent",
+            {"user": "bob"},
+            {
+                "name": "shared-agent",
+                "system_prompt": "bob prompt",
+                "mode": "primary",
+            },
+            "api",
+        )
+
+        alice_agents = await store.list_agent_definitions(scope={"user": "alice"})
+        bob_agents = await store.list_agent_definitions(scope={"user": "bob"})
+
+        alice_agent = next(agent for agent in alice_agents if agent.name == "shared-agent")
+        bob_agent = next(agent for agent in bob_agents if agent.name == "shared-agent")
+        assert alice_agent.system_prompt == "alice prompt"
+        assert bob_agent.system_prompt == "bob prompt"
+
 
 class TestValidationPropagation:
     @pytest.mark.asyncio

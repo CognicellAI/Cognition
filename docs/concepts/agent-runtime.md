@@ -137,7 +137,8 @@ class AgentDefinition(BaseModel):
 
 The `a2a_exposed` field controls whether an agent is exposed via the [A2A (Agent-to-Agent)](https://google.github.io/A2A/) protocol. When `True`:
 
-- The agent appears in `GET /.well-known/agent-card.json` (scope-filtered)
+- The agent has an Agent Card at `GET /a2a/{agent_name}/.well-known/agent-card.json`
+- The agent appears in `GET /.well-known/agent-card.json` (scope-filtered list)
 - The agent gets a dedicated JSON-RPC endpoint at `POST /a2a/{agent_name}`
 - External A2A clients can discover and invoke the agent
 
@@ -164,7 +165,8 @@ curl -X POST http://localhost:8000/agents \
 
 The `a2a_exposed` field controls whether an agent is exposed via the [A2A (Agent-to-Agent)](https://google.github.io/A2A/) protocol. When `True`:
 
-- The agent appears in `GET /.well-known/agent-card.json` (scope-filtered)
+- The agent has an Agent Card at `GET /a2a/{agent_name}/.well-known/agent-card.json`
+- The agent appears in `GET /.well-known/agent-card.json` (scope-filtered list)
 - The agent gets a dedicated JSON-RPC endpoint at `POST /a2a/{agent_name}`
 - External A2A clients can discover and invoke the agent
 

@@ -4,7 +4,10 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock
 
+import httpx
+import pytest
 from a2a.types import TaskState
+from fastapi import FastAPI
 
 from server.app.agent.definition import AgentDefinition
 from server.app.agent.runtime import (
@@ -19,6 +22,11 @@ from server.app.protocols.a2a.mapping import (
     event_to_a2a_state,
     extract_text_from_parts,
     is_hitl_pause,
+)
+from server.app.protocols.a2a.wire import (
+    normalize_request_for_sdk,
+    normalize_response_to_public,
+    normalize_stream_item_to_public,
 )
 
 
@@ -105,6 +113,95 @@ class TestBuildAgentCardForAgent:
         card_str = str(card)
         assert "tool1" not in card_str
         assert "tool2" not in card_str
+
+
+class TestA2APerAgentCardRoute:
+    @pytest.mark.asyncio
+    async def test_per_agent_card_uses_request_base_url_and_scope(self):
+        from server.app.protocols.a2a.routes import mount_a2a_routes
+        from server.app.storage.config_registry import MemoryConfigRegistry
+        from server.app.storage.config_store import DefaultConfigStore
+
+        app = FastAPI()
+        settings = MagicMock()
+        settings.scope_keys = ["user"]
+        config_store = DefaultConfigStore(MemoryConfigRegistry())
+        await config_store.upsert_agent(
+            "scoped-agent",
+            {"user": "alice"},
+            {
+                "name": "scoped-agent",
+                "system_prompt": "test",
+                "mode": "primary",
+                "a2a_exposed": True,
+            },
+        )
+        await mount_a2a_routes(
+            app,
+            settings=settings,
+            config_store=config_store,
+            session_agent_manager=MagicMock(),
+            store=MagicMock(),
+            version="0.10.3",
+        )
+
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(
+            transport=transport,
+            base_url="http://example.test",
+        ) as client:
+            response = await client.get(
+                "/a2a/scoped-agent/.well-known/agent-card.json",
+                headers={"X-Cognition-Scope-User": "alice"},
+            )
+
+        assert response.status_code == 200
+        card = response.json()
+        assert card["name"] == "Cognition (scoped-agent)"
+        assert card["supportedInterfaces"][0]["url"] == (
+            "http://example.test/a2a/scoped-agent"
+        )
+
+    @pytest.mark.asyncio
+    async def test_per_agent_card_respects_request_scope(self):
+        from server.app.protocols.a2a.routes import mount_a2a_routes
+        from server.app.storage.config_registry import MemoryConfigRegistry
+        from server.app.storage.config_store import DefaultConfigStore
+
+        app = FastAPI()
+        settings = MagicMock()
+        settings.scope_keys = ["user"]
+        config_store = DefaultConfigStore(MemoryConfigRegistry())
+        await config_store.upsert_agent(
+            "scoped-agent",
+            {"user": "alice"},
+            {
+                "name": "scoped-agent",
+                "system_prompt": "test",
+                "mode": "primary",
+                "a2a_exposed": True,
+            },
+        )
+        await mount_a2a_routes(
+            app,
+            settings=settings,
+            config_store=config_store,
+            session_agent_manager=MagicMock(),
+            store=MagicMock(),
+            version="0.10.3",
+        )
+
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(
+            transport=transport,
+            base_url="http://example.test",
+        ) as client:
+            response = await client.get(
+                "/a2a/scoped-agent/.well-known/agent-card.json",
+                headers={"X-Cognition-Scope-User": "bob"},
+            )
+
+        assert response.status_code == 404
 
 
 class TestA2AExposureFiltering:
@@ -202,6 +299,108 @@ class TestExtractTextFromParts:
 
     def test_empty_parts(self):
         assert extract_text_from_parts([]) == ""
+
+    def test_current_text_part_shape(self):
+        parts = [{"kind": "text", "text": "hello world"}]
+        assert extract_text_from_parts(parts) == "hello world"
+
+
+class TestA2AWireShape:
+    def test_message_send_request_normalizes_to_sdk_shape(self):
+        payload = {
+            "jsonrpc": "2.0",
+            "id": "1",
+            "method": "message/send",
+            "params": {
+                "message": {
+                    "role": "user",
+                    "parts": [{"kind": "text", "text": "hello"}],
+                }
+            },
+        }
+
+        normalized = normalize_request_for_sdk(payload)
+
+        assert normalized["method"] == "SendMessage"
+        message = normalized["params"]["message"]
+        assert message["role"] == "ROLE_USER"
+        assert message["parts"] == [{"text": "hello", "mediaType": "text/plain"}]
+
+    def test_message_stream_request_normalizes_to_sdk_shape(self):
+        payload = {
+            "jsonrpc": "2.0",
+            "id": "1",
+            "method": "message/stream",
+            "params": {"message": {"role": "agent", "parts": [{"text": "hello"}]}},
+        }
+
+        normalized = normalize_request_for_sdk(payload)
+
+        assert normalized["method"] == "SendStreamingMessage"
+        assert normalized["params"]["message"]["role"] == "ROLE_AGENT"
+
+    def test_task_response_normalizes_to_current_shape(self):
+        payload = {
+            "jsonrpc": "2.0",
+            "id": "1",
+            "result": {
+                "task": {
+                    "id": "task-1",
+                    "contextId": "ctx-1",
+                    "status": {
+                        "state": "TASK_STATE_COMPLETED",
+                        "message": {
+                            "role": "ROLE_AGENT",
+                            "parts": [{"text": "Done"}],
+                        },
+                    },
+                }
+            },
+        }
+
+        normalized = normalize_response_to_public(payload)
+
+        task = normalized["result"]
+        assert task["kind"] == "task"
+        assert task["status"]["state"] == "completed"
+        assert task["status"]["message"]["kind"] == "message"
+        assert task["status"]["message"]["role"] == "agent"
+        assert task["status"]["message"]["parts"][0]["kind"] == "text"
+
+    def test_stream_status_event_normalizes_to_current_shape(self):
+        payload = {
+            "jsonrpc": "2.0",
+            "id": "1",
+            "result": {
+                "taskId": "task-1",
+                "contextId": "ctx-1",
+                "status": {"state": 3},
+            },
+        }
+
+        normalized = normalize_stream_item_to_public(payload)
+
+        event = normalized["result"]
+        assert event["kind"] == "status-update"
+        assert event["status"]["state"] == "completed"
+
+    def test_stream_artifact_event_normalizes_to_current_shape(self):
+        payload = {
+            "jsonrpc": "2.0",
+            "id": "1",
+            "result": {
+                "taskId": "task-1",
+                "contextId": "ctx-1",
+                "artifact": {"parts": [{"text": "hello"}]},
+            },
+        }
+
+        normalized = normalize_stream_item_to_public(payload)
+
+        event = normalized["result"]
+        assert event["kind"] == "artifact-update"
+        assert event["artifact"]["kind"] == "artifact"
+        assert event["artifact"]["parts"][0]["kind"] == "text"
 
 
 class TestEventToA2AState:
