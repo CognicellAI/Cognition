@@ -10,13 +10,13 @@ The core promise: define your agent with tools, skills, and a system prompt — 
 
 - [The 7-Layer Model](#the-7-layer-model)
 - [Layer Breakdown](#layer-breakdown)
-  - [Layer 1 — Foundation](#layer-1--foundation)
-  - [Layer 2 — Persistence](#layer-2--persistence)
-  - [Layer 3 — Execution](#layer-3--execution)
-  - [Layer 4 — Agent Runtime](#layer-4--agent-runtime)
-  - [Layer 5 — LLM Provider](#layer-5--llm-provider)
-  - [Layer 6 — API & Streaming](#layer-6--api--streaming)
-  - [Layer 7 — Observability](#layer-7--observability)
+  - [Layer 1 — Foundation](#layer-1-foundation)
+  - [Layer 2 — Persistence](#layer-2-persistence)
+  - [Layer 3 — Execution](#layer-3-execution)
+  - [Layer 4 — Agent Runtime](#layer-4-agent-runtime)
+  - Layer 5 — LLM Provider
+  - Layer 6 — API & Streaming
+  - [Layer 7 — Observability](#layer-7-observability)
 - [Startup Sequence](#startup-sequence)
 - [The North Star](#the-north-star)
 

@@ -80,6 +80,11 @@ dev = [
     "pre-commit>=4.0.0",
 ]
 
+# Documentation site
+docs = [
+    "mkdocs-material>=9.6.0",
+]
+
 # Deployment (MLflow tracing + Docker sandbox)
 deploy = [
     "mlflow[genai]>=2.19.0",

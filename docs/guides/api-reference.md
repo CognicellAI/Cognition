@@ -8,7 +8,7 @@ All request and response bodies are JSON unless noted. Streaming endpoints retur
 
 ## Contents
 
-- [Health & Readiness](#health--readiness)
+- [Health & Readiness](#health-readiness)
 - [Sessions](#sessions)
   - [`POST /sessions`](#post-sessions)
   - [`GET /sessions`](#get-sessions)

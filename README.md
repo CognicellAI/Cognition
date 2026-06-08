@@ -189,6 +189,25 @@ The CLI is one example of what you can build on Cognition. See the [Blueprints](
 | [Deployment Guide](./docs/guides/deployment.md) | Docker Compose, PostgreSQL, and production hardening |
 | [API Reference](./docs/guides/api-reference.md) | Every REST endpoint and SSE event type |
 
+Preview the documentation site locally:
+
+```bash
+uv run --extra docs mkdocs serve
+```
+
+Build the static site for deployment under `/docs`:
+
+```bash
+uv run --extra docs mkdocs build --strict
+```
+
+The docs site is configured for Vercel in `vercel.json`. Connect the repository
+to Vercel, set the production branch to `main`, and add
+`cognition.cognicellai.com` as the project domain. Vercel builds `site/`, while
+MkDocs writes the documentation under `site/docs` so the public URL can be
+`https://cognition.cognicellai.com/docs/`. The `Docs / Build MkDocs site`
+GitHub Actions check should be required before merge.
+
 ## Testing
 
 ```bash
