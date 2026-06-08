@@ -47,6 +47,9 @@ htmlcov/
 # Ruff
 .ruff_cache/
 
+# Docs site build
+site/
+
 # Pre-commit
 .pre-commit-config.yaml.bak
 
@@ -74,3 +77,4 @@ mlflow.db
 # Local planning docs
 localdocs/
 claurst
+.vercel
