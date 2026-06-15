@@ -111,6 +111,12 @@ tools:
 config:
   model: gpt-4o
   temperature: 0.1
+  excluded_tools:
+    - grep
+    - ls
+    - websearch
+  blocked_tools:
+    - execute
 ---
 
 You are a security expert specialising in Python web applications.
@@ -137,6 +143,10 @@ tools:
 config:
   model: gpt-4o
   temperature: 0.2
+  excluded_tools:
+    - websearch
+  blocked_tools:
+    - execute
 ```
 
 ### Agent Modes
@@ -155,6 +165,27 @@ curl -X POST http://localhost:8000/sessions \
 ```
 
 Primary agents can delegate to subagents via the `task` tool. The delegation appears as a `delegation` SSE event.
+
+### Per-Agent Tool Policy
+
+Agent definitions can hide or block runtime tools inherited from Deep Agents and Cognition middleware.
+
+```yaml
+config:
+  excluded_tools:
+    - glob
+    - grep
+    - ls
+    - websearch
+  blocked_tools:
+    - execute
+```
+
+`excluded_tools` removes matching tool names from the model-visible tool list before the model can select them. Use it for agent profiles that should not see general-purpose harness tools, such as customer-facing tenant assistants.
+
+`blocked_tools` denies matching tool calls at execution time through `ToolSecurityMiddleware`. It is separate from exclusion so builders can keep a tool visible but guarded, or place the same name in both lists for no model affordance plus a runtime guard.
+
+File-based agent definitions put these fields under `config:`. The `/agents` API accepts them as top-level `excluded_tools` and `blocked_tools` fields and returns them under `config.excluded_tools` and `config.blocked_tools`.
 
 ---
 
@@ -467,7 +498,7 @@ Only HTTP/HTTPS URLs are accepted — stdio-based MCP servers are not supported 
 
 ## 7. Exposing Agents via A2A
 
-Cognition can expose agents via the [Agent-to-Agent (A2A)](https://google.github.io/A2A/) protocol, allowing external systems to discover and invoke your agents.
+Cognition can expose agents via the [Agent-to-Agent (A2A)](https://a2a-protocol.org/latest/) protocol, allowing external systems to discover and invoke your agents.
 
 ### Opting In
 

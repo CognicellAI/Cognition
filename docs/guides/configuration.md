@@ -364,10 +364,12 @@ See [Kubernetes Sandbox](../concepts/kubernetes-sandbox.md) for architecture, pr
 |---|---|---|---|
 | `security.protected_paths` | `COGNITION_PROTECTED_PATHS` | `[".cognition/"]` | Paths the agent cannot write to |
 | `security.trusted_tool_namespaces` | `COGNITION_TRUSTED_TOOL_NAMESPACES` | `[]` | Allowed Python namespaces for tool imports; empty = allow all |
-| `security.blocked_tools` | `COGNITION_BLOCKED_TOOLS` | `[]` | Tool names the agent cannot invoke (enforced by `ToolSecurityMiddleware`) |
+| `security.blocked_tools` | `COGNITION_BLOCKED_TOOLS` | `[]` | Deployment-wide tool names no agent can invoke; merged with per-agent `blocked_tools` and enforced by `ToolSecurityMiddleware` |
 | `security.a2a_enabled` | `COGNITION_A2A_ENABLED` | `true` | Enable/disable the A2A protocol adapter (`/.well-known/agent-card.json` + `/a2a/{agent_name}`) |
 
 > **Note:** `COGNITION_TOOL_SECURITY` (`warn`/`strict`) was removed. AST scanning has been replaced with Gateway-level authorization. See [Security concepts](../concepts/security.md) for the current trust model.
+
+`COGNITION_BLOCKED_TOOLS` is an execution-deny policy only. It does not remove tools from the model-visible schema. To hide tools for a specific agent, set `config.excluded_tools` on that agent definition or pass `excluded_tools` through the `/agents` API.
 
 ---
 
@@ -403,6 +405,10 @@ These settings configure the default agent behaviour when no `AgentDefinition` o
 | `agent.subagents` | List of subagent definitions |
 | `agent.interrupt_on` | Map of tool names to `true`/`false` for human-in-the-loop confirmation |
 | `agent.middleware` | List of middleware names or `{name: ..., **kwargs}` dicts |
+
+Per-agent runtime config can also set `config.excluded_tools` and `config.blocked_tools`. File-based agent definitions place those values under `config:`; the `/agents` API accepts the same policies as top-level fields and returns them under `config`.
+
+There is no global `excluded_tools` setting in v0.10.4. Use per-agent exclusions when one agent should have a narrower tool surface than another.
 
 **Upstream middleware names** (usable in `agent.middleware`):
 

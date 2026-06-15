@@ -15,6 +15,10 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Fixed inherited Deep Agents harness tool visibility for per-agent `excluded_tools` so tools such as `grep` can be removed from the model-visible tool list before the model can select them.
 - Fixed scoped `PATCH /agents/{name}` responses to reload the same scoped agent row that was updated.
 
+### Documentation
+
+- Clarified that `excluded_tools` hides tools from an agent's model-visible schema, while `blocked_tools` denies execution and is merged with deployment-wide `COGNITION_BLOCKED_TOOLS`.
+
 ---
 
 ## [0.10.3] — 2026-05-28

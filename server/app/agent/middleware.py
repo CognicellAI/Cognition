@@ -351,14 +351,16 @@ class ToolSecurityMiddleware(AgentMiddleware):
     - Logs tool invocations to the structured log pipeline
     - Blocks tools on a configurable blocklist
 
-    The blocked_tools list is sourced from Settings.blocked_tools.
+    The blocklist is assembled by ``create_cognition_agent()`` from
+    deployment-wide ``Settings.blocked_tools`` and per-agent
+    ``AgentConfig.blocked_tools``.
     """
 
     def __init__(self, blocked_tools: list[str] | None = None) -> None:
         """Initialize the middleware.
 
         Args:
-            blocked_tools: List of tool names to block. If None, uses settings.
+            blocked_tools: Fully resolved list of tool names to block.
         """
         self._blocked_tools = set(blocked_tools or [])
 
