@@ -10,6 +10,7 @@ from server.app.agent.cognition_agent import CognitionContext
 from server.app.agent.middleware import (
     ToolArgumentValidationMiddleware,
     ToolSecurityMiddleware,
+    ToolVisibilityMiddleware,
     TrustedRuntimeContextMiddleware,
     _audit_tool_safety,
     _tool_safety_attributes,
@@ -41,6 +42,23 @@ class _Request:
 
     def override(self, **overrides: Any) -> _Request:
         return replace(self, **overrides)
+
+
+@dataclass(frozen=True)
+class _ModelRequest:
+    tools: list[Any]
+
+    def override(self, **overrides: Any) -> _ModelRequest:
+        return replace(self, **overrides)
+
+
+@dataclass(frozen=True)
+class _NamedTool:
+    name: str
+
+
+def _plain_tool() -> str:
+    return "ok"
 
 
 def test_cognition_context_carries_trusted_runtime_fields() -> None:
@@ -293,3 +311,42 @@ async def test_blocked_tool_emits_redacted_tool_safety_event(
     assert data["run_id"] == "run-1"
     assert data["scope_keys"] == ["tenant"]
     assert "acme" not in str(data)
+
+
+@pytest.mark.asyncio
+async def test_tool_visibility_filters_blocked_model_tools() -> None:
+    middleware = ToolVisibilityMiddleware(
+        blocked_tools=["execute", "glob", "grep", "ls", "read_file"]
+    )
+    request = _ModelRequest(
+        tools=[
+            {"type": "function", "function": {"name": "grep"}},
+            {"name": "execute"},
+            _NamedTool("ls"),
+            _plain_tool,
+        ]
+    )
+
+    seen_request: _ModelRequest | None = None
+
+    async def handler(updated: _ModelRequest) -> list[Any]:
+        nonlocal seen_request
+        seen_request = updated
+        return updated.tools
+
+    result = await middleware.awrap_model_call(request, handler)
+
+    assert result == [_plain_tool]
+    assert seen_request is not None
+    assert seen_request.tools == [_plain_tool]
+    assert request.tools != seen_request.tools
+
+
+def test_tool_visibility_leaves_allowed_model_tools() -> None:
+    middleware = ToolVisibilityMiddleware(blocked_tools=["grep"])
+    request = _ModelRequest(tools=[_plain_tool])
+
+    def handler(updated: _ModelRequest) -> list[Any]:
+        return updated.tools
+
+    assert middleware.wrap_model_call(request, handler) == [_plain_tool]

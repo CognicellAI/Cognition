@@ -78,6 +78,29 @@ def _safe_tool_event_context(runtime: Any) -> dict[str, Any]:
     }
 
 
+def _model_tool_name(tool: Any) -> str | None:
+    if isinstance(tool, dict):
+        direct_name = tool.get("name")
+        if isinstance(direct_name, str):
+            return direct_name
+        function = tool.get("function")
+        if isinstance(function, dict):
+            function_name = function.get("name")
+            if isinstance(function_name, str):
+                return function_name
+        return None
+
+    name = getattr(tool, "name", None)
+    if isinstance(name, str):
+        return name
+
+    callable_name = getattr(tool, "__name__", None)
+    if isinstance(callable_name, str):
+        return callable_name
+
+    return None
+
+
 def _tool_safety_attributes(
     *,
     action: str,
@@ -404,6 +427,58 @@ class ToolSecurityMiddleware(AgentMiddleware):
             )
 
         return await handler(request)
+
+
+class ToolVisibilityMiddleware(AgentMiddleware):
+    """Remove blocked tools from model-visible tool schemas.
+
+    Deep Agents injects harness tools such as ``grep`` and ``ls`` from its
+    filesystem middleware, so filtering Cognition's explicit ``tools`` list is
+    not enough. This middleware runs at model-call time, after upstream
+    middleware has populated ``request.tools``, and removes any tool whose name
+    matches the configured blocklist.
+    """
+
+    def __init__(self, blocked_tools: list[str] | None = None) -> None:
+        self._blocked_tools = frozenset(blocked_tools or [])
+
+    @property
+    def name(self) -> str:
+        return "cognition_tool_visibility"
+
+    def _filtered_request(self, request: Any) -> Any:
+        if not self._blocked_tools:
+            return request
+
+        tools = getattr(request, "tools", None)
+        if tools is None:
+            return request
+
+        filtered_tools = []
+        filtered_names: set[str] = set()
+        for tool in tools:
+            tool_name = _model_tool_name(tool)
+            if tool_name in self._blocked_tools:
+                filtered_names.add(tool_name)
+                continue
+            filtered_tools.append(tool)
+
+        if not filtered_names:
+            return request
+
+        logger.info(
+            "tool_visibility_filtered",
+            tools=sorted(filtered_names),
+        )
+        return request.override(tools=filtered_tools)
+
+    def wrap_model_call(self, request: Any, handler: Any) -> Any:
+        """Filter blocked tools before sync model calls."""
+        return handler(self._filtered_request(request))
+
+    async def awrap_model_call(self, request: Any, handler: Any) -> Any:
+        """Filter blocked tools before async model calls."""
+        return await handler(self._filtered_request(request))
 
 
 class CognitionObservabilityMiddleware(AgentMiddleware):

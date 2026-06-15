@@ -53,6 +53,7 @@ See AGENTS.md for category definitions, DoD requirements, and precedence rules.
 | 2026-05-25 | Fix K8s sandbox filesystem API compatibility and terminal run contradictions — K8s wrapper now uses Deep Agents' current `ls`/`glob`/`grep` result APIs, and runtime errors suppress later `done` events/callback success. | AEP runtime report: `RUNTIME_ERROR` with "new `ls` API" followed by `run.done` | 3/4/6/7 | Completed |
 | 2026-05-28 | Align A2A protocol surface with current JSON-RPC method names and task/event wire shapes; add per-agent Agent Card discovery under `/a2a/{agent_name}/.well-known/agent-card.json`; ensure scoped dynamic agent route lookup respects request scope. | A2A interoperability report for Cognition 0.10.2 | 2/6 | Completed |
 | 2026-06-15 | Fix per-agent `blocked_tools` API persistence and scoped PATCH reload — `PATCH /agents/{name}` accepted unknown `blocked_tools` input with 200 but dropped it before ConfigRegistry persistence and runtime tool security. | Wá Salon Builder Starter dev report | 2/4/6 | Completed |
+| 2026-06-15 | Fix per-agent `blocked_tools` enforcement for inherited Deep Agents harness tools — `0.10.4-rc1` persisted Wá Salon's blocklist but model-visible built-ins such as `grep` could still be selected and executed. | Wá Salon Builder Starter `0.10.4-rc1` live validation | 4/6 | Completed |
 
 ---
 

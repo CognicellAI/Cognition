@@ -12,6 +12,7 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Fixed
 
 - Fixed per-agent `blocked_tools` persistence for `POST /agents` and `PATCH /agents/{name}` so API-provided tool blocklists are stored in ConfigRegistry, returned by `GET /agents/{name}`, and forwarded into runtime tool security alongside global `COGNITION_BLOCKED_TOOLS`.
+- Fixed per-agent `blocked_tools` enforcement for inherited Deep Agents harness tools such as `grep` by removing blocked names from the model-visible tool list before the model can select them.
 - Fixed scoped `PATCH /agents/{name}` responses to reload the same scoped agent row that was updated.
 
 ---

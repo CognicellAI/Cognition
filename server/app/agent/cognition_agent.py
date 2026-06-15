@@ -39,6 +39,7 @@ from server.app.agent.middleware import (  # noqa: E402
     CognitionStreamingMiddleware,
     ToolArgumentValidationMiddleware,
     ToolSecurityMiddleware,
+    ToolVisibilityMiddleware,
     TrustedRuntimeContextMiddleware,
 )
 from server.app.agent.prompts import SYSTEM_PROMPT  # noqa: E402
@@ -670,6 +671,7 @@ async def create_cognition_agent(params: CognitionAgentParams) -> CognitionAgent
             CognitionObservabilityMiddleware(),
             CognitionStreamingMiddleware(),
             TrustedRuntimeContextMiddleware(),
+            ToolVisibilityMiddleware(blocked_tools=blocked_tools),
             ToolSecurityMiddleware(blocked_tools=blocked_tools),
             ToolArgumentValidationMiddleware(),
         ]
