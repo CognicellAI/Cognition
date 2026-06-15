@@ -836,6 +836,7 @@ class AgentConfigResponse(BaseModel):
     recursion_limit: int | None = None
     tool_token_limit_before_evict: int | None = None
     context_policy: ContextPolicy | None = None
+    excluded_tools: list[str] | None = None
     blocked_tools: list[str] | None = None
     provider: str | None = None
     model: str | None = None
@@ -1169,6 +1170,7 @@ class AgentCreate(BaseModel):
     recursion_limit: int | None = Field(default=None)
     tool_token_limit_before_evict: int | None = Field(default=None)
     context_policy: ContextPolicy | None = Field(default=None)
+    excluded_tools: list[str] = Field(default_factory=list)
     blocked_tools: list[str] = Field(default_factory=list)
     provider: str | None = Field(default=None)
     timeout_seconds: float | None = Field(default=None)
@@ -1200,6 +1202,7 @@ class AgentUpdate(BaseModel):
     recursion_limit: int | None = None
     tool_token_limit_before_evict: int | None = None
     context_policy: ContextPolicy | None = None
+    excluded_tools: list[str] | None = None
     blocked_tools: list[str] | None = None
     provider: str | None = None
     timeout_seconds: float | None = None
