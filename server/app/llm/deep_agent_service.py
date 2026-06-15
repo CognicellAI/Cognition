@@ -156,6 +156,7 @@ class ResolvedAgentConfig:
     response_format: str | None = None
     tool_token_limit_before_evict: int | None = None
     context_policy: Any | None = None
+    blocked_tools: list[str] = field(default_factory=list)
     subagents: list[Any] = field(default_factory=list)
     async_subagents: list[Any] = field(default_factory=list)
     agent_def: Any = None
@@ -311,6 +312,9 @@ class DeepAgentStreamingService:
         if agent_def.config.context_policy is not None:
             resolved.context_policy = agent_def.config.context_policy
 
+        if agent_def.config.blocked_tools:
+            resolved.blocked_tools = list(agent_def.config.blocked_tools)
+
         if agent_def.middleware:
             resolved.middleware = _resolve_middleware(agent_def.middleware)
 
@@ -403,6 +407,7 @@ class DeepAgentStreamingService:
                 or agent_cfg.response_format,
                 tool_token_limit_before_evict=agent_cfg.tool_token_limit_before_evict,
                 context_policy=agent_cfg.context_policy,
+                blocked_tools=agent_cfg.blocked_tools,
                 middleware=agent_cfg.middleware,
                 mcp_configs=mcp_configs or None,
                 scope=scope,
@@ -606,6 +611,7 @@ class DeepAgentStreamingService:
                 or agent_cfg.response_format,
                 tool_token_limit_before_evict=agent_cfg.tool_token_limit_before_evict,
                 context_policy=agent_cfg.context_policy,
+                blocked_tools=agent_cfg.blocked_tools,
                 middleware=agent_cfg.middleware,
                 mcp_configs=mcp_configs or None,
                 scope=scope,

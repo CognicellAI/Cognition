@@ -52,6 +52,7 @@ See AGENTS.md for category definitions, DoD requirements, and precedence rules.
 | 2026-05-25 | Fix Deep Agents runtime activity not updating durable session state — assistant responses are streamed but not persisted, tool activity does not advance `updated_at`, tool logs show `session_id=None`, and overlapping turns can mark a session done while earlier runtime work continues. | AEP report: session `2488ce4e-13fa-47c4-95fb-d5120d89f097`; hotfix merged as PR #131 | 2/4/6/7 | Completed |
 | 2026-05-25 | Fix K8s sandbox filesystem API compatibility and terminal run contradictions — K8s wrapper now uses Deep Agents' current `ls`/`glob`/`grep` result APIs, and runtime errors suppress later `done` events/callback success. | AEP runtime report: `RUNTIME_ERROR` with "new `ls` API" followed by `run.done` | 3/4/6/7 | Completed |
 | 2026-05-28 | Align A2A protocol surface with current JSON-RPC method names and task/event wire shapes; add per-agent Agent Card discovery under `/a2a/{agent_name}/.well-known/agent-card.json`; ensure scoped dynamic agent route lookup respects request scope. | A2A interoperability report for Cognition 0.10.2 | 2/6 | Completed |
+| 2026-06-15 | Fix per-agent `blocked_tools` API persistence and scoped PATCH reload — `PATCH /agents/{name}` accepted unknown `blocked_tools` input with 200 but dropped it before ConfigRegistry persistence and runtime tool security. | Wá Salon Builder Starter dev report | 2/4/6 | Completed |
 
 ---
 

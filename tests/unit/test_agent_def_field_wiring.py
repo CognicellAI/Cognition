@@ -444,6 +444,30 @@ class TestStructuredOutputAndContextControls:
         assert params.context_policy == policy
 
     @pytest.mark.asyncio
+    async def test_blocked_tools_passed_to_create_cognition_agent(self):
+        """blocked_tools from AgentConfig must be forwarded to tool security."""
+        from server.app.agent.definition import AgentConfig, AgentDefinition
+
+        session = _make_session()
+        mock_runtime = _make_mock_runtime(DoneEvent())
+        patches = _base_patches(mock_runtime, session)
+
+        agent_def = AgentDefinition(
+            name="test-agent",
+            system_prompt="test",
+            config=AgentConfig(blocked_tools=["glob", "grep", "ls"]),
+        )
+        mock_def_registry = MagicMock()
+        mock_def_registry.get = MagicMock(return_value=agent_def)
+        mock_def_registry.subagents = MagicMock(return_value=[])
+
+        _, create_agent_mock = await _run(patches, session, mock_def_registry=mock_def_registry)
+
+        params = _get_params(create_agent_mock)
+        assert params is not None
+        assert params.blocked_tools == ["glob", "grep", "ls"]
+
+    @pytest.mark.asyncio
     async def test_async_subagents_passed_to_create_cognition_agent(self):
         """async_subagents from AgentDefinition must be forwarded."""
         from server.app.agent.definition import AgentDefinition, AsyncSubagentConfig
