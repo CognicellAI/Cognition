@@ -7,6 +7,15 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [0.10.4] — 2026-06-15
+
+### Fixed
+
+- Fixed per-agent `blocked_tools` persistence for `POST /agents` and `PATCH /agents/{name}` so API-provided tool blocklists are stored in ConfigRegistry, returned by `GET /agents/{name}`, and forwarded into runtime tool security alongside global `COGNITION_BLOCKED_TOOLS`.
+- Fixed scoped `PATCH /agents/{name}` responses to reload the same scoped agent row that was updated.
+
+---
+
 ## [0.10.3] — 2026-05-28
 
 ### Fixed

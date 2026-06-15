@@ -6,11 +6,14 @@ agent management.
 
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 from fastapi.testclient import TestClient
 
-from server.app.api.dependencies import set_config_store
+from server.app.api.dependencies import get_config_store, get_settings_dep, set_config_store
 from server.app.main import app
+from server.app.settings import Settings
 from server.app.storage.config_store import DefaultConfigStore
 
 client = TestClient(app)
@@ -142,6 +145,28 @@ class TestCreateAgent:
         assert data["async_subagents"][0]["name"] == "researcher"
         assert data["async_subagents"][0]["graph_id"] == "research_graph"
 
+    def test_create_agent_persists_blocked_tools(self):
+        response = client.post(
+            "/agents",
+            json={
+                "name": "test-create-blocked-tools-agent",
+                "system_prompt": "blocked tools create test",
+                "blocked_tools": ["glob", "grep", "ls"],
+            },
+        )
+        assert response.status_code == 201
+        assert response.json()["config"]["blocked_tools"] == ["glob", "grep", "ls"]
+
+        get_resp = client.get("/agents/test-create-blocked-tools-agent")
+        assert get_resp.status_code == 200
+        assert get_resp.json()["config"]["blocked_tools"] == ["glob", "grep", "ls"]
+
+        raw = asyncio.run(
+            get_config_store().get_agent_raw("test-create-blocked-tools-agent")
+        )
+        assert raw is not None
+        assert raw["config"]["blocked_tools"] == ["glob", "grep", "ls"]
+
     def test_get_preserves_top_level_provider(self):
         client.post(
             "/agents",
@@ -265,6 +290,93 @@ class TestUpdateAgent:
         assert response.json()["config"]["recursion_limit"] == 100
         assert response.json()["config"]["provider"] == "openai"
         assert response.json()["config"]["timeout_seconds"] == 30
+
+    def test_patch_agent_persists_blocked_tools(self):
+        client.post(
+            "/agents",
+            json={
+                "name": "test-patch-blocked-tools-agent",
+                "system_prompt": "blocked tools patch test",
+            },
+        )
+        response = client.patch(
+            "/agents/test-patch-blocked-tools-agent",
+            json={"blocked_tools": ["execute", "task", "write_todos"]},
+        )
+        assert response.status_code == 200
+        assert response.json()["config"]["blocked_tools"] == [
+            "execute",
+            "task",
+            "write_todos",
+        ]
+
+        get_resp = client.get("/agents/test-patch-blocked-tools-agent")
+        assert get_resp.status_code == 200
+        assert get_resp.json()["config"]["blocked_tools"] == [
+            "execute",
+            "task",
+            "write_todos",
+        ]
+
+        raw = asyncio.run(get_config_store().get_agent_raw("test-patch-blocked-tools-agent"))
+        assert raw is not None
+        assert raw["config"]["blocked_tools"] == ["execute", "task", "write_todos"]
+
+    def test_patch_scoped_agent_persists_blocked_tools(self):
+        scoped_settings = Settings(scoping_enabled=True, scope_keys=["tenant"])
+        headers = {"X-Cognition-Scope-Tenant": "wasaloon"}
+        app.dependency_overrides[get_settings_dep] = lambda: scoped_settings
+        try:
+            create_resp = client.post(
+                "/agents",
+                json={
+                    "name": "test-scoped-blocked-tools-agent",
+                    "system_prompt": "scoped blocked tools test",
+                },
+                headers=headers,
+            )
+            assert create_resp.status_code == 201
+
+            response = client.patch(
+                "/agents/test-scoped-blocked-tools-agent",
+                json={"blocked_tools": ["glob", "grep", "inspect_package", "ls"]},
+                headers=headers,
+            )
+            assert response.status_code == 200
+            assert response.json()["config"]["blocked_tools"] == [
+                "glob",
+                "grep",
+                "inspect_package",
+                "ls",
+            ]
+
+            get_resp = client.get(
+                "/agents/test-scoped-blocked-tools-agent",
+                headers=headers,
+            )
+            assert get_resp.status_code == 200
+            assert get_resp.json()["config"]["blocked_tools"] == [
+                "glob",
+                "grep",
+                "inspect_package",
+                "ls",
+            ]
+
+            raw = asyncio.run(
+                get_config_store().get_agent_raw(
+                    "test-scoped-blocked-tools-agent",
+                    {"tenant": "wasaloon"},
+                )
+            )
+            assert raw is not None
+            assert raw["config"]["blocked_tools"] == [
+                "glob",
+                "grep",
+                "inspect_package",
+                "ls",
+            ]
+        finally:
+            app.dependency_overrides.pop(get_settings_dep, None)
 
     def test_patch_unrelated_field_preserves_top_level_provider(self):
         client.post(
