@@ -118,6 +118,7 @@ class RuntimeContext:
     response_format: str
     tool_token_limit_before_evict: int | None
     context_policy: str
+    excluded_tools: tuple[str, ...]
     blocked_tools: tuple[str, ...]
     middleware_count: int
     tools_count: int
@@ -140,6 +141,7 @@ class RuntimeContext:
         response_format: str | type[Any] | None,
         tool_token_limit_before_evict: int | None,
         context_policy: Any | None,
+        excluded_tools: Sequence[str] | None,
         blocked_tools: Sequence[str] | None,
         middleware: Sequence[Any] | None,
         tools: Sequence[Any] | None,
@@ -166,6 +168,7 @@ class RuntimeContext:
             else "None",
             tool_token_limit_before_evict=tool_token_limit_before_evict,
             context_policy=_json_cache_key(context_policy),
+            excluded_tools=tuple(sorted(str(tool) for tool in (excluded_tools or []))),
             blocked_tools=tuple(sorted(str(tool) for tool in (blocked_tools or []))),
             middleware_count=len(middleware) if middleware else 0,
             tools_count=len(tools) if tools else 0,
@@ -370,6 +373,7 @@ class CognitionAgentParams:
     response_format: str | type[Any] | None = None
     tool_token_limit_before_evict: int | None = None
     context_policy: Any | None = None
+    excluded_tools: Sequence[str] | None = None
     blocked_tools: Sequence[str] | None = None
     middleware: Sequence[Any] | None = None
     tools: Sequence[Any] | None = None
@@ -481,6 +485,7 @@ async def create_cognition_agent(params: CognitionAgentParams) -> CognitionAgent
         response_format=params.response_format,
         tool_token_limit_before_evict=params.tool_token_limit_before_evict,
         context_policy=params.context_policy,
+        excluded_tools=params.excluded_tools,
         blocked_tools=params.blocked_tools,
         middleware=params.middleware,
         tools=params.tools,
@@ -621,6 +626,7 @@ async def create_cognition_agent(params: CognitionAgentParams) -> CognitionAgent
 
     agent_middleware = list(params.middleware) if params.middleware else []
     settings_blocked_tools = settings.blocked_tools if hasattr(settings, "blocked_tools") else []
+    excluded_tools = sorted({*(str(tool) for tool in (params.excluded_tools or []))})
     blocked_tools = sorted(
         {
             *(str(tool) for tool in settings_blocked_tools),
@@ -671,7 +677,7 @@ async def create_cognition_agent(params: CognitionAgentParams) -> CognitionAgent
             CognitionObservabilityMiddleware(),
             CognitionStreamingMiddleware(),
             TrustedRuntimeContextMiddleware(),
-            ToolVisibilityMiddleware(blocked_tools=blocked_tools),
+            ToolVisibilityMiddleware(excluded_tools=excluded_tools),
             ToolSecurityMiddleware(blocked_tools=blocked_tools),
             ToolArgumentValidationMiddleware(),
         ]

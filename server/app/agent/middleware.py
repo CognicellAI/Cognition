@@ -430,24 +430,24 @@ class ToolSecurityMiddleware(AgentMiddleware):
 
 
 class ToolVisibilityMiddleware(AgentMiddleware):
-    """Remove blocked tools from model-visible tool schemas.
+    """Remove excluded tools from model-visible tool schemas.
 
     Deep Agents injects harness tools such as ``grep`` and ``ls`` from its
     filesystem middleware, so filtering Cognition's explicit ``tools`` list is
     not enough. This middleware runs at model-call time, after upstream
     middleware has populated ``request.tools``, and removes any tool whose name
-    matches the configured blocklist.
+    matches the configured exclusion list.
     """
 
-    def __init__(self, blocked_tools: list[str] | None = None) -> None:
-        self._blocked_tools = frozenset(blocked_tools or [])
+    def __init__(self, excluded_tools: list[str] | None = None) -> None:
+        self._excluded_tools = frozenset(excluded_tools or [])
 
     @property
     def name(self) -> str:
         return "cognition_tool_visibility"
 
     def _filtered_request(self, request: Any) -> Any:
-        if not self._blocked_tools:
+        if not self._excluded_tools:
             return request
 
         tools = getattr(request, "tools", None)
@@ -458,7 +458,7 @@ class ToolVisibilityMiddleware(AgentMiddleware):
         filtered_names: set[str] = set()
         for tool in tools:
             tool_name = _model_tool_name(tool)
-            if tool_name in self._blocked_tools:
+            if tool_name in self._excluded_tools:
                 filtered_names.add(tool_name)
                 continue
             filtered_tools.append(tool)

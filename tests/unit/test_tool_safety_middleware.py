@@ -314,9 +314,9 @@ async def test_blocked_tool_emits_redacted_tool_safety_event(
 
 
 @pytest.mark.asyncio
-async def test_tool_visibility_filters_blocked_model_tools() -> None:
+async def test_tool_visibility_filters_excluded_model_tools() -> None:
     middleware = ToolVisibilityMiddleware(
-        blocked_tools=["execute", "glob", "grep", "ls", "read_file"]
+        excluded_tools=["execute", "glob", "grep", "ls", "read_file"]
     )
     request = _ModelRequest(
         tools=[
@@ -343,7 +343,7 @@ async def test_tool_visibility_filters_blocked_model_tools() -> None:
 
 
 def test_tool_visibility_leaves_allowed_model_tools() -> None:
-    middleware = ToolVisibilityMiddleware(blocked_tools=["grep"])
+    middleware = ToolVisibilityMiddleware(excluded_tools=["grep"])
     request = _ModelRequest(tools=[_plain_tool])
 
     def handler(updated: _ModelRequest) -> list[Any]:

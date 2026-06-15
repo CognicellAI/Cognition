@@ -78,8 +78,8 @@ async def test_create_cognition_agent_pluggability():
 
 
 @pytest.mark.asyncio
-async def test_blocked_tools_attach_model_visibility_middleware():
-    """blocked_tools must remove inherited Deep Agents tools from model-visible schemas."""
+async def test_excluded_and_blocked_tools_attach_separate_middleware():
+    """excluded_tools hide tools; blocked_tools deny execution."""
     clear_agent_cache()
     with patch("server.app.agent.cognition_agent.create_deep_agent") as mock_create:
         mock_create.return_value = AsyncMock()
@@ -88,6 +88,7 @@ async def test_blocked_tools_attach_model_visibility_middleware():
             CognitionAgentParams(
                 project_path=".",
                 model="mock:model",
+                excluded_tools=["grep"],
                 blocked_tools=["grep"],
                 settings=Settings(blocked_tools=["execute"]),
             )
@@ -111,9 +112,12 @@ async def test_blocked_tools_attach_model_visibility_middleware():
             seen_request = updated
             return updated.tools
 
-        assert visibility.wrap_model_call(request, handler) == [{"name": "safe_tool"}]
+        assert visibility.wrap_model_call(request, handler) == [
+            {"name": "execute"},
+            {"name": "safe_tool"},
+        ]
         assert seen_request is not None
-        assert security.name == "cognition_tool_security"
+        assert security._blocked_tools == {"execute", "grep"}
     clear_agent_cache()
 
 

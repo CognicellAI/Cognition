@@ -564,6 +564,7 @@ List all non-hidden agents available in the registry.
         "recursion_limit": null,
         "tool_token_limit_before_evict": null,
         "context_policy": null,
+        "excluded_tools": [],
         "blocked_tools": [],
         "provider": null,
         "model": null,
@@ -609,6 +610,7 @@ Create or replace an agent definition in the ConfigRegistry.
   "interrupt_on": {},
   "model": "gpt-4o",
   "temperature": 0.1,
+  "excluded_tools": ["glob", "grep", "ls"],
   "blocked_tools": ["execute"],
   "scope": {}
 }
@@ -626,7 +628,8 @@ Create or replace an agent definition in the ConfigRegistry.
 | `interrupt_on` | dict | Tool names mapped to `true` for HITL confirmation |
 | `model` | string | Model override (overrides global default for this agent's sessions) |
 | `temperature` | float | Temperature override |
-| `blocked_tools` | list[string] | Tool names blocked for this agent in addition to global `COGNITION_BLOCKED_TOOLS` |
+| `excluded_tools` | list[string] | Tool names removed from the model-visible tool list for this agent |
+| `blocked_tools` | list[string] | Tool names denied at execution time for this agent in addition to global `COGNITION_BLOCKED_TOOLS` |
 | `scope` | dict | Scope restriction; empty `{}` = global |
 
 **Response `201 Created`:** Agent object  
@@ -650,7 +653,8 @@ Partially update an agent definition. Only provided fields are changed.
   "system_prompt": "Updated prompt.",
   "model": "claude-sonnet-4-6",
   "temperature": 0.5,
-  "blocked_tools": ["execute", "glob", "grep"]
+  "excluded_tools": ["glob", "grep", "ls"],
+  "blocked_tools": ["execute"]
 }
 ```
 
