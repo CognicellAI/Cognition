@@ -24,8 +24,8 @@ All request and response bodies are JSON unless noted. Streaming endpoints retur
   - [`token`](#token)
   - [`tool_call`](#tool_call)
   - [`tool_result`](#tool_result)
-   - [`planning`](#planning) *(reserved)*
-   - [`step_complete`](#step_complete) *(reserved)*
+  - [`planning`](#planning) *(reserved)*
+  - [`step_complete`](#step_complete) *(reserved)*
   - [`delegation`](#delegation)
   - [`status`](#status)
   - [`usage`](#usage)
@@ -556,6 +556,8 @@ List all non-hidden agents available in the registry.
       "mode": "primary",
       "hidden": false,
       "native": true,
+      "a2a_exposed": false,
+      "provider": null,
       "model": null,
       "temperature": null,
       "config": {
@@ -564,6 +566,7 @@ List all non-hidden agents available in the registry.
         "recursion_limit": null,
         "tool_token_limit_before_evict": null,
         "context_policy": null,
+        "excluded_tools": [],
         "blocked_tools": [],
         "provider": null,
         "model": null,
@@ -571,8 +574,11 @@ List all non-hidden agents available in the registry.
       },
       "response_format": null,
       "interrupt_on": {},
+      "permissions": [],
       "tools": [],
       "skills": [],
+      "subagents": [],
+      "async_subagents": [],
       "system_prompt": "You are a coding agent..."
     }
   ]
@@ -580,7 +586,7 @@ List all non-hidden agents available in the registry.
 ```
 
 `mode` values: `primary`, `subagent`, `all`.  
-`system_prompt` is truncated to 500 characters in the response.
+`system_prompt` is returned as stored.
 
 **Response `503 Service Unavailable`:** Registry not yet initialized.
 
@@ -591,6 +597,20 @@ Get a specific agent by name.
 **Response `200 OK`:** Agent object  
 **Response `404 Not Found`:** Agent not found or hidden  
 **Response `503 Service Unavailable`:** Registry not yet initialized
+
+### Agent Tool Policy Fields
+
+Agent create/update requests use top-level `excluded_tools` and `blocked_tools` fields.
+Read responses return those values under `config.excluded_tools` and `config.blocked_tools`.
+
+The two fields are intentionally separate:
+
+| Field | Runtime effect | When to use |
+|---|---|---|
+| `excluded_tools` | Removes matching tool names from the model-visible tool schema before the model can select them. | Hide inherited Deep Agents harness tools for a specific agent, such as a customer-facing concierge that should not see `grep`, `ls`, `execute`, or `websearch`. |
+| `blocked_tools` | Denies matching tool calls at execution time through `ToolSecurityMiddleware`. The tool may still be visible unless it is also excluded. | Enforce a call-time safety guard. Per-agent values are merged with deployment-wide `COGNITION_BLOCKED_TOOLS`. |
+
+Use both fields for the same tool name when you want no model affordance plus a runtime guard. Tool names must match the runtime tool name exactly.
 
 ### `POST /agents`
 
@@ -607,8 +627,12 @@ Create or replace an agent definition in the ConfigRegistry.
   "skills": ["python-review"],
   "memory": ["AGENTS.md"],
   "interrupt_on": {},
+  "a2a_exposed": false,
   "model": "gpt-4o",
   "temperature": 0.1,
+  "max_tokens": 4096,
+  "recursion_limit": 100,
+  "excluded_tools": ["glob", "grep", "ls"],
   "blocked_tools": ["execute"],
   "scope": {}
 }
@@ -620,13 +644,27 @@ Create or replace an agent definition in the ConfigRegistry.
 | `system_prompt` | string | Agent's system prompt |
 | `description` | string | Human-readable description |
 | `mode` | `"primary"` \| `"subagent"` \| `"all"` | Whether agent can own sessions, be delegated to, or both |
+| `hidden` | boolean | Hide the agent from `GET /agents` list results |
+| `a2a_exposed` | boolean | Expose eligible `primary` or `all` agents through the A2A protocol |
 | `tools` | list[string] | Registry tool names to attach to this agent |
 | `skills` | list[string] | Registry skill names to attach to this agent |
 | `memory` | list[string] | Paths to instruction files (e.g. AGENTS.md) |
 | `interrupt_on` | dict | Tool names mapped to `true` for HITL confirmation |
-| `model` | string | Model override (overrides global default for this agent's sessions) |
+| `permissions` | list[object] | Deep Agents filesystem permission rules |
+| `response_format` | string | Dotted path to a structured output schema |
+| `provider` | string | Provider type override used with `model` |
+| `model` | string | Model override for this agent's sessions |
 | `temperature` | float | Temperature override |
-| `blocked_tools` | list[string] | Tool names blocked for this agent in addition to global `COGNITION_BLOCKED_TOOLS` |
+| `max_tokens` | int | Max output tokens |
+| `recursion_limit` | int | Max agent loop depth |
+| `tool_token_limit_before_evict` | int | Token threshold for evicting large tool output |
+| `context_policy` | object | Context and summarization policy configuration |
+| `excluded_tools` | list[string] | Tool names removed from the model-visible tool list for this agent |
+| `blocked_tools` | list[string] | Tool names denied at execution time for this agent in addition to global `COGNITION_BLOCKED_TOOLS` |
+| `timeout_seconds` | float | Per-agent model request timeout |
+| `middleware` | list | Middleware names or middleware config dicts |
+| `subagents` | list[object] | In-process subagent definitions |
+| `async_subagents` | list[object] | Experimental remote Agent Protocol async subagent definitions |
 | `scope` | dict | Scope restriction; empty `{}` = global |
 
 **Response `201 Created`:** Agent object  
@@ -643,6 +681,7 @@ Replace an agent definition entirely.
 ### `PATCH /agents/{name}`
 
 Partially update an agent definition. Only provided fields are changed.
+Send an empty list to clear `excluded_tools` or `blocked_tools`. Omit the field to leave the current policy unchanged.
 
 **Request body (all fields optional):**
 ```json
@@ -650,12 +689,15 @@ Partially update an agent definition. Only provided fields are changed.
   "system_prompt": "Updated prompt.",
   "model": "claude-sonnet-4-6",
   "temperature": 0.5,
-  "blocked_tools": ["execute", "glob", "grep"]
+  "excluded_tools": ["glob", "grep", "ls"],
+  "blocked_tools": ["execute"]
 }
 ```
 
 **Response `200 OK`:** Updated agent object  
 **Response `404 Not Found`**
+
+For scoped agents, use the same `X-Cognition-Scope-*` headers used to create or read the agent. The response is reloaded from the matched scoped row after the update.
 
 ### `DELETE /agents/{name}`
 
@@ -1476,7 +1518,7 @@ Returns the deployment's runtime feature set, package versions, and configuratio
 
 ## A2A Protocol
 
-Cognition exposes agents via the [Agent-to-Agent (A2A)](https://google.github.io/A2A/) protocol. Only agents with `a2a_exposed: true` on their definition are visible. The adapter is implemented in `server/app/protocols/a2a/` and uses the `a2a-sdk` for protocol compliance.
+Cognition exposes agents via the [Agent-to-Agent (A2A)](https://a2a-protocol.org/latest/) protocol. Only agents with `a2a_exposed: true` on their definition are visible. The adapter is implemented in `server/app/protocols/a2a/` and uses the `a2a-sdk` for protocol compliance.
 
 The A2A protocol surface can be disabled entirely by setting `COGNITION_A2A_ENABLED=false`. When disabled, the `/.well-known/agent-card.json` and `/a2a/{agent_name}` endpoints are not mounted, and `GET /capabilities` reports `a2a: false`.
 

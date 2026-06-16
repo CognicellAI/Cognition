@@ -59,6 +59,15 @@ from server.app.storage.factory import create_storage_backend
 logger = structlog.get_logger(__name__)
 
 
+class AgentDefinitionUnavailableError(Exception):
+    """Raised when a session-bound agent cannot be used for invocation."""
+
+    def __init__(self, agent_name: str, reason: str) -> None:
+        super().__init__(f"Invalid or unavailable agent '{agent_name}': {reason}")
+        self.agent_name = agent_name
+        self.reason = reason
+
+
 def _context_policy_dict(policy: Any | None) -> dict[str, Any]:
     if policy is None:
         return {}
@@ -156,6 +165,7 @@ class ResolvedAgentConfig:
     response_format: str | None = None
     tool_token_limit_before_evict: int | None = None
     context_policy: Any | None = None
+    excluded_tools: list[str] = field(default_factory=list)
     blocked_tools: list[str] = field(default_factory=list)
     subagents: list[Any] = field(default_factory=list)
     async_subagents: list[Any] = field(default_factory=list)
@@ -238,6 +248,7 @@ class DeepAgentStreamingService:
         session: Any,
         project_path: str,
         system_prompt: str | None = None,
+        scope: dict[str, str] | None = None,
     ) -> tuple[ResolvedAgentConfig, list[Any]]:
         """Resolve agent definition fields and custom tools from ConfigStore.
 
@@ -254,16 +265,23 @@ class DeepAgentStreamingService:
         if cs is None or session is None:
             return resolved, custom_tools
 
-        agent_def = await cs.get_agent_definition(session.agent_name)
+        lookup_scope = scope if scope is not None else getattr(session, "scopes", None)
+        agent_def = await cs.get_agent_definition(session.agent_name, lookup_scope)
         if not agent_def:
             logger.warning(
-                "Agent definition not found, falling back to 'default'",
+                "Session-bound agent definition not found",
                 requested=session.agent_name,
+                scope_keys=sorted((lookup_scope or {}).keys()),
             )
-            agent_def = await cs.get_agent_definition("default")
+            raise AgentDefinitionUnavailableError(session.agent_name, "not found")
 
-        if agent_def is None:
-            return resolved, custom_tools
+        if agent_def.hidden:
+            raise AgentDefinitionUnavailableError(session.agent_name, "agent is hidden")
+        if agent_def.mode not in ("primary", "all"):
+            raise AgentDefinitionUnavailableError(
+                session.agent_name,
+                f"agent mode '{agent_def.mode}' is not invokable as a primary agent",
+            )
 
         resolved.agent_def = agent_def
         if resolved.system_prompt is None:
@@ -272,7 +290,10 @@ class DeepAgentStreamingService:
         if agent_def.skills:
             resolved.skills = list(agent_def.skills)
 
-        all_defs = await cs.list_agent_definitions(include_hidden=True)
+        all_defs = await cs.list_agent_definitions(
+            include_hidden=True,
+            scope=lookup_scope,
+        )
         workspace_base = str(self.settings.workspace_path)
         resolved.subagents = [
             s.to_subagent(base_path=workspace_base)
@@ -312,6 +333,9 @@ class DeepAgentStreamingService:
         if agent_def.config.context_policy is not None:
             resolved.context_policy = agent_def.config.context_policy
 
+        if agent_def.config.excluded_tools:
+            resolved.excluded_tools = list(agent_def.config.excluded_tools)
+
         if agent_def.config.blocked_tools:
             resolved.blocked_tools = list(agent_def.config.blocked_tools)
 
@@ -340,6 +364,7 @@ class DeepAgentStreamingService:
                 session=session,
                 project_path=project_path,
                 system_prompt=system_prompt,
+                scope=scope,
             )
 
             model, provider, model_id, recursion_limit = await self._resolve_model(
@@ -407,6 +432,7 @@ class DeepAgentStreamingService:
                 or agent_cfg.response_format,
                 tool_token_limit_before_evict=agent_cfg.tool_token_limit_before_evict,
                 context_policy=agent_cfg.context_policy,
+                excluded_tools=agent_cfg.excluded_tools,
                 blocked_tools=agent_cfg.blocked_tools,
                 middleware=agent_cfg.middleware,
                 mcp_configs=mcp_configs or None,
@@ -528,6 +554,14 @@ class DeepAgentStreamingService:
                 session_id=session_id,
             )
             yield ErrorEvent(message=str(e), code="PROVIDER_CONFIG_ERROR")
+        except AgentDefinitionUnavailableError as e:
+            logger.warning(
+                "Session-bound agent unavailable",
+                agent_name=e.agent_name,
+                reason=e.reason,
+                session_id=session_id,
+            )
+            yield ErrorEvent(message=str(e), code="AGENT_NOT_FOUND")
         except Exception as e:
             logger.error("DeepAgents streaming error", error=str(e), session_id=session_id)
             yield ErrorEvent(message=str(e), code="STREAMING_ERROR")
@@ -552,6 +586,7 @@ class DeepAgentStreamingService:
             agent_cfg, custom_tools = await self._resolve_agent_config(
                 session=session,
                 project_path=project_path,
+                scope=scope,
             )
 
             model, provider, model_id, recursion_limit = await self._resolve_model(
@@ -611,6 +646,7 @@ class DeepAgentStreamingService:
                 or agent_cfg.response_format,
                 tool_token_limit_before_evict=agent_cfg.tool_token_limit_before_evict,
                 context_policy=agent_cfg.context_policy,
+                excluded_tools=agent_cfg.excluded_tools,
                 blocked_tools=agent_cfg.blocked_tools,
                 middleware=agent_cfg.middleware,
                 mcp_configs=mcp_configs or None,
@@ -680,6 +716,14 @@ class DeepAgentStreamingService:
                 "Provider configuration error on resume", error=str(e), session_id=session_id
             )
             yield ErrorEvent(message=str(e), code="PROVIDER_CONFIG_ERROR")
+        except AgentDefinitionUnavailableError as e:
+            logger.warning(
+                "Session-bound agent unavailable on resume",
+                agent_name=e.agent_name,
+                reason=e.reason,
+                session_id=session_id,
+            )
+            yield ErrorEvent(message=str(e), code="AGENT_NOT_FOUND")
         except Exception as e:
             logger.error(
                 "DeepAgents resume error",
