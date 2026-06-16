@@ -55,6 +55,7 @@ See AGENTS.md for category definitions, DoD requirements, and precedence rules.
 | 2026-06-15 | Fix per-agent tool policy API persistence and scoped PATCH reload — `PATCH /agents/{name}` accepted unknown tool policy input with 200 but dropped it before ConfigRegistry persistence and runtime policy middleware. | Wá Salon Builder Starter dev report | 2/4/6 | Completed |
 | 2026-06-15 | Add per-agent `excluded_tools` enforcement for inherited Deep Agents harness tools while keeping `blocked_tools` as separate execution-deny policy — `0.10.4-rc1` persisted Wá Salon's blocklist but model-visible built-ins such as `grep` could still be selected and executed. | Wá Salon Builder Starter `0.10.4-rc1` live validation | 4/6 | Completed |
 | 2026-06-15 | Fix scoped primary agent validation in session create/update — `GET /agents` could list Wá Salon's scoped custom primary agent, but `POST /sessions` and `PATCH /sessions/{session_id}` validated `agent_name` without the request scope and rejected the same agent as unknown. | Wá Salon Builder Starter `0.10.4-rc1` live validation | 2/6 | Completed |
+| 2026-06-15 | Fail explicitly when a session-bound agent is missing or unavailable at runtime instead of silently invoking the default agent; runtime lookup must use the session/request scope. | Wá Salon Builder Starter release-candidate validation | 4/6 | Completed |
 
 ---
 

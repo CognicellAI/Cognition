@@ -15,6 +15,7 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Fixed inherited Deep Agents harness tool visibility for per-agent `excluded_tools` so tools such as `grep` can be removed from the model-visible tool list before the model can select them.
 - Fixed scoped `PATCH /agents/{name}` responses to reload the same scoped agent row that was updated.
 - Fixed scoped custom primary agent validation for `POST /sessions` and `PATCH /sessions/{session_id}` so agents visible through scoped `GET /agents` can be bound to new or updated sessions.
+- Fixed runtime agent resolution so sessions bound to missing, hidden, or non-primary agents fail explicitly instead of silently falling back to the default agent.
 
 ### Documentation
 
