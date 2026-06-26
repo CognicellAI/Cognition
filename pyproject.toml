@@ -56,6 +56,8 @@ dependencies = [
     "langchain-mcp-adapters>=0.2.0",
     # A2A (Agent-to-Agent Protocol) - Inbound server adapter
     "a2a-sdk>=1.0.3",
+    # AWS Lambda MicroVM sandbox adapter (boto3 is optional/lazy)
+    "langchain-aws-lambda-microvms>=0.1.0",
 ]
 
 [project.optional-dependencies]
@@ -94,9 +96,14 @@ k8s = [
     "langchain-k8s-sandbox[k8s]",
 ]
 
+# AWS Lambda MicroVM sandbox backend
+aws-lambda-microvms = [
+    "langchain-aws-lambda-microvms[aws]",
+]
+
 # All extras
 all = [
-    "cognition[openai,bedrock,test,deploy,k8s]",
+    "cognition[openai,bedrock,test,deploy,k8s,aws-lambda-microvms]",
 ]
 
 [project.scripts]
@@ -114,6 +121,7 @@ members = ["packages/*"]
 
 [tool.uv.sources]
 langchain-k8s-sandbox = { workspace = true }
+langchain-aws-lambda-microvms = { workspace = true }
 
 [tool.hatch.build.targets.wheel]
 packages = ["server", "client", "shared", "packages"]
@@ -173,7 +181,13 @@ line-ending = "auto"
 convention = "google"
 
 [tool.ruff.lint.isort]
-known-first-party = ["server", "client", "shared", "langchain_k8s_sandbox"]
+known-first-party = [
+    "server",
+    "client",
+    "shared",
+    "langchain_k8s_sandbox",
+    "langchain_aws_lambda_microvms",
+]
 
 [tool.mypy]
 python_version = "3.11"

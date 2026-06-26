@@ -261,6 +261,84 @@ class McpServerRegistration(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# Sandbox Profile
+# ---------------------------------------------------------------------------
+
+
+class LambdaMicroVmIdlePolicy(BaseModel):
+    """Idle lifecycle policy for an AWS Lambda MicroVM sandbox profile."""
+
+    max_idle_duration_seconds: int = Field(default=900, gt=0)
+    suspended_duration_seconds: int | None = Field(default=1800, gt=0)
+    auto_resume_enabled: bool = Field(default=True)
+
+
+class SandboxProfile(BaseModel):
+    """Builder-managed sandbox profile for the AWS Lambda MicroVM backend.
+
+    V1 consumes prebuilt AWS Lambda MicroVM image ARNs. Cognition stores only
+    trusted profile metadata and never creates, updates, or persists runtime
+    credentials for the image or sandbox.
+    """
+
+    name: str = Field(..., min_length=1, max_length=100)
+    backend: Literal["aws_lambda_microvm"] = Field(default="aws_lambda_microvm")
+    image_arn: str = Field(..., min_length=1)
+    image_version: str | None = Field(default=None)
+    region: str | None = Field(default=None)
+    ingress_network_connector_arns: list[str] = Field(default_factory=list)
+    egress_mode: Literal["internet", "vpc"] = Field(default="internet")
+    egress_network_connector_arns: list[str] = Field(default_factory=list)
+    idle_policy: LambdaMicroVmIdlePolicy | None = Field(default=None)
+    maximum_duration_seconds: int = Field(default=3600, gt=0, le=28800)
+    port: int = Field(default=8080, ge=1, le=65535)
+    token_expiration_minutes: int = Field(default=30, gt=0)
+    default_execution_role_arn: str | None = Field(default=None)
+    scope: dict[str, str] = Field(default_factory=dict)
+    source: Literal["file", "api"] = Field(default="file")
+    extra: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("name")
+    @classmethod
+    def validate_name(cls, v: str) -> str:
+        """Validate sandbox profile name format."""
+        if not v.replace("-", "").replace("_", "").isalnum():
+            raise ValueError(
+                f"Sandbox profile name must be alphanumeric with hyphens/underscores only: {v}"
+            )
+        return v
+
+    @field_validator("image_arn")
+    @classmethod
+    def validate_image_arn(cls, v: str) -> str:
+        """Ensure the profile references a Lambda MicroVM image ARN."""
+        if not v.startswith("arn:aws:lambda:") or ":microvm-image:" not in v:
+            raise ValueError("image_arn must be an AWS Lambda MicroVM image ARN")
+        return v
+
+    @field_validator(
+        "ingress_network_connector_arns",
+        "egress_network_connector_arns",
+    )
+    @classmethod
+    def validate_network_connector_arns(cls, v: list[str]) -> list[str]:
+        """Ensure connector fields only contain ARN-shaped values."""
+        for arn in v:
+            if not arn.startswith("arn:aws:"):
+                raise ValueError(f"Network connector must be an AWS ARN: {arn!r}")
+        return v
+
+    @model_validator(mode="after")
+    def validate_egress_config(self) -> SandboxProfile:
+        """Require explicit egress connectors for VPC-only egress."""
+        if self.egress_mode == "vpc" and not self.egress_network_connector_arns:
+            raise ValueError(
+                "egress_network_connector_arns is required when egress_mode is 'vpc'"
+            )
+        return self
+
+
+# ---------------------------------------------------------------------------
 # Artifact
 # ---------------------------------------------------------------------------
 
@@ -334,7 +412,14 @@ class ArtifactDefinition(BaseModel):
 # Config change / invalidation events
 # ---------------------------------------------------------------------------
 
-EntityType = Literal["provider", "tool", "skill", "agent", "mcp_server"]
+EntityType = Literal[
+    "provider",
+    "tool",
+    "skill",
+    "agent",
+    "mcp_server",
+    "sandbox_profile",
+]
 OperationType = Literal["upsert", "delete"]
 
 
@@ -449,6 +534,8 @@ __all__ = [
     "McpServerRegistration",
     "OperationType",
     "ProviderConfig",
+    "LambdaMicroVmIdlePolicy",
+    "SandboxProfile",
     "SkillDefinition",
     "ToolRegistration",
 ]

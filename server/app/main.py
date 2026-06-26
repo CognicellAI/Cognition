@@ -31,6 +31,7 @@ from server.app.api.routes import (
     mcp_servers,
     messages,
     models,
+    sandbox_profiles,
     sessions,
     skills,
     tools,
@@ -87,6 +88,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # Seed provider config from config.yaml (insert-if-absent)
     from server.app.bootstrap import (
         seed_providers_from_config,
+        seed_sandbox_profiles_from_config,
         seed_skills_from_sources,
         seed_tools_from_sources,
     )
@@ -95,10 +97,16 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     yaml_config = load_config(cwd=settings.workspace_path)
     logger.debug("Loaded YAML config", keys=list(yaml_config.keys()))
     await seed_providers_from_config(yaml_config, config_store)
+    sandbox_profiles_seeded = await seed_sandbox_profiles_from_config(yaml_config, config_store)
     skills_seeded = await seed_skills_from_sources(yaml_config, config_store, settings.workspace_path)
     tools_seeded = await seed_tools_from_sources(yaml_config, config_store, settings.workspace_path)
-    if skills_seeded or tools_seeded:
-        logger.info("Bootstrapped file sources", skills=skills_seeded, tools=tools_seeded)
+    if sandbox_profiles_seeded or skills_seeded or tools_seeded:
+        logger.info(
+            "Bootstrapped file sources",
+            sandbox_profiles=sandbox_profiles_seeded,
+            skills=skills_seeded,
+            tools=tools_seeded,
+        )
 
     # Seed store-backed agent definitions after ConfigStore is available.
     await config_store.seed_agent_definitions()
@@ -266,6 +274,7 @@ app.include_router(sessions.router)
 app.include_router(messages.router)
 app.include_router(config.router)
 app.include_router(mcp_servers.router)
+app.include_router(sandbox_profiles.router)
 app.include_router(agents.router)
 app.include_router(skills.router)
 app.include_router(models.router)

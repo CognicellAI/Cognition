@@ -134,7 +134,7 @@ class Settings(BaseSettings):
     )
 
     # Sandbox / Execution backend settings
-    sandbox_backend: Literal["local", "docker", "kubernetes"] = Field(
+    sandbox_backend: Literal["local", "docker", "kubernetes", "aws_lambda_microvm"] = Field(
         default="local",
         alias="COGNITION_SANDBOX_BACKEND",
     )
@@ -180,6 +180,13 @@ class Settings(BaseSettings):
         default=None,
         alias="COGNITION_K8S_SANDBOX_WARM_POOL",
         description="Optional SandboxWarmPool CR name for pre-warmed sandbox allocation.",
+    )
+
+    # AWS Lambda MicroVM sandbox settings (only used when sandbox_backend="aws_lambda_microvm")
+    aws_lambda_microvm_default_profile: str = Field(
+        default="default",
+        alias="COGNITION_AWS_LAMBDA_MICROVM_DEFAULT_PROFILE",
+        description="Default SandboxProfile name for the AWS Lambda MicroVM backend.",
     )
 
     blocked_tools: list[str] = Field(
