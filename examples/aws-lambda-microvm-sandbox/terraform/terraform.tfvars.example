@@ -18,6 +18,17 @@ prebuilt_microvm_image_version = "1.0"
 profile_name = "default-lambda"
 runtime_port = 8080
 
+# Cost controls for generated profiles.
+maximum_duration_seconds      = 3600
+max_concurrent_sessions       = 10
+max_session_starts_per_minute = 30
+max_idle_duration_seconds     = 900
+suspended_duration_seconds    = 300
+microvm_logging_mode          = "disabled"
+# microvm_logging_mode = "cloudwatch"
+# microvm_log_group    = "/aws/lambda-microvms/cognition"
+# microvm_log_stream   = "default-lambda"
+
 # Attach the generated control-plane policy to existing Cognition runtime roles.
 control_plane_role_names = []
 

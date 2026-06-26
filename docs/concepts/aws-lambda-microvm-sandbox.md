@@ -51,6 +51,15 @@ sandbox_profiles:
     port: 8080
     token_expiration_minutes: 30
     default_execution_role_arn: arn:aws:iam::123456789012:role/cognition-agent-runtime
+    idle_policy:
+      max_idle_duration_seconds: 900
+      suspended_duration_seconds: 300
+      auto_resume_enabled: true
+    logging:
+      disabled: {}
+    quota:
+      max_concurrent_sessions: 10
+      max_session_starts_per_minute: 30
 ```
 
 | Field | Purpose |
@@ -64,6 +73,9 @@ sandbox_profiles:
 | `egress_mode` | `internet` or `vpc` |
 | `egress_network_connector_arns` | Required when `egress_mode` is `vpc`; optional for `internet` |
 | `idle_policy` | Optional Lambda MicroVM idle and suspend policy |
+| `logging` | Optional Lambda MicroVM logging config; use `disabled: {}` or `cloud_watch` |
+| `quota` | Optional Cognition-side profile/scope quota policy |
+| `run_hook_payload` | Optional payload for the image `/run` lifecycle hook |
 | `maximum_duration_seconds` | Maximum MicroVM lifetime, up to 28800 seconds |
 | `port` | Runtime command server port inside the MicroVM |
 | `token_expiration_minutes` | Proxy auth token lifetime requested by Cognition |
@@ -73,6 +85,21 @@ sandbox_profiles:
 When `egress_mode` is `internet`, Cognition uses the AWS managed
 `INTERNET_EGRESS` connector by default. When `egress_mode` is `vpc`, the
 profile must provide explicit egress network connector ARNs.
+
+Cost-sensitive profile fields are `maximum_duration_seconds`, `idle_policy`,
+`logging`, `quota`, and network connector selection. `quota` is enforced by
+Cognition per profile and effective-scope fingerprint; it can cap concurrent
+sandbox sessions and new session starts per minute before Cognition attempts
+more AWS work. Disable runtime logging by default unless you need CloudWatch
+logs for investigation, because noisy command output can create CloudWatch
+ingestion and retention cost. For CloudWatch logging:
+
+```yaml
+logging:
+  cloud_watch:
+    log_group: /aws/lambda-microvms/cognition
+    log_stream: repo-maintainer
+```
 
 ## Per-Agent IAM Role Assignment
 
@@ -167,7 +194,12 @@ lifecycle metadata includes:
 - `status`
 - `region`
 - `port`
+- `maximum_duration_seconds`
+- `logging_mode`
+- `quota`
 - `execution_role_fingerprint`
+- `correlation` with session id, run id, agent name, profile, scope keys, and a
+  scope fingerprint
 
 Auth tokens are filtered before events are streamed or persisted.
 

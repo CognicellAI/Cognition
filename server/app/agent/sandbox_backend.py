@@ -34,7 +34,7 @@ from deepagents.backends.protocol import (
 
 logger = structlog.get_logger(__name__)
 
-from server.app.storage.config_models import SandboxProfile  # noqa: E402
+from server.app.storage.config_models import LambdaMicroVmQuota, SandboxProfile  # noqa: E402
 
 
 class CognitionLocalSandboxBackend(LocalShellBackend, SandboxBackendProtocol):
@@ -263,6 +263,22 @@ def _role_fingerprint(role_arn: str | None) -> str | None:
     return hashlib.sha256(role_arn.encode("utf-8")).hexdigest()[:16]
 
 
+def _lambda_microvm_logging_mode(profile: SandboxProfile) -> str | None:
+    if profile.logging is not None:
+        if profile.logging.disabled is not None:
+            return "disabled"
+        if profile.logging.cloud_watch is not None:
+            return "cloud_watch"
+    legacy_logging = profile.extra.get("logging")
+    if isinstance(legacy_logging, dict):
+        if "disabled" in legacy_logging:
+            return "disabled"
+        if "cloudWatch" in legacy_logging or "cloud_watch" in legacy_logging:
+            return "cloud_watch"
+        return "custom"
+    return None
+
+
 class CognitionAwsLambdaMicroVmSandboxBackend(SandboxBackendProtocol):
     """AWS Lambda MicroVM sandbox backend wrapper for Cognition.
 
@@ -311,30 +327,55 @@ class CognitionAwsLambdaMicroVmSandboxBackend(SandboxBackendProtocol):
         return None
 
     @property
+    def quota(self) -> LambdaMicroVmQuota | None:
+        """Return the Cognition-side quota policy for this profile."""
+        if self._profile_config is None:
+            return None
+        return self._profile_config.quota
+
+    @property
     def runtime_metadata(self) -> dict[str, Any]:
         """Return token-free MicroVM metadata for observability/persistence."""
-        metadata: dict[str, Any] = {"profile": self._profile}
+        metadata: dict[str, Any] = {
+            "backend": "aws_lambda_microvm",
+            "profile": self._profile,
+        }
+        if self._profile_config is not None:
+            metadata.update(self._profile_runtime_metadata(self._profile_config))
         if self._backend is not None and hasattr(self._backend, "runtime_metadata"):
             self._last_runtime_metadata = cast(dict[str, Any], self._backend.runtime_metadata)
             metadata.update(self._last_runtime_metadata)
         elif self._last_runtime_metadata:
             metadata.update(self._last_runtime_metadata)
-        elif self._profile_config is not None:
-            metadata.update(
-                {
-                    "microvm_id": None,
-                    "endpoint": None,
-                    "image": self._profile_config.image_arn,
-                    "image_version": self._profile_config.image_version,
-                    "status": None,
-                    "execution_role_fingerprint": _role_fingerprint(
-                        self.execution_role_arn
-                    ),
-                    "region": self._profile_config.region,
-                    "port": self._profile_config.port,
-                }
-            )
         return metadata
+
+    def _profile_runtime_metadata(self, profile: SandboxProfile) -> dict[str, Any]:
+        """Return safe profile metadata useful for lifecycle correlation."""
+        return {
+            "microvm_id": None,
+            "endpoint": None,
+            "image": profile.image_arn,
+            "image_version": profile.image_version,
+            "status": None,
+            "execution_role_fingerprint": _role_fingerprint(self.execution_role_arn),
+            "region": profile.region,
+            "port": profile.port,
+            "maximum_duration_seconds": profile.maximum_duration_seconds,
+            "token_expiration_minutes": profile.token_expiration_minutes,
+            "egress_mode": profile.egress_mode,
+            "ingress_network_connector_count": len(profile.ingress_network_connector_arns),
+            "egress_network_connector_count": len(profile.egress_network_connector_arns),
+            "idle_policy": profile.idle_policy.model_dump(mode="json")
+            if profile.idle_policy is not None
+            else None,
+            "logging_mode": _lambda_microvm_logging_mode(profile),
+            "quota": profile.quota.model_dump(exclude_none=True, mode="json")
+            if profile.quota is not None
+            else None,
+            "run_hook_configured": bool(
+                profile.run_hook_payload or profile.extra.get("run_hook_payload")
+            ),
+        }
 
     def _is_protected_path(self, path: str) -> bool:
         try:
@@ -398,8 +439,15 @@ class CognitionAwsLambdaMicroVmSandboxBackend(SandboxBackendProtocol):
             if profile.idle_policy is not None
             else None
         )
-        logging_config = cast(dict[str, Any] | None, profile.extra.get("logging"))
-        run_hook_payload = cast(str | None, profile.extra.get("run_hook_payload"))
+        logging_config = (
+            profile.logging.to_aws_request()
+            if profile.logging is not None
+            else cast(dict[str, Any] | None, profile.extra.get("logging"))
+        )
+        run_hook_payload = profile.run_hook_payload or cast(
+            str | None,
+            profile.extra.get("run_hook_payload"),
+        )
         workspace_root = str(profile.extra.get("workspace_root", "/workspace"))
         launch_timeout_seconds = int(profile.extra.get("launch_timeout_seconds", 120))
         healthcheck_timeout_seconds = int(profile.extra.get("healthcheck_timeout_seconds", 60))

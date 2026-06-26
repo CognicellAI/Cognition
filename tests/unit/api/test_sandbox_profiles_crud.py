@@ -17,9 +17,7 @@ def _profile_payload(name: str = "lambda-default") -> dict[str, object]:
         "name": name,
         "image_arn": f"arn:aws:lambda:us-east-1:123456789012:microvm-image:{name}",
         "region": "us-east-1",
-        "default_execution_role_arn": (
-            "arn:aws:iam::123456789012:role/cognition-agent-runtime"
-        ),
+        "default_execution_role_arn": ("arn:aws:iam::123456789012:role/cognition-agent-runtime"),
     }
 
 
@@ -41,12 +39,26 @@ def setup_registry(tmp_path_factory):
 class TestSandboxProfilesCrud:
     def test_create_and_get_profile(self):
         payload = _profile_payload()
+        payload["logging"] = {"disabled": {}}
+        payload["quota"] = {
+            "max_concurrent_sessions": 2,
+            "max_session_starts_per_minute": 10,
+        }
+        payload["run_hook_payload"] = '{"mode":"test"}'
+        payload["maximum_duration_seconds"] = 900
         response = client.post("/sandbox/profiles", json=payload)
         assert response.status_code == 201
         data = response.json()
         assert data["name"] == "lambda-default"
         assert data["backend"] == "aws_lambda_microvm"
         assert data["egress_mode"] == "internet"
+        assert data["logging"] == {"disabled": {}, "cloud_watch": None}
+        assert data["quota"] == {
+            "max_concurrent_sessions": 2,
+            "max_session_starts_per_minute": 10,
+        }
+        assert data["run_hook_payload"] == '{"mode":"test"}'
+        assert data["maximum_duration_seconds"] == 900
         assert data["source"] == "api"
 
         get_response = client.get("/sandbox/profiles/lambda-default")
@@ -90,6 +102,56 @@ class TestSandboxProfilesCrud:
         data = response.json()
         assert data["egress_mode"] == "vpc"
         assert data["egress_network_connector_arns"]
+
+    def test_patch_profile_logging_to_cloudwatch(self):
+        response = client.post("/sandbox/profiles", json=_profile_payload("cw-valid"))
+        assert response.status_code == 201
+
+        response = client.patch(
+            "/sandbox/profiles/cw-valid",
+            json={
+                "logging": {
+                    "cloud_watch": {
+                        "log_group": "/aws/lambda-microvms/cognition",
+                        "log_stream": "agent-session",
+                    }
+                }
+            },
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert data["logging"] == {
+            "disabled": None,
+            "cloud_watch": {
+                "log_group": "/aws/lambda-microvms/cognition",
+                "log_stream": "agent-session",
+            },
+        }
+
+    def test_reject_logging_with_multiple_destinations(self):
+        response = client.post(
+            "/sandbox/profiles",
+            json={
+                **_profile_payload("logging-invalid"),
+                "logging": {
+                    "disabled": {},
+                    "cloud_watch": {"log_group": "/aws/lambda-microvms/cognition"},
+                },
+            },
+        )
+
+        assert response.status_code == 422
+
+    def test_reject_empty_quota_policy(self):
+        response = client.post(
+            "/sandbox/profiles",
+            json={
+                **_profile_payload("quota-invalid"),
+                "quota": {},
+            },
+        )
+
+        assert response.status_code == 422
 
     def test_delete_profile(self):
         response = client.post(

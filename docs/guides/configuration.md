@@ -345,11 +345,27 @@ sandbox_profiles:
       max_idle_duration_seconds: 900
       suspended_duration_seconds: 300
       auto_resume_enabled: true
+    logging:
+      disabled: {}
+    quota:
+      max_concurrent_sessions: 10
+      max_session_starts_per_minute: 30
     default_execution_role_arn: arn:aws:iam::123456789012:role/cognition-agent-runtime
 ```
 
 For private egress, set `egress_mode: vpc` and provide explicit
 `egress_network_connector_arns`.
+
+Cost-sensitive Lambda MicroVM profile keys:
+
+| Key | Cost impact |
+|---|---|
+| `maximum_duration_seconds` | Hard upper bound on billable MicroVM lifetime |
+| `idle_policy` | Allows AWS to suspend idle MicroVMs instead of continuing active compute |
+| `logging` | CloudWatch runtime logs may incur ingestion and retention cost; use `disabled: {}` unless needed |
+| `quota` | Cognition-side cap on concurrent sandbox sessions and starts per minute for a profile/scope pair |
+| `egress_mode` / `egress_network_connector_arns` | VPC connectors can add network path and data-transfer costs |
+| `run_hook_payload` | Can trigger runtime image hook work during launch; keep hook behavior bounded |
 
 ```yaml
 sandbox_profiles:

@@ -157,7 +157,21 @@ class LambdaMicroVmSandbox(BaseSandbox):
             "execution_role_fingerprint": _role_fingerprint(self._execution_role_arn),
             "region": self._region_name,
             "port": self._port,
+            "maximum_duration_seconds": self._maximum_duration_seconds,
+            "token_expiration_minutes": self._token_expiration_minutes,
+            "ingress_network_connector_count": len(self._ingress_network_connector_arns),
+            "egress_network_connector_count": len(self._egress_network_connector_arns),
+            "logging_mode": self._logging_mode(),
         }
+
+    def _logging_mode(self) -> str | None:
+        if self._logging_config is None:
+            return None
+        if "disabled" in self._logging_config:
+            return "disabled"
+        if "cloudWatch" in self._logging_config or "cloud_watch" in self._logging_config:
+            return "cloud_watch"
+        return "custom"
 
     def _get_client(self) -> Any:
         if self._client is not None:

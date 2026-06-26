@@ -100,6 +100,37 @@ class TestSandboxProfileValidation:
                 image_arn="arn:aws:ecr:us-east-1:123456789012:repository/runtime",
             )
 
+    def test_logging_must_select_one_destination(self):
+        with pytest.raises(ValueError, match="exactly one"):
+            SandboxProfile(
+                name="bad-logging",
+                image_arn=("arn:aws:lambda:us-east-1:123456789012:microvm-image:python-agent"),
+                logging={
+                    "disabled": {},
+                    "cloud_watch": {"log_group": "/aws/lambda-microvms/cognition"},
+                },
+            )
+
+    def test_cloudwatch_logging_profile_is_valid(self):
+        profile = SandboxProfile(
+            name="cloudwatch-logging",
+            image_arn="arn:aws:lambda:us-east-1:123456789012:microvm-image:python-agent",
+            logging={
+                "cloud_watch": {
+                    "log_group": "/aws/lambda-microvms/cognition",
+                    "log_stream": "agent-session",
+                }
+            },
+        )
+
+        assert profile.logging is not None
+        assert profile.logging.to_aws_request() == {
+            "cloudWatch": {
+                "logGroup": "/aws/lambda-microvms/cognition",
+                "logStream": "agent-session",
+            }
+        }
+
 
 # ---------------------------------------------------------------------------
 # MemoryConfigRegistry — Provider CRUD
@@ -223,9 +254,10 @@ class TestMemorySandboxProfileCRUD:
     @pytest.mark.asyncio
     async def test_scoped_profile_wins_over_global(self, mem_reg: MemoryConfigRegistry):
         await mem_reg.upsert_sandbox_profile(
-            _sandbox_profile("agent-runtime", image_arn=(
-                "arn:aws:lambda:us-east-1:123456789012:microvm-image:global"
-            ))
+            _sandbox_profile(
+                "agent-runtime",
+                image_arn=("arn:aws:lambda:us-east-1:123456789012:microvm-image:global"),
+            )
         )
         await mem_reg.upsert_sandbox_profile(
             _sandbox_profile(

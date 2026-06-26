@@ -64,6 +64,11 @@ sandbox_profiles:
       max_idle_duration_seconds: 900
       suspended_duration_seconds: 300
       auto_resume_enabled: true
+    logging:
+      disabled: {}
+    quota:
+      max_concurrent_sessions: 10
+      max_session_starts_per_minute: 30
     default_execution_role_arn: arn:aws:iam::123456789012:role/cognition-agent-runtime
 ```
 
@@ -81,6 +86,7 @@ curl -X POST http://localhost:8000/sandbox/profiles \
     "maximum_duration_seconds": 3600,
     "port": 8080,
     "token_expiration_minutes": 30,
+    "logging": {"disabled": {}},
     "default_execution_role_arn": "arn:aws:iam::123456789012:role/cognition-agent-runtime"
   }'
 ```
@@ -160,8 +166,9 @@ curl -N -X POST "http://localhost:8000/sessions/${SESSION_ID}/messages" \
 ```
 
 Watch for `sandbox_lifecycle` events. The runtime snapshot should include a
-MicroVM id, status, image, endpoint, profile, and role fingerprint. It must not
-include auth tokens.
+MicroVM id, status, image, endpoint, profile, cost-relevant profile settings,
+role fingerprint, and correlation metadata for the session/run/agent/scope. It
+must not include auth tokens.
 
 ## Troubleshooting
 
@@ -172,6 +179,7 @@ include auth tokens.
 | VPC profile returns validation error | Set `egress_network_connector_arns` when `egress_mode` is `vpc` |
 | `AccessDenied` on `RunMicroVM` | Attach the control-plane policy to the AWS identity running Cognition |
 | `AccessDenied` on `iam:PassRole` | Add the agent execution role ARN to the allowed role list in the control-plane policy |
+| `SANDBOX_QUOTA_EXCEEDED` | Raise or relax the profile `quota`, or wait for existing sessions/start history to fall below the configured limits |
 | Auth token creation fails | Allow `lambda:CreateMicroVMAuthToken` for approved MicroVM and image resources |
 | `/healthz` fails | Confirm the image runs the runtime command server on the profile `port` |
 | Commands hang or cannot reach dependencies | Check the profile egress mode and connector ARNs |

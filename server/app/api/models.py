@@ -21,7 +21,11 @@ from server.app.models import Session as CoreSession
 from server.app.models import SessionConfig
 from server.app.models import SessionEvent as CoreSessionEvent
 from server.app.models import SessionRun as CoreSessionRun
-from server.app.storage.config_models import LambdaMicroVmIdlePolicy
+from server.app.storage.config_models import (
+    LambdaMicroVmIdlePolicy,
+    LambdaMicroVmLogging,
+    LambdaMicroVmQuota,
+)
 
 # ============================================================================
 # Session Models
@@ -755,6 +759,9 @@ class SandboxProfileCreate(BaseModel):
     egress_mode: Literal["internet", "vpc"] = "internet"
     egress_network_connector_arns: list[str] = Field(default_factory=list)
     idle_policy: LambdaMicroVmIdlePolicy | None = None
+    logging: LambdaMicroVmLogging | None = None
+    quota: LambdaMicroVmQuota | None = None
+    run_hook_payload: str | None = None
     maximum_duration_seconds: int = Field(default=3600, gt=0, le=28800)
     port: int = Field(default=8080, ge=1, le=65535)
     token_expiration_minutes: int = Field(default=30, gt=0)
@@ -773,6 +780,9 @@ class SandboxProfileUpdate(BaseModel):
     egress_mode: Literal["internet", "vpc"] | None = None
     egress_network_connector_arns: list[str] | None = None
     idle_policy: LambdaMicroVmIdlePolicy | None = None
+    logging: LambdaMicroVmLogging | None = None
+    quota: LambdaMicroVmQuota | None = None
+    run_hook_payload: str | None = None
     maximum_duration_seconds: int | None = Field(default=None, gt=0, le=28800)
     port: int | None = Field(default=None, ge=1, le=65535)
     token_expiration_minutes: int | None = Field(default=None, gt=0)
@@ -792,6 +802,9 @@ class SandboxProfileResponse(BaseModel):
     egress_mode: Literal["internet", "vpc"]
     egress_network_connector_arns: list[str] = Field(default_factory=list)
     idle_policy: LambdaMicroVmIdlePolicy | None = None
+    logging: LambdaMicroVmLogging | None = None
+    quota: LambdaMicroVmQuota | None = None
+    run_hook_payload: str | None = None
     maximum_duration_seconds: int
     port: int
     token_expiration_minutes: int

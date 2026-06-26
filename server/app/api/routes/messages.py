@@ -245,6 +245,7 @@ async def agent_event_stream(
             system_prompt=system_prompt,
             manager=agent_manager,
             scope=scope,
+            run_id=run.id if run is not None else None,
         ):
             if isinstance(event, TokenEvent):
                 assistant_content_parts.append(event.content)

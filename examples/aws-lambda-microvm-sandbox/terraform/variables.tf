@@ -85,6 +85,28 @@ variable "token_expiration_minutes" {
   default     = 30
 }
 
+variable "max_concurrent_sessions" {
+  description = "Cognition-side maximum active sandbox sessions for each generated profile/scope pair."
+  type        = number
+  default     = 10
+
+  validation {
+    condition     = var.max_concurrent_sessions > 0
+    error_message = "max_concurrent_sessions must be greater than zero."
+  }
+}
+
+variable "max_session_starts_per_minute" {
+  description = "Cognition-side maximum sandbox session starts per minute for each generated profile/scope pair."
+  type        = number
+  default     = 30
+
+  validation {
+    condition     = var.max_session_starts_per_minute > 0
+    error_message = "max_session_starts_per_minute must be greater than zero."
+  }
+}
+
 variable "max_idle_duration_seconds" {
   description = "Maximum idle time before Lambda may suspend the MicroVM."
   type        = number
@@ -95,6 +117,31 @@ variable "suspended_duration_seconds" {
   description = "Duration Lambda may keep a suspended MicroVM available for resume."
   type        = number
   default     = 300
+}
+
+variable "microvm_logging_mode" {
+  description = "Runtime logging mode for generated Cognition profiles. Use disabled for lowest default cost; use cloudwatch when operational logs are required."
+  type        = string
+  default     = "disabled"
+
+  validation {
+    condition     = contains(["disabled", "cloudwatch"], var.microvm_logging_mode)
+    error_message = "microvm_logging_mode must be disabled or cloudwatch."
+  }
+}
+
+variable "microvm_log_group" {
+  description = "Optional CloudWatch log group for Lambda MicroVM runtime logging when microvm_logging_mode is cloudwatch."
+  type        = string
+  default     = null
+  nullable    = true
+}
+
+variable "microvm_log_stream" {
+  description = "Optional CloudWatch log stream for Lambda MicroVM runtime logging when microvm_logging_mode is cloudwatch."
+  type        = string
+  default     = null
+  nullable    = true
 }
 
 variable "create_vpc_egress_connector" {

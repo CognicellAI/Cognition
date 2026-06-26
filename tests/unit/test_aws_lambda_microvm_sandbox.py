@@ -11,14 +11,17 @@ from server.app.agent.sandbox_backend import (
     CognitionAwsLambdaMicroVmSandboxBackend,
     create_sandbox_backend,
 )
-from server.app.storage.config_models import LambdaMicroVmIdlePolicy, SandboxProfile
+from server.app.storage.config_models import (
+    LambdaMicroVmIdlePolicy,
+    LambdaMicroVmLogging,
+    LambdaMicroVmQuota,
+    SandboxProfile,
+)
 
 IMAGE_ARN = "arn:aws:lambda:us-west-2:123456789012:microvm-image:cognition-runtime"
 DEFAULT_ROLE_ARN = "arn:aws:iam::123456789012:role/default-agent-runtime"
 EXPLICIT_ROLE_ARN = "arn:aws:iam::123456789012:role/explicit-agent-runtime"
-ALL_INGRESS_ARN = (
-    "arn:aws:lambda:us-west-2:aws:network-connector:aws-network-connector:ALL_INGRESS"
-)
+ALL_INGRESS_ARN = "arn:aws:lambda:us-west-2:aws:network-connector:aws-network-connector:ALL_INGRESS"
 INTERNET_EGRESS_ARN = (
     "arn:aws:lambda:us-west-2:aws:network-connector:aws-network-connector:INTERNET_EGRESS"
 )
@@ -132,6 +135,12 @@ def _profile(
             suspended_duration_seconds=300,
             auto_resume_enabled=True,
         ),
+        logging=LambdaMicroVmLogging(disabled={}),
+        quota=LambdaMicroVmQuota(
+            max_concurrent_sessions=2,
+            max_session_starts_per_minute=10,
+        ),
+        run_hook_payload='{"workspace":"/workspace"}',
         maximum_duration_seconds=3600,
         port=8080,
         token_expiration_minutes=17,
@@ -155,6 +164,13 @@ class TestLambdaMicroVmSandboxAdapter:
                 "suspendedDurationSeconds": 300,
                 "autoResumeEnabled": True,
             },
+            logging_config={
+                "cloudWatch": {
+                    "logGroup": "/aws/lambda-microvms/cognition",
+                    "logStream": "test-stream",
+                }
+            },
+            run_hook_payload='{"workspace":"/workspace"}',
             maximum_duration_seconds=3600,
             port=8080,
             token_expiration_minutes=17,
@@ -173,11 +189,22 @@ class TestLambdaMicroVmSandboxAdapter:
         assert client.run_kwargs["ingressNetworkConnectors"] == [ALL_INGRESS_ARN]
         assert client.run_kwargs["egressNetworkConnectors"] == [INTERNET_EGRESS_ARN]
         assert client.run_kwargs["idlePolicy"]["autoResumeEnabled"] is True
+        assert client.run_kwargs["logging"] == {
+            "cloudWatch": {
+                "logGroup": "/aws/lambda-microvms/cognition",
+                "logStream": "test-stream",
+            }
+        }
+        assert client.run_kwargs["runHookPayload"] == '{"workspace":"/workspace"}'
         assert client.auth_kwargs == {
             "microvmIdentifier": "mv-123",
             "expirationInMinutes": 17,
             "allowedPorts": [{"port": 8080}],
         }
+        metadata = sandbox.runtime_metadata
+        assert metadata["maximum_duration_seconds"] == 3600
+        assert metadata["token_expiration_minutes"] == 17
+        assert metadata["logging_mode"] == "cloud_watch"
 
         execute_request = http_client.requests[-1]
         assert execute_request["url"] == "https://mv-123.lambda-url.aws/execute"
@@ -227,7 +254,9 @@ class TestCognitionAwsLambdaMicroVmSandboxBackend:
         adapter.id = "mv-123"
         adapter.execute.return_value = MagicMock(output="ok", exit_code=0, truncated=False)
 
-        with patch("langchain_aws_lambda_microvms.LambdaMicroVmSandbox", return_value=adapter) as cls:
+        with patch(
+            "langchain_aws_lambda_microvms.LambdaMicroVmSandbox", return_value=adapter
+        ) as cls:
             backend = CognitionAwsLambdaMicroVmSandboxBackend(
                 root_dir=tmp_path,
                 sandbox_id="lambda-test",
@@ -250,6 +279,8 @@ class TestCognitionAwsLambdaMicroVmSandboxBackend:
             "suspendedDurationSeconds": 300,
             "autoResumeEnabled": True,
         }
+        assert kwargs["logging_config"] == {"disabled": {}}
+        assert kwargs["run_hook_payload"] == '{"workspace":"/workspace"}'
 
     def test_wrapper_uses_profile_default_role_when_agent_role_absent(self, tmp_path) -> None:
         profile = _profile(egress_mode="vpc", egress=[VPC_EGRESS_ARN])
@@ -257,7 +288,9 @@ class TestCognitionAwsLambdaMicroVmSandboxBackend:
         adapter.id = "mv-123"
         adapter.execute.return_value = MagicMock(output="ok", exit_code=0, truncated=False)
 
-        with patch("langchain_aws_lambda_microvms.LambdaMicroVmSandbox", return_value=adapter) as cls:
+        with patch(
+            "langchain_aws_lambda_microvms.LambdaMicroVmSandbox", return_value=adapter
+        ) as cls:
             backend = CognitionAwsLambdaMicroVmSandboxBackend(
                 root_dir=tmp_path,
                 profile="lambda-default",
@@ -281,6 +314,11 @@ class TestCognitionAwsLambdaMicroVmSandboxBackend:
         assert isinstance(backend, CognitionAwsLambdaMicroVmSandboxBackend)
         assert backend.profile == "lambda-default"
         assert backend.execution_role_arn == DEFAULT_ROLE_ARN
+        assert backend.quota == profile.quota
+        assert backend.runtime_metadata["quota"] == {
+            "max_concurrent_sessions": 2,
+            "max_session_starts_per_minute": 10,
+        }
 
     def test_wrapper_requires_resolved_profile(self, tmp_path) -> None:
         backend = CognitionAwsLambdaMicroVmSandboxBackend(

@@ -79,6 +79,8 @@ Default resources:
 - IAM policy for the Cognition control plane.
 - Optional policy attachments to existing Cognition control-plane roles.
 - AWS-managed internet connector ARNs in generated profile YAML.
+- Cost-oriented sandbox profile defaults: max duration, idle/suspend policy, and
+  runtime logging disabled unless CloudWatch logging is explicitly selected.
 
 Optional resources when `create_vpc_egress_connector = true`:
 
@@ -130,7 +132,30 @@ curl -N -X POST "http://localhost:8000/sessions/${SESSION_ID}/messages" \
 ```
 
 Look for `sandbox_lifecycle` events with `sandbox_backend:
-"aws_lambda_microvm"` and token-free runtime metadata.
+"aws_lambda_microvm"` and token-free runtime metadata. The metadata includes
+safe correlation fields for the Cognition session, run, agent, profile, scope
+keys, and scope fingerprint.
+
+## Cost Controls
+
+The generated `sandbox_profiles_yaml` includes the Lambda MicroVM settings most
+likely to affect runtime cost:
+
+- `maximum_duration_seconds` caps how long a MicroVM can run.
+- `idle_policy` lets AWS suspend idle MicroVMs while preserving resume state.
+- `logging` defaults to `disabled: {}` so noisy runtime output is not sent to
+  CloudWatch unless you opt in.
+- `quota` caps Cognition-side concurrent sessions and session starts per minute
+  for each profile/scope pair.
+- `egress_mode` and connector ARNs make internet versus VPC egress explicit.
+
+To enable CloudWatch runtime logs, set:
+
+```hcl
+microvm_logging_mode = "cloudwatch"
+microvm_log_group    = "/aws/lambda-microvms/cognition"
+microvm_log_stream   = "default-lambda"
+```
 
 ## Cleanup
 

@@ -538,7 +538,21 @@ token-free runtime metadata.
     "status": "RUNNING",
     "region": "us-west-2",
     "port": 8080,
-    "execution_role_fingerprint": "abcd1234ef567890"
+    "maximum_duration_seconds": 3600,
+    "logging_mode": "disabled",
+    "quota": {
+      "max_concurrent_sessions": 10,
+      "max_session_starts_per_minute": 30
+    },
+    "execution_role_fingerprint": "abcd1234ef567890",
+    "correlation": {
+      "session_id": "session-123",
+      "run_id": "run-123",
+      "agent_name": "repo-maintainer",
+      "profile": "default-lambda",
+      "scope_keys": ["project", "tenant"],
+      "scope_fingerprint": "0123456789abcdef"
+    }
   }
 }
 ```
@@ -1325,6 +1339,15 @@ List sandbox profiles visible in the current scope.
         "suspended_duration_seconds": 300,
         "auto_resume_enabled": true
       },
+      "logging": {
+        "disabled": {},
+        "cloud_watch": null
+      },
+      "quota": {
+        "max_concurrent_sessions": 10,
+        "max_session_starts_per_minute": 30
+      },
+      "run_hook_payload": null,
       "maximum_duration_seconds": 3600,
       "port": 8080,
       "token_expiration_minutes": 30,
@@ -1351,6 +1374,13 @@ Create or replace an API-managed sandbox profile.
   "image_version": "1.0",
   "region": "us-west-2",
   "egress_mode": "internet",
+  "logging": {
+    "disabled": {}
+  },
+  "quota": {
+    "max_concurrent_sessions": 10,
+    "max_session_starts_per_minute": 30
+  },
   "maximum_duration_seconds": 3600,
   "port": 8080,
   "token_expiration_minutes": 30,
@@ -1370,6 +1400,9 @@ Create or replace an API-managed sandbox profile.
 | `egress_mode` | `"internet"` \| `"vpc"` | No | `internet` | Egress policy |
 | `egress_network_connector_arns` | list[string] | No | `[]` | Required when `egress_mode` is `vpc` |
 | `idle_policy` | object | No | `null` | Lambda MicroVM idle lifecycle policy |
+| `logging` | object | No | `null` | Lambda MicroVM logging config; set exactly one of `disabled` or `cloud_watch` |
+| `quota` | object | No | `null` | Cognition-side profile/scope quota policy |
+| `run_hook_payload` | string | No | `null` | Payload sent to the image `/run` lifecycle hook |
 | `maximum_duration_seconds` | int | No | `3600` | Maximum MicroVM runtime, max `28800` |
 | `port` | int | No | `8080` | Runtime command server port |
 | `token_expiration_minutes` | int | No | `30` | AWS proxy auth token TTL requested by Cognition |

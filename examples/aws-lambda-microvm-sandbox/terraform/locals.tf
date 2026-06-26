@@ -45,6 +45,23 @@ locals {
     auto_resume_enabled        = true
   }
 
+  sandbox_profile_logging = {
+    disabled = var.microvm_logging_mode == "disabled" ? {} : null
+    cloud_watch = (
+      var.microvm_logging_mode == "cloudwatch"
+      ? {
+        log_group  = var.microvm_log_group
+        log_stream = var.microvm_log_stream
+      }
+      : null
+    )
+  }
+
+  sandbox_profile_quota = {
+    max_concurrent_sessions       = var.max_concurrent_sessions
+    max_session_starts_per_minute = var.max_session_starts_per_minute
+  }
+
   internet_sandbox_profile = {
     (var.profile_name) = {
       backend                        = "aws_lambda_microvm"
@@ -55,6 +72,8 @@ locals {
       egress_mode                    = "internet"
       egress_network_connector_arns  = [local.aws_managed_internet_egress_connector_arn]
       idle_policy                    = local.sandbox_profile_idle_policy
+      logging                        = local.sandbox_profile_logging
+      quota                          = local.sandbox_profile_quota
       maximum_duration_seconds       = var.maximum_duration_seconds
       port                           = var.runtime_port
       token_expiration_minutes       = var.token_expiration_minutes
@@ -76,6 +95,8 @@ locals {
         egress_mode                    = "vpc"
         egress_network_connector_arns  = local.vpc_egress_connector_arns
         idle_policy                    = local.sandbox_profile_idle_policy
+        logging                        = local.sandbox_profile_logging
+        quota                          = local.sandbox_profile_quota
         maximum_duration_seconds       = var.maximum_duration_seconds
         port                           = var.runtime_port
         token_expiration_minutes       = var.token_expiration_minutes

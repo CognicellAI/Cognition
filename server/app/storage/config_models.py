@@ -273,6 +273,67 @@ class LambdaMicroVmIdlePolicy(BaseModel):
     auto_resume_enabled: bool = Field(default=True)
 
 
+class LambdaMicroVmCloudWatchLogging(BaseModel):
+    """CloudWatch destination for Lambda MicroVM runtime logging."""
+
+    log_group: str | None = Field(default=None, min_length=1)
+    log_stream: str | None = Field(default=None, min_length=1)
+
+
+class LambdaMicroVmLogging(BaseModel):
+    """Logging config for Lambda MicroVM sandboxes.
+
+    AWS models this as a union: either disable runtime logging or send runtime
+    logs to CloudWatch. Logging can materially affect cost for noisy agents, so
+    Cognition exposes it as first-class sandbox profile config instead of
+    hiding it in ``extra``.
+    """
+
+    disabled: dict[str, Any] | None = Field(default=None)
+    cloud_watch: LambdaMicroVmCloudWatchLogging | None = Field(default=None)
+
+    @model_validator(mode="after")
+    def validate_single_destination(self) -> LambdaMicroVmLogging:
+        """Require exactly one logging mode when logging config is present."""
+        enabled_modes = [
+            self.disabled is not None,
+            self.cloud_watch is not None,
+        ]
+        if sum(enabled_modes) != 1:
+            raise ValueError("logging must set exactly one of disabled or cloud_watch")
+        return self
+
+    def to_aws_request(self) -> dict[str, Any]:
+        """Return the Lambda MicroVM API shape for this logging config."""
+        if self.disabled is not None:
+            return {"disabled": {}}
+        if self.cloud_watch is None:
+            return {}
+        cloud_watch: dict[str, Any] = {}
+        if self.cloud_watch.log_group is not None:
+            cloud_watch["logGroup"] = self.cloud_watch.log_group
+        if self.cloud_watch.log_stream is not None:
+            cloud_watch["logStream"] = self.cloud_watch.log_stream
+        return {"cloudWatch": cloud_watch}
+
+
+class LambdaMicroVmQuota(BaseModel):
+    """Cognition-side quota policy for Lambda MicroVM sandbox profiles."""
+
+    max_concurrent_sessions: int | None = Field(default=None, gt=0)
+    max_session_starts_per_minute: int | None = Field(default=None, gt=0)
+
+    @model_validator(mode="after")
+    def validate_has_limit(self) -> LambdaMicroVmQuota:
+        """Require at least one quota limit when a quota policy is configured."""
+        if (
+            self.max_concurrent_sessions is None
+            and self.max_session_starts_per_minute is None
+        ):
+            raise ValueError("quota must set at least one limit")
+        return self
+
+
 class SandboxProfile(BaseModel):
     """Builder-managed sandbox profile for the AWS Lambda MicroVM backend.
 
@@ -290,6 +351,9 @@ class SandboxProfile(BaseModel):
     egress_mode: Literal["internet", "vpc"] = Field(default="internet")
     egress_network_connector_arns: list[str] = Field(default_factory=list)
     idle_policy: LambdaMicroVmIdlePolicy | None = Field(default=None)
+    logging: LambdaMicroVmLogging | None = Field(default=None)
+    quota: LambdaMicroVmQuota | None = Field(default=None)
+    run_hook_payload: str | None = Field(default=None)
     maximum_duration_seconds: int = Field(default=3600, gt=0, le=28800)
     port: int = Field(default=8080, ge=1, le=65535)
     token_expiration_minutes: int = Field(default=30, gt=0)
@@ -332,9 +396,7 @@ class SandboxProfile(BaseModel):
     def validate_egress_config(self) -> SandboxProfile:
         """Require explicit egress connectors for VPC-only egress."""
         if self.egress_mode == "vpc" and not self.egress_network_connector_arns:
-            raise ValueError(
-                "egress_network_connector_arns is required when egress_mode is 'vpc'"
-            )
+            raise ValueError("egress_network_connector_arns is required when egress_mode is 'vpc'")
         return self
 
 
@@ -531,10 +593,13 @@ __all__ = [
     "EntityType",
     "GlobalAgentDefaults",
     "GlobalProviderDefaults",
+    "LambdaMicroVmCloudWatchLogging",
     "McpServerRegistration",
     "OperationType",
     "ProviderConfig",
     "LambdaMicroVmIdlePolicy",
+    "LambdaMicroVmLogging",
+    "LambdaMicroVmQuota",
     "SandboxProfile",
     "SkillDefinition",
     "ToolRegistration",
