@@ -141,7 +141,7 @@ async def _sandbox_lifecycle_sse(
                 "metadata": metadata,
             },
         )
-        sse = cast(dict[str, Any], enrich_sse_event(sse, durable))
+        sse = enrich_sse_event(sse, durable)
     return sse
 
 

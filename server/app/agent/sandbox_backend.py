@@ -323,7 +323,7 @@ class CognitionAwsLambdaMicroVmSandboxBackend(SandboxBackendProtocol):
         if self._execution_role_arn:
             return self._execution_role_arn
         if self._profile_config is not None:
-            return cast(str | None, self._profile_config.default_execution_role_arn)
+            return self._profile_config.default_execution_role_arn
         return None
 
     @property

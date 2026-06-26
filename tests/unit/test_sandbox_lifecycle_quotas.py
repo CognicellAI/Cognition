@@ -51,7 +51,8 @@ class FakeSandboxBackend:
 
 
 def _manager() -> SessionAgentManager:
-    return SessionAgentManager(settings=_TestSettings(sandbox_backend="aws_lambda_microvm"))
+    settings = _TestSettings.model_validate({"sandbox_backend": "aws_lambda_microvm"})
+    return SessionAgentManager(settings=settings)
 
 
 def test_lifecycle_event_includes_safe_correlation_metadata() -> None:

@@ -17,5 +17,5 @@ def stub_optional_langchain_aws(monkeypatch: pytest.MonkeyPatch) -> None:
         return
 
     module = types.ModuleType("langchain_aws")
-    module.ChatBedrock = MagicMock(name="ChatBedrock")
+    module.ChatBedrock = MagicMock(name="ChatBedrock")  # type: ignore[attr-defined]
     monkeypatch.setitem(sys.modules, "langchain_aws", module)

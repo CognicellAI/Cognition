@@ -763,11 +763,10 @@ class DeepAgentStreamingService:
 
         Delegates to RuntimeResolver.resolve_model_for_session().
         """
-        return cast(
-            tuple[BaseChatModel, str, str, int],
-            await self._get_runtime_resolver().resolve_model_for_session(
-                session=session, scope=scope, agent_def=agent_def
-            ),
+        return await self._get_runtime_resolver().resolve_model_for_session(
+            session=session,
+            scope=scope,
+            agent_def=agent_def,
         )
 
     async def _resolve_mcp_configs(self, scope: dict[str, str] | None) -> list[Any]:
@@ -775,10 +774,7 @@ class DeepAgentStreamingService:
 
         Delegates to RuntimeResolver.resolve_mcp_configs().
         """
-        return cast(
-            list[Any],
-            await self._get_runtime_resolver().resolve_mcp_configs(scope=scope),
-        )
+        return await self._get_runtime_resolver().resolve_mcp_configs(scope=scope)
 
     def _build_messages(self, user_content: str, custom_system_prompt: str | None = None) -> list:
         """Build message list with optional system prompt.

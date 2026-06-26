@@ -20,10 +20,12 @@ EXPLICIT_ROLE_ARN = "arn:aws:iam::123456789012:role/explicit-agent-runtime"
 
 
 def _settings(tmp_path: Path) -> Settings:
-    return Settings(
-        workspace_path=tmp_path,
-        sandbox_backend="aws_lambda_microvm",
-        aws_lambda_microvm_default_profile="lambda-default",
+    return Settings.model_validate(
+        {
+            "workspace_path": tmp_path,
+            "sandbox_backend": "aws_lambda_microvm",
+            "aws_lambda_microvm_default_profile": "lambda-default",
+        }
     )
 
 

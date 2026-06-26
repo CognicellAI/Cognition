@@ -96,6 +96,11 @@ k8s = [
     "langchain-k8s-sandbox[k8s]",
 ]
 
+# Documentation site
+docs = [
+    "mkdocs-material>=9.6.0",
+]
+
 # AWS Lambda MicroVM sandbox backend
 aws-lambda-microvms = [
     "langchain-aws-lambda-microvms[aws]",
@@ -234,7 +239,7 @@ ignore_missing_imports = true
 
 # asyncpg has no stubs on Python 3.11 CI env
 [[tool.mypy.overrides]]
-module = ["asyncpg", "asyncpg.*"]
+module = "asyncpg"
 ignore_missing_imports = true
 
 # k8s-agent-sandbox SDK has no stubs
@@ -255,7 +260,7 @@ disallow_untyped_defs = false
 
 # boto3 has no bundled stubs (boto3-stubs is optional)
 [[tool.mypy.overrides]]
-module = ["boto3", "boto3.*"]
+module = "boto3"
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]

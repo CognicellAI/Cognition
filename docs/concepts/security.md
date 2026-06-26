@@ -131,7 +131,7 @@ Tool source code (both file-discovered and API-registered) executes with full Py
 
 `POST /tools` (API-registered tools) executes arbitrary Python with full privileges. **Restrict this endpoint to authorized administrators at the Gateway/proxy layer.**
 
-For a detailed explanation, see [AGENTS.md — Tool Security Trust Model](../../AGENTS.md).
+For a detailed explanation, see the Tool Security Trust Model section in `AGENTS.md`.
 
 ### Tool Namespace Allowlist
 

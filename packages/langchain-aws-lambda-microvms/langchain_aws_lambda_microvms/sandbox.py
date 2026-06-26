@@ -15,7 +15,7 @@ import threading
 import time
 import uuid
 from collections.abc import Callable, Mapping
-from typing import Any
+from typing import Any, Literal
 
 import httpx
 from deepagents.backends.protocol import (
@@ -35,6 +35,12 @@ TERMINATED_STATE = "TERMINATED"
 TERMINAL_STATES = {TERMINATED_STATE}
 AUTH_HEADER_NAME = "X-aws-proxy-auth"
 PORT_HEADER_NAME = "X-aws-proxy-port"
+FileTransferError = Literal[
+    "file_not_found",
+    "permission_denied",
+    "is_directory",
+    "invalid_path",
+]
 
 
 def _role_fingerprint(role_arn: str | None) -> str | None:
@@ -49,7 +55,7 @@ def _response_text(stdout: str, stderr: str) -> str:
     return stdout or stderr
 
 
-def _file_error_from_payload(payload: Mapping[str, Any]) -> str:
+def _file_error_from_payload(payload: Mapping[str, Any]) -> FileTransferError:
     error = str(payload.get("error", "")).lower()
     message = str(payload.get("message", "")).lower()
     detail = f"{error} {message}"
