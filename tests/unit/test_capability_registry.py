@@ -42,6 +42,7 @@ class TestCapabilityEndpoint:
         settings = Settings()
         result = await get_capabilities(settings)
         assert "local" in result.sandbox_backends
+        assert "aws_lambda_microvm" in result.sandbox_backends
 
     async def test_features_include_core_v010_flags(self):
         settings = Settings()
@@ -54,6 +55,8 @@ class TestCapabilityEndpoint:
         assert result.features["tool_safety"] is True
         assert result.features["scope_propagation"] is True
         assert result.features["async_subagents"] is True
+        assert result.features["sandbox_profile_crud"] is True
+        assert result.features["aws_lambda_microvm_sandbox"] is True
 
     async def test_features_do_not_include_deferred_items(self):
         settings = Settings()

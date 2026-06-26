@@ -44,6 +44,7 @@ from server.app.storage.config_models import (
     GlobalProviderDefaults,
     McpServerRegistration,
     ProviderConfig,
+    SandboxProfile,
     SkillDefinition,
     ToolRegistration,
 )
@@ -180,6 +181,32 @@ class ConfigRegistry(Protocol):
 
     async def delete_mcp_server(self, name: str, scope: dict[str, str] | None = None) -> bool:
         """Delete an MCP server registration. Returns True if row existed."""
+        ...
+
+    # ------------------------------------------------------------------
+    # Sandbox profile CRUD
+    # ------------------------------------------------------------------
+
+    async def get_sandbox_profile(
+        self, name: str, scope: dict[str, str] | None = None
+    ) -> SandboxProfile | None:
+        """Return the best-matching sandbox profile."""
+        ...
+
+    async def list_sandbox_profiles(
+        self, scope: dict[str, str] | None = None
+    ) -> list[SandboxProfile]:
+        """List all sandbox profiles visible in the given scope."""
+        ...
+
+    async def upsert_sandbox_profile(self, profile: SandboxProfile) -> None:
+        """Create or replace a sandbox profile."""
+        ...
+
+    async def delete_sandbox_profile(
+        self, name: str, scope: dict[str, str] | None = None
+    ) -> bool:
+        """Delete a sandbox profile. Returns True if row existed."""
         ...
 
     # ------------------------------------------------------------------
@@ -647,6 +674,39 @@ class SqliteConfigRegistry:
         return await self._delete_entity("mcp_server", name, scope)
 
     # ------------------------------------------------------------------
+    # Sandbox profile CRUD (SqliteConfigRegistry)
+    # ------------------------------------------------------------------
+
+    async def get_sandbox_profile(
+        self, name: str, scope: dict[str, str] | None = None
+    ) -> SandboxProfile | None:
+        data = await self._get_entity("sandbox_profile", name, scope)
+        if data is None:
+            return None
+        return SandboxProfile.model_validate(data)
+
+    async def list_sandbox_profiles(
+        self, scope: dict[str, str] | None = None
+    ) -> list[SandboxProfile]:
+        rows = await self._list_entities("sandbox_profile", scope)
+        return [SandboxProfile.model_validate(r) for r in rows]
+
+    async def upsert_sandbox_profile(self, profile: SandboxProfile) -> None:
+        data = profile.model_dump()
+        await self._upsert_entity(
+            "sandbox_profile",
+            profile.name,
+            profile.scope,
+            data,
+            profile.source,
+        )
+
+    async def delete_sandbox_profile(
+        self, name: str, scope: dict[str, str] | None = None
+    ) -> bool:
+        return await self._delete_entity("sandbox_profile", name, scope)
+
+    # ------------------------------------------------------------------
     # Global defaults
     # ------------------------------------------------------------------
 
@@ -1086,6 +1146,36 @@ class PostgresConfigRegistry:
         return await self._delete_entity("mcp_server", name, scope)
 
     # ------------------------------------------------------------------
+    # Sandbox profile CRUD
+    # ------------------------------------------------------------------
+
+    async def get_sandbox_profile(
+        self, name: str, scope: dict[str, str] | None = None
+    ) -> SandboxProfile | None:
+        data = await self._get_entity("sandbox_profile", name, scope)
+        return SandboxProfile.model_validate(data) if data else None
+
+    async def list_sandbox_profiles(
+        self, scope: dict[str, str] | None = None
+    ) -> list[SandboxProfile]:
+        rows = await self._list_entities("sandbox_profile", scope)
+        return [SandboxProfile.model_validate(r) for r in rows]
+
+    async def upsert_sandbox_profile(self, profile: SandboxProfile) -> None:
+        await self._upsert_entity(
+            "sandbox_profile",
+            profile.name,
+            profile.scope,
+            profile.model_dump(),
+            profile.source,
+        )
+
+    async def delete_sandbox_profile(
+        self, name: str, scope: dict[str, str] | None = None
+    ) -> bool:
+        return await self._delete_entity("sandbox_profile", name, scope)
+
+    # ------------------------------------------------------------------
     # Global defaults
     # ------------------------------------------------------------------
 
@@ -1380,6 +1470,35 @@ class MemoryConfigRegistry:
 
     async def delete_mcp_server(self, name: str, scope: dict[str, str] | None = None) -> bool:
         return self._delete("mcp_server", name, scope)
+
+    # Sandbox profile
+    async def get_sandbox_profile(
+        self, name: str, scope: dict[str, str] | None = None
+    ) -> SandboxProfile | None:
+        d = self._get_entity("sandbox_profile", name, scope)
+        return SandboxProfile.model_validate(d) if d else None
+
+    async def list_sandbox_profiles(
+        self, scope: dict[str, str] | None = None
+    ) -> list[SandboxProfile]:
+        return [
+            SandboxProfile.model_validate(r)
+            for r in self._list_entities("sandbox_profile", scope)
+        ]
+
+    async def upsert_sandbox_profile(self, profile: SandboxProfile) -> None:
+        self._upsert(
+            "sandbox_profile",
+            profile.name,
+            profile.scope,
+            profile.model_dump(),
+            profile.source,
+        )
+
+    async def delete_sandbox_profile(
+        self, name: str, scope: dict[str, str] | None = None
+    ) -> bool:
+        return self._delete("sandbox_profile", name, scope)
 
     # Global defaults
     async def get_global_provider_defaults(

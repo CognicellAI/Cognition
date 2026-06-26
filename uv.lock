@@ -11,6 +11,7 @@ resolution-markers = [
 [manifest]
 members = [
     "cognition",
+    "langchain-aws-lambda-microvms",
     "langchain-k8s-sandbox",
 ]
 
@@ -344,30 +345,30 @@ wheels = [
 
 [[package]]
 name = "boto3"
-version = "1.42.88"
+version = "1.43.36"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "botocore" },
     { name = "jmespath" },
     { name = "s3transfer" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/da/bb/7d4435cca6fccf235dd40c891c731bcb9078e815917b57ebadd1e0ffabaf/boto3-1.42.88.tar.gz", hash = "sha256:2d22c70de5726918676a06f1a03acfb4d5d9ea92fc759354800b67b22aaeef19", size = 113238, upload-time = "2026-04-10T19:41:06.912Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/ff/9f/897287e955db0f50b12fd69ef45956e4fd2c7ddb48c736872f7ea2314443/boto3-1.43.36.tar.gz", hash = "sha256:587d7ee92a12e440ad12b0e7f11f3358f0c4d65b19f64726efc94aaf194aff28", size = 112690, upload-time = "2026-06-23T02:47:14.561Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/0a/2b/8bfddb39a19f5fbc16a869f1a394771e6223f07160dbc0ff6b38e05ea0ae/boto3-1.42.88-py3-none-any.whl", hash = "sha256:2d0f52c971503377e4370d2a83edee6f077ddb8e684366ff38df4f13581d9cfc", size = 140557, upload-time = "2026-04-10T19:41:05.309Z" },
+    { url = "https://files.pythonhosted.org/packages/9f/f1/274303f52483ecf199eae6f8d9b6f5951670397ee4d72c06cfd4eb644612/boto3-1.43.36-py3-none-any.whl", hash = "sha256:42942dde254673abcbc9e6e60017c88341a4f49d99d24e1f2e290fb38138c26f", size = 140031, upload-time = "2026-06-23T02:47:13.178Z" },
 ]
 
 [[package]]
 name = "botocore"
-version = "1.42.88"
+version = "1.43.36"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "jmespath" },
     { name = "python-dateutil" },
     { name = "urllib3" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/93/50/87966238f7aa3f7e5f87081185d5a407a95ede8b551e11bbe134ca3306dc/botocore-1.42.88.tar.gz", hash = "sha256:cbb59ee464662039b0c2c95a520cdf85b1e8ce00b72375ab9cd9f842cc001301", size = 15195331, upload-time = "2026-04-10T19:40:57.012Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/7c/37/da9e7f6ca73ac73afd7f0bb7f238aa5daba35c081e98d7f48a7c399599c0/botocore-1.43.36.tar.gz", hash = "sha256:4cae47d1b2d426316b85a0087d9e69e048f13bc003b5177d74639fe9dfd28205", size = 15625488, upload-time = "2026-06-23T02:47:03.192Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/2a/46/ad14e41245adb8b0c83663ba13e822b68a0df08999dd250e75b0750fdf6c/botocore-1.42.88-py3-none-any.whl", hash = "sha256:032375b213305b6b81eedb269eaeefdf96f674620799bbf96117dca86052cc1a", size = 14876640, upload-time = "2026-04-10T19:40:53.663Z" },
+    { url = "https://files.pythonhosted.org/packages/5c/19/934f81592527a3f7f9b943c893e334c721a4644948642bc33885d584e9ec/botocore-1.43.36-py3-none-any.whl", hash = "sha256:3c65fdc39ed01d8dfde1e961b34038aed03c459f8ddf80717a12ac006475e49d", size = 15313630, upload-time = "2026-06-23T02:46:59.327Z" },
 ]
 
 [[package]]
@@ -595,6 +596,7 @@ dependencies = [
     { name = "fastapi" },
     { name = "httpx" },
     { name = "langchain" },
+    { name = "langchain-aws-lambda-microvms" },
     { name = "langchain-core" },
     { name = "langchain-mcp-adapters" },
     { name = "langgraph" },
@@ -627,6 +629,7 @@ all = [
     { name = "docker" },
     { name = "httpx" },
     { name = "langchain-aws" },
+    { name = "langchain-aws-lambda-microvms", extra = ["aws"] },
     { name = "langchain-k8s-sandbox", extra = ["k8s"] },
     { name = "langchain-openai" },
     { name = "langgraph-checkpoint-postgres" },
@@ -637,6 +640,9 @@ all = [
     { name = "pytest-asyncio" },
     { name = "pytest-cov" },
     { name = "pytest-timeout" },
+]
+aws-lambda-microvms = [
+    { name = "langchain-aws-lambda-microvms", extra = ["aws"] },
 ]
 bedrock = [
     { name = "boto3" },
@@ -702,6 +708,9 @@ requires-dist = [
     { name = "langchain", specifier = ">=1.3.0" },
     { name = "langchain-aws", marker = "extra == 'all'", specifier = ">=0.2.0" },
     { name = "langchain-aws", marker = "extra == 'bedrock'", specifier = ">=0.2.0" },
+    { name = "langchain-aws-lambda-microvms", editable = "packages/langchain-aws-lambda-microvms" },
+    { name = "langchain-aws-lambda-microvms", extras = ["aws"], marker = "extra == 'all'", editable = "packages/langchain-aws-lambda-microvms" },
+    { name = "langchain-aws-lambda-microvms", extras = ["aws"], marker = "extra == 'aws-lambda-microvms'", editable = "packages/langchain-aws-lambda-microvms" },
     { name = "langchain-core", specifier = ">=1.4.0" },
     { name = "langchain-k8s-sandbox", extras = ["k8s"], marker = "extra == 'all'", editable = "packages/langchain-k8s-sandbox" },
     { name = "langchain-k8s-sandbox", extras = ["k8s"], marker = "extra == 'k8s'", editable = "packages/langchain-k8s-sandbox" },
@@ -756,7 +765,7 @@ requires-dist = [
     { name = "watchdog", specifier = ">=6.0.0" },
     { name = "websockets", specifier = ">=13.0" },
 ]
-provides-extras = ["all", "bedrock", "deploy", "dev", "docs", "k8s", "openai", "test"]
+provides-extras = ["all", "aws-lambda-microvms", "bedrock", "deploy", "dev", "docs", "k8s", "openai", "test"]
 
 [package.metadata.requires-dev]
 dev = [{ name = "types-pyyaml", specifier = ">=6.0.12.20250915" }]
@@ -2095,6 +2104,34 @@ sdist = { url = "https://files.pythonhosted.org/packages/f1/79/7512cde465d6113cc
 wheels = [
     { url = "https://files.pythonhosted.org/packages/f8/cb/fbffc95944abb863abac70f135cc162e7b3960b7bbf73ddcccd06408428e/langchain_aws-1.4.3-py3-none-any.whl", hash = "sha256:74e0a2b341da2214bbf6fd25a91da48223f815078d22beb9aa88797666879843", size = 198618, upload-time = "2026-04-03T14:11:13.87Z" },
 ]
+
+[[package]]
+name = "langchain-aws-lambda-microvms"
+version = "0.1.0"
+source = { editable = "packages/langchain-aws-lambda-microvms" }
+dependencies = [
+    { name = "deepagents" },
+    { name = "httpx" },
+]
+
+[package.optional-dependencies]
+aws = [
+    { name = "boto3" },
+]
+test = [
+    { name = "pytest" },
+    { name = "pytest-asyncio" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "boto3", marker = "extra == 'aws'", specifier = ">=1.43.36" },
+    { name = "deepagents", specifier = ">=0.6.2" },
+    { name = "httpx", specifier = ">=0.27.0" },
+    { name = "pytest", marker = "extra == 'test'", specifier = ">=8.3.0" },
+    { name = "pytest-asyncio", marker = "extra == 'test'", specifier = ">=0.24.0" },
+]
+provides-extras = ["aws", "test"]
 
 [[package]]
 name = "langchain-core"
@@ -4569,14 +4606,14 @@ wheels = [
 
 [[package]]
 name = "s3transfer"
-version = "0.16.0"
+version = "0.19.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "botocore" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/05/04/74127fc843314818edfa81b5540e26dd537353b123a4edc563109d8f17dd/s3transfer-0.16.0.tar.gz", hash = "sha256:8e990f13268025792229cd52fa10cb7163744bf56e719e0b9cb925ab79abf920", size = 153827, upload-time = "2025-12-01T02:30:59.114Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/f6/94/dcdaeb1713cab9c84def276cfac7388b17c7d9855bbcfe88d77e4dbafd44/s3transfer-0.19.0.tar.gz", hash = "sha256:ce436931687addc4c1712d52d40b32f53e88315723f107ffa20ba82b05a0f685", size = 165171, upload-time = "2026-06-16T19:44:51.599Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/fc/51/727abb13f44c1fcf6d145979e1535a35794db0f6e450a0cb46aa24732fe2/s3transfer-0.16.0-py3-none-any.whl", hash = "sha256:18e25d66fed509e3868dc1572b3f427ff947dd2c56f844a5bf09481ad3f3b2fe", size = 86830, upload-time = "2025-12-01T02:30:57.729Z" },
+    { url = "https://files.pythonhosted.org/packages/46/5f/4c174edad94f82de888ac00a5ddd8d07b35609b6c94f0bdf4d74af57703e/s3transfer-0.19.0-py3-none-any.whl", hash = "sha256:777cc2415536f1debadb5c2ef7779275d0fc0fe0e042411cdd6caebeb2685262", size = 90101, upload-time = "2026-06-16T19:44:50.439Z" },
 ]
 
 [[package]]

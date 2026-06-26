@@ -7,6 +7,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from server.app.agent.sandbox_backend import (
+    CognitionAwsLambdaMicroVmSandboxBackend,
     CognitionKubernetesSandboxBackend,
     create_sandbox_backend,
 )
@@ -248,3 +249,27 @@ class TestCreateSandboxBackendFactory:
             sandbox_backend="docker",
         )
         assert backend.id.startswith("cognition-docker-")
+
+    def test_aws_lambda_microvm_branch(self, tmp_path):
+        backend = create_sandbox_backend(
+            root_dir=tmp_path,
+            sandbox_id="lambda-test",
+            sandbox_backend="aws_lambda_microvm",
+            aws_lambda_microvm_profile="tenant-runtime",
+            aws_lambda_microvm_execution_role_arn=(
+                "arn:aws:iam::123456789012:role/cognition-agent-runtime"
+            ),
+        )
+        assert isinstance(backend, CognitionAwsLambdaMicroVmSandboxBackend)
+        assert backend.id == "lambda-test"
+        assert backend.profile == "tenant-runtime"
+        assert (
+            backend.execution_role_arn
+            == "arn:aws:iam::123456789012:role/cognition-agent-runtime"
+        )
+
+    def test_aws_lambda_microvm_execute_requires_resolved_profile(self, tmp_path):
+        backend = CognitionAwsLambdaMicroVmSandboxBackend(root_dir=tmp_path)
+
+        with pytest.raises(RuntimeError, match="SandboxProfile 'default' was not resolved"):
+            backend.execute("echo hello")

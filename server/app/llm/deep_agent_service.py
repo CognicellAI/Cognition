@@ -156,6 +156,8 @@ class ResolvedAgentConfig:
     response_format: str | None = None
     tool_token_limit_before_evict: int | None = None
     context_policy: Any | None = None
+    sandbox_profile: str | None = None
+    sandbox_execution_role_arn: str | None = None
     subagents: list[Any] = field(default_factory=list)
     async_subagents: list[Any] = field(default_factory=list)
     agent_def: Any = None
@@ -311,6 +313,12 @@ class DeepAgentStreamingService:
         if agent_def.config.context_policy is not None:
             resolved.context_policy = agent_def.config.context_policy
 
+        if agent_def.config.sandbox_profile is not None:
+            resolved.sandbox_profile = agent_def.config.sandbox_profile
+
+        if agent_def.config.sandbox_execution_role_arn is not None:
+            resolved.sandbox_execution_role_arn = agent_def.config.sandbox_execution_role_arn
+
         if agent_def.middleware:
             resolved.middleware = _resolve_middleware(agent_def.middleware)
 
@@ -407,6 +415,8 @@ class DeepAgentStreamingService:
                 mcp_configs=mcp_configs or None,
                 scope=scope,
                 config_store=self._get_config_store(),
+                sandbox_profile=agent_cfg.sandbox_profile,
+                sandbox_execution_role_arn=agent_cfg.sandbox_execution_role_arn,
             )
             agent = await create_cognition_agent(agent_params)
 
@@ -720,8 +730,11 @@ class DeepAgentStreamingService:
 
         Delegates to RuntimeResolver.resolve_model_for_session().
         """
-        return await self._get_runtime_resolver().resolve_model_for_session(
-            session=session, scope=scope, agent_def=agent_def
+        return cast(
+            tuple[BaseChatModel, str, str, int],
+            await self._get_runtime_resolver().resolve_model_for_session(
+                session=session, scope=scope, agent_def=agent_def
+            ),
         )
 
     async def _resolve_mcp_configs(self, scope: dict[str, str] | None) -> list[Any]:
@@ -729,7 +742,10 @@ class DeepAgentStreamingService:
 
         Delegates to RuntimeResolver.resolve_mcp_configs().
         """
-        return await self._get_runtime_resolver().resolve_mcp_configs(scope=scope)
+        return cast(
+            list[Any],
+            await self._get_runtime_resolver().resolve_mcp_configs(scope=scope),
+        )
 
     def _build_messages(self, user_content: str, custom_system_prompt: str | None = None) -> list:
         """Build message list with optional system prompt.
@@ -925,9 +941,41 @@ class SessionAgentManager:
                 phase="provisioned",
                 sandbox_backend=self._sandbox_backend_type,
                 is_warm_pool_hit=getattr(backend, "_warm_pool", None) is not None,
+                metadata=self._sandbox_runtime_metadata(backend),
             ),
         )
         logger.debug("Sandbox backend registered", session_id=session_id)
+
+    @staticmethod
+    def _sandbox_runtime_metadata(backend: Any) -> dict[str, Any]:
+        """Return token-free backend runtime metadata when the backend exposes it."""
+        try:
+            metadata = getattr(backend, "runtime_metadata", {})
+        except Exception as exc:
+            logger.debug("Sandbox runtime metadata unavailable", error=str(exc))
+            return {}
+        if isinstance(metadata, dict):
+            return dict(metadata)
+        return {}
+
+    def snapshot_sandbox_backend(
+        self,
+        session_id: str,
+        phase: str = "runtime_snapshot",
+    ) -> SandboxLifecycleEvent | None:
+        """Build a lifecycle event with the current backend metadata snapshot."""
+        backend = self._sandbox_backends.get(session_id)
+        if backend is None:
+            return None
+        metadata = self._sandbox_runtime_metadata(backend)
+        if not metadata:
+            return None
+        return SandboxLifecycleEvent(
+            sandbox_id=getattr(backend, "id", str(id(backend))),
+            phase=phase,
+            sandbox_backend=self._sandbox_backend_type,
+            metadata=metadata,
+        )
 
     def unregister_session(self, session_id: str) -> None:
         """Unregister a session and clean up resources."""
@@ -944,6 +992,7 @@ class SessionAgentManager:
                     sandbox_id=sandbox_id,
                     phase="teardown_started",
                     sandbox_backend=self._sandbox_backend_type,
+                    metadata=self._sandbox_runtime_metadata(backend),
                 ),
             )
             if hasattr(backend, "terminate"):
@@ -955,6 +1004,7 @@ class SessionAgentManager:
                             sandbox_id=sandbox_id,
                             phase="teardown_complete",
                             sandbox_backend=self._sandbox_backend_type,
+                            metadata=self._sandbox_runtime_metadata(backend),
                         ),
                     )
                     logger.info("Sandbox backend terminated", session_id=session_id)

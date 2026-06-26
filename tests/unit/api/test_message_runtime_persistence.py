@@ -16,6 +16,7 @@ from server.app.agent.runtime import (
     ContextEvent,
     DoneEvent,
     ErrorEvent,
+    SandboxLifecycleEvent,
     TokenEvent,
     ToolCallEvent,
     ToolResultEvent,
@@ -59,9 +60,15 @@ class _FakeService:
 
 
 class _FakeAgentManager:
-    def __init__(self, service: _FakeService, active_runtime_count: int = 1) -> None:
+    def __init__(
+        self,
+        service: _FakeService,
+        active_runtime_count: int = 1,
+        sandbox_snapshot: Any | None = None,
+    ) -> None:
         self._service = service
         self._active_runtime_count = active_runtime_count
+        self._sandbox_snapshot = sandbox_snapshot
 
     def get_service(self, _session_id: str) -> _FakeService:
         return self._service
@@ -71,6 +78,15 @@ class _FakeAgentManager:
 
     def drain_sandbox_events(self, _session_id: str) -> list[Any]:
         return []
+
+    def snapshot_sandbox_backend(
+        self,
+        _session_id: str,
+        phase: str = "runtime_snapshot",
+    ) -> Any | None:
+        if self._sandbox_snapshot is not None:
+            self._sandbox_snapshot.phase = phase
+        return self._sandbox_snapshot
 
     def active_runtime_count(self, _session_id: str) -> int:
         return self._active_runtime_count
@@ -338,6 +354,76 @@ async def test_context_sse_overwrites_upstream_ids_with_durable_correlation(tmp_
     assert context["data"]["run_id"] == run.id
     assert context["data"]["event_type"] == "context.policy_resolved"
     assert context["data"]["sequence"] >= 1
+
+
+@pytest.mark.asyncio
+async def test_sandbox_lifecycle_metadata_is_streamed_and_persisted(tmp_path) -> None:
+    store = MemoryStorageBackend(workspace_path=str(tmp_path))
+    session = await store.create_session(
+        session_id="session-sandbox-lifecycle",
+        thread_id="thread-sandbox-lifecycle",
+        config=SessionConfig(),
+    )
+    run = await store.create_run(
+        run_id="run-sandbox-lifecycle",
+        session_id=session.id,
+        thread_id=session.thread_id,
+        status=RunStatus.ACTIVE,
+    )
+    service = _FakeService([DoneEvent()])
+    sandbox_snapshot = SandboxLifecycleEvent(
+        sandbox_id="microvm-123",
+        phase="runtime_snapshot",
+        sandbox_backend="aws_lambda_microvm",
+        metadata={
+            "microvm_id": "microvm-123",
+            "endpoint": "https://example.aws",
+            "image": "arn:aws:lambda:us-west-2:123:microvm-image/runtime",
+            "status": "RUNNING",
+            "execution_role_fingerprint": "abcd1234",
+            "proxy_auth": "do-not-stream",
+            "nested": {"auth_token": "do-not-persist", "port": 8080},
+        },
+    )
+    manager = _FakeAgentManager(
+        service,
+        active_runtime_count=0,
+        sandbox_snapshot=sandbox_snapshot,
+    )
+    projection = RuntimeProjectionService(store)
+
+    events = [
+        event
+        async for event in agent_event_stream(
+            session.id,
+            session.thread_id,
+            "sandbox status",
+            session.workspace_path,
+            _settings(),
+            manager,  # type: ignore[arg-type]
+            store,
+            run=run,
+            projection=projection,
+        )
+    ]
+
+    lifecycle = next(event for event in events if event["event"] == "sandbox_lifecycle")
+    streamed_metadata = lifecycle["data"]["metadata"]
+    assert streamed_metadata["microvm_id"] == "microvm-123"
+    assert streamed_metadata["endpoint"] == "https://example.aws"
+    assert streamed_metadata["nested"] == {"port": 8080}
+    assert "proxy_auth" not in streamed_metadata
+
+    durable_events = await store.list_events(session.id, run_id=run.id)
+    sandbox_event = next(
+        event
+        for event in durable_events
+        if event.event_type == "sandbox.runtime_snapshot"
+    )
+    persisted_metadata = sandbox_event.payload["metadata"]
+    assert persisted_metadata["microvm_id"] == "microvm-123"
+    assert persisted_metadata["execution_role_fingerprint"] == "abcd1234"
+    assert "do-not" not in str(persisted_metadata)
 
 
 @pytest.mark.asyncio
