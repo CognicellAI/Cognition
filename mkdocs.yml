@@ -67,6 +67,7 @@ nav:
       - Agent Runtime: concepts/agent-runtime.md
       - Storage & Execution: concepts/storage-and-execution.md
       - Kubernetes Sandbox: concepts/kubernetes-sandbox.md
+      - AWS Lambda MicroVM Sandbox: concepts/aws-lambda-microvm-sandbox.md
       - Observability: concepts/observability.md
       - Security: concepts/security.md
   - Guides:
@@ -74,6 +75,7 @@ nav:
       - Core vs App Layer: guides/core-vs-app-layer.md
       - Configuration: guides/configuration.md
       - Extending Agents: guides/extending-agents.md
+      - AWS Lambda MicroVM Sandbox Setup: guides/aws-lambda-microvm-sandbox.md
       - Deployment: guides/deployment.md
       - API Reference: guides/api-reference.md
       - Release Checklist: guides/release-checklist.md

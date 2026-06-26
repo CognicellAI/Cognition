@@ -1,0 +1,9 @@
+{
+  "name": "lambda-microvm-smoke",
+  "description": "Smoke-test agent for AWS Lambda MicroVM sandbox execution.",
+  "mode": "primary",
+  "system_prompt": "You are a concise engineering agent. Use shell tools when asked to inspect or write files, and keep responses short.",
+  "sandbox_profile": "default-lambda",
+  "sandbox_execution_role_arn": "arn:aws:iam::123456789012:role/cognition-agent-runtime",
+  "scope": {}
+}

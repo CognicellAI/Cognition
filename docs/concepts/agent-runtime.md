@@ -338,7 +338,7 @@ Returns installed package versions, supported stream protocols, sandbox backends
 
 The factory:
 
-1. Selects the sandbox backend from settings (`local` or `docker`)
+1. Selects the sandbox backend from settings (`local`, `docker`, `kubernetes`, or `aws_lambda_microvm`)
 2. Loads built-in tools: `BrowserTool`, `SearchTool`, `InspectPackageTool`
 3. Loads MCP tools from configured remote servers
 4. Resolves tools from the ConfigRegistry by registry name (filtered by `allowed_tool_names` from the AgentDefinition)

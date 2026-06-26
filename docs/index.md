@@ -21,6 +21,8 @@ This site is organized around three documentation surfaces:
   dependency rules.
 - [Extending Agents](guides/extending-agents.md): add memory, skills, tools,
   subagents, middleware, MCP servers, and custom providers.
+- [AWS Lambda MicroVM Sandbox Setup](guides/aws-lambda-microvm-sandbox.md):
+  configure AWS-native MicroVM sandbox isolation for agent commands.
 
 ## Concepts
 
@@ -31,6 +33,7 @@ This site is organized around three documentation surfaces:
 | [Agent Runtime](concepts/agent-runtime.md) | Agent runtime protocol, definitions, A2A exposure, and multi-agent registry |
 | [Storage & Execution](concepts/storage-and-execution.md) | Storage and execution backend protocols and implementations |
 | [Kubernetes Sandbox](concepts/kubernetes-sandbox.md) | K8s-native sandbox isolation using the agent-sandbox CRD and controller |
+| [AWS Lambda MicroVM Sandbox](concepts/aws-lambda-microvm-sandbox.md) | AWS-native MicroVM sandbox isolation, profiles, IAM roles, networking, and runtime protocol |
 | [Observability](concepts/observability.md) | OpenTelemetry traces, Prometheus metrics, and MLflow experiment tracking |
 | [Security](concepts/security.md) | Scoping, sandbox isolation, tool security, MCP policy, A2A boundaries, rate limiting, and CORS |
 
@@ -42,6 +45,7 @@ This site is organized around three documentation surfaces:
 | [Core vs App Layer](guides/core-vs-app-layer.md) | Builder responsibilities: what belongs in Cognition versus your product |
 | [Configuration](guides/configuration.md) | YAML keys and environment variables |
 | [Extending Agents](guides/extending-agents.md) | Add memory, skills, tools, subagents, middleware, MCP servers, A2A exposure, and custom providers |
+| [AWS Lambda MicroVM Sandbox Setup](guides/aws-lambda-microvm-sandbox.md) | Configure the `aws_lambda_microvm` backend, profiles, per-agent roles, and AWS prerequisites |
 | [Deployment](guides/deployment.md) | Docker Compose, PostgreSQL, migrations, and production hardening |
 | [API Reference](guides/api-reference.md) | REST endpoints, SSE events, artifacts, A2A protocol, capabilities, and scoping headers |
 | [Release Checklist](guides/release-checklist.md) | Release process for Cognition versions |
