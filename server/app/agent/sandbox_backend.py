@@ -535,7 +535,7 @@ class CognitionAwsLambdaMicroVmSandboxBackend(SandboxBackendProtocol):
         result: GrepResult = backend.grep(pattern, path=path, glob=glob)
         return result
 
-    def glob(self, pattern: str, path: str = "/") -> GlobResult:
+    def glob(self, pattern: str, path: str | None = "/") -> GlobResult:
         """Find matching files in the AWS Lambda MicroVM sandbox."""
         backend = self._get_backend()
         result: GlobResult = backend.glob(pattern, path=path)
@@ -836,7 +836,7 @@ class CognitionKubernetesSandboxBackend(SandboxBackendProtocol):
             return result.error
         return result.matches or []
 
-    def glob(self, pattern: str, path: str = "/") -> GlobResult:
+    def glob(self, pattern: str, path: str | None = "/") -> GlobResult:
         """Find matching files using Deep Agents' current result API."""
         backend = self._get_backend()
         result: GlobResult = backend.glob(pattern, path=path)

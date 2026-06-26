@@ -7,6 +7,18 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [0.11.0-rc.2] — 2026-06-26
+
+### Security
+
+- Resolved open Dependabot alerts by refreshing locked versions for `pydantic-settings`, `langsmith`, `langchain`, `langchain-anthropic`, `starlette`, `cryptography`, `aiohttp`, `python-multipart`, and `pyjwt`.
+
+### Changed
+
+- Refreshed the v0.11 runtime dependency family, including Deep Agents, LangChain, LangGraph, FastAPI/Starlette, OpenTelemetry, provider adapters, OpenAI, and MLflow deploy dependencies.
+
+---
+
 ## [0.11.0-rc.1] — 2026-06-26
 
 ### Added
