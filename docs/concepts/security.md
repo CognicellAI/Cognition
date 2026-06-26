@@ -87,6 +87,27 @@ When `COGNITION_SANDBOX_BACKEND=docker`, code runs in a Docker container with al
 
 The container is created from `cognition-sandbox:latest`, a minimal image without unnecessary tools. See [Deployment](../guides/deployment.md) for building the sandbox image.
 
+### AWS Lambda MicroVM Isolation
+
+When `COGNITION_SANDBOX_BACKEND=aws_lambda_microvm`, command execution runs in
+an AWS Lambda MicroVM launched from a trusted `SandboxProfile`.
+
+Key security properties:
+
+- MicroVM image ARN and network connectors come from builder-managed profile
+  config, not model tool arguments.
+- Per-agent `sandbox_execution_role_arn` is resolved from trusted agent config,
+  with profile default role fallback.
+- Cognition requests AWS proxy auth tokens at runtime and keeps them in memory
+  only.
+- Streamed and persisted sandbox metadata contains a role fingerprint, not
+  runtime credentials or auth tokens.
+- The Cognition control-plane IAM identity should be limited to approved
+  MicroVM images, network connectors, and execution roles.
+
+See [AWS Lambda MicroVM Sandbox](./aws-lambda-microvm-sandbox.md) for the full
+backend model.
+
 ---
 
 ## Tool Security
@@ -103,8 +124,8 @@ Tool source code (both file-discovered and API-registered) executes with full Py
 |---|---|
 | API authorization | Gateway/proxy layer — Cognition assumes authenticated callers |
 | Per-name tool blocking | `ToolSecurityMiddleware` — `COGNITION_BLOCKED_TOOLS` blocklist enforced at call time |
-| Process isolation | Docker sandbox backend — container per session |
-| Network isolation | Docker `network_mode=none` |
+| Process isolation | Docker, Kubernetes, or AWS Lambda MicroVM sandbox backend |
+| Network isolation | Docker `network_mode=none`, Kubernetes network policy, or Lambda MicroVM connector policy |
 | Filesystem isolation | `CognitionLocalSandboxBackend` protected paths |
 | Memory isolation | LangGraph Store namespaces scoped per tenant via `CognitionContext.effective_scope` |
 
