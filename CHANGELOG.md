@@ -7,6 +7,15 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [0.11.0-rc.1] — 2026-06-26
+
+### Added
+
+- Initial AWS Lambda MicroVM sandbox backend with scoped sandbox profiles, prebuilt MicroVM image ARNs, per-agent execution roles, runtime command server integration, lifecycle events, quota config, and token-free correlation metadata.
+- Builder documentation and reusable Terraform example for configuring Lambda MicroVM images, IAM roles, internet/VPC networking, logging, duration, idle policy, and Cognition-ready sandbox profile YAML.
+
+---
+
 ## [0.10.3] — 2026-05-28
 
 ### Fixed
