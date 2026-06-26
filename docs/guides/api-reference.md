@@ -8,7 +8,7 @@ All request and response bodies are JSON unless noted. Streaming endpoints retur
 
 ## Contents
 
-- [Health & Readiness](#health--readiness)
+- [Health & Readiness](#health-readiness)
 - [Sessions](#sessions)
   - [`POST /sessions`](#post-sessions)
   - [`GET /sessions`](#get-sessions)
@@ -28,7 +28,9 @@ All request and response bodies are JSON unless noted. Streaming endpoints retur
    - [`step_complete`](#step_complete) *(reserved)*
   - [`delegation`](#delegation)
   - [`status`](#status)
+  - [`interrupt`](#interrupt)
   - [`usage`](#usage)
+  - [`sandbox_lifecycle`](#sandbox_lifecycle)
   - [`error`](#error)
   - [`done`](#done)
 - [Agents](#agents)
@@ -70,6 +72,12 @@ All request and response bodies are JSON unless noted. Streaming endpoints retur
   - [`GET /mcp-servers/{name}`](#get-mcp-serversname)
   - [`PATCH /mcp-servers/{name}`](#patch-mcp-serversname)
   - [`DELETE /mcp-servers/{name}`](#delete-mcp-serversname)
+- [Sandbox Profiles](#sandbox-profiles)
+  - [`GET /sandbox/profiles`](#get-sandboxprofiles)
+  - [`POST /sandbox/profiles`](#post-sandboxprofiles)
+  - [`GET /sandbox/profiles/{name}`](#get-sandboxprofilesname)
+  - [`PATCH /sandbox/profiles/{name}`](#patch-sandboxprofilesname)
+  - [`DELETE /sandbox/profiles/{name}`](#delete-sandboxprofilesname)
 - [Artifacts](#artifacts)
   - [`GET /artifacts`](#get-artifacts)
   - [`POST /artifacts`](#post-artifacts)
@@ -508,6 +516,50 @@ Token usage and estimated cost for this response.
 }
 ```
 
+### `sandbox_lifecycle`
+
+Sandbox backend lifecycle transition. Lambda MicroVM snapshots include
+token-free runtime metadata.
+
+```json
+{
+  "sandbox_id": "microvm-123",
+  "phase": "runtime_snapshot",
+  "sandbox_backend": "aws_lambda_microvm",
+  "duration_ms": null,
+  "exit_code": null,
+  "is_warm_pool_hit": false,
+  "metadata": {
+    "microvm_id": "microvm-123",
+    "endpoint": "https://example.lambda-url.aws",
+    "profile": "default-lambda",
+    "image": "arn:aws:lambda:us-west-2:123456789012:microvm-image:cognition-runtime",
+    "image_version": "1.0",
+    "status": "RUNNING",
+    "region": "us-west-2",
+    "port": 8080,
+    "maximum_duration_seconds": 3600,
+    "logging_mode": "disabled",
+    "quota": {
+      "max_concurrent_sessions": 10,
+      "max_session_starts_per_minute": 30
+    },
+    "execution_role_fingerprint": "abcd1234ef567890",
+    "correlation": {
+      "session_id": "session-123",
+      "run_id": "run-123",
+      "agent_name": "repo-maintainer",
+      "profile": "default-lambda",
+      "scope_keys": ["project", "tenant"],
+      "scope_fingerprint": "0123456789abcdef"
+    }
+  }
+}
+```
+
+Proxy auth tokens and credentials are filtered before lifecycle events are
+streamed or persisted.
+
 ### `error`
 
 A recoverable error occurred. The stream terminates after an error event.
@@ -562,6 +614,8 @@ List all non-hidden agents available in the registry.
       "interrupt_on": {},
       "tools": [],
       "skills": [],
+      "sandbox_profile": null,
+      "sandbox_execution_role_arn": null,
       "system_prompt": "You are a coding agent..."
     }
   ]
@@ -598,6 +652,8 @@ Create or replace an agent definition in the ConfigRegistry.
   "interrupt_on": {},
   "model": "gpt-4o",
   "temperature": 0.1,
+  "sandbox_profile": "default-lambda",
+  "sandbox_execution_role_arn": "arn:aws:iam::123456789012:role/security-auditor-runtime",
   "scope": {}
 }
 ```
@@ -614,6 +670,8 @@ Create or replace an agent definition in the ConfigRegistry.
 | `interrupt_on` | dict | Tool names mapped to `true` for HITL confirmation |
 | `model` | string | Model override (overrides global default for this agent's sessions) |
 | `temperature` | float | Temperature override |
+| `sandbox_profile` | string | Trusted sandbox profile selected for this agent |
+| `sandbox_execution_role_arn` | string | Trusted IAM role ARN assigned to this agent's sandbox runtime |
 | `scope` | dict | Scope restriction; empty `{}` = global |
 
 **Response `201 Created`:** Agent object  
@@ -636,7 +694,8 @@ Partially update an agent definition. Only provided fields are changed.
 {
   "system_prompt": "Updated prompt.",
   "model": "claude-sonnet-4-6",
-  "temperature": 0.5
+  "temperature": 0.5,
+  "sandbox_profile": "default-lambda"
 }
 ```
 
@@ -1252,6 +1311,145 @@ Delete an MCP server.
 
 ---
 
+## Sandbox Profiles
+
+Manage AWS Lambda MicroVM sandbox profiles at runtime. File-managed profiles
+from `.cognition/config.yaml` have `source: "file"` and cannot be modified or
+deleted via the API.
+
+### `GET /sandbox/profiles`
+
+List sandbox profiles visible in the current scope.
+
+**Response `200 OK`:**
+```json
+{
+  "profiles": [
+    {
+      "name": "default-lambda",
+      "backend": "aws_lambda_microvm",
+      "image_arn": "arn:aws:lambda:us-west-2:123456789012:microvm-image:cognition-runtime",
+      "image_version": "1.0",
+      "region": "us-west-2",
+      "ingress_network_connector_arns": [],
+      "egress_mode": "internet",
+      "egress_network_connector_arns": [],
+      "idle_policy": {
+        "max_idle_duration_seconds": 900,
+        "suspended_duration_seconds": 300,
+        "auto_resume_enabled": true
+      },
+      "logging": {
+        "disabled": {},
+        "cloud_watch": null
+      },
+      "quota": {
+        "max_concurrent_sessions": 10,
+        "max_session_starts_per_minute": 30
+      },
+      "run_hook_payload": null,
+      "maximum_duration_seconds": 3600,
+      "port": 8080,
+      "token_expiration_minutes": 30,
+      "default_execution_role_arn": "arn:aws:iam::123456789012:role/cognition-agent-runtime",
+      "scope": {},
+      "source": "api",
+      "extra": {}
+    }
+  ],
+  "count": 1
+}
+```
+
+### `POST /sandbox/profiles`
+
+Create or replace an API-managed sandbox profile.
+
+**Request body:**
+```json
+{
+  "name": "default-lambda",
+  "backend": "aws_lambda_microvm",
+  "image_arn": "arn:aws:lambda:us-west-2:123456789012:microvm-image:cognition-runtime",
+  "image_version": "1.0",
+  "region": "us-west-2",
+  "egress_mode": "internet",
+  "logging": {
+    "disabled": {}
+  },
+  "quota": {
+    "max_concurrent_sessions": 10,
+    "max_session_starts_per_minute": 30
+  },
+  "maximum_duration_seconds": 3600,
+  "port": 8080,
+  "token_expiration_minutes": 30,
+  "default_execution_role_arn": "arn:aws:iam::123456789012:role/cognition-agent-runtime",
+  "scope": {}
+}
+```
+
+| Field | Type | Required | Default | Description |
+|---|---|---|---|---|
+| `name` | string | Yes | - | Profile selector used by agents |
+| `backend` | `"aws_lambda_microvm"` | No | `aws_lambda_microvm` | Sandbox backend type |
+| `image_arn` | string | Yes | - | Prebuilt Lambda MicroVM image ARN |
+| `image_version` | string | No | `null` | Optional image version |
+| `region` | string | No | image ARN region | AWS region |
+| `ingress_network_connector_arns` | list[string] | No | `[]` | Optional ingress connector ARNs |
+| `egress_mode` | `"internet"` \| `"vpc"` | No | `internet` | Egress policy |
+| `egress_network_connector_arns` | list[string] | No | `[]` | Required when `egress_mode` is `vpc` |
+| `idle_policy` | object | No | `null` | Lambda MicroVM idle lifecycle policy |
+| `logging` | object | No | `null` | Lambda MicroVM logging config; set exactly one of `disabled` or `cloud_watch` |
+| `quota` | object | No | `null` | Cognition-side profile/scope quota policy |
+| `run_hook_payload` | string | No | `null` | Payload sent to the image `/run` lifecycle hook |
+| `maximum_duration_seconds` | int | No | `3600` | Maximum MicroVM runtime, max `28800` |
+| `port` | int | No | `8080` | Runtime command server port |
+| `token_expiration_minutes` | int | No | `30` | AWS proxy auth token TTL requested by Cognition |
+| `default_execution_role_arn` | string | No | `null` | Default IAM execution role for agents using this profile |
+| `scope` | dict | No | `{}` | Scope restriction |
+| `extra` | dict | No | `{}` | Builder metadata |
+
+**Response `201 Created`:** Sandbox profile object
+**Response `409 Conflict`:** Existing profile is file-managed
+**Response `422 Unprocessable Entity`:** Validation error
+
+### `GET /sandbox/profiles/{name}`
+
+Get a sandbox profile by name.
+
+**Response `200 OK`:** Sandbox profile object
+**Response `404 Not Found`**
+
+### `PATCH /sandbox/profiles/{name}`
+
+Partially update an API-managed sandbox profile.
+
+**Request body (all fields optional):**
+```json
+{
+  "egress_mode": "vpc",
+  "egress_network_connector_arns": [
+    "arn:aws:lambda:us-west-2:123456789012:network-connector:private-egress"
+  ]
+}
+```
+
+**Response `200 OK`:** Updated sandbox profile object
+**Response `404 Not Found`**
+**Response `409 Conflict`:** Profile is file-managed
+**Response `422 Unprocessable Entity`:** Invalid profile shape
+
+### `DELETE /sandbox/profiles/{name}`
+
+Delete an API-managed sandbox profile.
+
+**Response `204 No Content`**
+**Response `404 Not Found`**
+**Response `409 Conflict`:** Profile is file-managed
+
+---
+
 ## Artifacts
 
 Artifacts are durable, scope-aware files that agents and builders can read, write, list, and diff. They provide explicit state outside the model context window for long-running agent handoffs.
@@ -1415,7 +1613,7 @@ Returns the deployment's runtime feature set, package versions, and configuratio
     "langchain_core": "1.4.0"
   },
   "stream_protocols": ["sse"],
-  "sandbox_backends": ["local", "docker", "kubernetes"],
+  "sandbox_backends": ["local", "docker", "kubernetes", "aws_lambda_microvm"],
   "features": {
     "async_subagents": true,
     "mcp": true,
@@ -1432,6 +1630,8 @@ Returns the deployment's runtime feature set, package versions, and configuratio
     "scope_propagation": true,
     "provider_config_crud": true,
     "agent_config_crud": true,
+    "sandbox_profile_crud": true,
+    "aws_lambda_microvm_sandbox": true,
     "model_catalog": true,
     "a2a": true,
     "a2a_jsonrpc": true,

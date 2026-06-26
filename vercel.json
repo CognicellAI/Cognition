@@ -1,0 +1,14 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "framework": null,
+  "installCommand": "uv --version",
+  "buildCommand": "uv run --no-project --with 'mkdocs-material>=9.6.0' mkdocs build --strict",
+  "outputDirectory": "site",
+  "redirects": [
+    {
+      "source": "/",
+      "destination": "/docs/",
+      "permanent": false
+    }
+  ]
+}

@@ -12,6 +12,7 @@ provides K8s-native isolation for production deployments on Kubernetes.
 
 from __future__ import annotations
 
+import hashlib
 import os
 import shlex
 from pathlib import Path
@@ -21,14 +22,19 @@ import structlog
 from deepagents.backends import FilesystemBackend, LocalShellBackend
 from deepagents.backends.protocol import (
     ExecuteResponse,
+    FileDownloadResponse,
+    FileUploadResponse,
     GlobResult,
     GrepResult,
     LsResult,
     ReadResult,
     SandboxBackendProtocol,
+    WriteResult,
 )
 
 logger = structlog.get_logger(__name__)
+
+from server.app.storage.config_models import LambdaMicroVmQuota, SandboxProfile  # noqa: E402
 
 
 class CognitionLocalSandboxBackend(LocalShellBackend, SandboxBackendProtocol):
@@ -219,6 +225,350 @@ class CognitionDockerSandboxBackend(FilesystemBackend, SandboxBackendProtocol):
             exit_code=result.exit_code,
             truncated=result.truncated,
         )
+
+
+def _arn_region(arn: str) -> str | None:
+    parts = arn.split(":")
+    if len(parts) > 3:
+        return parts[3] or None
+    return None
+
+
+def _arn_partition(arn: str) -> str:
+    parts = arn.split(":")
+    if len(parts) > 1 and parts[1]:
+        return parts[1]
+    return "aws"
+
+
+def _aws_managed_network_connector_arn(
+    *,
+    image_arn: str,
+    region: str | None,
+    connector_name: str,
+) -> str | None:
+    resolved_region = region or _arn_region(image_arn)
+    if not resolved_region:
+        return None
+    partition = _arn_partition(image_arn)
+    return (
+        f"arn:{partition}:lambda:{resolved_region}:aws:"
+        f"network-connector:aws-network-connector:{connector_name}"
+    )
+
+
+def _role_fingerprint(role_arn: str | None) -> str | None:
+    if not role_arn:
+        return None
+    return hashlib.sha256(role_arn.encode("utf-8")).hexdigest()[:16]
+
+
+def _lambda_microvm_logging_mode(profile: SandboxProfile) -> str | None:
+    if profile.logging is not None:
+        if profile.logging.disabled is not None:
+            return "disabled"
+        if profile.logging.cloud_watch is not None:
+            return "cloud_watch"
+    legacy_logging = profile.extra.get("logging")
+    if isinstance(legacy_logging, dict):
+        if "disabled" in legacy_logging:
+            return "disabled"
+        if "cloudWatch" in legacy_logging or "cloud_watch" in legacy_logging:
+            return "cloud_watch"
+        return "custom"
+    return None
+
+
+class CognitionAwsLambdaMicroVmSandboxBackend(SandboxBackendProtocol):
+    """AWS Lambda MicroVM sandbox backend wrapper for Cognition.
+
+    Cognition resolves trusted builder config (``SandboxProfile`` plus optional
+    agent execution role) and delegates the Deep Agents backend contract to the
+    reusable ``langchain-aws-lambda-microvms`` package.
+    """
+
+    def __init__(
+        self,
+        root_dir: str | Path,
+        sandbox_id: str | None = None,
+        profile: str = "default",
+        execution_role_arn: str | None = None,
+        profile_config: SandboxProfile | None = None,
+        protected_paths: list[str] | None = None,
+    ) -> None:
+        self._root_dir = Path(root_dir).resolve()
+        self._id = sandbox_id or f"cognition-aws-lambda-microvm-{id(self)}"
+        self._profile = profile
+        self._execution_role_arn = execution_role_arn
+        self._profile_config = profile_config
+        self._protected_paths = protected_paths or [".cognition"]
+        self._backend: Any | None = None
+        self._last_runtime_metadata: dict[str, Any] = {}
+
+    @property
+    def id(self) -> str:
+        """Return the unique identifier for this sandbox."""
+        if self._backend is not None:
+            return cast(str, self._backend.id)
+        return self._id
+
+    @property
+    def profile(self) -> str:
+        """Return the trusted sandbox profile selected for this backend."""
+        return self._profile
+
+    @property
+    def execution_role_arn(self) -> str | None:
+        """Return the trusted sandbox execution role ARN, if configured."""
+        if self._execution_role_arn:
+            return self._execution_role_arn
+        if self._profile_config is not None:
+            return self._profile_config.default_execution_role_arn
+        return None
+
+    @property
+    def quota(self) -> LambdaMicroVmQuota | None:
+        """Return the Cognition-side quota policy for this profile."""
+        if self._profile_config is None:
+            return None
+        return self._profile_config.quota
+
+    @property
+    def runtime_metadata(self) -> dict[str, Any]:
+        """Return token-free MicroVM metadata for observability/persistence."""
+        metadata: dict[str, Any] = {
+            "backend": "aws_lambda_microvm",
+            "profile": self._profile,
+        }
+        if self._profile_config is not None:
+            metadata.update(self._profile_runtime_metadata(self._profile_config))
+        if self._backend is not None and hasattr(self._backend, "runtime_metadata"):
+            self._last_runtime_metadata = cast(dict[str, Any], self._backend.runtime_metadata)
+            metadata.update(self._last_runtime_metadata)
+        elif self._last_runtime_metadata:
+            metadata.update(self._last_runtime_metadata)
+        return metadata
+
+    def _profile_runtime_metadata(self, profile: SandboxProfile) -> dict[str, Any]:
+        """Return safe profile metadata useful for lifecycle correlation."""
+        return {
+            "microvm_id": None,
+            "endpoint": None,
+            "image": profile.image_arn,
+            "image_version": profile.image_version,
+            "status": None,
+            "execution_role_fingerprint": _role_fingerprint(self.execution_role_arn),
+            "region": profile.region,
+            "port": profile.port,
+            "maximum_duration_seconds": profile.maximum_duration_seconds,
+            "token_expiration_minutes": profile.token_expiration_minutes,
+            "egress_mode": profile.egress_mode,
+            "ingress_network_connector_count": len(profile.ingress_network_connector_arns),
+            "egress_network_connector_count": len(profile.egress_network_connector_arns),
+            "idle_policy": profile.idle_policy.model_dump(mode="json")
+            if profile.idle_policy is not None
+            else None,
+            "logging_mode": _lambda_microvm_logging_mode(profile),
+            "quota": profile.quota.model_dump(exclude_none=True, mode="json")
+            if profile.quota is not None
+            else None,
+            "run_hook_configured": bool(
+                profile.run_hook_payload or profile.extra.get("run_hook_payload")
+            ),
+        }
+
+    def _is_protected_path(self, path: str) -> bool:
+        try:
+            resolved = (self._root_dir / path).resolve()
+            resolved_str = str(resolved)
+            for protected in self._protected_paths:
+                protected_full = (self._root_dir / protected).resolve()
+                if resolved_str.startswith(str(protected_full)):
+                    return True
+        except (ValueError, OSError):
+            pass
+        return False
+
+    def _ingress_connectors(self, profile: SandboxProfile) -> list[str]:
+        if profile.ingress_network_connector_arns:
+            return list(profile.ingress_network_connector_arns)
+        default = _aws_managed_network_connector_arn(
+            image_arn=profile.image_arn,
+            region=profile.region,
+            connector_name="ALL_INGRESS",
+        )
+        return [default] if default else []
+
+    def _egress_connectors(self, profile: SandboxProfile) -> list[str]:
+        if profile.egress_network_connector_arns:
+            return list(profile.egress_network_connector_arns)
+        if profile.egress_mode == "internet":
+            default = _aws_managed_network_connector_arn(
+                image_arn=profile.image_arn,
+                region=profile.region,
+                connector_name="INTERNET_EGRESS",
+            )
+            return [default] if default else []
+        return []
+
+    def _get_backend(self) -> Any:
+        if self._backend is not None:
+            return self._backend
+        if self._profile_config is None:
+            raise RuntimeError(
+                f"SandboxProfile {self._profile!r} was not resolved for the "
+                "aws_lambda_microvm backend. Register the profile in ConfigStore "
+                "or seed it from .cognition/config.yaml before selecting this backend."
+            )
+
+        try:
+            from langchain_aws_lambda_microvms import LambdaMicroVmSandbox
+        except ImportError as e:
+            raise RuntimeError(
+                "langchain-aws-lambda-microvms is required for the "
+                "aws_lambda_microvm sandbox backend."
+            ) from e
+
+        profile = self._profile_config
+        idle_policy = (
+            {
+                "maxIdleDurationSeconds": profile.idle_policy.max_idle_duration_seconds,
+                "suspendedDurationSeconds": profile.idle_policy.suspended_duration_seconds,
+                "autoResumeEnabled": profile.idle_policy.auto_resume_enabled,
+            }
+            if profile.idle_policy is not None
+            else None
+        )
+        logging_config = (
+            profile.logging.to_aws_request()
+            if profile.logging is not None
+            else cast(dict[str, Any] | None, profile.extra.get("logging"))
+        )
+        run_hook_payload = profile.run_hook_payload or cast(
+            str | None,
+            profile.extra.get("run_hook_payload"),
+        )
+        workspace_root = str(profile.extra.get("workspace_root", "/workspace"))
+        launch_timeout_seconds = int(profile.extra.get("launch_timeout_seconds", 120))
+        healthcheck_timeout_seconds = int(profile.extra.get("healthcheck_timeout_seconds", 60))
+
+        self._backend = LambdaMicroVmSandbox(
+            image_identifier=profile.image_arn,
+            image_version=profile.image_version,
+            region_name=profile.region,
+            execution_role_arn=self.execution_role_arn,
+            ingress_network_connector_arns=self._ingress_connectors(profile),
+            egress_network_connector_arns=self._egress_connectors(profile),
+            idle_policy=idle_policy,
+            logging_config=logging_config,
+            run_hook_payload=run_hook_payload,
+            maximum_duration_seconds=profile.maximum_duration_seconds,
+            port=profile.port,
+            token_expiration_minutes=profile.token_expiration_minutes,
+            workspace_root=workspace_root,
+            sandbox_id=self._id,
+            launch_timeout_seconds=launch_timeout_seconds,
+            healthcheck_timeout_seconds=healthcheck_timeout_seconds,
+        )
+        logger.info(
+            "AWS Lambda MicroVM sandbox backend initialized",
+            sandbox_id=self._id,
+            profile=self._profile,
+            image=profile.image_arn,
+            image_version=profile.image_version,
+            region=profile.region,
+        )
+        return self._backend
+
+    def execute(self, command: str, *, timeout: int | None = None) -> ExecuteResponse:
+        """Execute a command in the AWS Lambda MicroVM sandbox."""
+        backend = self._get_backend()
+        result: ExecuteResponse = backend.execute(command, timeout=timeout)
+        return result
+
+    def read(
+        self,
+        file_path: str,
+        offset: int = 0,
+        limit: int = 2000,
+    ) -> ReadResult:
+        """Read file content from the AWS Lambda MicroVM sandbox."""
+        backend = self._get_backend()
+        result: ReadResult = backend.read(file_path, offset=offset, limit=limit)
+        return result
+
+    def write(self, file_path: str, content: str) -> WriteResult:
+        """Write file content to the AWS Lambda MicroVM sandbox."""
+        if self._is_protected_path(file_path):
+            raise PermissionError(f"Writing to protected path is not allowed: {file_path}")
+        backend = self._get_backend()
+        result: WriteResult = backend.write(file_path, content)
+        return result
+
+    def edit(
+        self,
+        file_path: str,
+        old_string: str,
+        new_string: str,
+        replace_all: bool = False,
+    ) -> Any:
+        """Edit file content in the AWS Lambda MicroVM sandbox."""
+        if self._is_protected_path(file_path):
+            raise PermissionError(f"Editing protected path is not allowed: {file_path}")
+        backend = self._get_backend()
+        return backend.edit(file_path, old_string, new_string, replace_all=replace_all)
+
+    def ls(self, path: str) -> LsResult:
+        """List directory entries in the AWS Lambda MicroVM sandbox."""
+        backend = self._get_backend()
+        result: LsResult = backend.ls(path)
+        return result
+
+    def grep(
+        self,
+        pattern: str,
+        path: str | None = None,
+        glob: str | None = None,
+    ) -> GrepResult:
+        """Search files in the AWS Lambda MicroVM sandbox."""
+        backend = self._get_backend()
+        result: GrepResult = backend.grep(pattern, path=path, glob=glob)
+        return result
+
+    def glob(self, pattern: str, path: str = "/") -> GlobResult:
+        """Find matching files in the AWS Lambda MicroVM sandbox."""
+        backend = self._get_backend()
+        result: GlobResult = backend.glob(pattern, path=path)
+        return result
+
+    def download_files(self, paths: list[str]) -> list[FileDownloadResponse]:
+        """Download files from the AWS Lambda MicroVM sandbox."""
+        backend = self._get_backend()
+        return cast(list[FileDownloadResponse], backend.download_files(paths))
+
+    def upload_files(self, files: list[tuple[str, bytes]]) -> list[FileUploadResponse]:
+        """Upload files to the AWS Lambda MicroVM sandbox."""
+        backend = self._get_backend()
+        return cast(list[FileUploadResponse], backend.upload_files(files))
+
+    def terminate(self) -> None:
+        """Terminate the AWS Lambda MicroVM sandbox if one was created."""
+        if self._backend is not None:
+            try:
+                self._backend.terminate()
+                if hasattr(self._backend, "runtime_metadata"):
+                    self._last_runtime_metadata = cast(
+                        dict[str, Any], self._backend.runtime_metadata
+                    )
+                logger.info(
+                    "AWS Lambda MicroVM sandbox terminated",
+                    sandbox_id=self._id,
+                    profile=self._profile,
+                )
+            except Exception as e:
+                logger.warning("AWS Lambda MicroVM sandbox terminate failed", error=str(e))
+            finally:
+                self._backend = None
 
 
 class CognitionKubernetesSandboxBackend(SandboxBackendProtocol):
@@ -588,13 +938,17 @@ def create_sandbox_backend(
     k8s_ttl: int = 3600,
     k8s_warm_pool: str | None = None,
     labels: dict[str, str] | None = None,
-) -> FilesystemBackend | CognitionKubernetesSandboxBackend:
+    aws_lambda_microvm_profile: str = "default",
+    aws_lambda_microvm_execution_role_arn: str | None = None,
+    aws_lambda_microvm_profile_config: SandboxProfile | None = None,
+) -> FilesystemBackend | CognitionKubernetesSandboxBackend | CognitionAwsLambdaMicroVmSandboxBackend:
     """Factory for creating sandbox backends from settings.
 
     Args:
         root_dir: Workspace root directory.
         sandbox_id: Unique identifier for the sandbox.
-        sandbox_backend: Backend type - "local", "docker", or "kubernetes".
+        sandbox_backend: Backend type - "local", "docker", "kubernetes",
+            or "aws_lambda_microvm".
         docker_image: Docker image for sandbox containers.
         docker_network: Docker network mode.
         docker_memory_limit: Container memory limit.
@@ -606,6 +960,12 @@ def create_sandbox_backend(
         k8s_ttl: Time-to-live in seconds for K8s sandbox auto-cleanup.
         k8s_warm_pool: Optional SandboxWarmPool CR name.
         labels: Labels applied to the Sandbox CR (K8s only).
+        aws_lambda_microvm_profile: Trusted SandboxProfile name for the AWS
+            Lambda MicroVM backend.
+        aws_lambda_microvm_execution_role_arn: Trusted IAM role ARN assigned to
+            the AWS Lambda MicroVM sandbox runtime.
+        aws_lambda_microvm_profile_config: Trusted, already-resolved
+            SandboxProfile selected from ConfigStore.
 
     Returns:
         A sandbox backend implementing both FilesystemBackend and
@@ -613,7 +973,7 @@ def create_sandbox_backend(
         CognitionKubernetesSandboxBackend (for kubernetes).
 
     Raises:
-        ValueError: If sandbox_backend is not "local", "docker", or "kubernetes".
+        ValueError: If sandbox_backend is unknown.
     """
     if sandbox_backend == "local":
         return CognitionLocalSandboxBackend(
@@ -641,10 +1001,18 @@ def create_sandbox_backend(
             labels=labels,
             warm_pool=k8s_warm_pool,
         )
+    elif sandbox_backend == "aws_lambda_microvm":
+        return CognitionAwsLambdaMicroVmSandboxBackend(
+            root_dir=root_dir,
+            sandbox_id=sandbox_id,
+            profile=aws_lambda_microvm_profile,
+            execution_role_arn=aws_lambda_microvm_execution_role_arn,
+            profile_config=aws_lambda_microvm_profile_config,
+        )
     else:
         raise ValueError(
             f"Unknown sandbox_backend: {sandbox_backend!r}. "
-            "Must be 'local', 'docker', or 'kubernetes'."
+            "Must be 'local', 'docker', 'kubernetes', or 'aws_lambda_microvm'."
         )
 
 

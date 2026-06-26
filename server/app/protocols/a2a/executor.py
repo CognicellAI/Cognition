@@ -156,6 +156,7 @@ class CognitionA2AExecutor(AgentExecutor):
                 system_prompt=system_prompt,
                 manager=self._agent_manager,
                 scope=scope,
+                run_id=None,
             ):
                 if isinstance(event, TokenEvent):
                     accumulated_text.append(event.content)

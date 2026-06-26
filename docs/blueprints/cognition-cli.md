@@ -53,5 +53,5 @@ Developers can build on this blueprint to:
 ## Implementation Details
 
 Refer to the source code for the full implementation:
-- [client/cli/main.py](../../client/cli/main.py)
-- [client/cli/shell.py](../../client/cli/shell.py)
+- `client/cli/main.py`
+- `client/cli/shell.py`

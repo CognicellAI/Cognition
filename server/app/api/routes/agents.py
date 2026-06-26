@@ -39,6 +39,8 @@ def _agent_to_response(agent: AgentDefinition) -> AgentResponse:
             provider=agent.config.provider,
             model=agent.config.model,
             timeout_seconds=agent.config.timeout_seconds,
+            sandbox_profile=agent.config.sandbox_profile,
+            sandbox_execution_role_arn=agent.config.sandbox_execution_role_arn,
         ),
         response_format=getattr(agent, "response_format", None),
         interrupt_on={
@@ -146,6 +148,8 @@ async def create_agent(
                 ),
                 "provider": body.provider,
                 "timeout_seconds": body.timeout_seconds,
+                "sandbox_profile": body.sandbox_profile,
+                "sandbox_execution_role_arn": body.sandbox_execution_role_arn,
             },
         }
         if "interrupt_on" in body.model_fields_set:
@@ -217,6 +221,8 @@ async def update_agent(
             "context_policy",
             "provider",
             "timeout_seconds",
+            "sandbox_profile",
+            "sandbox_execution_role_arn",
         }
         config_updates = {key: updates.pop(key) for key in list(updates) if key in config_fields}
         if config_updates:

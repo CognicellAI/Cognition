@@ -13,7 +13,11 @@ and builds a LangChain BaseChatModel. No custom fallback chains.
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncGenerator
+import hashlib
+import json
+import time
+from collections import deque
+from collections.abc import AsyncGenerator, Mapping
 from dataclasses import dataclass, field
 from typing import Any, cast
 
@@ -156,6 +160,8 @@ class ResolvedAgentConfig:
     response_format: str | None = None
     tool_token_limit_before_evict: int | None = None
     context_policy: Any | None = None
+    sandbox_profile: str | None = None
+    sandbox_execution_role_arn: str | None = None
     subagents: list[Any] = field(default_factory=list)
     async_subagents: list[Any] = field(default_factory=list)
     agent_def: Any = None
@@ -187,6 +193,22 @@ def _has_explicit_agent_field(agent_def: Any, field_name: str) -> bool:
     if isinstance(fields_set, set):
         return field_name in fields_set
     return hasattr(agent_def, field_name)
+
+
+def _scope_fingerprint(scope: Mapping[str, str] | None) -> str | None:
+    """Return a short, stable fingerprint without exposing raw scope values."""
+    if not scope:
+        return None
+    encoded = json.dumps(
+        dict(scope),
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()[:16]
+
+
+class SandboxQuotaExceededError(RuntimeError):
+    """Raised when a Cognition-side sandbox quota blocks a session."""
 
 
 class DeepAgentStreamingService:
@@ -311,6 +333,12 @@ class DeepAgentStreamingService:
         if agent_def.config.context_policy is not None:
             resolved.context_policy = agent_def.config.context_policy
 
+        if agent_def.config.sandbox_profile is not None:
+            resolved.sandbox_profile = agent_def.config.sandbox_profile
+
+        if agent_def.config.sandbox_execution_role_arn is not None:
+            resolved.sandbox_execution_role_arn = agent_def.config.sandbox_execution_role_arn
+
         if agent_def.middleware:
             resolved.middleware = _resolve_middleware(agent_def.middleware)
 
@@ -325,6 +353,7 @@ class DeepAgentStreamingService:
         system_prompt: str | None = None,
         manager: SessionAgentManager | None = None,
         scope: dict[str, str] | None = None,
+        run_id: str | None = None,
     ) -> AsyncGenerator[StreamEvent, None]:
         """Stream LLM response using DeepAgents with multi-step support."""
         runtime: DeepAgentRuntime | None = None
@@ -407,11 +436,22 @@ class DeepAgentStreamingService:
                 mcp_configs=mcp_configs or None,
                 scope=scope,
                 config_store=self._get_config_store(),
+                sandbox_profile=agent_cfg.sandbox_profile,
+                sandbox_execution_role_arn=agent_cfg.sandbox_execution_role_arn,
             )
             agent = await create_cognition_agent(agent_params)
 
             if manager and agent.sandbox_backend is not None:
-                manager.register_sandbox_backend(session_id, agent.sandbox_backend)
+                manager.register_sandbox_backend(
+                    session_id,
+                    agent.sandbox_backend,
+                    run_id=run_id or thread_id,
+                    agent_name=session.agent_name if session else None,
+                    scope=scope
+                    or (session.scopes if session and hasattr(session, "scopes") else None),
+                )
+                for sandbox_event in manager.drain_sandbox_events(session_id):
+                    yield sandbox_event
 
             runtime = DeepAgentRuntime(
                 agent=agent.agent,
@@ -523,6 +563,9 @@ class DeepAgentStreamingService:
                 session_id=session_id,
             )
             yield ErrorEvent(message=str(e), code="PROVIDER_CONFIG_ERROR")
+        except SandboxQuotaExceededError as e:
+            logger.warning("Sandbox quota exceeded", error=str(e), session_id=session_id)
+            yield ErrorEvent(message=str(e), code="SANDBOX_QUOTA_EXCEEDED")
         except Exception as e:
             logger.error("DeepAgents streaming error", error=str(e), session_id=session_id)
             yield ErrorEvent(message=str(e), code="STREAMING_ERROR")
@@ -721,7 +764,9 @@ class DeepAgentStreamingService:
         Delegates to RuntimeResolver.resolve_model_for_session().
         """
         return await self._get_runtime_resolver().resolve_model_for_session(
-            session=session, scope=scope, agent_def=agent_def
+            session=session,
+            scope=scope,
+            agent_def=agent_def,
         )
 
     async def _resolve_mcp_configs(self, scope: dict[str, str] | None) -> list[Any]:
@@ -803,6 +848,8 @@ class SessionAgentManager:
         self._active_runtimes: dict[str, list[Any]] = {}
         self._sandbox_backends: dict[str, Any] = {}
         self._sandbox_events: dict[str, asyncio.Queue[SandboxLifecycleEvent]] = {}
+        self._sandbox_correlations: dict[str, dict[str, Any]] = {}
+        self._sandbox_start_history: dict[str, deque[float]] = {}
         self._sandbox_backend_type: str = settings.sandbox_backend
 
     def register_session(
@@ -906,7 +953,15 @@ class SessionAgentManager:
         logger.warning("No active runtime to abort", session_id=session_id)
         return False
 
-    def register_sandbox_backend(self, session_id: str, backend: Any) -> None:
+    def register_sandbox_backend(
+        self,
+        session_id: str,
+        backend: Any,
+        *,
+        run_id: str | None = None,
+        agent_name: str | None = None,
+        scope: Mapping[str, str] | None = None,
+    ) -> None:
         """Register a sandbox backend for lifecycle tracking.
 
         The backend's ``terminate()`` method will be called when the session
@@ -915,7 +970,26 @@ class SessionAgentManager:
         Args:
             session_id: Unique session identifier.
             backend: The sandbox backend instance (must have a ``terminate()`` method).
+            run_id: Durable run identifier, if available.
+            agent_name: Agent definition bound to the session.
+            scope: Trusted builder-authorized effective scope.
         """
+        correlation = self._sandbox_correlation(
+            session_id=session_id,
+            backend=backend,
+            run_id=run_id,
+            agent_name=agent_name,
+            scope=scope,
+        )
+        quota = getattr(backend, "quota", None)
+        if quota is not None:
+            self._enforce_sandbox_quota(
+                session_id=session_id,
+                quota_key=str(correlation["quota_key"]),
+                quota=quota,
+            )
+
+        self._sandbox_correlations[session_id] = correlation
         self._sandbox_backends[session_id] = backend
         sandbox_id = getattr(backend, "id", str(id(backend)))
         self._emit_sandbox_event(
@@ -925,9 +999,106 @@ class SessionAgentManager:
                 phase="provisioned",
                 sandbox_backend=self._sandbox_backend_type,
                 is_warm_pool_hit=getattr(backend, "_warm_pool", None) is not None,
+                metadata=self._sandbox_runtime_metadata(backend, session_id=session_id),
             ),
         )
         logger.debug("Sandbox backend registered", session_id=session_id)
+
+    def _sandbox_correlation(
+        self,
+        *,
+        session_id: str,
+        backend: Any,
+        run_id: str | None,
+        agent_name: str | None,
+        scope: Mapping[str, str] | None,
+    ) -> dict[str, Any]:
+        profile = getattr(backend, "profile", None)
+        scope_keys = sorted((scope or {}).keys())
+        scope_fingerprint = _scope_fingerprint(scope)
+        quota_scope = scope_fingerprint or "global"
+        quota_profile = str(profile or "default")
+        return {
+            "session_id": session_id,
+            "run_id": run_id,
+            "agent_name": agent_name,
+            "profile": profile,
+            "scope_keys": scope_keys,
+            "scope_fingerprint": scope_fingerprint,
+            "quota_key": f"{quota_profile}:{quota_scope}",
+        }
+
+    def _enforce_sandbox_quota(self, *, session_id: str, quota_key: str, quota: Any) -> None:
+        max_concurrent = getattr(quota, "max_concurrent_sessions", None)
+        if max_concurrent is not None:
+            active = sum(
+                1
+                for active_session_id, correlation in self._sandbox_correlations.items()
+                if active_session_id != session_id and correlation.get("quota_key") == quota_key
+            )
+            if active >= max_concurrent:
+                raise SandboxQuotaExceededError(
+                    "Lambda MicroVM sandbox quota exceeded: "
+                    f"max_concurrent_sessions={max_concurrent} for {quota_key}"
+                )
+
+        max_starts = getattr(quota, "max_session_starts_per_minute", None)
+        if max_starts is None:
+            return
+
+        now = time.monotonic()
+        history = self._sandbox_start_history.setdefault(quota_key, deque())
+        cutoff = now - 60.0
+        while history and history[0] < cutoff:
+            history.popleft()
+        if len(history) >= max_starts:
+            raise SandboxQuotaExceededError(
+                "Lambda MicroVM sandbox quota exceeded: "
+                f"max_session_starts_per_minute={max_starts} for {quota_key}"
+            )
+        history.append(now)
+
+    def _sandbox_runtime_metadata(
+        self,
+        backend: Any,
+        *,
+        session_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Return token-free backend runtime metadata when the backend exposes it."""
+        try:
+            metadata = getattr(backend, "runtime_metadata", {})
+        except Exception as exc:
+            logger.debug("Sandbox runtime metadata unavailable", error=str(exc))
+            return {}
+        safe_metadata = dict(metadata) if isinstance(metadata, dict) else {}
+        if session_id is not None:
+            correlation = self._sandbox_correlations.get(session_id)
+            if correlation is not None:
+                safe_metadata["correlation"] = {
+                    key: value
+                    for key, value in correlation.items()
+                    if key != "quota_key" and value is not None
+                }
+        return safe_metadata
+
+    def snapshot_sandbox_backend(
+        self,
+        session_id: str,
+        phase: str = "runtime_snapshot",
+    ) -> SandboxLifecycleEvent | None:
+        """Build a lifecycle event with the current backend metadata snapshot."""
+        backend = self._sandbox_backends.get(session_id)
+        if backend is None:
+            return None
+        metadata = self._sandbox_runtime_metadata(backend, session_id=session_id)
+        if not metadata:
+            return None
+        return SandboxLifecycleEvent(
+            sandbox_id=getattr(backend, "id", str(id(backend))),
+            phase=phase,
+            sandbox_backend=self._sandbox_backend_type,
+            metadata=metadata,
+        )
 
     def unregister_session(self, session_id: str) -> None:
         """Unregister a session and clean up resources."""
@@ -944,6 +1115,7 @@ class SessionAgentManager:
                     sandbox_id=sandbox_id,
                     phase="teardown_started",
                     sandbox_backend=self._sandbox_backend_type,
+                    metadata=self._sandbox_runtime_metadata(backend, session_id=session_id),
                 ),
             )
             if hasattr(backend, "terminate"):
@@ -955,6 +1127,10 @@ class SessionAgentManager:
                             sandbox_id=sandbox_id,
                             phase="teardown_complete",
                             sandbox_backend=self._sandbox_backend_type,
+                            metadata=self._sandbox_runtime_metadata(
+                                backend,
+                                session_id=session_id,
+                            ),
                         ),
                     )
                     logger.info("Sandbox backend terminated", session_id=session_id)
@@ -963,6 +1139,7 @@ class SessionAgentManager:
                         "Sandbox backend terminate failed", session_id=session_id, error=str(e)
                     )
 
+        self._sandbox_correlations.pop(session_id, None)
         self._sandbox_events.pop(session_id, None)
         logger.info("Session unregistered", session_id=session_id)
 
