@@ -11,6 +11,9 @@ This site is organized around three documentation surfaces:
 - **Blueprints** describe reference architectures for products built on
   Cognition.
 
+If you want a course sequence rather than reference material, use
+[Learn agent development](/learn/).
+
 ## Start Here
 
 - [Getting Started](guides/getting-started.md): install, configure, and send

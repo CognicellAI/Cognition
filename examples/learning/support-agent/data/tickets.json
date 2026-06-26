@@ -1,0 +1,48 @@
+[
+  {
+    "ticket_id": "tic_acme_1001",
+    "tenant": "acme",
+    "customer_id": "cus_acme_001",
+    "status": "open",
+    "priority": "high",
+    "subject": "Unexpected usage spike after sandbox rollout",
+    "summary": "Customer reports a 35 percent usage increase after enabling isolated execution for support workflows.",
+    "created_at": "2026-06-05T14:30:00Z",
+    "messages": [
+      {
+        "author": "customer",
+        "body": "We enabled sandbox isolation last week and our usage dashboard jumped. Can you help us understand whether this is expected?"
+      },
+      {
+        "author": "support",
+        "body": "We are checking execution counts and sandbox lifecycle events for the affected tenant."
+      }
+    ],
+    "policy_notes": [
+      "Acknowledge the impact before explaining likely causes.",
+      "Do not promise a refund without billing approval.",
+      "Offer to review usage analytics with the customer."
+    ]
+  },
+  {
+    "ticket_id": "tic_northstar_2001",
+    "tenant": "northstar",
+    "customer_id": "cus_northstar_001",
+    "status": "open",
+    "priority": "normal",
+    "subject": "Question about exporting audit logs",
+    "summary": "Customer wants to know whether their current plan supports audit log export.",
+    "created_at": "2026-06-06T09:15:00Z",
+    "messages": [
+      {
+        "author": "customer",
+        "body": "Can our team export audit logs for quarterly review?"
+      }
+    ],
+    "policy_notes": [
+      "Explain current plan capabilities clearly.",
+      "Do not expose details from other tenants.",
+      "Suggest upgrade path only if the feature is unavailable."
+    ]
+  }
+]

@@ -189,24 +189,28 @@ The CLI is one example of what you can build on Cognition. See the [Blueprints](
 | [Deployment Guide](./docs/guides/deployment.md) | Docker Compose, PostgreSQL, and production hardening |
 | [API Reference](./docs/guides/api-reference.md) | Every REST endpoint and SSE event type |
 
-Preview the documentation site locally:
+Preview the product docs locally:
 
 ```bash
 uv run --extra docs mkdocs serve
 ```
 
-Build the static site for deployment under `/docs`:
+Build the full public site for deployment:
 
 ```bash
-uv run --extra docs mkdocs build --strict
+uv run --extra docs python scripts/build_site.py
 ```
 
-The docs site is configured for Vercel in `vercel.json`. Connect the repository
-to Vercel, set the production branch to `main`, and add
-`cognition.cognicellai.com` as the project domain. Vercel builds `site/`, while
-MkDocs writes the documentation under `site/docs` so the public URL can be
-`https://cognition.cognicellai.com/docs/`. The `Docs / Build MkDocs site`
-GitHub Actions check should be required before merge.
+The public site is configured for Vercel in `vercel.json`. Connect the
+repository to Vercel, set the production branch to `main`, and add
+`cognition.cognicellai.com` as the project domain. The shared build writes:
+
+- Landing page: `site/index.html` for `https://cognition.cognicellai.com/`
+- Learn site: `site/learn/` for `https://cognition.cognicellai.com/learn/`
+- Product docs: `site/docs/` for `https://cognition.cognicellai.com/docs/`
+
+The `Docs / Build public site` GitHub Actions check should be required before
+merge.
 
 ## Testing
 

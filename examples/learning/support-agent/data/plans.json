@@ -1,0 +1,27 @@
+[
+  {
+    "plan_id": "plan_scale",
+    "name": "Scale",
+    "monthly_price_usd": 499,
+    "included_seats": 50,
+    "support_sla_hours": 4,
+    "features": [
+      "priority_support",
+      "audit_log_export",
+      "advanced_scoping",
+      "usage_analytics"
+    ]
+  },
+  {
+    "plan_id": "plan_team",
+    "name": "Team",
+    "monthly_price_usd": 149,
+    "included_seats": 15,
+    "support_sla_hours": 24,
+    "features": [
+      "standard_support",
+      "team_workspaces",
+      "basic_usage"
+    ]
+  }
+]

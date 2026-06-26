@@ -49,6 +49,8 @@ htmlcov/
 
 # Docs site build
 site/
+web/landing/dist/
+web/landing/node_modules/
 
 # Pre-commit
 .pre-commit-config.yaml.bak

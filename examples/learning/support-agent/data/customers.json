@@ -1,0 +1,28 @@
+[
+  {
+    "customer_id": "cus_acme_001",
+    "tenant": "acme",
+    "name": "Acme Robotics",
+    "primary_contact": {
+      "name": "Maya Patel",
+      "role": "Operations Lead",
+      "email": "maya.patel@example.invalid"
+    },
+    "plan_id": "plan_scale",
+    "region": "us-east",
+    "support_tier": "priority"
+  },
+  {
+    "customer_id": "cus_northstar_001",
+    "tenant": "northstar",
+    "name": "Northstar Analytics",
+    "primary_contact": {
+      "name": "Evan Brooks",
+      "role": "Data Platform Manager",
+      "email": "evan.brooks@example.invalid"
+    },
+    "plan_id": "plan_team",
+    "region": "us-west",
+    "support_tier": "standard"
+  }
+]

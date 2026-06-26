@@ -21,6 +21,8 @@ server/
 shared/
 site/
 tests/
+web/landing/dist/
+web/landing/node_modules/
 workspaces/
 *.egg-info/
 *.log

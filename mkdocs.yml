@@ -9,6 +9,7 @@ site_dir: site/docs
 strict: true
 exclude_docs: |
   README.md
+  learn/**
 
 theme:
   name: material

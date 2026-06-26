@@ -16,11 +16,18 @@ concurrency:
 
 jobs:
   build:
-    name: Build MkDocs site
+    name: Build public site
     runs-on: ubuntu-latest
 
     steps:
       - uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: ".node-version"
+          cache: "npm"
+          cache-dependency-path: "web/landing/package-lock.json"
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -32,5 +39,5 @@ jobs:
         with:
           enable-cache: true
 
-      - name: Build docs
-        run: uv run --extra docs mkdocs build --strict
+      - name: Build site
+        run: uv run --extra docs python scripts/build_site.py
