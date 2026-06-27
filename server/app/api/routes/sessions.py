@@ -227,7 +227,7 @@ async def create_session(
     Note: Server uses global settings exclusively. No per-session configuration.
     """
     # Validate agent_name is a valid primary agent
-    if not await config_store.is_valid_primary(request.agent_name):
+    if not await config_store.is_valid_primary(request.agent_name, scope.get_all() or None):
         raise _unprocessable_entity(f"Invalid or unknown agent: {request.agent_name}")
 
     # Idempotency: return existing session if idempotency_key matches
@@ -490,7 +490,7 @@ async def update_session(
     )
 
     if request.agent_name:
-        if not await config_store.is_valid_primary(request.agent_name):
+        if not await config_store.is_valid_primary(request.agent_name, scope.get_all() or None):
             raise _unprocessable_entity(f"Invalid or unknown agent: {request.agent_name}")
 
     session = await store.update_session(
