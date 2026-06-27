@@ -7,6 +7,14 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [0.11.0-rc.3] — 2026-06-27
+
+### Fixed
+
+- Fixed scoped API-created primary agents being visible through `GET /agents/{name}` but rejected by `POST /sessions` and `PATCH /sessions/{id}` because session agent validation did not use the request scope.
+
+---
+
 ## [0.11.0-rc.2] — 2026-06-26
 
 ### Security
