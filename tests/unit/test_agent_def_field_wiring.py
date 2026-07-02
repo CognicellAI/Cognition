@@ -20,11 +20,11 @@ from __future__ import annotations
 
 from collections.abc import AsyncGenerator
 from typing import Any, cast
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, call, patch
 
 import pytest
 
-from server.app.agent.runtime import DoneEvent, TokenEvent
+from server.app.agent.runtime import DoneEvent, ErrorEvent, TokenEvent
 from server.app.models import Session, SessionConfig, SessionStatus
 
 
@@ -43,6 +43,7 @@ def _make_session(
     agent_name: str = "test-agent",
     provider: str = "mock",
     model: str = "mock-model",
+    scopes: dict[str, str] | None = None,
 ) -> Session:
     return Session(
         id="sess-wire-test",
@@ -55,6 +56,7 @@ def _make_session(
             model=model,
         ),
         agent_name=agent_name,
+        scopes=scopes or {},
         created_at="2026-01-01T00:00:00",
         updated_at="2026-01-01T00:00:00",
     )
@@ -103,6 +105,7 @@ async def _run(
     patches: tuple,
     session: Session,
     mock_def_registry: Any = None,
+    scope: dict[str, str] | None = None,
 ) -> tuple[list[Any], MagicMock]:
     """Drive stream_response and return (events, create_cognition_agent mock)."""
     from server.app.llm.deep_agent_service import DeepAgentStreamingService
@@ -130,12 +133,14 @@ async def _run(
     with p1, p2, p3 as create_agent_mock, p4:
         if mock_def_registry is not None:
             mock_config_store.get_agent_definition = AsyncMock(
-                side_effect=lambda name, scope=None: mock_def_registry.get(name)
+                side_effect=lambda name, scope=None: mock_def_registry.get(name, scope)
             )
             mock_config_store.list_agent_definitions = AsyncMock(
-                return_value=mock_def_registry.subagents()
-                if hasattr(mock_def_registry, "subagents")
-                else []
+                side_effect=lambda include_hidden=False, scope=None: (
+                    mock_def_registry.subagents(scope)
+                    if hasattr(mock_def_registry, "subagents")
+                    else []
+                )
             )
 
         collected = []
@@ -144,6 +149,7 @@ async def _run(
             thread_id=session.thread_id,
             project_path="/tmp/ws",
             content="hello",
+            scope=scope,
         ):
             collected.append(event)
 
@@ -157,8 +163,8 @@ async def _run(
 
 class TestNoAgentDef:
     @pytest.mark.asyncio
-    async def test_stream_works_without_agent_def(self):
-        """Service must work when no AgentDefinition is found."""
+    async def test_missing_session_agent_fails_without_default_fallback(self):
+        """Missing session agent emits AGENT_NOT_FOUND instead of running default."""
         session = _make_session()
         mock_runtime = _make_mock_runtime(TokenEvent(content="hi"), DoneEvent())
         patches = _base_patches(mock_runtime, session)
@@ -168,8 +174,56 @@ class TestNoAgentDef:
         mock_def_registry.get = MagicMock(return_value=None)
         mock_def_registry.subagents = MagicMock(return_value=[])
 
-        events, _ = await _run(patches, session, mock_def_registry=mock_def_registry)
-        assert any(isinstance(e, DoneEvent) for e in events)
+        events, create_agent_mock = await _run(
+            patches, session, mock_def_registry=mock_def_registry
+        )
+
+        errors = [event for event in events if isinstance(event, ErrorEvent)]
+        assert len(errors) == 1
+        assert errors[0].code == "AGENT_NOT_FOUND"
+        assert mock_def_registry.get.call_args_list == [call("test-agent", None)]
+        create_agent_mock.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_scoped_session_agent_resolution_uses_session_scope(self):
+        """Runtime loads the scoped agent definition bound to the session."""
+        from server.app.agent.definition import AgentDefinition
+
+        scope = {"tenant": "acme", "user": "surface"}
+        session = _make_session(agent_name="scoped-agent", scopes=scope)
+        mock_runtime = _make_mock_runtime(DoneEvent())
+        patches = _base_patches(mock_runtime, session)
+
+        agent_def = AgentDefinition(
+            name="scoped-agent",
+            system_prompt="scoped prompt",
+            skills=["scoped-skill"],
+        )
+
+        class ScopedRegistry:
+            def __init__(self) -> None:
+                self.get_calls: list[tuple[str, dict[str, str] | None]] = []
+                self.subagent_scopes: list[dict[str, str] | None] = []
+
+            def get(self, name: str, query_scope: dict[str, str] | None = None) -> Any:
+                self.get_calls.append((name, query_scope))
+                if name == "scoped-agent" and query_scope == scope:
+                    return agent_def
+                return None
+
+            def subagents(self, query_scope: dict[str, str] | None = None) -> list[Any]:
+                self.subagent_scopes.append(query_scope)
+                return []
+
+        registry = ScopedRegistry()
+
+        _, create_agent_mock = await _run(patches, session, mock_def_registry=registry)
+
+        params = _get_params(create_agent_mock)
+        assert params.system_prompt == "scoped prompt"
+        assert params.skills == ["scoped-skill"]
+        assert registry.get_calls == [("scoped-agent", scope)]
+        assert registry.subagent_scopes == [scope]
 
 
 # ---------------------------------------------------------------------------

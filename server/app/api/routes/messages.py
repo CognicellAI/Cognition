@@ -145,6 +145,21 @@ async def _sandbox_lifecycle_sse(
     return sse
 
 
+async def _release_sandbox_lifecycle_sse_events(
+    agent_manager: SessionAgentManager,
+    session_id: str,
+    *,
+    projection: RuntimeProjectionService | None = None,
+    run: SessionRun | None = None,
+) -> list[dict[str, Any]]:
+    """Release sandbox resources and return lifecycle events emitted by teardown."""
+    agent_manager.release_sandbox_backend(session_id)
+    events: list[dict[str, Any]] = []
+    for event in agent_manager.drain_sandbox_events(session_id):
+        events.append(await _sandbox_lifecycle_sse(event, projection=projection, run=run))
+    return events
+
+
 async def _touch_session_activity(
     store: StorageBackend,
     session_id: str,
@@ -561,14 +576,14 @@ async def agent_event_stream(
                     )
 
                 active_runtime_count = agent_manager.active_runtime_count(session_id)
-                terminal_status = (
+                completion_status = (
                     SessionStatus.ACTIVE.value
                     if active_runtime_count > 1
-                    else SessionStatus.DONE.value
+                    else SessionStatus.IDLE.value
                 )
                 state_sse: dict[str, Any] | None = None
                 if projection is not None and run is not None:
-                    if terminal_status == SessionStatus.DONE.value:
+                    if completion_status == SessionStatus.IDLE.value:
                         run, durable_state = await projection.transition_run_with_event(
                             run,
                             RunStatus.DONE,
@@ -576,7 +591,7 @@ async def agent_event_stream(
                         state_sse = enrich_sse_event(
                             EventBuilder.run_state(
                                 from_status="active",
-                                to_status=SessionStatus.DONE.value,
+                                to_status=SessionStatus.IDLE.value,
                                 scope_keys=scope_keys,
                             ),
                             durable_state,
@@ -586,17 +601,17 @@ async def agent_event_stream(
                         durable_status = await projection.append_event(
                             run,
                             "run.status",
-                            payload={"status": terminal_status},
+                            payload={"status": completion_status},
                         )
                         state_sse = enrich_sse_event(
                             EventBuilder.status("active"),
                             durable_status,
                         )
                 else:
-                    await store.update_session(session_id=session_id, status=terminal_status)
+                    await store.update_session(session_id=session_id, status=completion_status)
                     state_sse = EventBuilder.run_state(
                         from_status="active",
-                        to_status=terminal_status,
+                        to_status=completion_status,
                         scope_keys=scope_keys,
                     )
                 yield state_sse
@@ -621,6 +636,13 @@ async def agent_event_stream(
                 yield sse
 
             elif isinstance(event, ErrorEvent):
+                for teardown_sse in await _release_sandbox_lifecycle_sse_events(
+                    agent_manager,
+                    session_id,
+                    projection=projection,
+                    run=run,
+                ):
+                    yield teardown_sse
                 if event.code == "ABORTED":
                     error_state_sse: dict[str, Any] | None = None
                     if projection is not None and run is not None:
@@ -888,6 +910,13 @@ async def send_message(
                 f"{session.scopes}, but request has scope {scope.get_all()}. "
                 "Session scope is immutable after creation."
             ),
+        )
+
+    session_status = SessionStatus(session.status)
+    if SessionStatus.is_terminal(session_status):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Session '{session_id}' is in terminal state '{session_status.value}'",
         )
 
     if request.idempotency_key:

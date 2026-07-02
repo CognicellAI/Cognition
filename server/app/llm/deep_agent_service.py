@@ -207,6 +207,26 @@ def _scope_fingerprint(scope: Mapping[str, str] | None) -> str | None:
     return hashlib.sha256(encoded).hexdigest()[:16]
 
 
+def _effective_session_scope(
+    session: Any | None,
+    fallback_scope: Mapping[str, str] | None,
+) -> dict[str, str] | None:
+    """Return the trusted scope for runtime config resolution."""
+    if session is not None and hasattr(session, "scopes"):
+        session_scope = getattr(session, "scopes", None)
+        return dict(session_scope) if session_scope else None
+    return dict(fallback_scope) if fallback_scope else None
+
+
+class AgentDefinitionNotFoundError(RuntimeError):
+    """Raised when a session-bound agent cannot be resolved for execution."""
+
+    def __init__(self, agent_name: str, scope: Mapping[str, str] | None) -> None:
+        self.agent_name = agent_name
+        self.scope_keys = sorted((scope or {}).keys())
+        super().__init__(f"Agent definition not found: {agent_name}")
+
+
 class SandboxQuotaExceededError(RuntimeError):
     """Raised when a Cognition-side sandbox quota blocks a session."""
 
@@ -259,6 +279,7 @@ class DeepAgentStreamingService:
         session: Any,
         project_path: str,
         system_prompt: str | None = None,
+        scope: Mapping[str, str] | None = None,
     ) -> tuple[ResolvedAgentConfig, list[Any]]:
         """Resolve agent definition fields and custom tools from ConfigStore.
 
@@ -275,16 +296,19 @@ class DeepAgentStreamingService:
         if cs is None or session is None:
             return resolved, custom_tools
 
-        agent_def = await cs.get_agent_definition(session.agent_name)
-        if not agent_def:
+        effective_scope = _effective_session_scope(session, scope)
+        agent_def = await cs.get_agent_definition(session.agent_name, effective_scope)
+        if (
+            agent_def is None
+            or agent_def.hidden
+            or agent_def.mode not in ("primary", "all")
+        ):
             logger.warning(
-                "Agent definition not found, falling back to 'default'",
+                "Agent definition not found for session execution",
                 requested=session.agent_name,
+                scope_keys=sorted((effective_scope or {}).keys()),
             )
-            agent_def = await cs.get_agent_definition("default")
-
-        if agent_def is None:
-            return resolved, custom_tools
+            raise AgentDefinitionNotFoundError(session.agent_name, effective_scope)
 
         resolved.agent_def = agent_def
         if resolved.system_prompt is None:
@@ -293,7 +317,10 @@ class DeepAgentStreamingService:
         if agent_def.skills:
             resolved.skills = list(agent_def.skills)
 
-        all_defs = await cs.list_agent_definitions(include_hidden=True)
+        all_defs = await cs.list_agent_definitions(
+            include_hidden=True,
+            scope=effective_scope,
+        )
         workspace_base = str(self.settings.workspace_path)
         resolved.subagents = [
             s.to_subagent(base_path=workspace_base)
@@ -360,15 +387,17 @@ class DeepAgentStreamingService:
         try:
             # Get session for config / agent_name resolution
             session = await self.storage_backend.get_session(session_id)
+            effective_scope = _effective_session_scope(session, scope)
 
             agent_cfg, custom_tools = await self._resolve_agent_config(
                 session=session,
                 project_path=project_path,
                 system_prompt=system_prompt,
+                scope=effective_scope,
             )
 
             model, provider, model_id, recursion_limit = await self._resolve_model(
-                session=session, scope=scope, agent_def=agent_cfg.agent_def
+                session=session, scope=effective_scope, agent_def=agent_cfg.agent_def
             )
 
             # Get checkpointer from storage backend
@@ -376,7 +405,7 @@ class DeepAgentStreamingService:
 
             # Load tools registered via POST /tools from ConfigStore.
             config_store_tools = await self._get_runtime_resolver().build_tools(
-                scope=scope,
+                scope=effective_scope,
                 extra_tools=custom_tools if custom_tools else None,
                 allowed_tool_names=agent_cfg.agent_def.tools if agent_cfg.agent_def else None,
             )
@@ -388,14 +417,14 @@ class DeepAgentStreamingService:
             from server.app.agent.cognition_agent import CognitionContext
 
             invocation_context = CognitionContext.from_scope(
-                session.scopes if session and hasattr(session, "scopes") else scope,
+                effective_scope,
                 session_id=session.id if session else session_id,
                 thread_id=session.thread_id if session else thread_id,
                 agent_name=session.agent_name if session else None,
                 metadata=session.metadata if session else None,
             )
 
-            mcp_configs = await self._resolve_mcp_configs(scope=scope)
+            mcp_configs = await self._resolve_mcp_configs(scope=effective_scope)
             context_policy = _effective_context_policy(
                 agent_cfg.context_policy,
                 agent_cfg.tool_token_limit_before_evict,
@@ -404,7 +433,7 @@ class DeepAgentStreamingService:
                 action="policy_resolved",
                 session_id=session.id if session else session_id,
                 run_id=thread_id,
-                scope_keys=sorted((scope or {}).keys()),
+                scope_keys=sorted((effective_scope or {}).keys()),
                 policy=context_policy,
                 input_tokens=count_text_tokens(content),
                 message_count=getattr(session, "message_count", None),
@@ -434,7 +463,7 @@ class DeepAgentStreamingService:
                 context_policy=agent_cfg.context_policy,
                 middleware=agent_cfg.middleware,
                 mcp_configs=mcp_configs or None,
-                scope=scope,
+                scope=effective_scope,
                 config_store=self._get_config_store(),
                 sandbox_profile=agent_cfg.sandbox_profile,
                 sandbox_execution_role_arn=agent_cfg.sandbox_execution_role_arn,
@@ -447,8 +476,7 @@ class DeepAgentStreamingService:
                     agent.sandbox_backend,
                     run_id=run_id or thread_id,
                     agent_name=session.agent_name if session else None,
-                    scope=scope
-                    or (session.scopes if session and hasattr(session, "scopes") else None),
+                    scope=effective_scope,
                 )
                 for sandbox_event in manager.drain_sandbox_events(session_id):
                     yield sandbox_event
@@ -538,7 +566,7 @@ class DeepAgentStreamingService:
                     action="usage_snapshot",
                     session_id=session.id if session else session_id,
                     run_id=thread_id,
-                    scope_keys=sorted((scope or {}).keys()),
+                    scope_keys=sorted((effective_scope or {}).keys()),
                     policy=context_policy,
                     input_tokens=acc.input_tokens,
                     output_tokens=acc.output_tokens,
@@ -563,6 +591,15 @@ class DeepAgentStreamingService:
                 session_id=session_id,
             )
             yield ErrorEvent(message=str(e), code="PROVIDER_CONFIG_ERROR")
+        except AgentDefinitionNotFoundError as e:
+            logger.warning(
+                "Session agent definition unavailable",
+                error=str(e),
+                session_id=session_id,
+                agent_name=e.agent_name,
+                scope_keys=e.scope_keys,
+            )
+            yield ErrorEvent(message=str(e), code="AGENT_NOT_FOUND")
         except SandboxQuotaExceededError as e:
             logger.warning("Sandbox quota exceeded", error=str(e), session_id=session_id)
             yield ErrorEvent(message=str(e), code="SANDBOX_QUOTA_EXCEEDED")
@@ -586,18 +623,20 @@ class DeepAgentStreamingService:
             if session is None:
                 yield ErrorEvent(message=f"Session not found: {session_id}", code="NOT_FOUND")
                 return
+            effective_scope = _effective_session_scope(session, scope)
 
             agent_cfg, custom_tools = await self._resolve_agent_config(
                 session=session,
                 project_path=project_path,
+                scope=effective_scope,
             )
 
             model, provider, model_id, recursion_limit = await self._resolve_model(
-                session=session, scope=scope, agent_def=agent_cfg.agent_def
+                session=session, scope=effective_scope, agent_def=agent_cfg.agent_def
             )
             checkpointer = await self.storage_backend.get_checkpointer()
             config_store_tools = await self._get_runtime_resolver().build_tools(
-                scope=scope,
+                scope=effective_scope,
                 extra_tools=custom_tools if custom_tools else None,
                 allowed_tool_names=agent_cfg.agent_def.tools if agent_cfg.agent_def else None,
             )
@@ -608,13 +647,13 @@ class DeepAgentStreamingService:
             from server.app.agent.cognition_agent import CognitionContext
 
             invocation_context = CognitionContext.from_scope(
-                session.scopes if hasattr(session, "scopes") else scope,
+                effective_scope,
                 session_id=session.id,
                 thread_id=session.thread_id,
                 agent_name=session.agent_name,
                 metadata=session.metadata,
             )
-            mcp_configs = await self._resolve_mcp_configs(scope=scope)
+            mcp_configs = await self._resolve_mcp_configs(scope=effective_scope)
             context_policy = _effective_context_policy(
                 agent_cfg.context_policy,
                 agent_cfg.tool_token_limit_before_evict,
@@ -623,7 +662,7 @@ class DeepAgentStreamingService:
                 action="policy_resolved",
                 session_id=session.id,
                 run_id=thread_id,
-                scope_keys=sorted((scope or {}).keys()),
+                scope_keys=sorted((effective_scope or {}).keys()),
                 policy=context_policy,
                 input_tokens=0,
                 message_count=getattr(session, "message_count", None),
@@ -651,7 +690,7 @@ class DeepAgentStreamingService:
                 context_policy=agent_cfg.context_policy,
                 middleware=agent_cfg.middleware,
                 mcp_configs=mcp_configs or None,
-                scope=scope,
+                scope=effective_scope,
                 config_store=self._get_config_store(),
             )
             agent = await create_cognition_agent(agent_params)
@@ -717,6 +756,15 @@ class DeepAgentStreamingService:
                 "Provider configuration error on resume", error=str(e), session_id=session_id
             )
             yield ErrorEvent(message=str(e), code="PROVIDER_CONFIG_ERROR")
+        except AgentDefinitionNotFoundError as e:
+            logger.warning(
+                "Session agent definition unavailable on resume",
+                error=str(e),
+                session_id=session_id,
+                agent_name=e.agent_name,
+                scope_keys=e.scope_keys,
+            )
+            yield ErrorEvent(message=str(e), code="AGENT_NOT_FOUND")
         except Exception as e:
             logger.error(
                 "DeepAgents resume error",
@@ -1100,46 +1148,54 @@ class SessionAgentManager:
             metadata=metadata,
         )
 
+    def release_sandbox_backend(self, session_id: str) -> None:
+        """Release only the sandbox backend and quota state for a session."""
+        backend = self._sandbox_backends.pop(session_id, None)
+        if backend is None:
+            self._sandbox_correlations.pop(session_id, None)
+            logger.debug("Sandbox backend release skipped", session_id=session_id)
+            return
+
+        sandbox_id = getattr(backend, "id", str(id(backend)))
+        self._emit_sandbox_event(
+            session_id,
+            SandboxLifecycleEvent(
+                sandbox_id=sandbox_id,
+                phase="teardown_started",
+                sandbox_backend=self._sandbox_backend_type,
+                metadata=self._sandbox_runtime_metadata(backend, session_id=session_id),
+            ),
+        )
+        if hasattr(backend, "terminate"):
+            try:
+                backend.terminate()
+                self._emit_sandbox_event(
+                    session_id,
+                    SandboxLifecycleEvent(
+                        sandbox_id=sandbox_id,
+                        phase="teardown_complete",
+                        sandbox_backend=self._sandbox_backend_type,
+                        metadata=self._sandbox_runtime_metadata(
+                            backend,
+                            session_id=session_id,
+                        ),
+                    ),
+                )
+                logger.info("Sandbox backend terminated", session_id=session_id)
+            except Exception as e:
+                logger.warning(
+                    "Sandbox backend terminate failed", session_id=session_id, error=str(e)
+                )
+
+        self._sandbox_correlations.pop(session_id, None)
+
     def unregister_session(self, session_id: str) -> None:
         """Unregister a session and clean up resources."""
         self._services.pop(session_id, None)
         self._project_paths.pop(session_id, None)
         self._active_runtimes.pop(session_id, None)
 
-        backend = self._sandbox_backends.pop(session_id, None)
-        if backend is not None:
-            sandbox_id = getattr(backend, "id", str(id(backend)))
-            self._emit_sandbox_event(
-                session_id,
-                SandboxLifecycleEvent(
-                    sandbox_id=sandbox_id,
-                    phase="teardown_started",
-                    sandbox_backend=self._sandbox_backend_type,
-                    metadata=self._sandbox_runtime_metadata(backend, session_id=session_id),
-                ),
-            )
-            if hasattr(backend, "terminate"):
-                try:
-                    backend.terminate()
-                    self._emit_sandbox_event(
-                        session_id,
-                        SandboxLifecycleEvent(
-                            sandbox_id=sandbox_id,
-                            phase="teardown_complete",
-                            sandbox_backend=self._sandbox_backend_type,
-                            metadata=self._sandbox_runtime_metadata(
-                                backend,
-                                session_id=session_id,
-                            ),
-                        ),
-                    )
-                    logger.info("Sandbox backend terminated", session_id=session_id)
-                except Exception as e:
-                    logger.warning(
-                        "Sandbox backend terminate failed", session_id=session_id, error=str(e)
-                    )
-
-        self._sandbox_correlations.pop(session_id, None)
+        self.release_sandbox_backend(session_id)
         self._sandbox_events.pop(session_id, None)
         logger.info("Session unregistered", session_id=session_id)
 

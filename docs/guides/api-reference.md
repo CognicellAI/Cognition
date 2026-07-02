@@ -102,6 +102,9 @@ All request and response bodies are JSON unless noted. Streaming endpoints retur
 
 Returns server health status.
 
+`active_sessions` counts open non-terminal sessions, including idle sessions
+that can still accept follow-up messages.
+
 **Response `200 OK`:**
 ```json
 {
@@ -128,7 +131,9 @@ Readiness probe. Returns `200` when the server has completed startup.
 
 ### `POST /sessions`
 
-Create a new session.
+Create a new reusable conversation session. Each message sent to the session
+creates a run on the session's `thread_id`; successful run completion returns
+the session to `idle` so the same session can receive follow-up messages.
 
 **Request body:**
 ```json
@@ -160,7 +165,7 @@ X-Cognition-Scope-Project: proj-123
   "id": "550e8400-e29b-41d4-a716-446655440000",
   "title": "My session",
   "thread_id": "7f3e4a12-...",
-  "status": "active",
+  "status": "idle",
   "agent_name": "default",
   "metadata": {"repository": "myorg/myrepo", "pr_number": "42"},
   "created_at": "2026-03-02T12:00:00Z",
@@ -169,7 +174,16 @@ X-Cognition-Scope-Project: proj-123
 }
 ```
 
-**Response `422 Unprocessable Entity`:** `agent_name` is not a known primary agent.
+**Response `422 Unprocessable Entity`:** `agent_name` is not a known primary agent in the request scope.
+
+Session status summary:
+
+| Status | Meaning |
+|---|---|
+| `idle` | No run is active; the session can accept a follow-up message |
+| `active` | A run is currently executing |
+| `waiting_for_approval` | A run is paused for human-in-the-loop review; use `POST /sessions/{session_id}/resume` |
+| `aborted`, `failed`, `done`, `expired` | Terminal session states; create a new session for more work |
 
 ### `GET /sessions`
 
@@ -267,7 +281,11 @@ Cancel any in-progress agent operation for this session.
 
 ### `POST /sessions/{session_id}/resume`
 
-Resume an interrupted HITL session after an `interrupt` SSE event.
+Resume an interrupted HITL run after an `interrupt` SSE event.
+
+Use this endpoint only while the session is in `waiting_for_approval`. A normal
+completed message run returns the session to `idle`; send another
+`POST /sessions/{session_id}/messages` request to continue that conversation.
 
 **Request body:**
 ```json
@@ -286,7 +304,9 @@ Resume an interrupted HITL session after an `interrupt` SSE event.
 | `tool_name` | string | Yes | Interrupted tool name |
 | `args` | object | No | Replacement tool args when `decision="edit"`; may include a rejection message for `reject` |
 
-If `Accept: text/event-stream` is sent, Cognition streams the resumed continuation. Otherwise it returns a simple success response.
+If `Accept: text/event-stream` is sent, Cognition streams the resumed
+continuation. Otherwise it returns a simple success response. When the resumed
+run completes successfully, the session returns to `idle`.
 
 **Response `200 OK` (JSON):**
 ```json
@@ -573,7 +593,8 @@ A recoverable error occurred. The stream terminates after an error event.
 
 ### `done`
 
-The stream is complete. Contains the full assistant message.
+The current run's stream is complete. Contains the full assistant message.
+The session remains reusable unless it has moved to a terminal session state.
 
 ```json
 {
@@ -1447,6 +1468,8 @@ Delete an API-managed sandbox profile.
 **Response `204 No Content`**
 **Response `404 Not Found`**
 **Response `409 Conflict`:** Profile is file-managed
+
+Related: [Lambda MicroVM Sandbox Profiles](../concepts/sandboxes/aws-lambda-microvm/profiles.md).
 
 ---
 

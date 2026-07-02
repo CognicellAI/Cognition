@@ -127,12 +127,18 @@ Code execution is isolated from the server process using pluggable backends.
 - Configurable memory and CPU limits
 - Network isolation (`network_mode=none` by default)
 
-**`server/app/agent/sandbox_backend.py`** — Two Cognition-specific backends:
+**`server/app/agent/sandbox_backend.py`** — Cognition-specific sandbox
+wrappers:
 
 - `CognitionLocalSandboxBackend` — Commands executed in the local process using `shlex.split()` + `shell=False`. Protected paths (`.cognition/` by default) block write operations. Per-command `timeout` override supported. No `shell=True` anywhere.
 - `CognitionDockerSandboxBackend` — File operations run directly on the host filesystem; command execution is routed through `DockerExecutionBackend`. Container is created lazily and reused within a session.
+- `CognitionKubernetesSandboxBackend` — Commands execute in Kubernetes-native
+  sandbox pods.
+- `CognitionAwsLambdaMicroVmSandboxBackend` — Commands execute in AWS Lambda
+  MicroVMs launched from trusted sandbox profiles.
 
-`create_sandbox_backend(settings)` selects between them based on `settings.sandbox_backend`.
+`create_sandbox_backend(settings)` selects the configured backend. See
+[Sandboxes](./sandboxes/index.md) for backend-specific behavior and setup.
 
 ---
 
@@ -233,7 +239,7 @@ Key methods: `get_all()`, `get(name)`, `primaries()`, `subagents()`, `reload()`,
 
 **`server/app/agent/cognition_agent.py`** — `create_cognition_agent()` is the async factory that instantiates a Deep Agent from an `AgentDefinition`. In order:
 
-1. Selects the sandbox backend (`local` or `docker`)
+1. Selects the sandbox backend (`local`, `docker`, `kubernetes`, or `aws_lambda_microvm`)
 2. Loads built-in tools: `BrowserTool`, `SearchTool`, `InspectPackageTool`
 3. Loads MCP tools from configured remote servers
 4. Resolves tools from `AgentDefinition.tools` (dotted import paths)

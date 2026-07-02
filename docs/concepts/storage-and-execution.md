@@ -262,7 +262,7 @@ Best for: Cognition deployed on Kubernetes without Docker socket access.
 COGNITION_SANDBOX_BACKEND=kubernetes
 ```
 
-See [Kubernetes Sandbox](./kubernetes-sandbox.md) for architecture and
+See [Kubernetes Sandbox](./sandboxes/kubernetes/index.md) for architecture and
 deployment prerequisites.
 
 #### CognitionAwsLambdaMicroVmSandboxBackend
@@ -284,8 +284,8 @@ COGNITION_SANDBOX_BACKEND=aws_lambda_microvm
 COGNITION_AWS_LAMBDA_MICROVM_DEFAULT_PROFILE=default-lambda
 ```
 
-See [AWS Lambda MicroVM Sandbox](./aws-lambda-microvm-sandbox.md) for the full
-backend model.
+See [AWS Lambda MicroVM Sandbox](./sandboxes/aws-lambda-microvm/index.md) for
+the full backend model.
 
 ### Factory
 

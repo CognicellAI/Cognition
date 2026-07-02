@@ -37,14 +37,15 @@ TEST_TIMEOUT = httpx.Timeout(30.0, connect=10.0)
 def is_terminal_stream_event(event: dict[str, Any]) -> bool:
     """Return whether an SSE event represents stream termination.
 
-    v0.10 normal message streams use ``run_state`` with ``to_status=done`` as
-    the terminal signal. Some older endpoints and resume flows still emit a
-    standalone ``done`` event, and errors are terminal for both shapes.
+    Normal message streams can use ``run_state`` with ``to_status=idle`` as
+    the per-run completion signal. Some older endpoints and resume flows still
+    emit a standalone ``done`` event, and errors are terminal for both shapes.
     """
     event_type = event.get("event")
     if event_type in {"done", "error"}:
         return True
     return event_type == "run_state" and event.get("to_status") in {
+        "idle",
         "done",
         "failed",
         "aborted",

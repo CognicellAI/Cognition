@@ -227,7 +227,8 @@ async def create_session(
     Note: Server uses global settings exclusively. No per-session configuration.
     """
     # Validate agent_name is a valid primary agent
-    if not await config_store.is_valid_primary(request.agent_name, scope.get_all() or None):
+    effective_scope = scope.get_all() or None
+    if not await config_store.is_valid_primary(request.agent_name, effective_scope):
         raise _unprocessable_entity(f"Invalid or unknown agent: {request.agent_name}")
 
     # Idempotency: return existing session if idempotency_key matches
@@ -490,7 +491,8 @@ async def update_session(
     )
 
     if request.agent_name:
-        if not await config_store.is_valid_primary(request.agent_name, scope.get_all() or None):
+        effective_scope = scope.get_all() or None
+        if not await config_store.is_valid_primary(request.agent_name, effective_scope):
             raise _unprocessable_entity(f"Invalid or unknown agent: {request.agent_name}")
 
     session = await store.update_session(
@@ -572,6 +574,7 @@ async def abort_session(
             reason="Execution aborted",
             session_status=SessionStatus.ABORTED,
         )
+        agent_manager.release_sandbox_backend(session_id)
 
     return {"success": True, "message": "Operation aborted"}
 
@@ -639,6 +642,7 @@ async def resume_session(
                         error_code=event.code,
                         session_status=SessionStatus.FAILED,
                     )
+                    agent_manager.release_sandbox_backend(session_id)
                 raise HTTPException(
                     status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                     detail=event.message,
@@ -647,7 +651,7 @@ async def resume_session(
                 await projection.transition_run(
                     active_run,
                     RunStatus.DONE,
-                    session_status=SessionStatus.DONE,
+                    session_status=SessionStatus.IDLE,
                 )
         return {"success": True, "message": "Session resumed"}
 
@@ -720,7 +724,7 @@ async def resume_session(
                     await projection.transition_run(
                         active_run,
                         RunStatus.DONE,
-                        session_status=SessionStatus.DONE,
+                        session_status=SessionStatus.IDLE,
                     )
                 yield EventBuilder.done(
                     message_id="resume",
@@ -735,6 +739,7 @@ async def resume_session(
                         error_code=event.code,
                         session_status=SessionStatus.FAILED,
                     )
+                    agent_manager.release_sandbox_backend(session_id)
                 yield EventBuilder.error(event.message, code=event.code)
                 return
 
@@ -802,6 +807,7 @@ async def cancel_session(
         )
     else:
         await _transition_status(store, session_id, SessionStatus.ABORTING, SessionStatus.ABORTED)
+    agent_manager.release_sandbox_backend(session_id)
 
     return {
         "success": True,

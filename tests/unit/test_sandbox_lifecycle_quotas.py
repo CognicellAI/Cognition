@@ -36,6 +36,7 @@ class FakeSandboxBackend:
         self.profile = profile
         self.quota = quota
         self.terminated = False
+        self.terminate_calls = 0
 
     @property
     def runtime_metadata(self) -> dict[str, Any]:
@@ -47,6 +48,7 @@ class FakeSandboxBackend:
         }
 
     def terminate(self) -> None:
+        self.terminate_calls += 1
         self.terminated = True
 
 
@@ -121,6 +123,58 @@ def test_session_starts_per_minute_quota_blocks_burst_restarts() -> None:
         scope={"tenant": "acme"},
     )
     manager.unregister_session("session-1")
+
+    with pytest.raises(SandboxQuotaExceededError, match="max_session_starts_per_minute=1"):
+        manager.register_sandbox_backend(
+            "session-2",
+            FakeSandboxBackend(sandbox_id="microvm-2", quota=quota),
+            scope={"tenant": "acme"},
+        )
+
+
+def test_release_sandbox_backend_frees_concurrent_quota_and_is_idempotent() -> None:
+    manager = _manager()
+    quota = LambdaMicroVmQuota(max_concurrent_sessions=1)
+    first = FakeSandboxBackend(sandbox_id="microvm-1", quota=quota)
+
+    manager.register_sandbox_backend(
+        "session-1",
+        first,
+        scope={"tenant": "acme"},
+    )
+
+    manager.release_sandbox_backend("session-1")
+    manager.release_sandbox_backend("session-1")
+
+    assert first.terminated is True
+    assert first.terminate_calls == 1
+
+    phases = [event.phase for event in manager.drain_sandbox_events("session-1")]
+    assert phases == ["provisioned", "teardown_started", "teardown_complete"]
+
+    second = FakeSandboxBackend(sandbox_id="microvm-2", quota=quota)
+    manager.register_sandbox_backend(
+        "session-2",
+        second,
+        scope={"tenant": "acme"},
+    )
+
+    assert second.terminated is False
+
+
+def test_release_sandbox_backend_preserves_start_rate_history() -> None:
+    manager = _manager()
+    quota = LambdaMicroVmQuota(
+        max_concurrent_sessions=1,
+        max_session_starts_per_minute=1,
+    )
+
+    manager.register_sandbox_backend(
+        "session-1",
+        FakeSandboxBackend(sandbox_id="microvm-1", quota=quota),
+        scope={"tenant": "acme"},
+    )
+    manager.release_sandbox_backend("session-1")
 
     with pytest.raises(SandboxQuotaExceededError, match="max_session_starts_per_minute=1"):
         manager.register_sandbox_backend(

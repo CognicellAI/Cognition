@@ -105,8 +105,8 @@ Key security properties:
 - The Cognition control-plane IAM identity should be limited to approved
   MicroVM images, network connectors, and execution roles.
 
-See [AWS Lambda MicroVM Sandbox](./aws-lambda-microvm-sandbox.md) for the full
-backend model.
+See [AWS Lambda MicroVM Sandbox](./sandboxes/aws-lambda-microvm/index.md) for
+the full backend model.
 
 ---
 

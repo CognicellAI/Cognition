@@ -38,6 +38,7 @@ from server.app.api.routes import (
 )
 from server.app.exceptions import RateLimitError
 from server.app.file_watcher import WorkspaceWatcher
+from server.app.models import SessionStatus
 from server.app.observability import setup_metrics, setup_tracing
 from server.app.observability.mlflow_config import setup_mlflow_tracing
 from server.app.rate_limiter import RateLimitConfig, get_rate_limiter
@@ -289,11 +290,16 @@ async def health_check(
 ) -> HealthStatus:
     """Health check endpoint."""
     sessions_list = await storage_backend.list_sessions()
+    active_sessions = sum(
+        1
+        for session in sessions_list
+        if not SessionStatus.is_terminal(getattr(session, "status", "active"))
+    )
 
     return HealthStatus(
         status="healthy",
         version=VERSION,
-        active_sessions=len(sessions_list),
+        active_sessions=active_sessions,
         circuit_breakers=[],
         timestamp=datetime.now(UTC),
     )

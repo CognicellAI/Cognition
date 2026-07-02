@@ -315,7 +315,8 @@ Cognition ships four sandbox backends:
 | `sandbox.k8s.ttl` | `COGNITION_K8S_SANDBOX_TTL` | `3600` | Auto-cleanup after N seconds (safety net for abandoned sandboxes) |
 | `sandbox.k8s.warm_pool` | `COGNITION_K8S_SANDBOX_WARM_POOL` | (none) | SandboxWarmPool CR name (reserved, not yet implemented) |
 
-See [Kubernetes Sandbox](../concepts/kubernetes-sandbox.md) for architecture, prerequisites, and deployment details.
+See [Kubernetes Sandbox](../concepts/sandboxes/kubernetes/index.md) for
+architecture, prerequisites, and deployment details.
 
 ### AWS Lambda MicroVM settings (when `sandbox.backend = aws_lambda_microvm`)
 
@@ -391,8 +392,8 @@ agents:
 `sandbox_execution_role_arn` overrides the profile default role for that
 agent. The role is never read from model-generated tool arguments.
 
-See [AWS Lambda MicroVM Sandbox Setup](./aws-lambda-microvm-sandbox.md) for the
-end-to-end setup flow and Terraform example.
+See [AWS Lambda MicroVM Setup](../concepts/sandboxes/aws-lambda-microvm/setup.md)
+for the end-to-end setup flow and Terraform example.
 
 ---
 

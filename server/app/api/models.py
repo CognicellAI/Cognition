@@ -518,7 +518,7 @@ class HealthStatus(BaseModel):
 
     status: Literal["healthy", "unhealthy"] = Field(..., description="Overall health status")
     version: str = Field(..., description="Server version")
-    active_sessions: int = Field(..., description="Number of active sessions")
+    active_sessions: int = Field(..., description="Number of open non-terminal sessions")
     circuit_breakers: list[CircuitBreakerStatus] = Field(
         default_factory=list, description="Circuit breaker status for each provider"
     )

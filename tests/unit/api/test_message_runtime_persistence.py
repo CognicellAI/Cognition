@@ -69,6 +69,7 @@ class _FakeAgentManager:
         self._service = service
         self._active_runtime_count = active_runtime_count
         self._sandbox_snapshot = sandbox_snapshot
+        self.release_calls: list[str] = []
 
     def get_service(self, _session_id: str) -> _FakeService:
         return self._service
@@ -90,6 +91,9 @@ class _FakeAgentManager:
 
     def active_runtime_count(self, _session_id: str) -> int:
         return self._active_runtime_count
+
+    def release_sandbox_backend(self, session_id: str) -> None:
+        self.release_calls.append(session_id)
 
 
 def _settings() -> Settings:
@@ -131,10 +135,11 @@ async def test_agent_stream_done_includes_assistant_data(tmp_path) -> None:
 
     done = next(event for event in events if event["event"] == "done")
     assert done["data"]["assistant_data"]["content"] == "Actively working."
+    assert manager.release_calls == []
 
     updated = await store.get_session(session.id)
     assert updated is not None
-    assert updated.status == SessionStatus.DONE
+    assert updated.status == SessionStatus.IDLE
 
 
 @pytest.mark.asyncio
@@ -182,7 +187,7 @@ async def test_tool_activity_updates_session_and_message_projection(tmp_path) ->
 
 
 @pytest.mark.asyncio
-async def test_done_does_not_mark_session_done_when_other_runtime_active(tmp_path) -> None:
+async def test_done_keeps_session_active_when_other_runtime_active(tmp_path) -> None:
     store = MemoryStorageBackend(workspace_path=str(tmp_path))
     session = await store.create_session(
         session_id="session-overlap",
@@ -207,6 +212,7 @@ async def test_done_does_not_mark_session_done_when_other_runtime_active(tmp_pat
     updated = await store.get_session(session.id)
     assert updated is not None
     assert updated.status == SessionStatus.ACTIVE
+    assert manager.release_calls == []
 
 
 @pytest.mark.asyncio
@@ -301,7 +307,12 @@ async def test_run_state_sse_uses_durable_transition_correlation(tmp_path) -> No
     assert run_state["data"]["run_id"] == run.id
     assert run_state["data"]["session_id"] == session.id
     assert run_state["data"]["event_type"] == "run.done"
+    assert run_state["data"]["to_status"] == "idle"
     assert run_state["data"]["sequence"] >= 1
+
+    updated = await store.get_session(session.id)
+    assert updated is not None
+    assert updated.status == SessionStatus.IDLE
 
 
 @pytest.mark.asyncio
@@ -478,6 +489,7 @@ async def test_error_event_terminates_run_without_done(tmp_path) -> None:
     updated_session = await store.get_session(session.id)
     assert updated_session is not None
     assert updated_session.status == SessionStatus.FAILED
+    assert manager.release_calls == [session.id]
 
     durable_event_types = [
         event.event_type
