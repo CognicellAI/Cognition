@@ -189,6 +189,46 @@ class TestResolveModelConfig:
         assert resolved.base_url == "https://api.example.com/v1"
 
     @pytest.mark.asyncio
+    async def test_resolved_model_cache_key_includes_provider_config_identity(self) -> None:
+        resolver = _make_resolver()
+        session = _make_session()
+
+        with patch.object(
+            resolver,
+            "select_model_target_for_session",
+            new=AsyncMock(
+                side_effect=[
+                    MagicMock(
+                        provider="openai_compatible",
+                        model_id="shared-model",
+                        api_key_env="MY_CUSTOM_API_KEY",
+                        base_url="https://one.example/v1",
+                        region=None,
+                        role_arn=None,
+                        max_retries=2,
+                        timeout=30,
+                    ),
+                    MagicMock(
+                        provider="openai_compatible",
+                        model_id="shared-model",
+                        api_key_env="MY_CUSTOM_API_KEY",
+                        base_url="https://two.example/v1",
+                        region=None,
+                        role_arn=None,
+                        max_retries=2,
+                        timeout=30,
+                    ),
+                ]
+            ),
+        ):
+            with patch.dict("os.environ", {"MY_CUSTOM_API_KEY": "resolved-key"}):
+                first = await resolver.resolve_model_config_for_session(session, scope=None)
+                second = await resolver.resolve_model_config_for_session(session, scope=None)
+
+        assert first.cache_key() != second.cache_key()
+        assert "resolved-key" not in first.cache_key()
+
+    @pytest.mark.asyncio
     async def test_resolve_model_for_session_forwards_temperature_and_max_tokens(self) -> None:
         from server.app.agent.definition import AgentConfig, AgentDefinition
 

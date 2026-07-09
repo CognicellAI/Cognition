@@ -22,11 +22,10 @@ from dataclasses import dataclass, field
 from typing import Any, cast
 
 import structlog
-from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from server.app.agent.cognition_agent import CognitionAgentParams, create_cognition_agent
-from server.app.agent.resolver import RuntimeResolver
+from server.app.agent.resolver import ResolvedRuntimeModel, RuntimeResolver
 from server.app.agent.runtime import (
     CallbackEvent,  # noqa: F401 — re-exported for consumers of this module
     ContextEvent,
@@ -121,6 +120,17 @@ def _audit_context_event(event: ContextEvent) -> None:
         },
     ):
         pass
+
+
+def _model_cache_key_from_resolved(
+    resolved_model: Any,
+    provider: str,
+    model_id: str,
+) -> str:
+    cache_key = getattr(resolved_model, "cache_key", None)
+    if isinstance(cache_key, str) and cache_key:
+        return cache_key
+    return f"resolved:{provider}:{model_id}"
 
 
 def _resolve_middleware(specs: list[str | dict[str, Any]]) -> list[Any]:
@@ -396,8 +406,14 @@ class DeepAgentStreamingService:
                 scope=effective_scope,
             )
 
-            model, provider, model_id, recursion_limit = await self._resolve_model(
+            resolved_model = await self._resolve_model(
                 session=session, scope=effective_scope, agent_def=agent_cfg.agent_def
+            )
+            model, provider, model_id, recursion_limit = resolved_model
+            model_cache_key = _model_cache_key_from_resolved(
+                resolved_model,
+                provider,
+                model_id,
             )
 
             # Get checkpointer from storage backend
@@ -444,6 +460,7 @@ class DeepAgentStreamingService:
             agent_params = CognitionAgentParams(
                 project_path=project_path,
                 model=model,
+                model_cache_key=model_cache_key,
                 store=store,
                 checkpointer=checkpointer,
                 settings=self.settings,
@@ -631,8 +648,14 @@ class DeepAgentStreamingService:
                 scope=effective_scope,
             )
 
-            model, provider, model_id, recursion_limit = await self._resolve_model(
+            resolved_model = await self._resolve_model(
                 session=session, scope=effective_scope, agent_def=agent_cfg.agent_def
+            )
+            model, provider, model_id, recursion_limit = resolved_model
+            model_cache_key = _model_cache_key_from_resolved(
+                resolved_model,
+                provider,
+                model_id,
             )
             checkpointer = await self.storage_backend.get_checkpointer()
             config_store_tools = await self._get_runtime_resolver().build_tools(
@@ -673,6 +696,7 @@ class DeepAgentStreamingService:
             agent_params = CognitionAgentParams(
                 project_path=project_path,
                 model=model,
+                model_cache_key=model_cache_key,
                 store=store,
                 checkpointer=checkpointer,
                 settings=self.settings,
@@ -806,15 +830,13 @@ class DeepAgentStreamingService:
         session: Any,
         scope: dict[str, str] | None,
         agent_def: Any | None = None,
-    ) -> tuple[BaseChatModel, str, str, int]:
+    ) -> ResolvedRuntimeModel:
         """Resolve provider config and build a LangChain BaseChatModel.
 
-        Delegates to RuntimeResolver.resolve_model_for_session().
+        Delegates to RuntimeResolver.resolve_runtime_model_for_session().
         """
-        return await self._get_runtime_resolver().resolve_model_for_session(
-            session=session,
-            scope=scope,
-            agent_def=agent_def,
+        return await self._get_runtime_resolver().resolve_runtime_model_for_session(
+            session=session, scope=scope, agent_def=agent_def
         )
 
     async def _resolve_mcp_configs(self, scope: dict[str, str] | None) -> list[Any]:

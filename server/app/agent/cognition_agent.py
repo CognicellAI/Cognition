@@ -147,10 +147,11 @@ class RuntimeContext:
         scope: dict[str, str] | None,
         sandbox_profile: str | None = None,
         sandbox_execution_role_arn: str | None = None,
+        model_cache_key: str | None = None,
     ) -> RuntimeContext:
         return cls(
             project_path=str(project_path.resolve()),
-            model_key=_model_cache_key(model),
+            model_key=model_cache_key or _model_cache_key(model),
             store_type=store.__class__.__name__ if store else "None",
             system_prompt=system_prompt or "default",
             memory=tuple(sorted(memory)) if memory else (),
@@ -183,6 +184,8 @@ _agent_cache: dict[RuntimeContext, Any] = {}
 def _model_cache_key(model: Any) -> str:
     if model is None:
         return "None"
+    if isinstance(model, str):
+        return f"str:{model}"
     type_name = type(model).__name__
     model_id = (
         getattr(model, "model_name", None)
@@ -381,6 +384,7 @@ class CognitionAgentParams:
     config_store: ConfigStore | None = None
     sandbox_profile: str | None = None
     sandbox_execution_role_arn: str | None = None
+    model_cache_key: str | None = None
 
 
 def _create_sandbox(
@@ -523,6 +527,7 @@ async def create_cognition_agent(params: CognitionAgentParams) -> CognitionAgent
         scope=params.scope,
         sandbox_profile=params.sandbox_profile,
         sandbox_execution_role_arn=params.sandbox_execution_role_arn,
+        model_cache_key=params.model_cache_key,
     )
     resolved_sandbox_profile = params.sandbox_profile or settings.aws_lambda_microvm_default_profile
     sandbox_profile_config = await _resolve_sandbox_profile_config(
