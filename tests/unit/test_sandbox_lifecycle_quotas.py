@@ -31,12 +31,19 @@ class FakeSandboxBackend:
         sandbox_id: str,
         profile: str = "lambda-default",
         quota: LambdaMicroVmQuota | None = None,
+        lifecycle_phases: list[str] | None = None,
+        teardown_status: str = "complete",
+        raise_on_terminate: Exception | None = None,
     ) -> None:
         self.id = sandbox_id
         self.profile = profile
         self.quota = quota
         self.terminated = False
         self.terminate_calls = 0
+        self.lifecycle_phases = lifecycle_phases or []
+        self.teardown_status = teardown_status
+        self.raise_on_terminate = raise_on_terminate
+        self.status = "RUNNING"
 
     @property
     def runtime_metadata(self) -> dict[str, Any]:
@@ -44,12 +51,21 @@ class FakeSandboxBackend:
             "backend": "aws_lambda_microvm",
             "profile": self.profile,
             "microvm_id": self.id,
-            "status": "RUNNING",
+            "status": self.status,
+            "aws_state": self.status,
+            "lifecycle_phases": list(self.lifecycle_phases),
+            "teardown_status": self.teardown_status if self.terminated else None,
         }
 
     def terminate(self) -> None:
         self.terminate_calls += 1
+        if self.raise_on_terminate is not None:
+            raise self.raise_on_terminate
         self.terminated = True
+        if self.teardown_status == "complete":
+            self.status = "TERMINATED"
+        elif self.teardown_status == "pending":
+            self.status = "RUNNING"
 
 
 def _manager() -> SessionAgentManager:
@@ -160,6 +176,85 @@ def test_release_sandbox_backend_frees_concurrent_quota_and_is_idempotent() -> N
     )
 
     assert second.terminated is False
+
+
+def test_release_sandbox_backend_pending_teardown_frees_concurrent_quota() -> None:
+    manager = _manager()
+    quota = LambdaMicroVmQuota(max_concurrent_sessions=1)
+    first = FakeSandboxBackend(
+        sandbox_id="microvm-1",
+        quota=quota,
+        teardown_status="pending",
+    )
+
+    manager.register_sandbox_backend(
+        "session-1",
+        first,
+        scope={"tenant": "acme"},
+    )
+    manager.release_sandbox_backend("session-1")
+
+    phases = [event.phase for event in manager.drain_sandbox_events("session-1")]
+    assert phases == ["provisioned", "teardown_started", "teardown_pending"]
+
+    second = FakeSandboxBackend(sandbox_id="microvm-2", quota=quota)
+    manager.register_sandbox_backend(
+        "session-2",
+        second,
+        scope={"tenant": "acme"},
+    )
+
+    assert first.terminated is True
+    assert second.terminated is False
+
+
+def test_release_sandbox_backend_failed_teardown_emits_failure_event() -> None:
+    manager = _manager()
+    backend = FakeSandboxBackend(
+        sandbox_id="microvm-1",
+        raise_on_terminate=RuntimeError("control plane failed"),
+    )
+
+    manager.register_sandbox_backend("session-1", backend, scope={"tenant": "acme"})
+    manager.release_sandbox_backend("session-1")
+
+    events = manager.drain_sandbox_events("session-1")
+    assert [event.phase for event in events] == [
+        "provisioned",
+        "teardown_started",
+        "teardown_failed",
+    ]
+    assert events[-1].metadata["teardown_status"] == "failed"
+    assert events[-1].metadata["teardown_error_code"] == "RuntimeError"
+
+
+def test_snapshot_sandbox_backend_events_emits_new_microvm_phases_once() -> None:
+    manager = _manager()
+    backend = FakeSandboxBackend(
+        sandbox_id="microvm-1",
+        lifecycle_phases=[
+            "launch_started",
+            "launch_running",
+            "auth_token_created",
+            "runtime_healthcheck_started",
+            "runtime_healthcheck_passed",
+        ],
+    )
+
+    manager.register_sandbox_backend("session-1", backend, scope={"tenant": "acme"})
+
+    first = manager.snapshot_sandbox_backend_events("session-1")
+    second = manager.snapshot_sandbox_backend_events("session-1")
+
+    assert [event.phase for event in first] == [
+        "launch_started",
+        "launch_running",
+        "auth_token_created",
+        "runtime_healthcheck_started",
+        "runtime_healthcheck_passed",
+        "runtime_snapshot",
+    ]
+    assert [event.phase for event in second] == ["runtime_snapshot"]
 
 
 def test_release_sandbox_backend_preserves_start_rate_history() -> None:

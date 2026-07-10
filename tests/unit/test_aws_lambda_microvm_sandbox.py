@@ -33,6 +33,8 @@ class FakeLambdaMicroVmsClient:
         self.run_kwargs: dict[str, Any] | None = None
         self.auth_kwargs: dict[str, Any] | None = None
         self.terminated: list[str] = []
+        self.get_states: list[str] = []
+        self.terminate_error: Exception | None = None
 
     def run_microvm(self, **kwargs: Any) -> dict[str, Any]:
         self.run_kwargs = kwargs
@@ -48,9 +50,15 @@ class FakeLambdaMicroVmsClient:
 
     def get_microvm(self, **kwargs: Any) -> dict[str, Any]:
         microvm_identifier = str(kwargs["microvmIdentifier"])
+        if self.get_states:
+            state = self.get_states.pop(0)
+        elif microvm_identifier in self.terminated:
+            state = "TERMINATED"
+        else:
+            state = "RUNNING"
         return {
             "microvmId": microvm_identifier,
-            "state": "RUNNING",
+            "state": state,
             "endpoint": "mv-123.lambda-url.aws",
             "imageArn": IMAGE_ARN,
             "imageVersion": "1.0",
@@ -66,6 +74,8 @@ class FakeLambdaMicroVmsClient:
         del kwargs
 
     def terminate_microvm(self, **kwargs: Any) -> None:
+        if self.terminate_error is not None:
+            raise self.terminate_error
         self.terminated.append(str(kwargs["microvmIdentifier"]))
 
 
@@ -205,6 +215,16 @@ class TestLambdaMicroVmSandboxAdapter:
         assert metadata["maximum_duration_seconds"] == 3600
         assert metadata["token_expiration_minutes"] == 17
         assert metadata["logging_mode"] == "cloud_watch"
+        assert metadata["aws_state"] == "RUNNING"
+        assert metadata["launch_duration_ms"] >= 0
+        assert metadata["healthcheck_duration_ms"] >= 0
+        assert metadata["lifecycle_phases"] == [
+            "launch_started",
+            "launch_running",
+            "auth_token_created",
+            "runtime_healthcheck_started",
+            "runtime_healthcheck_passed",
+        ]
 
         execute_request = http_client.requests[-1]
         assert execute_request["url"] == "https://mv-123.lambda-url.aws/execute"
@@ -213,6 +233,20 @@ class TestLambdaMicroVmSandboxAdapter:
         assert execute_request["json"]["command"] == ["sh", "-c", "echo hello"]
         assert execute_request["json"]["timeout_seconds"] == 12
         assert "secret-token" not in str(sandbox.runtime_metadata)
+
+    def test_execute_omits_execution_role_when_not_configured(self) -> None:
+        client = FakeLambdaMicroVmsClient()
+        http_client = FakeHttpClient()
+        sandbox = LambdaMicroVmSandbox(
+            image_identifier=IMAGE_ARN,
+            client=client,
+            http_client=http_client,
+        )
+
+        sandbox.execute("echo hello")
+
+        assert client.run_kwargs is not None
+        assert "executionRoleArn" not in client.run_kwargs
 
     def test_upload_and_download_workspace_paths_use_runtime_file_routes(self) -> None:
         client = FakeLambdaMicroVmsClient()
@@ -244,7 +278,73 @@ class TestLambdaMicroVmSandboxAdapter:
 
         assert client.terminated == ["mv-123"]
         assert sandbox.runtime_metadata["status"] == "TERMINATED"
+        assert sandbox.runtime_metadata["aws_state"] == "TERMINATED"
+        assert sandbox.runtime_metadata["teardown_status"] == "complete"
+        assert sandbox.runtime_metadata["teardown_attempt"] == 1
+        assert sandbox.runtime_metadata["teardown_duration_ms"] >= 0
+        assert "teardown_error_code" not in sandbox.runtime_metadata
         assert "secret-token" not in str(sandbox.runtime_metadata)
+
+    def test_terminate_reports_pending_when_aws_does_not_confirm_terminal(self) -> None:
+        client = FakeLambdaMicroVmsClient()
+        client.get_states = ["RUNNING"]
+        http_client = FakeHttpClient()
+        sandbox = LambdaMicroVmSandbox(
+            image_identifier=IMAGE_ARN,
+            client=client,
+            http_client=http_client,
+            teardown_timeout_seconds=0,
+            teardown_poll_interval_seconds=0,
+        )
+
+        sandbox.execute("true")
+        sandbox.terminate()
+
+        assert client.terminated == ["mv-123"]
+        assert sandbox.runtime_metadata["status"] == "RUNNING"
+        assert sandbox.runtime_metadata["aws_state"] == "RUNNING"
+        assert sandbox.runtime_metadata["teardown_status"] == "pending"
+        assert "teardown_pending" in sandbox.runtime_metadata["lifecycle_phases"]
+        assert "secret-token" not in str(sandbox.runtime_metadata)
+
+    def test_terminate_reports_failed_on_control_plane_error(self) -> None:
+        client = FakeLambdaMicroVmsClient()
+        client.terminate_error = RuntimeError("boom")
+        http_client = FakeHttpClient()
+        sandbox = LambdaMicroVmSandbox(
+            image_identifier=IMAGE_ARN,
+            client=client,
+            http_client=http_client,
+        )
+
+        sandbox.execute("true")
+        sandbox.terminate()
+
+        assert client.terminated == []
+        assert sandbox.runtime_metadata["status"] == "RUNNING"
+        assert sandbox.runtime_metadata["teardown_status"] == "failed"
+        assert sandbox.runtime_metadata["teardown_error_code"] == "RuntimeError"
+        assert sandbox.runtime_metadata["teardown_error_message"] == "boom"
+        assert "teardown_failed" in sandbox.runtime_metadata["lifecycle_phases"]
+        assert "secret-token" not in str(sandbox.runtime_metadata)
+
+    def test_terminate_is_idempotent_after_verified_terminal_state(self) -> None:
+        client = FakeLambdaMicroVmsClient()
+        http_client = FakeHttpClient()
+        sandbox = LambdaMicroVmSandbox(
+            image_identifier=IMAGE_ARN,
+            client=client,
+            http_client=http_client,
+        )
+
+        sandbox.execute("true")
+        sandbox.terminate()
+        sandbox.terminate()
+
+        assert client.terminated == ["mv-123"]
+        assert sandbox.runtime_metadata["status"] == "TERMINATED"
+        assert sandbox.runtime_metadata["teardown_status"] == "complete"
+        assert sandbox.runtime_metadata["teardown_attempt"] == 2
 
 
 class TestCognitionAwsLambdaMicroVmSandboxBackend:

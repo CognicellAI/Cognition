@@ -7,6 +7,18 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [0.11.0-rc.5] — 2026-07-10
+
+### Fixed
+
+- Verified Lambda MicroVM teardown before reporting completion, with bounded AWS `GetMicrovm` polling and explicit `teardown_complete`, `teardown_pending`, and `teardown_failed` lifecycle phases.
+
+### Added
+
+- Added token-free Lambda MicroVM lifecycle observability for launch, auth token creation, runtime healthchecks, runtime snapshots, teardown status, timing metadata, and scope/role fingerprints.
+
+---
+
 ## [0.11.0-rc.3] — 2026-06-27
 
 ### Fixed

@@ -567,8 +567,9 @@ async def agent_event_stream(
                 yield sse
 
             elif isinstance(event, DoneEvent):
-                sandbox_snapshot = agent_manager.snapshot_sandbox_backend(session_id)
-                if sandbox_snapshot is not None:
+                for sandbox_snapshot in agent_manager.snapshot_sandbox_backend_events(
+                    session_id
+                ):
                     yield await _sandbox_lifecycle_sse(
                         sandbox_snapshot,
                         projection=projection,
