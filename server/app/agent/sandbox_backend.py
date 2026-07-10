@@ -357,6 +357,7 @@ class CognitionAwsLambdaMicroVmSandboxBackend(SandboxBackendProtocol):
             "image": profile.image_arn,
             "image_version": profile.image_version,
             "status": None,
+            "aws_state": None,
             "execution_role_fingerprint": _role_fingerprint(self.execution_role_arn),
             "region": profile.region,
             "port": profile.port,
@@ -560,12 +561,36 @@ class CognitionAwsLambdaMicroVmSandboxBackend(SandboxBackendProtocol):
                     self._last_runtime_metadata = cast(
                         dict[str, Any], self._backend.runtime_metadata
                     )
-                logger.info(
-                    "AWS Lambda MicroVM sandbox terminated",
-                    sandbox_id=self._id,
-                    profile=self._profile,
-                )
+                log_args = {
+                    "sandbox_id": self._id,
+                    "profile": self._profile,
+                    "microvm_id": self._last_runtime_metadata.get("microvm_id"),
+                    "image": self._last_runtime_metadata.get("image"),
+                    "image_version": self._last_runtime_metadata.get("image_version"),
+                    "region": self._last_runtime_metadata.get("region"),
+                    "aws_state": self._last_runtime_metadata.get("aws_state"),
+                    "teardown_status": self._last_runtime_metadata.get("teardown_status"),
+                    "teardown_attempt": self._last_runtime_metadata.get("teardown_attempt"),
+                    "execution_role_fingerprint": self._last_runtime_metadata.get(
+                        "execution_role_fingerprint"
+                    ),
+                }
+                if log_args["teardown_status"] in {"pending", "failed"}:
+                    logger.warning("AWS Lambda MicroVM sandbox teardown incomplete", **log_args)
+                else:
+                    logger.info("AWS Lambda MicroVM sandbox teardown finished", **log_args)
             except Exception as e:
+                if hasattr(self._backend, "runtime_metadata"):
+                    self._last_runtime_metadata = cast(
+                        dict[str, Any], self._backend.runtime_metadata
+                    )
+                self._last_runtime_metadata.update(
+                    {
+                        "teardown_status": "failed",
+                        "teardown_error_code": e.__class__.__name__,
+                        "teardown_error_message": str(e),
+                    }
+                )
                 logger.warning("AWS Lambda MicroVM sandbox terminate failed", error=str(e))
             finally:
                 self._backend = None

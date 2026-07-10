@@ -14,6 +14,8 @@ or clean up as expected.
 | `/healthz` fails | Confirm the image starts the runtime command server on the profile `port` |
 | Commands hang | Check runtime server logs, command timeout, and network connector reachability |
 | `SANDBOX_QUOTA_EXCEEDED` | Raise or relax profile `quota`, delete/abort/expire idle sessions, or wait for start history to age out |
+| `teardown_pending` | Cognition requested termination, freed its own quota, and AWS had not yet confirmed `TERMINATED`; inspect `GetMicrovm`, idle policy, and CloudWatch service logs |
+| `teardown_failed` | Inspect `teardown_error_code`, Cognition control-plane IAM permissions, and AWS Lambda MicroVM API errors |
 | CloudWatch cost is high | Disable runtime logging by default or reduce log volume and retention |
 
 ## Debug Checklist
@@ -23,10 +25,14 @@ or clean up as expected.
    role, networking, idle policy, logging, and quota settings.
 3. Confirm the agent has the expected `sandbox_profile` and optional
    `sandbox_execution_role_arn`.
-4. Watch `sandbox_lifecycle` SSE events for `provisioned`,
-   `runtime_snapshot`, and teardown phases.
+4. Watch `sandbox_lifecycle` SSE events for launch, auth token, runtime
+   healthcheck, `runtime_snapshot`, and teardown phases.
 5. Inspect AWS service errors for control-plane permission, image, connector,
    and runtime health failures.
+
+`teardown_pending` is not an end-user remediation step. It is operator telemetry
+that says Cognition stopped waiting after its bounded verification window. AWS
+idle policy and `maximum_duration_seconds` remain the final cleanup backstops.
 
 ## Related
 

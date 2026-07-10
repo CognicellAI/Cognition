@@ -89,6 +89,19 @@ class _FakeAgentManager:
             self._sandbox_snapshot.phase = phase
         return self._sandbox_snapshot
 
+    def snapshot_sandbox_backend_events(
+        self,
+        _session_id: str,
+        *,
+        include_runtime_snapshot: bool = True,
+    ) -> list[Any]:
+        if not include_runtime_snapshot:
+            return []
+        if self._sandbox_snapshot is None:
+            return []
+        self._sandbox_snapshot.phase = "runtime_snapshot"
+        return [self._sandbox_snapshot]
+
     def active_runtime_count(self, _session_id: str) -> int:
         return self._active_runtime_count
 

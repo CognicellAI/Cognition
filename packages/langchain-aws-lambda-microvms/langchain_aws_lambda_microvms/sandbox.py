@@ -29,6 +29,8 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_COMMAND_TIMEOUT_SECONDS = 300
 DEFAULT_HEALTHCHECK_TIMEOUT_SECONDS = 60
+DEFAULT_TEARDOWN_TIMEOUT_SECONDS = 5.0
+DEFAULT_TEARDOWN_POLL_INTERVAL_SECONDS = 1.0
 RUNNING_STATE = "RUNNING"
 SUSPENDED_STATE = "SUSPENDED"
 TERMINATED_STATE = "TERMINATED"
@@ -88,6 +90,8 @@ class LambdaMicroVmSandbox(BaseSandbox):
         sandbox_id: Stable local identifier before AWS returns a MicroVM id.
         launch_timeout_seconds: Maximum time to wait for RUNNING state.
         healthcheck_timeout_seconds: Maximum time to wait for /healthz.
+        teardown_timeout_seconds: Maximum time to wait for TERMINATED state.
+        teardown_poll_interval_seconds: Time between GetMicrovm teardown polls.
         client: Optional prebuilt boto3 lambda-microvms client, for tests.
         client_factory: Optional boto3 client factory, for tests.
         http_client: Optional sync httpx-compatible client, for tests.
@@ -112,6 +116,8 @@ class LambdaMicroVmSandbox(BaseSandbox):
         sandbox_id: str | None = None,
         launch_timeout_seconds: int = 120,
         healthcheck_timeout_seconds: int = DEFAULT_HEALTHCHECK_TIMEOUT_SECONDS,
+        teardown_timeout_seconds: float = DEFAULT_TEARDOWN_TIMEOUT_SECONDS,
+        teardown_poll_interval_seconds: float = DEFAULT_TEARDOWN_POLL_INTERVAL_SECONDS,
         client: Any | None = None,
         client_factory: Callable[..., Any] | None = None,
         http_client: Any | None = None,
@@ -132,6 +138,8 @@ class LambdaMicroVmSandbox(BaseSandbox):
         self._sandbox_id = sandbox_id or f"lambda-microvm-{id(self):x}"
         self._launch_timeout_seconds = launch_timeout_seconds
         self._healthcheck_timeout_seconds = healthcheck_timeout_seconds
+        self._teardown_timeout_seconds = teardown_timeout_seconds
+        self._teardown_poll_interval_seconds = teardown_poll_interval_seconds
         self._client = client
         self._client_factory = client_factory
         self._http_client: Any | None = http_client or httpx.Client()
@@ -145,6 +153,14 @@ class LambdaMicroVmSandbox(BaseSandbox):
         self._created_client_token: str | None = None
         self._image_arn: str | None = None
         self._resolved_image_version: str | None = image_version
+        self._launch_duration_ms: float | None = None
+        self._healthcheck_duration_ms: float | None = None
+        self._teardown_duration_ms: float | None = None
+        self._teardown_status: str | None = None
+        self._teardown_attempt = 0
+        self._teardown_error_code: str | None = None
+        self._teardown_error_message: str | None = None
+        self._lifecycle_phases: list[str] = []
 
     @property
     def id(self) -> str:
@@ -154,12 +170,13 @@ class LambdaMicroVmSandbox(BaseSandbox):
     @property
     def runtime_metadata(self) -> dict[str, Any]:
         """Return token-free runtime metadata suitable for logs or persistence."""
-        return {
+        metadata: dict[str, Any] = {
             "microvm_id": self._microvm_id,
             "endpoint": self._endpoint,
             "image": self._image_arn or self._image_identifier,
             "image_version": self._resolved_image_version,
             "status": self._state,
+            "aws_state": self._state,
             "execution_role_fingerprint": _role_fingerprint(self._execution_role_arn),
             "region": self._region_name,
             "port": self._port,
@@ -168,7 +185,23 @@ class LambdaMicroVmSandbox(BaseSandbox):
             "ingress_network_connector_count": len(self._ingress_network_connector_arns),
             "egress_network_connector_count": len(self._egress_network_connector_arns),
             "logging_mode": self._logging_mode(),
+            "lifecycle_phases": list(self._lifecycle_phases),
         }
+        optional = {
+            "launch_duration_ms": self._launch_duration_ms,
+            "healthcheck_duration_ms": self._healthcheck_duration_ms,
+            "teardown_duration_ms": self._teardown_duration_ms,
+            "teardown_status": self._teardown_status,
+            "teardown_attempt": self._teardown_attempt or None,
+            "teardown_error_code": self._teardown_error_code,
+            "teardown_error_message": self._teardown_error_message,
+        }
+        metadata.update({key: value for key, value in optional.items() if value is not None})
+        return metadata
+
+    def _record_lifecycle_phase(self, phase: str) -> None:
+        if phase not in self._lifecycle_phases:
+            self._lifecycle_phases.append(phase)
 
     def _logging_mode(self) -> str | None:
         if self._logging_config is None:
@@ -264,6 +297,26 @@ class LambdaMicroVmSandbox(BaseSandbox):
             f"Timed out waiting for Lambda MicroVM {self._microvm_id} to enter RUNNING"
         )
 
+    def _wait_for_terminated(self) -> bool:
+        if self._state == TERMINATED_STATE:
+            return True
+
+        if not self._microvm_id:
+            return False
+
+        client = self._get_client()
+        deadline = time.monotonic() + self._teardown_timeout_seconds
+        while True:
+            response = client.get_microvm(microvmIdentifier=self._microvm_id)
+            self._update_state_from_response(response)
+            if self._state == TERMINATED_STATE:
+                return True
+            remaining_seconds = deadline - time.monotonic()
+            if remaining_seconds <= 0:
+                break
+            time.sleep(min(self._teardown_poll_interval_seconds, remaining_seconds))
+        return False
+
     def _create_auth_headers(self) -> None:
         if not self._microvm_id:
             raise RuntimeError("Cannot create MicroVM auth token before launch")
@@ -280,6 +333,13 @@ class LambdaMicroVmSandbox(BaseSandbox):
             for key, value in token_parts.items()
         }
         self._auth_headers[PORT_HEADER_NAME] = str(self._port)
+        self._record_lifecycle_phase("auth_token_created")
+        logger.info(
+            "Lambda MicroVM auth token created microvm_id=%s port=%s expiration_minutes=%s",
+            self._microvm_id,
+            self._port,
+            self._token_expiration_minutes,
+        )
 
     def _runtime_url(self, path: str) -> str:
         if not self._endpoint:
@@ -314,6 +374,13 @@ class LambdaMicroVmSandbox(BaseSandbox):
         return data
 
     def _healthcheck(self) -> None:
+        started = time.monotonic()
+        self._record_lifecycle_phase("runtime_healthcheck_started")
+        logger.info(
+            "Lambda MicroVM runtime healthcheck started microvm_id=%s port=%s",
+            self._microvm_id,
+            self._port,
+        )
         deadline = time.monotonic() + self._healthcheck_timeout_seconds
         last_error: Exception | None = None
         while time.monotonic() < deadline:
@@ -322,6 +389,13 @@ class LambdaMicroVmSandbox(BaseSandbox):
                 workspace_root = data.get("workspace_root")
                 if isinstance(workspace_root, str) and workspace_root.strip():
                     self._workspace_root = workspace_root.rstrip("/") or self._workspace_root
+                self._healthcheck_duration_ms = (time.monotonic() - started) * 1000
+                self._record_lifecycle_phase("runtime_healthcheck_passed")
+                logger.info(
+                    "Lambda MicroVM runtime healthcheck passed microvm_id=%s duration_ms=%.2f",
+                    self._microvm_id,
+                    self._healthcheck_duration_ms,
+                )
                 return
             except Exception as e:
                 last_error = e
@@ -342,9 +416,32 @@ class LambdaMicroVmSandbox(BaseSandbox):
                 client.resume_microvm(microvmIdentifier=self._microvm_id)
                 self._wait_for_running()
             else:
+                launch_started = time.monotonic()
+                self._record_lifecycle_phase("launch_started")
+                logger.info(
+                    "Lambda MicroVM launch started sandbox_id=%s image=%s "
+                    "image_version=%s region=%s role_fingerprint=%s",
+                    self._sandbox_id,
+                    self._image_identifier,
+                    self._image_version,
+                    self._region_name,
+                    _role_fingerprint(self._execution_role_arn),
+                )
                 response = client.run_microvm(**self._run_request())
                 self._update_state_from_response(response)
                 self._wait_for_running()
+                self._launch_duration_ms = (time.monotonic() - launch_started) * 1000
+                self._record_lifecycle_phase("launch_running")
+                logger.info(
+                    "Lambda MicroVM launch running microvm_id=%s image=%s "
+                    "image_version=%s region=%s aws_state=%s duration_ms=%.2f",
+                    self._microvm_id,
+                    self._image_arn or self._image_identifier,
+                    self._resolved_image_version,
+                    self._region_name,
+                    self._state,
+                    self._launch_duration_ms,
+                )
 
             self._create_auth_headers()
             self._healthcheck()
@@ -355,6 +452,16 @@ class LambdaMicroVmSandbox(BaseSandbox):
                 self._resolved_image_version,
                 _role_fingerprint(self._execution_role_arn),
             )
+
+    def _exception_code(self, exc: Exception) -> str:
+        response = getattr(exc, "response", None)
+        if isinstance(response, Mapping):
+            error = response.get("Error")
+            if isinstance(error, Mapping):
+                code = error.get("Code")
+                if code:
+                    return str(code)
+        return exc.__class__.__name__
 
     def execute(self, command: str, *, timeout: int | None = None) -> ExecuteResponse:
         """Execute a shell command through the MicroVM command server."""
@@ -480,21 +587,64 @@ class LambdaMicroVmSandbox(BaseSandbox):
 
     def terminate(self) -> None:
         """Terminate the Lambda MicroVM and clear in-memory auth material."""
+        started = time.monotonic()
+        self._teardown_attempt += 1
+        self._teardown_error_code = None
+        self._teardown_error_message = None
         try:
-            if self._microvm_id and self._state != TERMINATED_STATE:
-                self._get_client().terminate_microvm(microvmIdentifier=self._microvm_id)
-                logger.info("Lambda MicroVM sandbox terminated microvm_id=%s", self._microvm_id)
-        except Exception:
+            if not self._microvm_id:
+                self._teardown_status = "skipped"
+                return
+
+            if self._state == TERMINATED_STATE:
+                self._teardown_status = "complete"
+                self._record_lifecycle_phase("teardown_complete")
+                return
+
+            self._record_lifecycle_phase("teardown_started")
+            logger.info(
+                "Lambda MicroVM teardown started microvm_id=%s image=%s "
+                "image_version=%s region=%s aws_state=%s role_fingerprint=%s attempt=%s",
+                self._microvm_id,
+                self._image_arn or self._image_identifier,
+                self._resolved_image_version,
+                self._region_name,
+                self._state,
+                _role_fingerprint(self._execution_role_arn),
+                self._teardown_attempt,
+            )
+            self._get_client().terminate_microvm(microvmIdentifier=self._microvm_id)
+            if self._wait_for_terminated():
+                self._teardown_status = "complete"
+                self._record_lifecycle_phase("teardown_complete")
+                logger.info(
+                    "Lambda MicroVM teardown complete microvm_id=%s aws_state=%s",
+                    self._microvm_id,
+                    self._state,
+                )
+            else:
+                self._teardown_status = "pending"
+                self._record_lifecycle_phase("teardown_pending")
+                logger.warning(
+                    "Lambda MicroVM teardown pending microvm_id=%s aws_state=%s",
+                    self._microvm_id,
+                    self._state,
+                )
+        except Exception as exc:
+            self._teardown_status = "failed"
+            self._teardown_error_code = self._exception_code(exc)
+            self._teardown_error_message = str(exc)
+            self._record_lifecycle_phase("teardown_failed")
             logger.warning(
                 "Lambda MicroVM terminate failed microvm_id=%s",
                 self._microvm_id,
                 exc_info=True,
             )
         finally:
+            self._teardown_duration_ms = (time.monotonic() - started) * 1000
             self._auth_headers = None
             self._endpoint = None
             self._created_client_token = None
-            self._state = TERMINATED_STATE if self._microvm_id else self._state
             if self._owns_http_client and self._http_client is not None:
                 self._http_client.close()
                 self._http_client = None

@@ -531,6 +531,12 @@ class DeepAgentStreamingService:
 
                         elif isinstance(event, ToolResultEvent):
                             acc.set_tool_call(None)
+                            if manager:
+                                for sandbox_event in manager.snapshot_sandbox_backend_events(
+                                    session_id,
+                                    include_runtime_snapshot=False,
+                                ):
+                                    yield sandbox_event
                             yield event
 
                         elif isinstance(event, PlanningEvent) or isinstance(
@@ -716,6 +722,8 @@ class DeepAgentStreamingService:
                 mcp_configs=mcp_configs or None,
                 scope=effective_scope,
                 config_store=self._get_config_store(),
+                sandbox_profile=agent_cfg.sandbox_profile,
+                sandbox_execution_role_arn=agent_cfg.sandbox_execution_role_arn,
             )
             agent = await create_cognition_agent(agent_params)
 
@@ -920,6 +928,7 @@ class SessionAgentManager:
         self._sandbox_events: dict[str, asyncio.Queue[SandboxLifecycleEvent]] = {}
         self._sandbox_correlations: dict[str, dict[str, Any]] = {}
         self._sandbox_start_history: dict[str, deque[float]] = {}
+        self._sandbox_emitted_lifecycle_phases: dict[str, set[str]] = {}
         self._sandbox_backend_type: str = settings.sandbox_backend
 
     def register_session(
@@ -1072,6 +1081,7 @@ class SessionAgentManager:
                 metadata=self._sandbox_runtime_metadata(backend, session_id=session_id),
             ),
         )
+        self._sandbox_emitted_lifecycle_phases.setdefault(session_id, set()).add("provisioned")
         logger.debug("Sandbox backend registered", session_id=session_id)
 
     def _sandbox_correlation(
@@ -1170,11 +1180,98 @@ class SessionAgentManager:
             metadata=metadata,
         )
 
+    def snapshot_sandbox_backend_events(
+        self,
+        session_id: str,
+        *,
+        include_runtime_snapshot: bool = True,
+    ) -> list[SandboxLifecycleEvent]:
+        """Build lifecycle events for newly observed backend phases."""
+        backend = self._sandbox_backends.get(session_id)
+        if backend is None:
+            return []
+        metadata = self._sandbox_runtime_metadata(backend, session_id=session_id)
+        if not metadata:
+            return []
+
+        sandbox_id = getattr(backend, "id", str(id(backend)))
+        emitted = self._sandbox_emitted_lifecycle_phases.setdefault(session_id, set())
+        events: list[SandboxLifecycleEvent] = []
+        lifecycle_phases = metadata.get("lifecycle_phases")
+        if isinstance(lifecycle_phases, list):
+            for raw_phase in lifecycle_phases:
+                phase = str(raw_phase)
+                if phase in emitted:
+                    continue
+                emitted.add(phase)
+                event = SandboxLifecycleEvent(
+                    sandbox_id=sandbox_id,
+                    phase=phase,
+                    sandbox_backend=self._sandbox_backend_type,
+                    metadata=metadata,
+                )
+                self._log_sandbox_lifecycle_event(event)
+                events.append(event)
+
+        if include_runtime_snapshot:
+            event = SandboxLifecycleEvent(
+                sandbox_id=sandbox_id,
+                phase="runtime_snapshot",
+                sandbox_backend=self._sandbox_backend_type,
+                metadata=metadata,
+            )
+            self._log_sandbox_lifecycle_event(event)
+            events.append(event)
+        return events
+
+    def _teardown_phase_from_metadata(self, metadata: Mapping[str, Any]) -> str:
+        teardown_status = metadata.get("teardown_status")
+        if teardown_status == "pending":
+            return "teardown_pending"
+        if teardown_status == "failed":
+            return "teardown_failed"
+        if teardown_status in {"complete", "skipped"}:
+            return "teardown_complete"
+        aws_state = metadata.get("aws_state") or metadata.get("status")
+        if aws_state == "TERMINATED":
+            return "teardown_complete"
+        return "teardown_complete"
+
+    def _log_sandbox_lifecycle_event(self, event: SandboxLifecycleEvent) -> None:
+        metadata = event.metadata or {}
+        correlation = metadata.get("correlation")
+        if not isinstance(correlation, Mapping):
+            correlation = {}
+        fields = {
+            "session_id": correlation.get("session_id"),
+            "run_id": correlation.get("run_id"),
+            "agent_name": correlation.get("agent_name"),
+            "sandbox_profile": metadata.get("profile") or correlation.get("profile"),
+            "sandbox_backend": event.sandbox_backend,
+            "sandbox_id": event.sandbox_id,
+            "microvm_id": metadata.get("microvm_id"),
+            "image": metadata.get("image"),
+            "image_version": metadata.get("image_version"),
+            "region": metadata.get("region"),
+            "aws_state": metadata.get("aws_state") or metadata.get("status"),
+            "execution_role_fingerprint": metadata.get("execution_role_fingerprint"),
+            "scope_fingerprint": correlation.get("scope_fingerprint"),
+            "teardown_status": metadata.get("teardown_status"),
+            "teardown_attempt": metadata.get("teardown_attempt"),
+            "teardown_error_code": metadata.get("teardown_error_code"),
+        }
+        fields = {key: value for key, value in fields.items() if value is not None}
+        if event.phase in {"teardown_pending", "teardown_failed"}:
+            logger.warning("Sandbox lifecycle event", phase=event.phase, **fields)
+        else:
+            logger.info("Sandbox lifecycle event", phase=event.phase, **fields)
+
     def release_sandbox_backend(self, session_id: str) -> None:
         """Release only the sandbox backend and quota state for a session."""
         backend = self._sandbox_backends.pop(session_id, None)
         if backend is None:
             self._sandbox_correlations.pop(session_id, None)
+            self._sandbox_emitted_lifecycle_phases.pop(session_id, None)
             logger.debug("Sandbox backend release skipped", session_id=session_id)
             return
 
@@ -1188,28 +1285,47 @@ class SessionAgentManager:
                 metadata=self._sandbox_runtime_metadata(backend, session_id=session_id),
             ),
         )
+        self._sandbox_emitted_lifecycle_phases.setdefault(session_id, set()).add(
+            "teardown_started"
+        )
         if hasattr(backend, "terminate"):
             try:
                 backend.terminate()
+                metadata = self._sandbox_runtime_metadata(
+                    backend,
+                    session_id=session_id,
+                )
+                phase = self._teardown_phase_from_metadata(metadata)
                 self._emit_sandbox_event(
                     session_id,
                     SandboxLifecycleEvent(
                         sandbox_id=sandbox_id,
-                        phase="teardown_complete",
+                        phase=phase,
                         sandbox_backend=self._sandbox_backend_type,
-                        metadata=self._sandbox_runtime_metadata(
-                            backend,
-                            session_id=session_id,
-                        ),
+                        metadata=metadata,
                     ),
                 )
-                logger.info("Sandbox backend terminated", session_id=session_id)
+                logger.info("Sandbox backend released", session_id=session_id, phase=phase)
             except Exception as e:
+                metadata = self._sandbox_runtime_metadata(backend, session_id=session_id)
+                metadata["teardown_status"] = "failed"
+                metadata["teardown_error_code"] = e.__class__.__name__
+                metadata["teardown_error_message"] = str(e)
+                self._emit_sandbox_event(
+                    session_id,
+                    SandboxLifecycleEvent(
+                        sandbox_id=sandbox_id,
+                        phase="teardown_failed",
+                        sandbox_backend=self._sandbox_backend_type,
+                        metadata=metadata,
+                    ),
+                )
                 logger.warning(
                     "Sandbox backend terminate failed", session_id=session_id, error=str(e)
                 )
 
         self._sandbox_correlations.pop(session_id, None)
+        self._sandbox_emitted_lifecycle_phases.pop(session_id, None)
 
     def unregister_session(self, session_id: str) -> None:
         """Unregister a session and clean up resources."""
@@ -1219,6 +1335,7 @@ class SessionAgentManager:
 
         self.release_sandbox_backend(session_id)
         self._sandbox_events.pop(session_id, None)
+        self._sandbox_emitted_lifecycle_phases.pop(session_id, None)
         logger.info("Session unregistered", session_id=session_id)
 
     def _emit_sandbox_event(self, session_id: str, event: SandboxLifecycleEvent) -> None:
@@ -1227,6 +1344,7 @@ class SessionAgentManager:
             self._sandbox_events[session_id] = asyncio.Queue(maxsize=20)
         try:
             self._sandbox_events[session_id].put_nowait(event)
+            self._log_sandbox_lifecycle_event(event)
         except asyncio.QueueFull:
             pass
 
