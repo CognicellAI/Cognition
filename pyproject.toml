@@ -205,7 +205,10 @@ warn_redundant_casts = true
 warn_unused_ignores = true
 show_error_codes = true
 explicit_package_bases = true
-exclude = ["^workspaces/"]
+exclude = [
+    "^workspaces/",
+    "^examples/aws-lambda-microvm-default-runtime/runtime/server\\.py$",
+]
 
 # Pragmatic overrides for tests - too many untyped fixtures to fix
 [[tool.mypy.overrides]]

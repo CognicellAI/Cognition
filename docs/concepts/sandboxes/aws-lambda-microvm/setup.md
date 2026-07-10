@@ -13,6 +13,10 @@ You need:
 - at least one IAM execution role for sandboxed agent work
 - optional Lambda Network Connector ARNs for VPC egress
 
+If you do not already have a Lambda MicroVM image, start with the
+[default runtime image](./default-runtime-image.md) example. It creates a
+builder-owned image ARN from Cognition's commented runtime source files.
+
 The Terraform example in
 [`examples/aws-lambda-microvm-sandbox`](https://github.com/CognicellAI/Cognition/tree/main/examples/aws-lambda-microvm-sandbox)
 creates IAM roles, an optional VPC egress connector, and Cognition-ready
@@ -110,5 +114,6 @@ include auth tokens.
 ## Related
 
 - [Sandbox Profiles](./profiles.md)
+- [Default Runtime Image](./default-runtime-image.md)
 - [IAM and Networking](./iam-and-networking.md)
 - [Troubleshooting](./troubleshooting.md)

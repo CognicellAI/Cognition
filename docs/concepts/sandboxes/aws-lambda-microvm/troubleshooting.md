@@ -12,6 +12,7 @@ or clean up as expected.
 | `AccessDenied` on `iam:PassRole` | Add the agent execution role ARN to the allowed role list |
 | Auth token creation fails | Allow `lambda:CreateMicroVMAuthToken` for approved MicroVM and image resources |
 | `/healthz` fails | Confirm the image starts the runtime command server on the profile `port` |
+| Image creation fails | Rebuild the default runtime zip, confirm the S3 artifact exists, and inspect the Lambda MicroVM image build logs |
 | Commands hang | Check runtime server logs, command timeout, and network connector reachability |
 | `SANDBOX_QUOTA_EXCEEDED` | Raise or relax profile `quota`, delete/abort/expire idle sessions, or wait for start history to age out |
 | `teardown_pending` | Cognition requested termination, freed its own quota, and AWS had not yet confirmed `TERMINATED`; inspect `GetMicrovm`, idle policy, and CloudWatch service logs |
@@ -37,5 +38,6 @@ idle policy and `maximum_duration_seconds` remain the final cleanup backstops.
 ## Related
 
 - [Setup](./setup.md)
+- [Default Runtime Image](./default-runtime-image.md)
 - [IAM and Networking](./iam-and-networking.md)
 - [Runtime Command Server](./runtime-command-server.md)

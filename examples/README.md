@@ -10,6 +10,8 @@ These examples are intentionally split by purpose:
 - `aws-lambda-microvm-sandbox/`: AWS Lambda MicroVM sandbox prerequisites,
   Cognition profile config, and reusable Terraform for consuming a prebuilt
   MicroVM image ARN.
+- `aws-lambda-microvm-default-runtime/`: commented default runtime source and
+  Terraform for creating a builder-owned Lambda MicroVM image ARN.
 - `scoped-multi-tenant/`: scoping and multi-tenant configuration example.
 - `a2a-exposed-agent/`: A2A protocol exposure for agent-to-agent interoperability.
 
