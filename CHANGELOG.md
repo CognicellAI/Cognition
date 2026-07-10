@@ -7,6 +7,14 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [0.11.0-rc.6] — 2026-07-10
+
+### Added
+
+- Added public documentation and a reusable builder-owned default Lambda MicroVM runtime image example, including commented runtime source, packaging script, Terraform image creation template, and sandbox profile output.
+
+---
+
 ## [0.11.0-rc.5] — 2026-07-10
 
 ### Fixed
