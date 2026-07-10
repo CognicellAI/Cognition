@@ -490,8 +490,8 @@ async def update_session(
         settings=settings,
     )
 
+    effective_scope = scope.get_all() or None
     if request.agent_name:
-        effective_scope = scope.get_all() or None
         if not await config_store.is_valid_primary(request.agent_name, effective_scope):
             raise _unprocessable_entity(f"Invalid or unknown agent: {request.agent_name}")
 

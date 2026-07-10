@@ -90,6 +90,8 @@ class AgentConfig(BaseModel):
     recursion_limit: int | None = Field(default=None, gt=0)
     tool_token_limit_before_evict: int | None = Field(default=None, gt=0)
     context_policy: ContextPolicy | None = Field(default=None)
+    excluded_tools: list[str] = Field(default_factory=list)
+    blocked_tools: list[str] = Field(default_factory=list)
     provider: str | None = Field(default=None)
     model: str | None = Field(default=None)
     timeout_seconds: float | None = Field(default=None, gt=0)
@@ -569,6 +571,8 @@ def load_agent_definition_from_markdown(path: str | Path) -> AgentDefinition:
             "recursion_limit",
             "tool_token_limit_before_evict",
             "context_policy",
+            "blocked_tools",
+            "excluded_tools",
             "provider",
             "model",
             "timeout_seconds",

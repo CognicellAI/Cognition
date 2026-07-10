@@ -10,6 +10,11 @@ The core promise: define your agent with tools, skills, and a system prompt — 
 
 - [The 7-Layer Model](#the-7-layer-model)
 - [Layer Breakdown](#layer-breakdown)
+  - [Layer 1 — Foundation](#layer-1--foundation)
+  - [Layer 2 — Persistence](#layer-2--persistence)
+  - [Layer 3 — Execution](#layer-3--execution)
+  - [Layer 4 — Agent Runtime](#layer-4--agent-runtime)
+  - [Layer 7 — Observability](#layer-7--observability)
 - [Startup Sequence](#startup-sequence)
 - [The North Star](#the-north-star)
 
@@ -271,7 +276,7 @@ It provides the primary key for scoping LangGraph Store namespaces — ensuring 
 
 #### A2A Protocol Adapter
 
-Cognition exposes agents via the [Agent-to-Agent (A2A)](https://google.github.io/A2A/) protocol through a protocol adapter in `server/app/protocols/a2a/`. The adapter is mounted during startup (`mount_a2a_routes()`) and registers two endpoints:
+Cognition exposes agents via the [Agent-to-Agent (A2A)](https://a2a-protocol.org/latest/) protocol through a protocol adapter in `server/app/protocols/a2a/`. The adapter is mounted during startup (`mount_a2a_routes()`) and registers two endpoints:
 
 - **`GET /.well-known/agent-card.json`** — Agent card discovery. Returns A2A-compliant `AgentCard` objects for all agents with `a2a_exposed=True`. Cards are filtered by the request's scope — only agents visible to the caller's scope are listed.
 - **`POST /a2a/{agent_name}`** — JSON-RPC endpoint. Accepts A2A `SendMessage` and `SendStreamingMessage` requests and bridges them to Cognition's `service.stream_response()`. Each agent gets its own card with a dedicated endpoint URL.

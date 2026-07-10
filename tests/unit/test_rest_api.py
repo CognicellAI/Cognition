@@ -829,6 +829,85 @@ class TestSessionAgentName:
         data = get_resp.json()
         assert data["agent_name"] == "readonly"
 
+    def test_create_session_accepts_scoped_primary_agent(self):
+        """Scoped primary agents listed by /agents can be bound at session creation."""
+        scoped_settings = Settings(scoping_enabled=True, scope_keys=["tenant", "user"])
+        headers = {
+            "X-Cognition-Scope-Tenant": "wasaloon",
+            "X-Cognition-Scope-User": "kennel-surface-wa-salon-concierge",
+        }
+        agent_name = f"test-scoped-primary-{uuid.uuid4().hex}"
+        app.dependency_overrides[get_settings_dep] = lambda: scoped_settings
+        try:
+            create_agent_resp = client.post(
+                "/agents",
+                json={
+                    "name": agent_name,
+                    "mode": "primary",
+                    "hidden": False,
+                    "system_prompt": "Scoped primary session test.",
+                },
+                headers=headers,
+            )
+            assert create_agent_resp.status_code == 201
+
+            agents_resp = client.get("/agents", headers=headers)
+            assert agents_resp.status_code == 200
+            assert any(agent["name"] == agent_name for agent in agents_resp.json()["agents"])
+
+            session_resp = client.post(
+                "/sessions",
+                json={
+                    "agent_name": agent_name,
+                    "title": "diagnostic-session-create",
+                },
+                headers=headers,
+            )
+            assert session_resp.status_code == 201
+            assert session_resp.json()["agent_name"] == agent_name
+        finally:
+            app.dependency_overrides.pop(get_settings_dep, None)
+
+    def test_update_session_accepts_scoped_primary_agent(self):
+        """Session agent_name updates validate primary agents in the request scope."""
+        scoped_settings = Settings(scoping_enabled=True, scope_keys=["tenant", "user"])
+        headers = {
+            "X-Cognition-Scope-Tenant": "wasaloon",
+            "X-Cognition-Scope-User": "kennel-surface-wa-salon-concierge",
+        }
+        agent_name = f"test-scoped-update-primary-{uuid.uuid4().hex}"
+        app.dependency_overrides[get_settings_dep] = lambda: scoped_settings
+        try:
+            create_agent_resp = client.post(
+                "/agents",
+                json={
+                    "name": agent_name,
+                    "mode": "primary",
+                    "hidden": False,
+                    "system_prompt": "Scoped primary update test.",
+                },
+                headers=headers,
+            )
+            assert create_agent_resp.status_code == 201
+
+            session_resp = client.post(
+                "/sessions",
+                json={"title": "scoped-session-agent-update"},
+                headers=headers,
+            )
+            assert session_resp.status_code == 201
+            session_id = session_resp.json()["id"]
+
+            update_resp = client.patch(
+                f"/sessions/{session_id}",
+                json={"agent_name": agent_name},
+                headers=headers,
+            )
+            assert update_resp.status_code == 200
+            assert update_resp.json()["agent_name"] == agent_name
+        finally:
+            app.dependency_overrides.pop(get_settings_dep, None)
+
 
 class TestScopedSessionAgentName:
     """Test scoped API-created agent resolution for session binding."""

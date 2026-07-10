@@ -62,6 +62,21 @@ from server.app.storage.factory import create_storage_backend
 logger = structlog.get_logger(__name__)
 
 
+class AgentDefinitionUnavailableError(Exception):
+    """Raised when a session-bound agent cannot be used for invocation."""
+
+    def __init__(
+        self,
+        agent_name: str,
+        reason: str,
+        scope: Mapping[str, str] | None = None,
+    ) -> None:
+        super().__init__(f"Invalid or unavailable agent '{agent_name}': {reason}")
+        self.agent_name = agent_name
+        self.reason = reason
+        self.scope_keys = sorted((scope or {}).keys())
+
+
 def _context_policy_dict(policy: Any | None) -> dict[str, Any]:
     if policy is None:
         return {}
@@ -172,6 +187,8 @@ class ResolvedAgentConfig:
     context_policy: Any | None = None
     sandbox_profile: str | None = None
     sandbox_execution_role_arn: str | None = None
+    excluded_tools: list[str] = field(default_factory=list)
+    blocked_tools: list[str] = field(default_factory=list)
     subagents: list[Any] = field(default_factory=list)
     async_subagents: list[Any] = field(default_factory=list)
     agent_def: Any = None
@@ -226,15 +243,6 @@ def _effective_session_scope(
         session_scope = getattr(session, "scopes", None)
         return dict(session_scope) if session_scope else None
     return dict(fallback_scope) if fallback_scope else None
-
-
-class AgentDefinitionNotFoundError(RuntimeError):
-    """Raised when a session-bound agent cannot be resolved for execution."""
-
-    def __init__(self, agent_name: str, scope: Mapping[str, str] | None) -> None:
-        self.agent_name = agent_name
-        self.scope_keys = sorted((scope or {}).keys())
-        super().__init__(f"Agent definition not found: {agent_name}")
 
 
 class SandboxQuotaExceededError(RuntimeError):
@@ -308,17 +316,30 @@ class DeepAgentStreamingService:
 
         effective_scope = _effective_session_scope(session, scope)
         agent_def = await cs.get_agent_definition(session.agent_name, effective_scope)
-        if (
-            agent_def is None
-            or agent_def.hidden
-            or agent_def.mode not in ("primary", "all")
-        ):
+        if agent_def is None:
             logger.warning(
                 "Agent definition not found for session execution",
                 requested=session.agent_name,
                 scope_keys=sorted((effective_scope or {}).keys()),
             )
-            raise AgentDefinitionNotFoundError(session.agent_name, effective_scope)
+            raise AgentDefinitionUnavailableError(
+                session.agent_name,
+                "not found",
+                effective_scope,
+            )
+
+        if agent_def.hidden:
+            raise AgentDefinitionUnavailableError(
+                session.agent_name,
+                "agent is hidden",
+                effective_scope,
+            )
+        if agent_def.mode not in ("primary", "all"):
+            raise AgentDefinitionUnavailableError(
+                session.agent_name,
+                f"agent mode '{agent_def.mode}' is not invokable as a primary agent",
+                effective_scope,
+            )
 
         resolved.agent_def = agent_def
         if resolved.system_prompt is None:
@@ -375,6 +396,12 @@ class DeepAgentStreamingService:
 
         if agent_def.config.sandbox_execution_role_arn is not None:
             resolved.sandbox_execution_role_arn = agent_def.config.sandbox_execution_role_arn
+
+        if agent_def.config.excluded_tools:
+            resolved.excluded_tools = list(agent_def.config.excluded_tools)
+
+        if agent_def.config.blocked_tools:
+            resolved.blocked_tools = list(agent_def.config.blocked_tools)
 
         if agent_def.middleware:
             resolved.middleware = _resolve_middleware(agent_def.middleware)
@@ -478,6 +505,8 @@ class DeepAgentStreamingService:
                 or agent_cfg.response_format,
                 tool_token_limit_before_evict=agent_cfg.tool_token_limit_before_evict,
                 context_policy=agent_cfg.context_policy,
+                excluded_tools=agent_cfg.excluded_tools,
+                blocked_tools=agent_cfg.blocked_tools,
                 middleware=agent_cfg.middleware,
                 mcp_configs=mcp_configs or None,
                 scope=effective_scope,
@@ -614,12 +643,13 @@ class DeepAgentStreamingService:
                 session_id=session_id,
             )
             yield ErrorEvent(message=str(e), code="PROVIDER_CONFIG_ERROR")
-        except AgentDefinitionNotFoundError as e:
+        except AgentDefinitionUnavailableError as e:
             logger.warning(
                 "Session agent definition unavailable",
                 error=str(e),
                 session_id=session_id,
                 agent_name=e.agent_name,
+                reason=e.reason,
                 scope_keys=e.scope_keys,
             )
             yield ErrorEvent(message=str(e), code="AGENT_NOT_FOUND")
@@ -718,6 +748,8 @@ class DeepAgentStreamingService:
                 or agent_cfg.response_format,
                 tool_token_limit_before_evict=agent_cfg.tool_token_limit_before_evict,
                 context_policy=agent_cfg.context_policy,
+                excluded_tools=agent_cfg.excluded_tools,
+                blocked_tools=agent_cfg.blocked_tools,
                 middleware=agent_cfg.middleware,
                 mcp_configs=mcp_configs or None,
                 scope=effective_scope,
@@ -788,12 +820,13 @@ class DeepAgentStreamingService:
                 "Provider configuration error on resume", error=str(e), session_id=session_id
             )
             yield ErrorEvent(message=str(e), code="PROVIDER_CONFIG_ERROR")
-        except AgentDefinitionNotFoundError as e:
+        except AgentDefinitionUnavailableError as e:
             logger.warning(
                 "Session agent definition unavailable on resume",
                 error=str(e),
                 session_id=session_id,
                 agent_name=e.agent_name,
+                reason=e.reason,
                 scope_keys=e.scope_keys,
             )
             yield ErrorEvent(message=str(e), code="AGENT_NOT_FOUND")

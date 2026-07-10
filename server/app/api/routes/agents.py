@@ -36,6 +36,8 @@ def _agent_to_response(agent: AgentDefinition) -> AgentResponse:
             recursion_limit=agent.config.recursion_limit,
             tool_token_limit_before_evict=agent.config.tool_token_limit_before_evict,
             context_policy=agent.config.context_policy,
+            excluded_tools=list(agent.config.excluded_tools),
+            blocked_tools=list(agent.config.blocked_tools),
             provider=agent.config.provider,
             model=agent.config.model,
             timeout_seconds=agent.config.timeout_seconds,
@@ -146,6 +148,8 @@ async def create_agent(
                     if body.context_policy
                     else None
                 ),
+                "excluded_tools": body.excluded_tools,
+                "blocked_tools": body.blocked_tools,
                 "provider": body.provider,
                 "timeout_seconds": body.timeout_seconds,
                 "sandbox_profile": body.sandbox_profile,
@@ -219,6 +223,8 @@ async def update_agent(
             "recursion_limit",
             "tool_token_limit_before_evict",
             "context_policy",
+            "excluded_tools",
+            "blocked_tools",
             "provider",
             "timeout_seconds",
             "sandbox_profile",
@@ -235,7 +241,7 @@ async def update_agent(
 
         await config_store.upsert_agent(name, agent_scope, data, "api")
 
-        agent_def = await config_store.get_agent_definition(name)
+        agent_def = await config_store.get_agent_definition(name, agent_scope or None)
         if agent_def is None:
             raise HTTPException(status_code=500, detail="Agent not found after update")
         return _agent_to_response(agent_def)
