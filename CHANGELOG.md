@@ -7,52 +7,42 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
-## [0.11.0-rc.6] — 2026-07-10
+## [0.11.0] — 2026-07-10
+
+### Highlights
+
+- Introduced the AWS Lambda MicroVM sandbox backend as a production-oriented isolation option for Cognition agents, alongside the existing local, Docker, and Kubernetes sandbox backends.
+- Added scoped sandbox profiles and per-agent Lambda MicroVM execution roles so builder platforms can run tenant/project/user-scoped agents with least-privilege AWS access.
+- Added a builder-owned default Lambda MicroVM runtime image path, including commented runtime source, packaging script, Terraform image creation template, and Cognition-ready sandbox profile output.
+- Hardened Lambda MicroVM lifecycle behavior with quota release, verified teardown, token-free lifecycle metadata, and operator-grade lifecycle events/logs.
 
 ### Added
 
-- Added public documentation and a reusable builder-owned default Lambda MicroVM runtime image example, including commented runtime source, packaging script, Terraform image creation template, and sandbox profile output.
-
----
-
-## [0.11.0-rc.5] — 2026-07-10
-
-### Fixed
-
-- Verified Lambda MicroVM teardown before reporting completion, with bounded AWS `GetMicrovm` polling and explicit `teardown_complete`, `teardown_pending`, and `teardown_failed` lifecycle phases.
-
-### Added
-
-- Added token-free Lambda MicroVM lifecycle observability for launch, auth token creation, runtime healthchecks, runtime snapshots, teardown status, timing metadata, and scope/role fingerprints.
-
----
-
-## [0.11.0-rc.3] — 2026-06-27
+- `aws_lambda_microvm` sandbox backend support with a dedicated `packages/langchain-aws-lambda-microvms` runtime adapter and Cognition integration wrapper.
+- Lambda MicroVM `SandboxProfile` configuration for image ARN/version, region, memory, storage, duration, idle policy, egress mode, network connector ARNs, logging, quotas, and default execution role.
+- Agent-level `sandbox_profile` and `sandbox_execution_role_arn` fields, with execution roles resolved from trusted config/API data instead of model or tool arguments.
+- Runtime command-server contract for Lambda MicroVM images: `/healthz`, `/execute`, `/upload`, `/download`, and safe lifecycle hook endpoints.
+- Public Lambda MicroVM documentation under `docs/concepts/sandboxes/aws-lambda-microvm/`, plus reusable Terraform examples for sandbox prerequisites and default runtime image creation.
 
 ### Fixed
 
-- Fixed scoped API-created primary agents being visible through `GET /agents/{name}` but rejected by `POST /sessions` and `PATCH /sessions/{id}` because session agent validation did not use the request scope.
-
----
-
-## [0.11.0-rc.2] — 2026-06-26
+- Fixed scoped API-created agents so `POST /sessions`, session agent updates, and runtime execution resolve primary agents using the effective request/session scope.
+- Removed unsafe runtime fallback to the `default` agent when a session references a missing scoped agent; missing runtime definitions now fail explicitly.
+- Fixed Lambda MicroVM quota accounting so terminal runs/sessions release concurrent-session quota without requiring session deletion, while preserving start-rate history.
+- Fixed `/health.active_sessions` to count only non-terminal sessions.
+- Verified Lambda MicroVM teardown before reporting completion, with bounded AWS `GetMicrovm` polling and explicit `teardown_complete`, `teardown_pending`, and `teardown_failed` phases.
+- Fixed agent graph cache identity for string model IDs and provider/model configuration so agent-level model overrides do not reuse stale compiled graphs.
+- Aligned sandbox backend file/glob behavior with the upgraded Deep Agents backend protocol.
 
 ### Security
 
-- Resolved open Dependabot alerts by refreshing locked versions for `pydantic-settings`, `langsmith`, `langchain`, `langchain-anthropic`, `starlette`, `cryptography`, `aiohttp`, `python-multipart`, and `pyjwt`.
+- Refreshed locked runtime dependencies to resolve Dependabot alerts for `pydantic-settings`, `langsmith`, `langchain`, `langchain-anthropic`, `starlette`, `cryptography`, `aiohttp`, `python-multipart`, and `pyjwt`.
+- Kept Lambda MicroVM proxy auth tokens and raw role credentials out of persisted lifecycle metadata, logs, and SSE events.
 
 ### Changed
 
 - Refreshed the v0.11 runtime dependency family, including Deep Agents, LangChain, LangGraph, FastAPI/Starlette, OpenTelemetry, provider adapters, OpenAI, and MLflow deploy dependencies.
-
----
-
-## [0.11.0-rc.1] — 2026-06-26
-
-### Added
-
-- Initial AWS Lambda MicroVM sandbox backend with scoped sandbox profiles, prebuilt MicroVM image ARNs, per-agent execution roles, runtime command server integration, lifecycle events, quota config, and token-free correlation metadata.
-- Builder documentation and reusable Terraform example for configuring Lambda MicroVM images, IAM roles, internet/VPC networking, logging, duration, idle policy, and Cognition-ready sandbox profile YAML.
+- Reorganized public sandbox documentation under `docs/concepts/sandboxes/` with backend-specific pages for local, Docker, Kubernetes, and AWS Lambda MicroVM sandboxes.
 
 ---
 

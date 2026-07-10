@@ -2,6 +2,6 @@
 
 from __future__ import annotations
 
-VERSION = "0.11.0-rc.6"
+VERSION = "0.11.0"
 
 __all__ = ["VERSION"]
