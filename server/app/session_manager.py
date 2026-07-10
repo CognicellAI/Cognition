@@ -230,7 +230,7 @@ class SessionManager:
             workspace_path=session_workspace_path,
             title=title,
             thread_id=thread_id,
-            status=SessionStatus.ACTIVE,
+            status=SessionStatus.IDLE,
             config=config or SessionConfig(),
             created_at=now,
             updated_at=now,

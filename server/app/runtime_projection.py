@@ -253,7 +253,7 @@ def _session_status_for_run(status: RunStatus) -> str:
     if status == RunStatus.FAILED:
         return SessionStatus.FAILED.value
     if status == RunStatus.DONE:
-        return SessionStatus.DONE.value
+        return SessionStatus.IDLE.value
     if status == RunStatus.STALLED:
         return SessionStatus.STALLED.value
     if status == RunStatus.ABORTING:

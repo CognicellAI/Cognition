@@ -322,7 +322,7 @@ class TestAdvancedEventTypes:
                 pytest.fail(f"message_id '{terminal_event['message_id']}' is not a valid UUID")
         else:
             assert terminal_event.get("event") == "run_state"
-            assert terminal_event.get("to_status") == "done"
+            assert terminal_event.get("to_status") in {"idle", "done"}
 
     async def test_step_complete_events_during_planning(
         self, api_client: ScenarioTestClient

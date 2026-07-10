@@ -185,7 +185,10 @@ COGNITION_PERSISTENCE_BACKEND=memory
 
 ## ExecutionBackend
 
-Code execution is isolated from the server process. Cognition uses two backend types, both ultimately relying on `DockerExecutionBackend` for hard isolation.
+Code execution is isolated from the server process by a configurable sandbox
+backend. Local execution is for trusted development; Docker, Kubernetes, and
+AWS Lambda MicroVMs provide stronger isolation boundaries for production
+deployments.
 
 ### DockerExecutionBackend (`server/app/execution/backend.py`)
 
@@ -205,7 +208,8 @@ Container lifecycle: the backend checks for an existing running container for th
 
 ### Sandbox Backends (`server/app/agent/sandbox_backend.py`)
 
-The two sandbox backends are Cognition's concrete wrappers around the execution abstraction:
+Cognition's sandbox backends are concrete wrappers around the execution
+abstraction:
 
 #### CognitionLocalSandboxBackend
 
@@ -242,13 +246,54 @@ COGNITION_DOCKER_CPU_LIMIT=1.0
 COGNITION_DOCKER_TIMEOUT=300
 ```
 
+#### CognitionKubernetesSandboxBackend
+
+Commands execute in Kubernetes-native sandbox pods created from an
+agent-sandbox `SandboxTemplate`.
+
+- Lazy creation on first tool call.
+- Sandbox CRs carry Cognition session and scope labels.
+- The sandbox-router proxies command execution to the sandbox pod.
+- TTL cleanup is handled by the agent-sandbox controller.
+
+Best for: Cognition deployed on Kubernetes without Docker socket access.
+
+```env
+COGNITION_SANDBOX_BACKEND=kubernetes
+```
+
+See [Kubernetes Sandbox](./sandboxes/kubernetes/index.md) for architecture and
+deployment prerequisites.
+
+#### CognitionAwsLambdaMicroVmSandboxBackend
+
+Commands execute in AWS Lambda MicroVMs launched from builder-managed
+`SandboxProfile` records.
+
+- Lazy creation on first sandbox operation.
+- Uses prebuilt Lambda MicroVM image ARNs; Cognition does not build images.
+- Agents can select a profile and a trusted IAM execution role.
+- Runtime command server handles `/execute`, `/upload`, and `/download`.
+- Auth tokens stay in memory; persisted metadata is token-free.
+
+Best for: AWS-native isolation with per-agent IAM roles and profile-controlled
+internet or VPC egress.
+
+```env
+COGNITION_SANDBOX_BACKEND=aws_lambda_microvm
+COGNITION_AWS_LAMBDA_MICROVM_DEFAULT_PROFILE=default-lambda
+```
+
+See [AWS Lambda MicroVM Sandbox](./sandboxes/aws-lambda-microvm/index.md) for
+the full backend model.
+
 ### Factory
 
 ```python
 from server.app.agent.sandbox_backend import create_sandbox_backend
 
 backend = create_sandbox_backend(settings)
-# Returns CognitionLocalSandboxBackend or CognitionDockerSandboxBackend
+# Returns the configured sandbox backend wrapper
 ```
 
 ---

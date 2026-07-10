@@ -279,19 +279,20 @@ COGNITION_PERSISTENCE_URI=postgresql://user:password@host:5432/dbname
 
 ## Sandbox (Execution)
 
-Cognition ships three sandbox backends:
+Cognition ships four sandbox backends:
 
 | Backend | Isolation | Works on K8s? |
 |---|---|---|
 | `local` | None — commands run as server process user | Yes, but no isolation |
 | `docker` | Container per session | No — requires Docker socket + privileged mode |
 | `kubernetes` | Sandbox pod per session | Yes — K8s-native, no special privileges needed |
+| `aws_lambda_microvm` | AWS Lambda MicroVM per sandbox runtime | Yes — if Cognition has AWS credentials |
 
 ### Common settings
 
 | YAML key | Environment variable | Default | Description |
 |---|---|---|---|
-| `sandbox.backend` | `COGNITION_SANDBOX_BACKEND` | `local` | `local`, `docker`, or `kubernetes` |
+| `sandbox.backend` | `COGNITION_SANDBOX_BACKEND` | `local` | `local`, `docker`, `kubernetes`, or `aws_lambda_microvm` |
 
 ### Docker settings (when `sandbox.backend = docker`)
 
@@ -314,7 +315,85 @@ Cognition ships three sandbox backends:
 | `sandbox.k8s.ttl` | `COGNITION_K8S_SANDBOX_TTL` | `3600` | Auto-cleanup after N seconds (safety net for abandoned sandboxes) |
 | `sandbox.k8s.warm_pool` | `COGNITION_K8S_SANDBOX_WARM_POOL` | (none) | SandboxWarmPool CR name (reserved, not yet implemented) |
 
-See [Kubernetes Sandbox](../concepts/kubernetes-sandbox.md) for architecture, prerequisites, and deployment details.
+See [Kubernetes Sandbox](../concepts/sandboxes/kubernetes/index.md) for
+architecture, prerequisites, and deployment details.
+
+### AWS Lambda MicroVM settings (when `sandbox.backend = aws_lambda_microvm`)
+
+| YAML key | Environment variable | Default | Description |
+|---|---|---|---|
+| (environment only) | `COGNITION_AWS_LAMBDA_MICROVM_DEFAULT_PROFILE` | `default` | SandboxProfile name used when an agent does not specify `sandbox_profile` |
+
+Lambda MicroVM profiles are managed through the `sandbox_profiles:` YAML
+section or the `/sandbox/profiles` API. File-seeded profiles are inserted only
+when absent; API-managed profiles take precedence after startup.
+
+```yaml
+sandbox:
+  backend: aws_lambda_microvm
+
+sandbox_profiles:
+  default-lambda:
+    backend: aws_lambda_microvm
+    image_arn: arn:aws:lambda:us-west-2:123456789012:microvm-image:cognition-runtime
+    image_version: "1.0"
+    region: us-west-2
+    egress_mode: internet
+    maximum_duration_seconds: 3600
+    port: 8080
+    token_expiration_minutes: 30
+    idle_policy:
+      max_idle_duration_seconds: 900
+      suspended_duration_seconds: 300
+      auto_resume_enabled: true
+    logging:
+      disabled: {}
+    quota:
+      max_concurrent_sessions: 10
+      max_session_starts_per_minute: 30
+    default_execution_role_arn: arn:aws:iam::123456789012:role/cognition-agent-runtime
+```
+
+For private egress, set `egress_mode: vpc` and provide explicit
+`egress_network_connector_arns`.
+
+Cost-sensitive Lambda MicroVM profile keys:
+
+| Key | Cost impact |
+|---|---|
+| `maximum_duration_seconds` | Hard upper bound on billable MicroVM lifetime |
+| `idle_policy` | Allows AWS to suspend idle MicroVMs instead of continuing active compute |
+| `logging` | CloudWatch runtime logs may incur ingestion and retention cost; use `disabled: {}` unless needed |
+| `quota` | Cognition-side cap on concurrent sandbox sessions and starts per minute for a profile/scope pair |
+| `egress_mode` / `egress_network_connector_arns` | VPC connectors can add network path and data-transfer costs |
+| `run_hook_payload` | Can trigger runtime image hook work during launch; keep hook behavior bounded |
+
+```yaml
+sandbox_profiles:
+  private-lambda:
+    backend: aws_lambda_microvm
+    image_arn: arn:aws:lambda:us-west-2:123456789012:microvm-image:cognition-runtime
+    region: us-west-2
+    egress_mode: vpc
+    egress_network_connector_arns:
+      - arn:aws:lambda:us-west-2:123456789012:network-connector:private-egress
+```
+
+Agents select profiles and execution roles from trusted config:
+
+```yaml
+agents:
+  - name: repo-maintainer
+    system_prompt: "You maintain Python repositories."
+    sandbox_profile: default-lambda
+    sandbox_execution_role_arn: arn:aws:iam::123456789012:role/repo-maintainer-runtime
+```
+
+`sandbox_execution_role_arn` overrides the profile default role for that
+agent. The role is never read from model-generated tool arguments.
+
+See [AWS Lambda MicroVM Setup](../concepts/sandboxes/aws-lambda-microvm/setup.md)
+for the end-to-end setup flow and Terraform example.
 
 ---
 
@@ -405,6 +484,8 @@ These settings configure the default agent behaviour when no `AgentDefinition` o
 | `agent.subagents` | List of subagent definitions |
 | `agent.interrupt_on` | Map of tool names to `true`/`false` for human-in-the-loop confirmation |
 | `agent.middleware` | List of middleware names or `{name: ..., **kwargs}` dicts |
+| `agent.sandbox_profile` | Default Lambda MicroVM sandbox profile for the file-defined default agent |
+| `agent.sandbox_execution_role_arn` | Trusted IAM execution role ARN for the file-defined default agent sandbox |
 
 Per-agent runtime config can also set `config.excluded_tools` and `config.blocked_tools`. File-based agent definitions place those values under `config:`; the `/agents` API accepts the same policies as top-level fields and returns them under `config`.
 

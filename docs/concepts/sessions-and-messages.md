@@ -1,24 +1,27 @@
 # Sessions & Messages
 
-A **session** is the unit of conversation in Cognition. It owns a thread of messages, binds to a specific agent, carries optional tenant scope, and persists across server restarts. Every message sent to a session streams back over Server-Sent Events (SSE).
+A **session** is the unit of conversation in Cognition. It owns a LangGraph thread, binds to a specific agent, carries optional tenant scope, and persists across server restarts. Every message sent to a session creates a **run** and streams that run back over Server-Sent Events (SSE).
 
 ---
 
 ## Session Lifecycle
 
 ```
-POST /sessions                →  Session created (status: active)
+POST /sessions                →  Session created (status: idle)
     │
-POST /sessions/{id}/messages  →  User message persisted, agent streams response
+POST /sessions/{id}/messages  →  User message persisted, run starts (status: active)
     │                              (token events, tool calls, tool results, ...)
+    │                              run.done event → session returns to idle
     │                              done event → assistant message persisted
     │
-POST /sessions/{id}/abort     →  In-progress stream cancelled gracefully
+POST /sessions/{id}/resume    →  Continue a waiting_for_approval run
+    │
+POST /sessions/{id}/abort     →  In-progress run cancelled gracefully
     │
 DELETE /sessions/{id}         →  Session and all messages deleted
 ```
 
-Sessions start with `status: active`. The `active`/`inactive`/`error` states are tracked in `server/app/models.py:SessionStatus`.
+Sessions start with `status: idle`. `active` means a run is currently executing. A successful run transitions the run to `done` and the session back to `idle`, so follow-up messages reuse the same `thread_id`. Terminal session states such as `aborted`, `failed`, `done`, and `expired` do not accept new messages.
 
 ---
 
@@ -29,9 +32,9 @@ Defined in `server/app/models.py:Session`:
 | Field | Type | Description |
 |---|---|---|
 | `id` | `str` (UUID) | Unique session identifier |
-| `thread_id` | `str` (UUID) | LangGraph checkpoint thread ID; one-to-one with session |
+| `thread_id` | `str` (UUID) | LangGraph checkpoint thread ID; one-to-one with the reusable conversation session |
 | `title` | `str` | Human-readable session name |
-| `status` | `SessionStatus` | `active`, `inactive`, or `error` |
+| `status` | `SessionStatus` | `idle`, `active`, `waiting_for_approval`, `aborted`, `failed`, `done`, `expired`, or legacy aliases |
 | `agent_name` | `str` | Name of the bound agent (default: `"default"`) |
 | `config` | `SessionConfig` | Per-session LLM overrides (provider, model, temperature) |
 | `scopes` | `dict[str, str]` | Builder-defined scope key-value pairs (e.g. `{"user": "alice", "project": "proj-123"}`) |
@@ -244,6 +247,10 @@ Completion payload shape:
 }
 ```
 
+The callback `status: "done"` describes the completed run. The session remains
+available for follow-up messages unless it has been explicitly aborted,
+failed, expired, or deleted.
+
 Current behavior notes:
 - delivery is best-effort and logged on failure
 - retries, signatures, and persistent delivery tracking are not yet implemented
@@ -309,7 +316,7 @@ Response:
 
 ## Abort
 
-`POST /sessions/{id}/abort` cancels any in-progress agent operation. The streaming response stops emitting events, the assistant message is persisted with whatever content was accumulated, and the session returns to idle.
+`POST /sessions/{id}/abort` cancels any in-progress agent operation. If a run is active, Cognition marks that run `aborted`, moves the session to terminal `aborted`, and releases any registered sandbox resources. A no-op abort on an idle session does not close the session.
 
 ```bash
 curl -X POST http://localhost:8000/sessions/${SESSION}/abort

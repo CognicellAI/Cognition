@@ -1,7 +1,7 @@
-"""Business Scenario: Session Lifecycle State Transitions
+"""Business Scenario: Session Lifecycle State Transitions.
 
-A session goes through its full lifecycle (queued → active → done)
-via message streaming, with correct status values at each stage.
+A session acts as a reusable conversation thread. Each message creates a run;
+successful run completion returns the session to idle.
 """
 
 from __future__ import annotations
@@ -18,7 +18,7 @@ class TestSessionLifecycleWorkflow:
     async def test_session_status_after_stream_completes(
         self, api_client: ScenarioTestClient
     ) -> None:
-        """After sending a message and the stream completes, session is done."""
+        """A newly created session has a valid reusable lifecycle status."""
         session_id = await api_client.create_session("Lifecycle Test")
 
         initial = await api_client.get(f"/sessions/{session_id}")

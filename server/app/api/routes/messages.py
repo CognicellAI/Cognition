@@ -16,8 +16,8 @@ Persistence contract:
 from __future__ import annotations
 
 import uuid
-from collections.abc import AsyncGenerator
-from typing import Any
+from collections.abc import AsyncGenerator, Mapping
+from typing import Any, cast
 
 import httpx
 import structlog
@@ -73,6 +73,16 @@ from server.app.storage.backend import StorageBackend
 router = APIRouter(prefix="/sessions/{session_id}/messages", tags=["messages"])
 logger = structlog.get_logger(__name__)
 
+_SENSITIVE_SANDBOX_METADATA_KEY_PARTS = (
+    "auth",
+    "authorization",
+    "credential",
+    "password",
+    "secret",
+    "token",
+    "x-aws-proxy-auth",
+)
+
 
 async def _refresh_session_message_count(store: StorageBackend, session_id: str) -> int:
     """Synchronize the durable session message_count projection."""
@@ -80,6 +90,74 @@ async def _refresh_session_message_count(store: StorageBackend, session_id: str)
     count = len(messages_for_session)
     await store.update_message_count(session_id, count)
     return count
+
+
+def _is_sensitive_sandbox_metadata_key(key: str) -> bool:
+    normalized = key.lower()
+    return any(part in normalized for part in _SENSITIVE_SANDBOX_METADATA_KEY_PARTS)
+
+
+def _sanitize_sandbox_metadata(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return {
+            str(key): _sanitize_sandbox_metadata(nested)
+            for key, nested in value.items()
+            if not _is_sensitive_sandbox_metadata_key(str(key))
+        }
+    if isinstance(value, list):
+        return [_sanitize_sandbox_metadata(item) for item in value]
+    return value
+
+
+async def _sandbox_lifecycle_sse(
+    event: SandboxLifecycleEvent,
+    *,
+    projection: RuntimeProjectionService | None = None,
+    run: SessionRun | None = None,
+) -> dict[str, Any]:
+    metadata = cast(dict[str, Any], _sanitize_sandbox_metadata(event.metadata))
+    sse: dict[str, Any] = cast(
+        dict[str, Any],
+        EventBuilder.sandbox_lifecycle(
+            sandbox_id=event.sandbox_id,
+            phase=event.phase,
+            sandbox_backend=event.sandbox_backend,
+            duration_ms=event.duration_ms,
+            exit_code=event.exit_code,
+            is_warm_pool_hit=event.is_warm_pool_hit,
+            metadata=metadata,
+        ),
+    )
+    if projection is not None and run is not None:
+        durable = await projection.append_event(
+            run,
+            f"sandbox.{event.phase}",
+            payload={
+                "sandbox_id": event.sandbox_id,
+                "sandbox_backend": event.sandbox_backend,
+                "duration_ms": event.duration_ms,
+                "exit_code": event.exit_code,
+                "is_warm_pool_hit": event.is_warm_pool_hit,
+                "metadata": metadata,
+            },
+        )
+        sse = enrich_sse_event(sse, durable)
+    return sse
+
+
+async def _release_sandbox_lifecycle_sse_events(
+    agent_manager: SessionAgentManager,
+    session_id: str,
+    *,
+    projection: RuntimeProjectionService | None = None,
+    run: SessionRun | None = None,
+) -> list[dict[str, Any]]:
+    """Release sandbox resources and return lifecycle events emitted by teardown."""
+    agent_manager.release_sandbox_backend(session_id)
+    events: list[dict[str, Any]] = []
+    for event in agent_manager.drain_sandbox_events(session_id):
+        events.append(await _sandbox_lifecycle_sse(event, projection=projection, run=run))
+    return events
 
 
 async def _touch_session_activity(
@@ -170,14 +248,7 @@ async def agent_event_stream(
 
         # Drain sandbox lifecycle events queued during agent setup
         for se in agent_manager.drain_sandbox_events(session_id):
-            yield EventBuilder.sandbox_lifecycle(
-                sandbox_id=se.sandbox_id,
-                phase=se.phase,
-                sandbox_backend=se.sandbox_backend,
-                duration_ms=se.duration_ms,
-                exit_code=se.exit_code,
-                is_warm_pool_hit=se.is_warm_pool_hit,
-            )
+            yield await _sandbox_lifecycle_sse(se, projection=projection, run=run)
 
         # Stream response using DeepAgents with multi-step support
         # Pass agent_manager to enable abort functionality
@@ -189,6 +260,7 @@ async def agent_event_stream(
             system_prompt=system_prompt,
             manager=agent_manager,
             scope=scope,
+            run_id=run.id if run is not None else None,
         ):
             if isinstance(event, TokenEvent):
                 assistant_content_parts.append(event.content)
@@ -452,28 +524,7 @@ async def agent_event_stream(
 
             elif isinstance(event, SandboxLifecycleEvent):
                 await _touch_session_activity(store, session_id)
-                sse = EventBuilder.sandbox_lifecycle(
-                    sandbox_id=event.sandbox_id,
-                    phase=event.phase,
-                    sandbox_backend=event.sandbox_backend,
-                    duration_ms=event.duration_ms,
-                    exit_code=event.exit_code,
-                    is_warm_pool_hit=event.is_warm_pool_hit,
-                )
-                if projection is not None and run is not None:
-                    durable = await projection.append_event(
-                        run,
-                        f"sandbox.{event.phase}",
-                        payload={
-                            "sandbox_id": event.sandbox_id,
-                            "sandbox_backend": event.sandbox_backend,
-                            "duration_ms": event.duration_ms,
-                            "exit_code": event.exit_code,
-                            "is_warm_pool_hit": event.is_warm_pool_hit,
-                        },
-                    )
-                    sse = enrich_sse_event(sse, durable)
-                yield sse
+                yield await _sandbox_lifecycle_sse(event, projection=projection, run=run)
 
             elif isinstance(event, StatusEvent):
                 await _touch_session_activity(store, session_id)
@@ -516,15 +567,24 @@ async def agent_event_stream(
                 yield sse
 
             elif isinstance(event, DoneEvent):
+                for sandbox_snapshot in agent_manager.snapshot_sandbox_backend_events(
+                    session_id
+                ):
+                    yield await _sandbox_lifecycle_sse(
+                        sandbox_snapshot,
+                        projection=projection,
+                        run=run,
+                    )
+
                 active_runtime_count = agent_manager.active_runtime_count(session_id)
-                terminal_status = (
+                completion_status = (
                     SessionStatus.ACTIVE.value
                     if active_runtime_count > 1
-                    else SessionStatus.DONE.value
+                    else SessionStatus.IDLE.value
                 )
                 state_sse: dict[str, Any] | None = None
                 if projection is not None and run is not None:
-                    if terminal_status == SessionStatus.DONE.value:
+                    if completion_status == SessionStatus.IDLE.value:
                         run, durable_state = await projection.transition_run_with_event(
                             run,
                             RunStatus.DONE,
@@ -532,7 +592,7 @@ async def agent_event_stream(
                         state_sse = enrich_sse_event(
                             EventBuilder.run_state(
                                 from_status="active",
-                                to_status=SessionStatus.DONE.value,
+                                to_status=SessionStatus.IDLE.value,
                                 scope_keys=scope_keys,
                             ),
                             durable_state,
@@ -542,17 +602,17 @@ async def agent_event_stream(
                         durable_status = await projection.append_event(
                             run,
                             "run.status",
-                            payload={"status": terminal_status},
+                            payload={"status": completion_status},
                         )
                         state_sse = enrich_sse_event(
                             EventBuilder.status("active"),
                             durable_status,
                         )
                 else:
-                    await store.update_session(session_id=session_id, status=terminal_status)
+                    await store.update_session(session_id=session_id, status=completion_status)
                     state_sse = EventBuilder.run_state(
                         from_status="active",
-                        to_status=terminal_status,
+                        to_status=completion_status,
                         scope_keys=scope_keys,
                     )
                 yield state_sse
@@ -577,6 +637,13 @@ async def agent_event_stream(
                 yield sse
 
             elif isinstance(event, ErrorEvent):
+                for teardown_sse in await _release_sandbox_lifecycle_sse_events(
+                    agent_manager,
+                    session_id,
+                    projection=projection,
+                    run=run,
+                ):
+                    yield teardown_sse
                 if event.code == "ABORTED":
                     error_state_sse: dict[str, Any] | None = None
                     if projection is not None and run is not None:
@@ -844,6 +911,13 @@ async def send_message(
                 f"{session.scopes}, but request has scope {scope.get_all()}. "
                 "Session scope is immutable after creation."
             ),
+        )
+
+    session_status = SessionStatus(session.status)
+    if SessionStatus.is_terminal(session_status):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Session '{session_id}' is in terminal state '{session_status.value}'",
         )
 
     if request.idempotency_key:

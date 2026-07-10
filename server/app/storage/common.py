@@ -64,7 +64,7 @@ def make_session(
     created_at: str | None = None,
     updated_at: str | None = None,
     message_count: int = 0,
-    status: SessionStatus = SessionStatus.ACTIVE,
+    status: SessionStatus = SessionStatus.IDLE,
 ) -> Session:
     created = created_at or now_utc_iso()
     updated = updated_at or created

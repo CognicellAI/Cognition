@@ -187,10 +187,10 @@ class ArtifactBackend(BackendProtocol):
         result = self.ls(path)
         return result.entries or []
 
-    async def aglob(self, pattern: str, path: str = "/") -> GlobResult:
+    async def aglob(self, pattern: str, path: str | None = "/") -> GlobResult:
         return GlobResult(matches=[])
 
-    def glob(self, pattern: str, path: str = "/") -> GlobResult:
+    def glob(self, pattern: str, path: str | None = "/") -> GlobResult:
         return GlobResult(matches=[])
 
     async def aglob_info(self, pattern: str, path: str = "/") -> list[FileInfo]:

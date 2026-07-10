@@ -68,7 +68,7 @@ class TestSessionManagerBasics:
             str(session_manager._settings.session_sandboxes_path)
         )
         assert session.title == "Test Session"
-        assert session.status == SessionStatus.ACTIVE
+        assert session.status == SessionStatus.IDLE
         assert session.id is not None
         assert session.thread_id is not None
 

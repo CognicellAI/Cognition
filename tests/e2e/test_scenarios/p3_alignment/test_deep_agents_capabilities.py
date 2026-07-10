@@ -259,7 +259,7 @@ class TestDeepAgentsInterruptResume:
 
             session_response = await api_client.get(f"/sessions/{session_id}")
             assert session_response.status_code == 200, session_response.text
-            assert session_response.json()["status"] == "active"
+            assert session_response.json()["status"] == "idle"
         finally:
             await api_client.delete(f"/sessions/{session_id}")
 
@@ -296,7 +296,7 @@ class TestDeepAgentsInterruptResume:
 
             session_response = await api_client.get(f"/sessions/{session_id}")
             assert session_response.status_code == 200, session_response.text
-            assert session_response.json()["status"] == "active"
+            assert session_response.json()["status"] == "idle"
         finally:
             await api_client.delete(f"/sessions/{session_id}")
 
@@ -334,7 +334,7 @@ class TestDeepAgentsInterruptResume:
 
             session_response = await api_client.get(f"/sessions/{session_id}")
             assert session_response.status_code == 200, session_response.text
-            assert session_response.json()["status"] == "active"
+            assert session_response.json()["status"] == "idle"
         finally:
             await api_client.delete(f"/sessions/{session_id}")
 
@@ -364,6 +364,7 @@ class TestDeepAgentsInterruptResume:
             assert response.status_code == 200, response.text
             assert response.json()["status"] in {
                 "active",
+                "idle",
                 "inactive",
                 "error",
                 "waiting_for_approval",

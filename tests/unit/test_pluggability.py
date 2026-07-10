@@ -8,6 +8,7 @@ import pytest
 
 from server.app.agent.cognition_agent import (
     CognitionAgentParams,
+    _model_cache_key,
     clear_agent_cache,
     create_cognition_agent,
 )
@@ -26,6 +27,13 @@ class _DefaultsOnlyConfigStore:
         self, scope: dict[str, str] | None = None
     ) -> GlobalAgentDefaults:
         return self._defaults
+
+
+def test_string_model_cache_key_includes_model_id():
+    """Different string model IDs must not reuse the same compiled graph."""
+    assert _model_cache_key("us.amazon.nova-lite-v1:0") != _model_cache_key(
+        "global.anthropic.claude-sonnet-5"
+    )
 
 
 @dataclass(frozen=True)
@@ -75,6 +83,55 @@ async def test_create_cognition_agent_pluggability():
         assert "cognition_observability" in middleware_names
         assert "cognition_streaming" in middleware_names
     clear_agent_cache()
+
+
+@pytest.mark.asyncio
+async def test_string_model_change_recompiles_agent_graph():
+    """Changing a string model ID should produce a fresh Deep Agents graph."""
+    clear_agent_cache()
+    with patch("server.app.agent.cognition_agent.create_deep_agent") as mock_create:
+        mock_create.return_value = AsyncMock()
+
+        await create_cognition_agent(
+            CognitionAgentParams(
+                project_path=".",
+                model="us.amazon.nova-lite-v1:0",
+            )
+        )
+        await create_cognition_agent(
+            CognitionAgentParams(
+                project_path=".",
+                model="global.anthropic.claude-sonnet-5",
+            )
+        )
+
+        assert mock_create.call_count == 2
+    clear_agent_cache()
+
+
+@pytest.mark.asyncio
+async def test_model_cache_key_change_recompiles_agent_graph():
+    """Provider/config identity changes should recompile even for the same model ID."""
+    clear_agent_cache()
+    with patch("server.app.agent.cognition_agent.create_deep_agent") as mock_create:
+        mock_create.return_value = AsyncMock()
+
+        await create_cognition_agent(
+            CognitionAgentParams(
+                project_path=".",
+                model="shared-model",
+                model_cache_key="resolved:openai_compatible:shared-model:https://one.example",
+            )
+        )
+        await create_cognition_agent(
+            CognitionAgentParams(
+                project_path=".",
+                model="shared-model",
+                model_cache_key="resolved:openai_compatible:shared-model:https://two.example",
+            )
+        )
+
+        assert mock_create.call_count == 2
 
 
 @pytest.mark.asyncio

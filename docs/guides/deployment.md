@@ -366,7 +366,8 @@ The Helm chart automatically creates the required RBAC (namespace-scoped Role fo
 
 **Startup validation** — Cognition checks at startup that the agent-sandbox CRDs exist and the router is reachable. If CRDs are missing, the server fails to start with a clear error message.
 
-See [Kubernetes Sandbox](../concepts/kubernetes-sandbox.md) for architecture details, scoping labels, and the two-package design.
+See [Kubernetes Sandbox](../concepts/sandboxes/kubernetes/index.md) for
+architecture details, scoping labels, and the two-package design.
 
 ### Health Probes
 
@@ -407,7 +408,7 @@ scrape_configs:
 | `cognition_requests_total{status=~"5.."}` | Rate > 0 sustained | Server-side errors |
 | `cognition_llm_call_duration_seconds` | p99 > 30s | LLM latency degradation |
 | `cognition_tool_calls_total{status="error"}` | Rate spike | Tool execution failures |
-| `cognition_active_sessions` | Near `COGNITION_MAX_SESSIONS` | Session limit approaching |
+| `cognition_active_sessions` | Near `COGNITION_MAX_SESSIONS` | Open non-terminal session limit approaching |
 
 ---
 

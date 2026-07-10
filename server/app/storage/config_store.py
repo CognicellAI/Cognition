@@ -40,6 +40,7 @@ from server.app.storage.config_models import (
     GlobalProviderDefaults,
     McpServerRegistration,
     ProviderConfig,
+    SandboxProfile,
     SkillDefinition,
     ToolRegistration,
 )
@@ -180,6 +181,26 @@ class ConfigStore(Protocol):
     async def upsert_mcp_server(self, server: McpServerRegistration) -> None: ...
 
     async def delete_mcp_server(self, name: str, scope: dict[str, str] | None = None) -> bool: ...
+
+    # ------------------------------------------------------------------
+    # Sandbox profile CRUD
+    # ------------------------------------------------------------------
+
+    async def get_sandbox_profile(
+        self, name: str, scope: dict[str, str] | None = None
+    ) -> SandboxProfile | None: ...
+
+    async def list_sandbox_profiles(
+        self, scope: dict[str, str] | None = None
+    ) -> list[SandboxProfile]: ...
+
+    async def upsert_sandbox_profile(self, profile: SandboxProfile) -> None: ...
+
+    async def upsert_sandbox_profile_from_dict(self, data: dict[str, Any]) -> None: ...
+
+    async def delete_sandbox_profile(
+        self, name: str, scope: dict[str, str] | None = None
+    ) -> bool: ...
 
     # ------------------------------------------------------------------
     # Global defaults
@@ -543,6 +564,38 @@ Attempt the exact protected tool call immediately so that human-in-the-loop appr
 
     async def delete_mcp_server(self, name: str, scope: dict[str, str] | None = None) -> bool:
         return bool(await self._config_registry.delete_mcp_server(name, scope))
+
+    # ------------------------------------------------------------------
+    # Sandbox profile CRUD
+    # ------------------------------------------------------------------
+
+    async def get_sandbox_profile(
+        self, name: str, scope: dict[str, str] | None = None
+    ) -> SandboxProfile | None:
+        return cast(
+            SandboxProfile | None,
+            await self._config_registry.get_sandbox_profile(name, scope),
+        )
+
+    async def list_sandbox_profiles(
+        self, scope: dict[str, str] | None = None
+    ) -> list[SandboxProfile]:
+        return cast(
+            list[SandboxProfile],
+            await self._config_registry.list_sandbox_profiles(scope),
+        )
+
+    async def upsert_sandbox_profile(self, profile: SandboxProfile) -> None:
+        await self._config_registry.upsert_sandbox_profile(profile)
+
+    async def upsert_sandbox_profile_from_dict(self, data: dict[str, Any]) -> None:
+        profile = SandboxProfile.model_validate(data)
+        await self._config_registry.upsert_sandbox_profile(profile)
+
+    async def delete_sandbox_profile(
+        self, name: str, scope: dict[str, str] | None = None
+    ) -> bool:
+        return bool(await self._config_registry.delete_sandbox_profile(name, scope))
 
     # ------------------------------------------------------------------
     # Global defaults

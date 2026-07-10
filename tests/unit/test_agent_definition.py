@@ -36,6 +36,8 @@ class TestAgentConfig:
         assert config.provider is None
         assert config.model is None
         assert config.timeout_seconds is None
+        assert config.sandbox_profile is None
+        assert config.sandbox_execution_role_arn is None
 
     def test_valid_temperature(self):
         """Test valid temperature values."""
@@ -81,6 +83,20 @@ class TestAgentConfig:
 
         with pytest.raises(ValueError):
             AgentConfig(timeout_seconds=-1.0)
+
+    def test_sandbox_config_fields(self):
+        """Sandbox profile and role selectors are trusted agent config fields."""
+        config = AgentConfig(
+            sandbox_profile="tenant-runtime",
+            sandbox_execution_role_arn=(
+                "arn:aws:iam::123456789012:role/cognition-agent-runtime"
+            ),
+        )
+        assert config.sandbox_profile == "tenant-runtime"
+        assert (
+            config.sandbox_execution_role_arn
+            == "arn:aws:iam::123456789012:role/cognition-agent-runtime"
+        )
 
 
 class TestSubagentDefinition:

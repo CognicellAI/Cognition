@@ -18,7 +18,7 @@ from server.app.api.dependencies import (
     set_config_store,
 )
 from server.app.main import app
-from server.app.models import RunStatus
+from server.app.models import RunStatus, SessionStatus
 from server.app.runtime_projection import RuntimeProjectionService
 from server.app.settings import Settings
 
@@ -56,6 +56,32 @@ class TestHealthEndpoints:
         assert "version" in data
         assert "active_sessions" in data
         assert "timestamp" in data
+
+    def test_health_active_sessions_excludes_terminal_sessions(self):
+        """Health active_sessions reports non-terminal sessions only."""
+
+        class FakeStorage:
+            async def list_sessions(self):
+                from types import SimpleNamespace
+
+                return [
+                    SimpleNamespace(status=SessionStatus.IDLE),
+                    SimpleNamespace(status=SessionStatus.ACTIVE),
+                    SimpleNamespace(status=SessionStatus.WAITING_FOR_APPROVAL),
+                    SimpleNamespace(status=SessionStatus.DONE),
+                    SimpleNamespace(status=SessionStatus.FAILED),
+                    SimpleNamespace(status=SessionStatus.ABORTED),
+                    SimpleNamespace(status=SessionStatus.EXPIRED),
+                ]
+
+        app.dependency_overrides[get_storage_backend_dep] = lambda: FakeStorage()
+        try:
+            response = client.get("/health")
+        finally:
+            app.dependency_overrides.pop(get_storage_backend_dep, None)
+
+        assert response.status_code == 200
+        assert response.json()["active_sessions"] == 3
 
     def test_ready_check(self):
         """Test ready endpoint returns ready status."""
@@ -503,6 +529,7 @@ class TestRuntimeDurabilityEndpoints:
         assert session_data["active_run_id"] is None
         assert session_data["latest_event_type"] == "run.done"
         assert session_data["last_activity_at"] is not None
+        assert session_data["status"] == "idle"
 
     def test_message_idempotency_key_does_not_reuse_terminal_run_for_new_work(self):
         session_resp = client.post("/sessions", json={"title": "runtime-idempotency"})
@@ -691,6 +718,101 @@ class TestSessionAgentName:
         )
         assert response.status_code == 422
 
+    def test_create_session_with_scoped_api_agent(self):
+        """Scoped API-created agents are valid with matching scope only."""
+        settings = Settings(scoping_enabled=True, scope_keys=["tenant", "user"])
+        app.dependency_overrides[get_settings_dep] = lambda: settings
+
+        agent_name = f"scoped-agent-{uuid.uuid4().hex}"
+        headers = {
+            "X-Cognition-Scope-Tenant": "kennel-testing-lab",
+            "X-Cognition-Scope-User": "surface-a",
+        }
+        other_headers = {
+            "X-Cognition-Scope-Tenant": "kennel-testing-lab",
+            "X-Cognition-Scope-User": "surface-b",
+        }
+        try:
+            create_agent = client.post(
+                "/agents",
+                headers=headers,
+                json={
+                    "name": agent_name,
+                    "system_prompt": "You are scoped.",
+                    "mode": "primary",
+                    "skills": [],
+                    "tools": [],
+                },
+            )
+            assert create_agent.status_code == 201
+
+            visible = client.get(f"/agents/{agent_name}", headers=headers)
+            assert visible.status_code == 200
+
+            hidden = client.get(f"/agents/{agent_name}", headers=other_headers)
+            assert hidden.status_code == 404
+
+            valid_session = client.post(
+                "/sessions",
+                headers=headers,
+                json={"title": "Scoped Agent Session", "agent_name": agent_name},
+            )
+            assert valid_session.status_code == 201
+            assert valid_session.json()["agent_name"] == agent_name
+
+            invalid_session = client.post(
+                "/sessions",
+                headers=other_headers,
+                json={"title": "Wrong Scope", "agent_name": agent_name},
+            )
+            assert invalid_session.status_code == 422
+        finally:
+            app.dependency_overrides.pop(get_settings_dep, None)
+
+    def test_update_session_agent_name_uses_scope(self):
+        """PATCH /sessions validates agent_name in the request scope."""
+        settings = Settings(scoping_enabled=True, scope_keys=["tenant", "user"])
+        app.dependency_overrides[get_settings_dep] = lambda: settings
+
+        first_agent = f"scoped-agent-{uuid.uuid4().hex}"
+        second_agent = f"scoped-agent-{uuid.uuid4().hex}"
+        headers = {
+            "X-Cognition-Scope-Tenant": "kennel-testing-lab",
+            "X-Cognition-Scope-User": "surface-a",
+        }
+        try:
+            for agent_name in (first_agent, second_agent):
+                create_agent = client.post(
+                    "/agents",
+                    headers=headers,
+                    json={
+                        "name": agent_name,
+                        "system_prompt": "You are scoped.",
+                        "mode": "primary",
+                        "skills": [],
+                        "tools": [],
+                    },
+                )
+                assert create_agent.status_code == 201
+
+            create_session = client.post(
+                "/sessions",
+                headers=headers,
+                json={"title": "Scoped Patch Session", "agent_name": first_agent},
+            )
+            assert create_session.status_code == 201
+            session_id = create_session.json()["id"]
+
+            patch_session = client.patch(
+                f"/sessions/{session_id}",
+                headers=headers,
+                json={"agent_name": second_agent},
+            )
+            assert patch_session.status_code == 200
+            assert patch_session.json()["agent_name"] == second_agent
+        finally:
+            app.dependency_overrides.pop(get_settings_dep, None)
+
     def test_session_agent_name_persisted(self):
         """Test agent_name is persisted and returned in session details."""
         # Create session
@@ -785,6 +907,86 @@ class TestSessionAgentName:
             assert update_resp.json()["agent_name"] == agent_name
         finally:
             app.dependency_overrides.pop(get_settings_dep, None)
+
+
+class TestScopedSessionAgentName:
+    """Test scoped API-created agent resolution for session binding."""
+
+    def test_scoped_api_created_agent_can_create_and_update_sessions(self):
+        """Session agent validation must use the same scope as the agent API."""
+        scoped_settings = Settings(
+            scoping_enabled=True,
+            scope_keys=["tenant", "user"],
+        )
+        app.dependency_overrides[get_settings_dep] = lambda: scoped_settings
+        name = f"kennel-testing-lab-lambda-microvm-smoke-{uuid.uuid4().hex[:8]}"
+        headers = {
+            "X-Cognition-Scope-Tenant": "kennel-testing-lab",
+            "X-Cognition-Scope-User": "kennel-surface-lambda-microvm-smoke",
+        }
+        wrong_headers = {
+            "X-Cognition-Scope-Tenant": "kennel-testing-lab",
+            "X-Cognition-Scope-User": "other-user",
+        }
+
+        try:
+            create_agent_resp = client.post(
+                "/agents",
+                headers=headers,
+                json={
+                    "name": name,
+                    "description": "Kennel scoped Lambda MicroVM smoke agent",
+                    "system_prompt": "You are a scoped smoke-test agent.",
+                    "mode": "primary",
+                    "sandbox_profile": "lambda-microvm-smoke",
+                },
+            )
+            assert create_agent_resp.status_code == 201, create_agent_resp.text
+
+            same_scope_get = client.get(f"/agents/{name}", headers=headers)
+            assert same_scope_get.status_code == 200
+
+            wrong_scope_get = client.get(f"/agents/{name}", headers=wrong_headers)
+            assert wrong_scope_get.status_code == 404
+
+            missing_scope_session = client.post(
+                "/sessions",
+                json={"title": "missing-scope", "agent_name": name},
+            )
+            assert missing_scope_session.status_code == 403
+
+            wrong_scope_session = client.post(
+                "/sessions",
+                headers=wrong_headers,
+                json={"title": "wrong-scope", "agent_name": name},
+            )
+            assert wrong_scope_session.status_code == 422
+
+            create_session_resp = client.post(
+                "/sessions",
+                headers=headers,
+                json={"title": "direct generated agent probe", "agent_name": name},
+            )
+            assert create_session_resp.status_code == 201, create_session_resp.text
+            assert create_session_resp.json()["agent_name"] == name
+
+            patch_target_resp = client.post(
+                "/sessions",
+                headers=headers,
+                json={"title": "patch generated agent probe"},
+            )
+            assert patch_target_resp.status_code == 201, patch_target_resp.text
+
+            patch_session_resp = client.patch(
+                f"/sessions/{patch_target_resp.json()['id']}",
+                headers=headers,
+                json={"agent_name": name},
+            )
+            assert patch_session_resp.status_code == 200, patch_session_resp.text
+            assert patch_session_resp.json()["agent_name"] == name
+        finally:
+            app.dependency_overrides.pop(get_settings_dep, None)
+            client.delete(f"/agents/{name}", headers=headers)
 
 
 class TestAgentEndpoints:

@@ -40,6 +40,7 @@ async def get_capabilities(
     if settings.docker_image:
         sandbox_backends.append("docker")
     sandbox_backends.append("kubernetes")
+    sandbox_backends.append("aws_lambda_microvm")
 
     a2a_enabled = settings.a2a_enabled
 
@@ -59,6 +60,8 @@ async def get_capabilities(
         "scope_propagation": True,
         "provider_config_crud": True,
         "agent_config_crud": True,
+        "sandbox_profile_crud": True,
+        "aws_lambda_microvm_sandbox": True,
         "model_catalog": True,
         "a2a": a2a_enabled,
         "a2a_jsonrpc": a2a_enabled,

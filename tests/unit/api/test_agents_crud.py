@@ -103,6 +103,10 @@ class TestCreateAgent:
                 "retention": {"logs": "summarize"},
             },
             "timeout_seconds": 45,
+            "sandbox_profile": "lambda-default",
+            "sandbox_execution_role_arn": (
+                "arn:aws:iam::123456789012:role/cognition-agent-runtime"
+            ),
             "middleware": [{"name": "tool_retry", "max_retries": 2}],
             "interrupt_on": {
                 "execute": {
@@ -140,6 +144,11 @@ class TestCreateAgent:
         assert data["config"]["context_policy"]["summarizer_model"] == "fast-summarizer"
         assert data["config"]["context_policy"]["retention"] == {"logs": "summarize"}
         assert data["config"]["timeout_seconds"] == 45
+        assert data["config"]["sandbox_profile"] == "lambda-default"
+        assert (
+            data["config"]["sandbox_execution_role_arn"]
+            == "arn:aws:iam::123456789012:role/cognition-agent-runtime"
+        )
         assert data["interrupt_on"]["execute"]["allowed_decisions"] == ["approve", "reject"]
         assert data["permissions"][0]["paths"] == ["/workspace/repo/**"]
         assert data["async_subagents"][0]["name"] == "researcher"
@@ -286,7 +295,14 @@ class TestUpdateAgent:
         )
         response = client.patch(
             "/agents/test-patch-config-agent",
-            json={"max_tokens": 8000, "timeout_seconds": 30},
+            json={
+                "max_tokens": 8000,
+                "timeout_seconds": 30,
+                "sandbox_profile": "lambda-vpc",
+                "sandbox_execution_role_arn": (
+                    "arn:aws:iam::123456789012:role/cognition-agent-vpc"
+                ),
+            },
         )
         assert response.status_code == 200
         assert response.json()["provider"] == "openai"
@@ -294,6 +310,11 @@ class TestUpdateAgent:
         assert response.json()["config"]["recursion_limit"] == 100
         assert response.json()["config"]["provider"] == "openai"
         assert response.json()["config"]["timeout_seconds"] == 30
+        assert response.json()["config"]["sandbox_profile"] == "lambda-vpc"
+        assert (
+            response.json()["config"]["sandbox_execution_role_arn"]
+            == "arn:aws:iam::123456789012:role/cognition-agent-vpc"
+        )
 
     def test_patch_agent_persists_blocked_tools(self):
         client.post(

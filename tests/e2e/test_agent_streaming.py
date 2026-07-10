@@ -53,12 +53,12 @@ async def _collect_sse_events(
 def _stream_completed(events: dict[str, list[dict]]) -> bool:
     """Check if the stream completed successfully.
 
-    Accepts either a 'done' event, or a 'run_state' event transitioning to 'done'.
+    Accepts either a 'done' event, or a 'run_state' event showing run completion.
     """
     if "done" in events:
         return True
     for rs in events.get("run_state", []):
-        if rs.get("to_status") == "done":
+        if rs.get("to_status") in {"idle", "done"}:
             return True
     return False
 
