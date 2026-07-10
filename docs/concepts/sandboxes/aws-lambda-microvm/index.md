@@ -6,7 +6,8 @@ execution roles, and profile-controlled networking without running Docker or
 Kubernetes sandbox infrastructure yourself.
 
 Cognition consumes prebuilt Lambda MicroVM image ARNs. It does not build,
-publish, or mutate MicroVM images.
+publish, or mutate MicroVM images at runtime. Builders who need a starting image
+can build one from Cognition's [default runtime image source](./default-runtime-image.md).
 
 ## Architecture
 
@@ -46,6 +47,7 @@ deleted, aborted, failed, expired, or released by backend policy.
 ## Start Here
 
 - [Setup](./setup.md)
+- [Default Runtime Image](./default-runtime-image.md)
 - [Sandbox Profiles](./profiles.md)
 - [IAM and Networking](./iam-and-networking.md)
 - [Runtime Command Server](./runtime-command-server.md)

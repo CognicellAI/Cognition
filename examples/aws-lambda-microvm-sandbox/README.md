@@ -12,6 +12,14 @@ It includes:
 The Terraform consumes a prebuilt Lambda MicroVM image ARN. It does not build,
 publish, or update MicroVM images.
 
+## Need an Image?
+
+If you do not already have a Lambda MicroVM image, use
+[`examples/aws-lambda-microvm-default-runtime`](../aws-lambda-microvm-default-runtime/)
+first. That example packages Cognition's commented default runtime source,
+creates a builder-owned Lambda MicroVM image, and outputs the image ARN/version
+used by this example.
+
 ## Prerequisites
 
 You need:
@@ -187,6 +195,7 @@ Terraform does not delete or modify your prebuilt MicroVM image.
 
 ## Related Docs
 
-- [AWS Lambda MicroVM Sandbox concept](../../docs/concepts/aws-lambda-microvm-sandbox.md)
-- [AWS Lambda MicroVM Sandbox setup guide](../../docs/guides/aws-lambda-microvm-sandbox.md)
+- [AWS Lambda MicroVM Sandbox concept](../../docs/concepts/sandboxes/aws-lambda-microvm/index.md)
+- [Default runtime image](../../docs/concepts/sandboxes/aws-lambda-microvm/default-runtime-image.md)
+- [AWS Lambda MicroVM Sandbox setup guide](../../docs/concepts/sandboxes/aws-lambda-microvm/setup.md)
 - [API Reference: Sandbox Profiles](../../docs/guides/api-reference.md#sandbox-profiles)

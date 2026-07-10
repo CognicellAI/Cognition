@@ -16,6 +16,10 @@ the MicroVM and issues a proxy auth token.
 
 The server should listen on the `SandboxProfile.port`, usually `8080`.
 
+Builders who need a ready starting point can use the
+[default runtime image](./default-runtime-image.md) example. Its zipped runtime
+source includes a commented `Dockerfile`, `server.py`, and runtime `README.md`.
+
 ## Auth Boundary
 
 The command server does not need its own application-level public auth when it
@@ -51,5 +55,6 @@ and reject path traversal outside the workspace.
 ## Related
 
 - [Setup](./setup.md)
+- [Default Runtime Image](./default-runtime-image.md)
 - [IAM and Networking](./iam-and-networking.md)
 - [Lifecycle and Observability](./lifecycle-and-observability.md)

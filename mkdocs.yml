@@ -75,6 +75,7 @@ nav:
           - AWS Lambda MicroVM:
               - Overview: concepts/sandboxes/aws-lambda-microvm/index.md
               - Setup: concepts/sandboxes/aws-lambda-microvm/setup.md
+              - Default Runtime Image: concepts/sandboxes/aws-lambda-microvm/default-runtime-image.md
               - Profiles: concepts/sandboxes/aws-lambda-microvm/profiles.md
               - IAM & Networking: concepts/sandboxes/aws-lambda-microvm/iam-and-networking.md
               - Runtime Command Server: concepts/sandboxes/aws-lambda-microvm/runtime-command-server.md

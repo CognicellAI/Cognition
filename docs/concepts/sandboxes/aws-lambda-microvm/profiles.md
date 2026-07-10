@@ -36,8 +36,10 @@ V1 profiles consume prebuilt Lambda MicroVM image ARNs:
 image_arn: arn:aws:lambda:us-west-2:123456789012:microvm-image:cognition-runtime
 ```
 
-Cognition does not create or update images. Builders own image contents,
-publishing, patching, and runtime command server compatibility.
+Cognition does not create or update images at runtime. Builders own image
+contents, publishing, patching, and runtime command server compatibility. If you
+need a starter image, use the [default runtime image](./default-runtime-image.md)
+example to create a builder-owned image ARN.
 
 ## Cost-Sensitive Settings
 
@@ -66,5 +68,6 @@ no longer need so concurrent-session quota is released.
 ## Related
 
 - [Setup](./setup.md)
+- [Default Runtime Image](./default-runtime-image.md)
 - [Lifecycle and Observability](./lifecycle-and-observability.md)
 - [API Reference](../../../guides/api-reference.md#sandbox-profiles)
