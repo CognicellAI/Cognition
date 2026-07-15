@@ -603,7 +603,7 @@ class CognitionKubernetesSandboxBackend(SandboxBackendProtocol):
     with Cognition-specific policy:
 
     - Protected path enforcement (same as CognitionLocalSandboxBackend)
-    - Builder-defined scope labels derived from effective_scope for multi-tenant scoping
+    - Builder-defined labels derived from effective_scope for runtime isolation
     - Session-scoped lifecycle tied to Cognition session creation/destruction
 
     The K8sSandbox is lazily initialized on first ``execute()`` — no Sandbox CR

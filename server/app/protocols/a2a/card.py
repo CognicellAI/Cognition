@@ -44,11 +44,20 @@ def build_agent_card_for_agent(
         version=version,
         default_input_modes=["text/plain"],
         default_output_modes=["text/plain", "application/json"],
-        capabilities=AgentCapabilities(streaming=True),
+        # Explicitly publish every capability flag.  The protocol uses
+        # presence-sensitive fields, so omitting ``pushNotifications`` or
+        # ``extendedAgentCard`` would leave clients unable to distinguish an
+        # unsupported capability from an unknown one.
+        capabilities=AgentCapabilities(
+            streaming=True,
+            push_notifications=False,
+            extended_agent_card=False,
+        ),
         supported_interfaces=[
             AgentInterface(
                 protocol_binding="JSONRPC",
                 url=f"{base_url}/a2a/{agent.name}",
+                protocol_version="1.0",
             )
         ],
         skills=[skill],

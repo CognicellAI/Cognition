@@ -5,7 +5,14 @@ from __future__ import annotations
 import uuid
 from typing import Any, Literal
 
-from server.app.models import RunStatus, Session, SessionEvent, SessionRun, SessionStatus
+from server.app.models import (
+    RunStatus,
+    Session,
+    SessionEvent,
+    SessionRun,
+    SessionStatus,
+    TaskStatus,
+)
 from server.app.observability import (
     RUN_TRANSITION_COUNT,
     RUNTIME_EVENT_COUNT,
@@ -39,9 +46,11 @@ class RuntimeProjectionService:
         idempotency_key: str | None = None,
         trace_id: str | None = None,
         metadata: dict[str, Any] | None = None,
+        task_id: str | None = None,
+        parent_run_id: str | None = None,
     ) -> SessionRun:
         """Create or reuse a durable active run for a session."""
-        scope = effective_scope or session.scopes
+        scope = session.scopes if effective_scope is None else effective_scope
         with trace_span(
             "cognition.run.begin",
             {
@@ -69,7 +78,28 @@ class RuntimeProjectionService:
                 idempotency_key=idempotency_key,
                 trace_id=trace_id or span_trace_id,
                 metadata=metadata,
+                task_id=task_id,
+                parent_run_id=parent_run_id,
             )
+            if task_id is not None:
+                task = await self.store.get_task(task_id, scope)
+                if task is None:
+                    raise ValueError(f"Runtime task not found for run: {task_id}")
+                linked = await self.store.update_task(
+                    task_id,
+                    scope,
+                    expected_statuses={
+                        TaskStatus.SUBMITTED,
+                        TaskStatus.WORKING,
+                        TaskStatus.INPUT_REQUIRED,
+                        TaskStatus.AUTH_REQUIRED,
+                    },
+                    status=TaskStatus.WORKING,
+                    current_run_id=run.id,
+                    last_run_id=run.id,
+                )
+                if linked is None:
+                    raise ActiveRunConflictError(run)
             await self.store.update_session(
                 session_id=session.id,
                 status=SessionStatus.ACTIVE.value,
@@ -117,6 +147,7 @@ class RuntimeProjectionService:
                 effective_scope=run.effective_scope,
                 trace_id=trace_id or current_trace_id or run.trace_id,
                 span_id=span_id or current_span_id,
+                task_id=run.task_id,
             )
             RUNTIME_EVENT_COUNT.labels(event_type=event_type, visibility=visibility).inc()
             return event
@@ -160,21 +191,43 @@ class RuntimeProjectionService:
                 },
             ),
         ):
-            event_type = f"run.{status.value}"
-            event = await self.append_event(
-                run,
-                event_type,
-                payload={"status": status.value, "reason": reason, "error_code": error_code},
-            )
+            effective_status = status
+            task_status = _task_status_for_run(status)
+            if run.task_id is not None and task_status is not None:
+                current_task = await self.store.get_task(run.task_id, run.effective_scope)
+                if current_task is not None and current_task.status != task_status:
+                    updated_task = await self.store.update_task(
+                        run.task_id,
+                        run.effective_scope,
+                        expected_statuses={current_task.status},
+                        status=task_status,
+                        current_run_id=run.id,
+                        last_run_id=run.id,
+                        status_reason=reason,
+                    )
+                    if updated_task is None:
+                        winner = await self.store.get_task(run.task_id, run.effective_scope)
+                        if winner is not None and TaskStatus.is_terminal(winner.status):
+                            effective_status = _run_status_for_task(winner.status)
+
             updated = await self.store.update_run(
                 run.id,
-                status=status,
-                last_activity_at=event.created_at,
+                status=effective_status,
                 error_code=error_code,
                 status_reason=reason,
             )
             if updated is None:
                 updated = run
+            event_type = f"run.{effective_status.value}"
+            event = await self.append_event(
+                updated,
+                event_type,
+                payload={
+                    "status": effective_status.value,
+                    "reason": reason,
+                    "error_code": error_code,
+                },
+            )
 
             session = await self.store.get_session(run.session_id)
             metadata = dict(session.metadata) if session is not None else {}
@@ -185,7 +238,7 @@ class RuntimeProjectionService:
                     "last_activity_at": event.created_at,
                 }
             )
-            if RunStatus.is_terminal(status):
+            if RunStatus.is_terminal(effective_status):
                 if metadata.get("active_run_id") == run.id:
                     metadata.pop("active_run_id", None)
             else:
@@ -193,10 +246,14 @@ class RuntimeProjectionService:
 
             await self.store.update_session(
                 session_id=run.session_id,
-                status=(session_status.value if session_status else _session_status_for_run(status)),
+                status=(
+                    session_status.value
+                    if session_status
+                    else _session_status_for_run(effective_status)
+                ),
                 metadata=metadata,
             )
-            RUN_TRANSITION_COUNT.labels(status=status.value).inc()
+            RUN_TRANSITION_COUNT.labels(status=effective_status.value).inc()
             return updated, event
 
     async def refresh_message_count(self, session_id: str) -> int:
@@ -240,17 +297,21 @@ def enrich_sse_event(event: dict[str, Any], durable_event: SessionEvent) -> dict
     data["event_id"] = durable_event.id
     data["event_type"] = durable_event.event_type
     data["created_at"] = durable_event.created_at
+    if durable_event.task_id:
+        data["task_id"] = durable_event.task_id
     if durable_event.trace_id:
         data["trace_id"] = durable_event.trace_id
     return {**event, "data": data}
 
 
 def _session_status_for_run(status: RunStatus) -> str:
-    if status == RunStatus.WAITING_FOR_APPROVAL:
+    if status in {RunStatus.WAITING_FOR_APPROVAL, RunStatus.INTERRUPTED}:
         return SessionStatus.WAITING_FOR_APPROVAL.value
     if status == RunStatus.ABORTED:
         return SessionStatus.ABORTED.value
     if status == RunStatus.FAILED:
+        return SessionStatus.FAILED.value
+    if status == RunStatus.REJECTED:
         return SessionStatus.FAILED.value
     if status == RunStatus.DONE:
         return SessionStatus.IDLE.value
@@ -276,3 +337,32 @@ def _runtime_attributes(
     if extra:
         attributes.update(extra)
     return attributes
+
+
+def _task_status_for_run(status: RunStatus) -> TaskStatus | None:
+    mapping = {
+        RunStatus.QUEUED: TaskStatus.SUBMITTED,
+        RunStatus.STARTING: TaskStatus.WORKING,
+        RunStatus.ACTIVE: TaskStatus.WORKING,
+        RunStatus.WAITING_FOR_APPROVAL: TaskStatus.INPUT_REQUIRED,
+        RunStatus.INTERRUPTED: TaskStatus.INPUT_REQUIRED,
+        RunStatus.ABORTED: TaskStatus.CANCELED,
+        RunStatus.FAILED: TaskStatus.FAILED,
+        RunStatus.REJECTED: TaskStatus.REJECTED,
+        RunStatus.DONE: TaskStatus.COMPLETED,
+    }
+    return mapping.get(status)
+
+
+def _run_status_for_task(status: TaskStatus) -> RunStatus:
+    mapping = {
+        TaskStatus.SUBMITTED: RunStatus.QUEUED,
+        TaskStatus.WORKING: RunStatus.ACTIVE,
+        TaskStatus.INPUT_REQUIRED: RunStatus.INTERRUPTED,
+        TaskStatus.AUTH_REQUIRED: RunStatus.INTERRUPTED,
+        TaskStatus.COMPLETED: RunStatus.DONE,
+        TaskStatus.FAILED: RunStatus.FAILED,
+        TaskStatus.CANCELED: RunStatus.ABORTED,
+        TaskStatus.REJECTED: RunStatus.REJECTED,
+    }
+    return mapping[status]

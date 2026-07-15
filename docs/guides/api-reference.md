@@ -90,7 +90,7 @@ All request and response bodies are JSON unless noted. Streaming endpoints retur
 - [A2A Protocol](#a2a-protocol)
   - [`GET /.well-known/agent-card.json`](#get-well-knownagent-cardjson)
   - [`POST /a2a/{agent_name}`](#post-a2aagent_name)
-- [Multi-Tenant Scoping](#multi-tenant-scoping)
+  - [Builder-Defined Runtime Scoping](#builder-defined-runtime-scoping)
 - [Rate Limiting](#rate-limiting)
 - [Error Format](#error-format)
 
@@ -373,7 +373,7 @@ List messages in a session with pagination.
     {
       "id": "msg-uuid",
       "session_id": "session-uuid",
-      "role": "user",
+      "role": "ROLE_USER",
       "content": "List files.",
       "created_at": "2026-03-02T12:00:00Z",
       "tool_calls": [],
@@ -1741,13 +1741,21 @@ Returns the deployment's runtime feature set, package versions, and configuratio
 
 ## A2A Protocol
 
-Cognition exposes agents via the [Agent-to-Agent (A2A)](https://a2a-protocol.org/latest/) protocol. Only agents with `a2a_exposed: true` on their definition are visible. The adapter is implemented in `server/app/protocols/a2a/` and uses the `a2a-sdk` for protocol compliance.
+Cognition exposes agents as strict [A2A 1.0](https://a2a-protocol.org/latest/)
+JSON-RPC servers. Only agents with `a2a_exposed: true` are visible. Cognition
+implements the execution data plane: the embedding application authenticates and
+authorizes callers, then supplies trusted `X-Cognition-Scope-*` headers. Cognition
+carries that opaque builder-defined scope and isolates agents, tasks, contexts,
+messages, events, and artifacts exactly by it; it does not own tenant or IAM models.
 
 The A2A protocol surface can be disabled entirely by setting `COGNITION_A2A_ENABLED=false`. When disabled, the `/.well-known/agent-card.json` and `/a2a/{agent_name}` endpoints are not mounted, and `GET /capabilities` reports `a2a: false`.
 
 ### `GET /.well-known/agent-card.json`
 
-Discover available agents. Returns A2A `AgentCard` objects filtered by the request's scope.
+Return one scope-visible A2A `AgentCard`. Use `?assistant_id={agent_name}` when a
+deployment exposes more than one agent. The deterministic first visible agent is
+returned when the query parameter is omitted. A specific card is also available at
+`GET /a2a/{agent_name}/.well-known/agent-card.json`.
 
 **Headers:**
 ```
@@ -1757,28 +1765,29 @@ X-Cognition-Scope-User: alice
 **Response `200 OK`:**
 ```json
 {
-  "cards": [
+  "name": "Cognition (deploy-agent)",
+  "description": "Handles deployment workflows",
+  "supportedInterfaces": [
     {
-      "name": "deploy-agent",
-      "description": "Handles deployment workflows",
       "url": "http://localhost:8000/a2a/deploy-agent",
-      "version": "1.0",
-      "capabilities": {
-        "streaming": true,
-        "pushNotifications": false
-      },
-      "skills": [
-        {
-          "name": "deploy",
-          "description": "Deploy applications to production"
-        }
-      ]
+      "protocolBinding": "JSONRPC",
+      "protocolVersion": "1.0"
     }
-  ]
+  ],
+  "version": "0.10.3",
+  "capabilities": {
+    "streaming": true,
+    "pushNotifications": false,
+    "extendedAgentCard": false
+  },
+  "defaultInputModes": ["text/plain"],
+  "defaultOutputModes": ["text/plain", "application/json"],
+  "skills": []
 }
 ```
 
-Only agents visible in the caller's scope with `a2a_exposed=True` are returned. Built-in agents are not exposed by default.
+Only agents visible in the exact supplied scope with `a2a_exposed=True` are
+returned. Built-in agents are not exposed by default.
 
 ### `POST /a2a/{agent_name}`
 
@@ -1799,9 +1808,10 @@ X-Cognition-Scope-User: alice
   "method": "SendMessage",
   "params": {
     "message": {
-      "role": "user",
+      "role": "ROLE_USER",
+      "messageId": "msg-123",
       "parts": [
-        {"type": "text", "text": "Deploy the staging environment"}
+        {"text": "Deploy the staging environment", "mediaType": "text/plain"}
       ]
     }
   }
@@ -1814,6 +1824,10 @@ X-Cognition-Scope-User: alice
 |---|---|
 | `SendMessage` | Send a message and get the complete response |
 | `SendStreamingMessage` | Send a message and stream the response (SSE) |
+| `GetTask` | Read one task by `id` |
+| `ListTasks` | List exact-agent, exact-scope tasks with cursor pagination |
+| `CancelTask` | Atomically cancel one non-terminal task |
+| `SubscribeToTask` | Replay and follow one non-terminal task over SSE |
 
 **Response `200 OK` (SendMessage):**
 ```json
@@ -1821,42 +1835,52 @@ X-Cognition-Scope-User: alice
   "jsonrpc": "2.0",
   "id": "1",
   "result": {
-    "taskId": "task-abc123",
-    "status": {
-      "state": "completed",
-      "message": {
-        "role": "agent",
-        "parts": [
-          {"type": "text", "text": "Staging environment deployed successfully."}
-        ]
-      }
+    "task": {
+      "id": "task-abc123",
+      "contextId": "context-456",
+      "status": {
+        "state": "TASK_STATE_COMPLETED"
+      },
+      "history": [],
+      "artifacts": []
     }
   }
 }
 ```
 
-**Response `200 OK` (SendStreamingMessage):**  
-Content-Type: `text/event-stream` — streams A2A task state events as SSE.
+`SendMessage` returns either `result.task` for task-oriented work or
+`result.message` for a direct message response. `SendStreamingMessage` and
+`SubscribeToTask` use `Content-Type: text/event-stream`; every SSE `data` value is
+a complete JSON-RPC 2.0 response envelope containing `task`, `message`,
+`statusUpdate`, or `artifactUpdate`.
 
-**A2A task state mapping:**
+Tasks are durable and independent from execution attempts. A continuation after
+`TASK_STATE_INPUT_REQUIRED` keeps the same A2A task and context IDs while creating
+a new Cognition run. Get, list, continuation, subscription, and cancellation
+remain available after a process restart or on another replica when the deployment
+uses shared durable storage.
 
-| Cognition Event | A2A TaskState |
-|---|---|
-| `StatusEvent("thinking")` | `working` |
-| `TokenEvent` | `working` (with content part) |
-| `DoneEvent` | `completed` |
-| `ErrorEvent` | `failed` |
+Send operations may use `messageId` as an idempotency identity. Cognition
+namespaces it by selected agent and exact effective scope so a retry does not
+create a second task or run and cannot collide across application scopes.
 
 **Errors:**
-- `404 Not Found` — Agent not found or not A2A-exposed
-- `422 Unprocessable Entity` — Invalid JSON-RPC request
-- `400 Bad Request` — Unsupported A2A method
 
-For full A2A protocol details, see the [A2A SDK documentation](https://github.com/a2aproject/a2a-python).
+- HTTP `404` — agent not found, not visible in scope, or not A2A-exposed.
+- A2A protocol failures use HTTP `200` with a structured JSON-RPC `error`,
+  including `TaskNotFoundError`, `TaskNotCancelableError`,
+  `UnsupportedOperationError`, `ContentTypeNotSupportedError`, and
+  `VersionNotSupportedError`.
+- A task owned by another agent or scope is reported as not found.
+- `SubscribeToTask` and a new `SendMessage` continuation reject terminal tasks.
+
+Push notifications, gRPC, HTTP+JSON, and authenticated extended cards are not
+advertised. The JSON-RPC 1.0 MUST profile is checked with the official
+[A2A TCK](https://github.com/a2aproject/a2a-tck).
 
 ---
 
-## Multi-Tenant Scoping
+## Builder-Defined Runtime Scoping
 
 When `COGNITION_SCOPING_ENABLED=true`, all session endpoints require scope headers. The required headers are determined by `COGNITION_SCOPE_KEYS` — these are **builder-defined** key names. Cognition does not hardcode a vocabulary.
 
@@ -1883,7 +1907,12 @@ Missing required headers return `403 Forbidden`:
 }
 ```
 
-Sessions are automatically filtered to match the request's scope values. One tenant cannot read or write another tenant's sessions. The `effective_scope` dict propagates through the full runtime stack — ConfigRegistry CRUD, session persistence, `CognitionContext`, middleware, and tools.
+Sessions are automatically filtered to match the request's exact scope values. A
+resource in one authorized scope cannot be read or mutated from another scope. The
+`effective_scope` dict propagates through the full runtime stack — ConfigRegistry
+CRUD, session persistence, `CognitionContext`, middleware, and tools. This lets
+Cognition serve as the isolated runtime inside a multi-tenant host application;
+Cognition itself does not define tenants, memberships, roles, or entitlements.
 
 ---
 

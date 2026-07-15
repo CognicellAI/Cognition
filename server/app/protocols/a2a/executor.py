@@ -1,278 +1,452 @@
-"""Cognition A2A Executor.
-
-Implements the a2a-sdk AgentExecutor interface. Bridges A2A protocol
-requests into Cognition's existing session/run/event model by reusing
-the existing agent_event_stream() function from the messages route.
-"""
+"""A2A executor translating requests onto Cognition's neutral task runtime."""
 
 from __future__ import annotations
 
-import uuid
 from typing import TYPE_CHECKING
 
 import structlog
 from a2a.helpers.proto_helpers import (
-    new_task,
+    new_data_artifact_update_event,
+    new_raw_artifact_update_event,
     new_text_artifact_update_event,
+    new_text_message,
     new_text_status_update_event,
+    new_url_artifact_update_event,
 )
 from a2a.server.agent_execution import AgentExecutor, RequestContext
 from a2a.server.events import EventQueue
-from a2a.types import TaskState
+from a2a.types import Role, TaskArtifactUpdateEvent, TaskState, TaskStatusUpdateEvent
+from a2a.utils.errors import InvalidParamsError, TaskNotFoundError
 
-from server.app.protocols.a2a.mapping import (
-    _RUN_STATUS_TO_A2A,
-    extract_text_from_parts,
+from server.app.agent.runtime import (
+    ArtifactEvent,
+    DirectMessageEvent,
+    DoneEvent,
+    ErrorEvent,
+    InterruptEvent,
+    RejectedEvent,
+    RunStateEvent,
+    TokenEvent,
+)
+from server.app.agent.task_runtime import (
+    AgentTaskRuntime,
+    CancelTask,
+    ContinueTask,
+    GetTask,
+    SubmitTask,
+    TaskExecution,
+)
+from server.app.exceptions import RuntimeTaskConflictError, RuntimeTaskNotFoundError
+from server.app.models import RunStatus, TaskStatus
+from server.app.protocols.a2a.mapping import extract_text_from_parts
+from server.app.protocols.a2a.task_store import (
+    CognitionTaskStore,
+    effective_scope_from_context,
 )
 
 if TYPE_CHECKING:
     from server.app.llm.deep_agent_service import SessionAgentManager
-    from server.app.settings import Settings
-    from server.app.storage.backend import StorageBackend
 
 logger = structlog.get_logger(__name__)
 
-# Canonical A2A artifact name for the agent's text response
 _ARTIFACT_NAME = "response"
+_TASK_STATUS_TO_A2A: dict[TaskStatus, int] = {
+    TaskStatus.SUBMITTED: TaskState.TASK_STATE_SUBMITTED,
+    TaskStatus.WORKING: TaskState.TASK_STATE_WORKING,
+    TaskStatus.INPUT_REQUIRED: TaskState.TASK_STATE_INPUT_REQUIRED,
+    TaskStatus.AUTH_REQUIRED: TaskState.TASK_STATE_AUTH_REQUIRED,
+    TaskStatus.COMPLETED: TaskState.TASK_STATE_COMPLETED,
+    TaskStatus.FAILED: TaskState.TASK_STATE_FAILED,
+    TaskStatus.CANCELED: TaskState.TASK_STATE_CANCELED,
+    TaskStatus.REJECTED: TaskState.TASK_STATE_REJECTED,
+}
 
 
 class CognitionA2AExecutor(AgentExecutor):
-    """Bridges A2A protocol requests into Cognition's runtime.
-
-    Uses Cognition's existing session model, agent_event_stream(),
-    and event types. Each A2A message creates a new Cognition run
-    within the session identified by the A2A contextId.
-
-    The agent_name parameter determines which Cognition agent is used
-    for sessions created by this executor. Each per-agent A2A endpoint
-    gets its own executor with the correct agent_name.
-    """
+    """Run one A2A request through the shared durable Cognition lifecycle."""
 
     def __init__(
         self,
-        settings: Settings,
+        runtime: AgentTaskRuntime,
+        task_store: CognitionTaskStore,
         session_agent_manager: SessionAgentManager,
-        store: StorageBackend,
-        agent_name: str = "default",
+        *,
+        agent_name: str,
+        message_id_idempotency: bool = True,
     ) -> None:
-        self._settings = settings
+        self._runtime = runtime
+        self._task_store = task_store
         self._agent_manager = session_agent_manager
-        self._store = store
         self._agent_name = agent_name
+        self._message_id_idempotency = message_id_idempotency
 
-    async def execute(
-        self,
-        context: RequestContext,
-        event_queue: EventQueue,
-    ) -> None:
-        from server.app.agent.runtime import (
-            DoneEvent,
-            ErrorEvent,
-            RunStateEvent,
-            TokenEvent,
-        )
-
-        # 1. Extract user text from A2A message parts
-        user_text = ""
-        if context.message:
-            user_text = extract_text_from_parts(context.message.parts)
-        if not user_text:
-            user_text = "(empty message)"
-
-        # 2. Resolve scope from request metadata/context
-        scope: dict[str, str] | None = None
-        if context.call_context:
-            headers = context.call_context.state.get("headers", {})
-            scope_keys = self._settings.scope_keys
-            if scope_keys:
-                scope = {}
-                for key in scope_keys:
-                    header_name = f"x-cognition-scope-{key.replace('_', '-')}"
-                    val = headers.get(header_name)
-                    if val:
-                        scope[key] = val
-
-        # 3. Map contextId -> session_id; create session if needed
-        context_id = context.context_id or str(uuid.uuid4())
-        session_id = context_id
-        session = await self._store.get_session(session_id)
-        if not session:
-            from server.app.models import SessionConfig
-
-            thread_id = str(uuid.uuid4())
-            workspace_path = str(self._settings.workspace_path)
-            session = await self._store.create_session(
-                session_id=session_id,
-                thread_id=thread_id,
-                config=SessionConfig(),
-                title=f"A2A session {context_id[:8]}",
-                scopes=scope,
-                agent_name=self._agent_name,
-                metadata={"a2a_context_id": context_id},
-                workspace_path=workspace_path,
-            )
-            self._agent_manager.register_session(session_id, workspace_path)
-
-        # 4. Get or create agent service
-        service = self._agent_manager.get_service(session_id)
-        if not service:
-            workspace_path = session.workspace_path or str(self._settings.workspace_path)
-            service = self._agent_manager.register_session(session_id, workspace_path)
-
-        # 5. Create or reuse task
-        task_id = context.task_id or str(uuid.uuid4())
-        task = context.current_task
-        if not task:
-            task = new_task(
-                task_id=task_id,
-                context_id=context_id,
-                state=TaskState.TASK_STATE_SUBMITTED,
-            )
-            await event_queue.enqueue_event(task)
-
-        # 6. Mark working
-        await event_queue.enqueue_event(
-            new_text_status_update_event(
-                task_id=task_id,
-                context_id=context_id,
-                state=TaskState.TASK_STATE_WORKING,
-                text="Processing...",
-            )
-        )
-
-        # 7. Stream Cognition events via service.stream_response()
-        accumulated_text: list[str] = []
-        workspace_path = session.workspace_path or str(self._settings.workspace_path)
-        system_prompt = None
-        if session.config and session.config.system_prompt:
-            system_prompt = session.config.system_prompt
+    async def execute(self, context: RequestContext, event_queue: EventQueue) -> None:
+        """Create/continue a task, stream execution, and persist before emitting."""
+        if context.call_context is None or not context.task_id or not context.context_id:
+            raise InvalidParamsError(message="Task and context identifiers are required")
+        scope = effective_scope_from_context(context.call_context)
+        user_text = (
+            extract_text_from_parts(context.message.parts) if context.message else ""
+        ) or "(empty message)"
+        message_id = context.message.message_id if context.message else None
+        persisted_message_id = message_id if self._message_id_idempotency else None
+        idempotency_key = message_id or context.task_id if self._message_id_idempotency else None
+        execution: TaskExecution | None = None
 
         try:
+            existing = await self._runtime.get(GetTask(context.task_id, self._agent_name, scope))
+            if existing is None:
+                execution = await self._runtime.submit(
+                    SubmitTask(
+                        task_id=context.task_id,
+                        context_id=context.context_id,
+                        agent_name=self._agent_name,
+                        effective_scope=scope,
+                        content=user_text,
+                        message_id=persisted_message_id or None,
+                        idempotency_key=idempotency_key,
+                        metadata={
+                            "source": "a2a-jsonrpc",
+                            "a2a_message_id": message_id,
+                        },
+                    )
+                )
+            else:
+                if existing.context_id != context.context_id:
+                    raise RuntimeTaskNotFoundError(context.task_id)
+                execution = await self._runtime.continue_task(
+                    ContinueTask(
+                        task_id=existing.id,
+                        agent_name=self._agent_name,
+                        effective_scope=scope,
+                        content=user_text,
+                        message_id=persisted_message_id or None,
+                        idempotency_key=idempotency_key,
+                        metadata={
+                            "source": "a2a-jsonrpc",
+                            "a2a_message_id": message_id,
+                        },
+                    )
+                )
+
+            if execution.reused:
+                if execution.task.metadata.get("interaction_mode") == "message":
+                    message = await self._task_store.project_message(execution.task)
+                    if message is not None:
+                        await event_queue.enqueue_event(message)
+                        return
+                await event_queue.enqueue_event(await self._task_store.project(execution.task))
+                return
+
+            service = self._agent_manager.get_service(execution.session.id)
+            if service is None:
+                service = self._agent_manager.register_session(
+                    execution.session.id,
+                    execution.session.workspace_path,
+                )
+
+            accumulated_text: list[str] = []
+            task_announced = False
+            has_artifact = False
+            system_prompt = execution.session.config.system_prompt
             async for event in service.stream_response(
-                session_id=session_id,
-                thread_id=session.thread_id,
-                project_path=workspace_path,
+                session_id=execution.session.id,
+                thread_id=execution.session.thread_id,
+                project_path=execution.session.workspace_path,
                 content=user_text,
                 system_prompt=system_prompt,
                 manager=self._agent_manager,
                 scope=scope,
                 run_id=None,
             ):
-                if isinstance(event, TokenEvent):
-                    accumulated_text.append(event.content)
-
-                if isinstance(event, RunStateEvent):
-                    a2a_state = _RUN_STATUS_TO_A2A.get(event.to_status)
-                    if a2a_state == TaskState.TASK_STATE_INPUT_REQUIRED:
-                        await event_queue.enqueue_event(
-                            new_text_status_update_event(
-                                task_id=task_id,
-                                context_id=context_id,
-                                state=TaskState.TASK_STATE_INPUT_REQUIRED,
-                                text="Waiting for approval",
-                            )
-                        )
-                        return
-                    if event.to_status in {"idle", "done"}:
-                        await _emit_final_artifact(
-                            event_queue, task_id, context_id,
-                            "".join(accumulated_text),
-                        )
-                        await event_queue.enqueue_event(
-                            new_text_status_update_event(
-                                task_id=task_id,
-                                context_id=context_id,
-                                state=TaskState.TASK_STATE_COMPLETED,
-                                text="Done",
-                            )
-                        )
-                        return
-                    if event.to_status == "failed":
-                        await event_queue.enqueue_event(
-                            new_text_status_update_event(
-                                task_id=task_id,
-                                context_id=context_id,
-                                state=TaskState.TASK_STATE_FAILED,
-                                text=event.reason or "Run failed",
-                            )
-                        )
-                        return
-
-                if isinstance(event, DoneEvent):
-                    await _emit_final_artifact(
-                        event_queue, task_id, context_id,
-                        "".join(accumulated_text),
+                current = await self._runtime.get(
+                    GetTask(execution.task.id, self._agent_name, scope)
+                )
+                if current is None:
+                    raise RuntimeTaskNotFoundError(execution.task.id)
+                if current.status == TaskStatus.CANCELED:
+                    await self._agent_manager.abort_session(
+                        execution.session.id,
+                        execution.session.thread_id,
                     )
                     await event_queue.enqueue_event(
-                        new_text_status_update_event(
-                            task_id=task_id,
-                            context_id=context_id,
-                            state=TaskState.TASK_STATE_COMPLETED,
-                            text="Done",
+                        _status_event(execution, TaskState.TASK_STATE_CANCELED, "Canceled")
+                    )
+                    return
+
+                if isinstance(event, DirectMessageEvent):
+                    persisted_message = await self._runtime.persist_direct_message(
+                        execution,
+                        content=event.content,
+                        media_type=event.media_type,
+                    )
+                    await self._runtime.transition(
+                        execution.task,
+                        execution.run,
+                        RunStatus.DONE,
+                    )
+                    projected = new_text_message(
+                        event.content,
+                        media_type=event.media_type,
+                        context_id=execution.task.context_id,
+                        role=Role.ROLE_AGENT,
+                    )
+                    projected.message_id = persisted_message.id
+                    await event_queue.enqueue_event(projected)
+                    return
+
+                if not task_announced:
+                    await event_queue.enqueue_event(await self._task_store.project(current))
+                    task_announced = True
+
+                if isinstance(event, ArtifactEvent):
+                    await self._runtime.persist_artifact_output(
+                        execution,
+                        artifact_id=event.artifact_id,
+                        name=event.name,
+                        kind=event.kind,
+                        value=event.value,
+                        media_type=event.media_type,
+                        filename=event.filename,
+                        description=event.description,
+                        append=event.append,
+                        last_chunk=event.last_chunk,
+                    )
+                    await event_queue.enqueue_event(_artifact_event(execution, event))
+                    has_artifact = True
+                    continue
+
+                if isinstance(event, TokenEvent):
+                    accumulated_text.append(event.content)
+                    await self._runtime.projection.append_event(
+                        execution.run,
+                        "message.assistant.delta",
+                        payload={"length": len(event.content)},
+                        visibility="internal",
+                    )
+                    continue
+
+                if isinstance(event, InterruptEvent) or (
+                    isinstance(event, RunStateEvent) and event.to_status == "waiting_for_approval"
+                ):
+                    _task, _run, _event = await self._runtime.transition(
+                        execution.task,
+                        execution.run,
+                        RunStatus.INTERRUPTED,
+                        reason="Human input required",
+                    )
+                    await event_queue.enqueue_event(
+                        _status_event(
+                            execution,
+                            TaskState.TASK_STATE_INPUT_REQUIRED,
+                            "Human input required",
                         )
                     )
                     return
 
                 if isinstance(event, ErrorEvent):
+                    if event.code == "ABORTED":
+                        status = RunStatus.ABORTED
+                        state = TaskState.TASK_STATE_CANCELED
+                    else:
+                        status = RunStatus.FAILED
+                        state = TaskState.TASK_STATE_FAILED
+                    await self._runtime.transition(
+                        execution.task,
+                        execution.run,
+                        status,
+                        reason=event.message,
+                        error_code=event.code,
+                    )
                     await event_queue.enqueue_event(
-                        new_text_status_update_event(
-                            task_id=task_id,
-                            context_id=context_id,
-                            state=TaskState.TASK_STATE_FAILED,
-                            text=event.message or "Agent error",
+                        _status_event(execution, state, event.message or status.value)
+                    )
+                    return
+
+                if isinstance(event, RejectedEvent):
+                    await self._runtime.transition(
+                        execution.task,
+                        execution.run,
+                        RunStatus.REJECTED,
+                        reason=event.reason,
+                        error_code="REJECTED",
+                    )
+                    await event_queue.enqueue_event(
+                        _status_event(
+                            execution,
+                            TaskState.TASK_STATE_REJECTED,
+                            event.reason,
                         )
                     )
                     return
 
-            # Stream exhausted without terminal event
-            await _emit_final_artifact(
-                event_queue, task_id, context_id,
-                "".join(accumulated_text),
+                if isinstance(event, DoneEvent) or (
+                    isinstance(event, RunStateEvent) and event.to_status == "done"
+                ):
+                    await self._complete(
+                        execution,
+                        event_queue,
+                        accumulated_text,
+                        has_artifact=has_artifact,
+                    )
+                    return
+
+            if not task_announced:
+                await event_queue.enqueue_event(await self._task_store.project(execution.task))
+            await self._complete(
+                execution,
+                event_queue,
+                accumulated_text,
+                has_artifact=has_artifact,
             )
-            await event_queue.enqueue_event(
-                new_text_status_update_event(
-                    task_id=task_id,
-                    context_id=context_id,
-                    state=TaskState.TASK_STATE_COMPLETED,
-                    text="Done",
+        except RuntimeTaskNotFoundError as exc:
+            raise TaskNotFoundError from exc
+        except RuntimeTaskConflictError as exc:
+            raise InvalidParamsError(message=str(exc)) from exc
+        except Exception:
+            logger.exception(
+                "A2A task execution failed",
+                task_id=context.task_id,
+                agent_name=self._agent_name,
+            )
+            if execution is not None:
+                await self._runtime.transition(
+                    execution.task,
+                    execution.run,
+                    RunStatus.FAILED,
+                    reason="Agent execution failed",
+                    error_code="AGENT_ERROR",
                 )
-            )
-
-        except Exception as e:
-            logger.error("A2A executor error", error=str(e), task_id=task_id)
-            await event_queue.enqueue_event(
-                new_text_status_update_event(
-                    task_id=task_id,
-                    context_id=context_id,
-                    state=TaskState.TASK_STATE_FAILED,
-                    text=f"Error: {e}",
+                await event_queue.enqueue_event(
+                    _status_event(
+                        execution,
+                        TaskState.TASK_STATE_FAILED,
+                        "Agent execution failed",
+                    )
                 )
+                return
+            raise
+
+    async def cancel(self, context: RequestContext, event_queue: EventQueue) -> None:
+        """Cancel exactly the task identified by the A2A request context."""
+        if context.call_context is None or not context.task_id:
+            raise TaskNotFoundError
+        scope = effective_scope_from_context(context.call_context)
+        try:
+            task = await self._runtime.cancel(
+                CancelTask(context.task_id, self._agent_name, scope),
+                abort_execution=self._agent_manager.abort_session,
             )
-
-    async def cancel(
-        self,
-        context: RequestContext,
-        event_queue: EventQueue,
-    ) -> None:
-        # v0.10.0: cancel not supported
-        raise NotImplementedError("Cancel not supported in v0.10.0")
-
-
-async def _emit_final_artifact(
-    event_queue: EventQueue,
-    task_id: str,
-    context_id: str,
-    text: str,
-) -> None:
-    """Emit the accumulated agent response as an A2A artifact."""
-    if not text:
-        text = "(no response)"
-    await event_queue.enqueue_event(
-        new_text_artifact_update_event(
-            task_id=task_id,
-            context_id=context_id,
-            name=_ARTIFACT_NAME,
-            text=text,
-            last_chunk=True,
+        except RuntimeTaskNotFoundError as exc:
+            raise TaskNotFoundError from exc
+        await event_queue.enqueue_event(
+            new_text_status_update_event(
+                task_id=task.id,
+                context_id=task.context_id,
+                state=TaskState.TASK_STATE_CANCELED,
+                text="Canceled",
+            )
         )
+
+    async def _complete(
+        self,
+        execution: TaskExecution,
+        event_queue: EventQueue,
+        accumulated_text: list[str],
+        *,
+        has_artifact: bool,
+    ) -> None:
+        text = "".join(accumulated_text) or "(no response)"
+        await self._runtime.persist_assistant_message(
+            execution,
+            content=text,
+            create_artifact=not has_artifact,
+        )
+        task, _run, _event = await self._runtime.transition(
+            execution.task,
+            execution.run,
+            RunStatus.DONE,
+        )
+        if task.status == TaskStatus.CANCELED:
+            await event_queue.enqueue_event(
+                _status_event(execution, TaskState.TASK_STATE_CANCELED, "Canceled")
+            )
+            return
+        if not has_artifact:
+            await event_queue.enqueue_event(
+                new_text_artifact_update_event(
+                    task_id=execution.task.id,
+                    context_id=execution.task.context_id,
+                    name=_ARTIFACT_NAME,
+                    text=text,
+                    artifact_id=f"task-{execution.task.id}-response",
+                    last_chunk=True,
+                )
+            )
+        await event_queue.enqueue_event(
+            _status_event(execution, TaskState.TASK_STATE_COMPLETED, "Done")
+        )
+
+
+def _status_event(
+    execution: TaskExecution,
+    state: int,
+    text: str,
+) -> TaskStatusUpdateEvent:
+    return new_text_status_update_event(
+        task_id=execution.task.id,
+        context_id=execution.task.context_id,
+        state=state,  # type: ignore[arg-type]
+        text=text,
+    )
+
+
+def _artifact_event(
+    execution: TaskExecution,
+    event: ArtifactEvent,
+) -> TaskArtifactUpdateEvent:
+    if event.kind == "data":
+        return new_data_artifact_update_event(
+            task_id=execution.task.id,
+            context_id=execution.task.context_id,
+            name=event.name,
+            data=event.value,
+            media_type=event.media_type,
+            append=event.append,
+            last_chunk=event.last_chunk,
+            artifact_id=event.artifact_id,
+        )
+    if event.kind == "raw":
+        raw = event.value if isinstance(event.value, bytes) else str(event.value).encode()
+        return new_raw_artifact_update_event(
+            task_id=execution.task.id,
+            context_id=execution.task.context_id,
+            name=event.name,
+            raw=raw,
+            media_type=event.media_type,
+            filename=event.filename,
+            append=event.append,
+            last_chunk=event.last_chunk,
+            artifact_id=event.artifact_id,
+        )
+    if event.kind == "url":
+        return new_url_artifact_update_event(
+            task_id=execution.task.id,
+            context_id=execution.task.context_id,
+            name=event.name,
+            url=str(event.value),
+            media_type=event.media_type,
+            filename=event.filename,
+            append=event.append,
+            last_chunk=event.last_chunk,
+            artifact_id=event.artifact_id,
+        )
+    return new_text_artifact_update_event(
+        task_id=execution.task.id,
+        context_id=execution.task.context_id,
+        name=event.name,
+        text=str(event.value),
+        append=event.append,
+        last_chunk=event.last_chunk,
+        artifact_id=event.artifact_id,
     )

@@ -13,11 +13,13 @@ from server.app.storage.sqlite import SqliteStorageBackend
 async def setup_storage_backend():
     """Automatically set up storage backend and DI providers for all tests."""
     from server.app.api.dependencies import (
+        set_artifact_store,
         set_config_store,
         set_session_agent_manager_dep,
         set_storage_backend_dep,
     )
     from server.app.llm.deep_agent_service import SessionAgentManager
+    from server.app.storage.artifact_store import MemoryArtifactStore
     from server.app.storage.config_registry import MemoryConfigRegistry
     from server.app.storage.config_store import DefaultConfigStore
 
@@ -29,6 +31,7 @@ async def setup_storage_backend():
         await storage.initialize()
 
         set_storage_backend_dep(storage)
+        set_artifact_store(MemoryArtifactStore())
 
         settings = get_settings()
         set_session_agent_manager_dep(SessionAgentManager(settings))

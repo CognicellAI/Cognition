@@ -160,6 +160,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
                 session_agent_manager=session_agent_manager,
                 store=storage_backend,
                 version=VERSION,
+                artifact_store=artifact_store,
             )
             logger.info("A2A protocol adapter mounted")
         except Exception as e:

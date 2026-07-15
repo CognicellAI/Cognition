@@ -217,7 +217,7 @@ COGNITION_DOCKER_TIMEOUT=300
 
 ### Session Scoping
 
-Enable multi-tenant isolation with builder-defined scope keys:
+Enable exact runtime isolation for a multi-tenant host application with builder-defined scope keys:
 
 ```env
 COGNITION_SCOPING_ENABLED=true

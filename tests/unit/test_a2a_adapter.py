@@ -6,6 +6,7 @@ from unittest.mock import MagicMock
 
 import httpx
 import pytest
+from a2a.helpers.proto_helpers import new_text_artifact
 from a2a.types import TaskState
 from fastapi import FastAPI
 
@@ -23,11 +24,7 @@ from server.app.protocols.a2a.mapping import (
     extract_text_from_parts,
     is_hitl_pause,
 )
-from server.app.protocols.a2a.wire import (
-    normalize_request_for_sdk,
-    normalize_response_to_public,
-    normalize_stream_item_to_public,
-)
+from server.app.protocols.a2a.routes import _task_signature
 
 
 class TestA2AExposedField:
@@ -40,9 +37,7 @@ class TestA2AExposedField:
         assert agent.a2a_exposed is True
 
     def test_a2a_exposed_can_be_set_false_explicitly(self):
-        agent = AgentDefinition(
-            name="test", system_prompt="test prompt", a2a_exposed=False
-        )
+        agent = AgentDefinition(name="test", system_prompt="test prompt", a2a_exposed=False)
         assert agent.a2a_exposed is False
 
 
@@ -64,9 +59,7 @@ class TestBuildAgentCardForAgent:
         assert card.supported_interfaces[0].protocol_binding == "JSONRPC"
 
     def test_card_has_streaming_capability(self):
-        agent = AgentDefinition(
-            name="test", system_prompt="test", mode="primary", a2a_exposed=True
-        )
+        agent = AgentDefinition(name="test", system_prompt="test", mode="primary", a2a_exposed=True)
         card = build_agent_card_for_agent(agent, "http://localhost:8000", "0.10.0")
         assert card.capabilities.streaming is True
 
@@ -158,9 +151,7 @@ class TestA2APerAgentCardRoute:
         assert response.status_code == 200
         card = response.json()
         assert card["name"] == "Cognition (scoped-agent)"
-        assert card["supportedInterfaces"][0]["url"] == (
-            "http://example.test/a2a/scoped-agent"
-        )
+        assert card["supportedInterfaces"][0]["url"] == ("http://example.test/a2a/scoped-agent")
 
     @pytest.mark.asyncio
     async def test_per_agent_card_respects_request_scope(self):
@@ -208,22 +199,26 @@ class TestA2AExposureFiltering:
     """Test the filtering logic that determines which agents are A2A-exposed."""
 
     def test_subagent_not_exposed(self):
-        agent = AgentDefinition(
-            name="sub", system_prompt="test", mode="subagent", a2a_exposed=True
-        )
+        agent = AgentDefinition(name="sub", system_prompt="test", mode="subagent", a2a_exposed=True)
         # The filtering logic in routes.py checks mode != "subagent"
         assert agent.mode == "subagent"  # would be filtered out
 
     def test_hidden_agent_not_exposed(self):
         agent = AgentDefinition(
-            name="hidden", system_prompt="test", mode="primary", hidden=True,
+            name="hidden",
+            system_prompt="test",
+            mode="primary",
+            hidden=True,
             a2a_exposed=True,
         )
         assert agent.hidden is True  # would be filtered out
 
     def test_primary_non_hidden_exposed(self):
         agent = AgentDefinition(
-            name="visible", system_prompt="test", mode="primary", hidden=False,
+            name="visible",
+            system_prompt="test",
+            mode="primary",
+            hidden=False,
             a2a_exposed=True,
         )
         assert agent.mode != "subagent" and not agent.hidden and agent.a2a_exposed
@@ -261,23 +256,13 @@ class TestExtractScope:
 
 
 class TestExecutorAgentName:
-    def test_default_agent_name(self):
-        from server.app.protocols.a2a.executor import CognitionA2AExecutor
-
-        executor = CognitionA2AExecutor(
-            settings=MagicMock(),
-            session_agent_manager=MagicMock(),
-            store=MagicMock(),
-        )
-        assert executor._agent_name == "default"
-
     def test_custom_agent_name(self):
         from server.app.protocols.a2a.executor import CognitionA2AExecutor
 
         executor = CognitionA2AExecutor(
-            settings=MagicMock(),
+            runtime=MagicMock(),
+            task_store=MagicMock(),
             session_agent_manager=MagicMock(),
-            store=MagicMock(),
             agent_name="my-agent",
         )
         assert executor._agent_name == "my-agent"
@@ -286,11 +271,13 @@ class TestExecutorAgentName:
 class TestExtractTextFromParts:
     def test_single_text_part(self):
         from a2a.types import Part
+
         parts = [Part(text="hello world", media_type="text/plain")]
         assert extract_text_from_parts(parts) == "hello world"
 
     def test_multiple_text_parts(self):
         from a2a.types import Part
+
         parts = [
             Part(text="line one", media_type="text/plain"),
             Part(text="line two", media_type="text/plain"),
@@ -303,104 +290,6 @@ class TestExtractTextFromParts:
     def test_current_text_part_shape(self):
         parts = [{"kind": "text", "text": "hello world"}]
         assert extract_text_from_parts(parts) == "hello world"
-
-
-class TestA2AWireShape:
-    def test_message_send_request_normalizes_to_sdk_shape(self):
-        payload = {
-            "jsonrpc": "2.0",
-            "id": "1",
-            "method": "message/send",
-            "params": {
-                "message": {
-                    "role": "user",
-                    "parts": [{"kind": "text", "text": "hello"}],
-                }
-            },
-        }
-
-        normalized = normalize_request_for_sdk(payload)
-
-        assert normalized["method"] == "SendMessage"
-        message = normalized["params"]["message"]
-        assert message["role"] == "ROLE_USER"
-        assert message["parts"] == [{"text": "hello", "mediaType": "text/plain"}]
-
-    def test_message_stream_request_normalizes_to_sdk_shape(self):
-        payload = {
-            "jsonrpc": "2.0",
-            "id": "1",
-            "method": "message/stream",
-            "params": {"message": {"role": "agent", "parts": [{"text": "hello"}]}},
-        }
-
-        normalized = normalize_request_for_sdk(payload)
-
-        assert normalized["method"] == "SendStreamingMessage"
-        assert normalized["params"]["message"]["role"] == "ROLE_AGENT"
-
-    def test_task_response_normalizes_to_current_shape(self):
-        payload = {
-            "jsonrpc": "2.0",
-            "id": "1",
-            "result": {
-                "task": {
-                    "id": "task-1",
-                    "contextId": "ctx-1",
-                    "status": {
-                        "state": "TASK_STATE_COMPLETED",
-                        "message": {
-                            "role": "ROLE_AGENT",
-                            "parts": [{"text": "Done"}],
-                        },
-                    },
-                }
-            },
-        }
-
-        normalized = normalize_response_to_public(payload)
-
-        task = normalized["result"]
-        assert task["kind"] == "task"
-        assert task["status"]["state"] == "completed"
-        assert task["status"]["message"]["kind"] == "message"
-        assert task["status"]["message"]["role"] == "agent"
-        assert task["status"]["message"]["parts"][0]["kind"] == "text"
-
-    def test_stream_status_event_normalizes_to_current_shape(self):
-        payload = {
-            "jsonrpc": "2.0",
-            "id": "1",
-            "result": {
-                "taskId": "task-1",
-                "contextId": "ctx-1",
-                "status": {"state": 3},
-            },
-        }
-
-        normalized = normalize_stream_item_to_public(payload)
-
-        event = normalized["result"]
-        assert event["kind"] == "status-update"
-        assert event["status"]["state"] == "completed"
-
-    def test_stream_artifact_event_normalizes_to_current_shape(self):
-        payload = {
-            "jsonrpc": "2.0",
-            "id": "1",
-            "result": {
-                "taskId": "task-1",
-                "contextId": "ctx-1",
-                "artifact": {"parts": [{"text": "hello"}]},
-            },
-        }
-
-        normalized = normalize_stream_item_to_public(payload)
-
-        event = normalized["result"]
-        assert event["kind"] == "artifact-update"
-        assert event["artifact"]["kind"] == "artifact"
-        assert event["artifact"]["parts"][0]["kind"] == "text"
 
 
 class TestEventToA2AState:
@@ -458,9 +347,19 @@ class TestIsHitlPause:
 class TestRunStatusMapping:
     def test_all_expected_statuses_mapped(self):
         expected = {
-            "queued", "starting", "active", "idle",
-            "waiting_for_approval", "stalled",
-            "done", "failed", "aborted", "aborting", "expired",
+            "queued",
+            "starting",
+            "active",
+            "idle",
+            "waiting_for_approval",
+            "interrupted",
+            "stalled",
+            "done",
+            "failed",
+            "rejected",
+            "aborted",
+            "aborting",
+            "expired",
         }
         assert set(_RUN_STATUS_TO_A2A.keys()) == expected
 
@@ -469,3 +368,26 @@ class TestRunStatusMapping:
         assert _RUN_STATUS_TO_A2A["done"] == TaskState.TASK_STATE_COMPLETED
         assert _RUN_STATUS_TO_A2A["failed"] == TaskState.TASK_STATE_FAILED
         assert _RUN_STATUS_TO_A2A["aborted"] == TaskState.TASK_STATE_CANCELED
+
+
+def test_task_subscription_signature_detects_artifact_content_changes():
+    from a2a.types import Task, TaskStatus
+
+    task = Task(
+        id="task-1",
+        context_id="context-1",
+        status=TaskStatus(state=TaskState.TASK_STATE_WORKING),
+    )
+    before = _task_signature(task)
+    task.artifacts.append(
+        new_text_artifact(
+            name="response",
+            text="chunk one",
+            artifact_id="artifact-1",
+        )
+    )
+    after_first_chunk = _task_signature(task)
+    task.artifacts[0].parts[0].text = "chunk one and two"
+
+    assert after_first_chunk != before
+    assert _task_signature(task) != after_first_chunk

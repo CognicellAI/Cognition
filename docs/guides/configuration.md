@@ -452,9 +452,11 @@ for the end-to-end setup flow and Terraform example.
 
 ---
 
-## Session Scoping (Multi-Tenancy)
+## Builder-Defined Runtime Scoping
 
-Scope keys are **builder-defined** — Cognition does not hardcode a vocabulary. Choose keys that match your application's tenancy model.
+Scope keys are **builder-defined** — Cognition does not hardcode a vocabulary.
+They isolate runtime data supplied by a host application; Cognition does not define
+the host's tenant, membership, role, or entitlement model.
 
 | YAML key | Environment variable | Default | Description |
 |---|---|---|---|

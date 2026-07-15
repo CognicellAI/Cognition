@@ -22,7 +22,7 @@ from collections.abc import AsyncIterator, Mapping
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Protocol, cast, runtime_checkable
+from typing import Any, Literal, Protocol, cast, runtime_checkable
 
 import structlog
 
@@ -197,11 +197,41 @@ class DoneEvent(AgentEvent):
 
 
 @dataclass
+class DirectMessageEvent(AgentEvent):
+    """A message-only response that does not expose a task to the caller."""
+
+    content: str
+    media_type: str = "text/plain"
+
+
+@dataclass
+class ArtifactEvent(AgentEvent):
+    """Protocol-neutral task artifact or artifact chunk."""
+
+    artifact_id: str
+    name: str
+    kind: Literal["text", "data", "raw", "url"]
+    value: Any
+    media_type: str | None = None
+    filename: str | None = None
+    description: str | None = None
+    append: bool = False
+    last_chunk: bool = True
+
+
+@dataclass
 class ErrorEvent(AgentEvent):
     """Error during execution."""
 
     message: str
     code: str = "ERROR"
+
+
+@dataclass
+class RejectedEvent(AgentEvent):
+    """Agent rejected the requested task without executing it."""
+
+    reason: str = "Rejected"
 
 
 @dataclass
@@ -337,7 +367,10 @@ StreamEvent = (
     | ContextEvent
     | StatusEvent
     | DoneEvent
+    | DirectMessageEvent
+    | ArtifactEvent
     | ErrorEvent
+    | RejectedEvent
     | UsageEvent
     | PlanningEvent
     | StepCompleteEvent

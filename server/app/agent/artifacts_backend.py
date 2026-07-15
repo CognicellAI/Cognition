@@ -51,7 +51,7 @@ class ArtifactBackend(BackendProtocol):
 
     Args:
         artifact_store: The ArtifactStore to read/write artifacts.
-        scope: Scope dict for multi-tenant isolation.
+        scope: Builder-authorized runtime isolation scope.
     """
 
     def __init__(self, artifact_store: ArtifactStore, scope: dict[str, str] | None = None) -> None:

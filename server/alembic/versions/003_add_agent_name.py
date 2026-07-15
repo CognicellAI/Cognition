@@ -20,10 +20,19 @@ depends_on: str | Sequence[str] | None = None
 
 def upgrade() -> None:
     """Add agent_name column to sessions table."""
-    op.add_column(
-        "sessions",
-        sa.Column("agent_name", sa.String(length=100), nullable=False, server_default="default"),
-    )
+    columns = {
+        column["name"] for column in sa.inspect(op.get_bind()).get_columns("sessions")
+    }
+    if "agent_name" not in columns:
+        op.add_column(
+            "sessions",
+            sa.Column(
+                "agent_name",
+                sa.String(length=100),
+                nullable=False,
+                server_default="default",
+            ),
+        )
 
 
 def downgrade() -> None:

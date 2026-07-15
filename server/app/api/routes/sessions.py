@@ -22,8 +22,10 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from fastapi.responses import StreamingResponse
 
 from server.app.agent.resolver import RuntimeResolver
+from server.app.agent.task_runtime import AgentTaskRuntime, ContinueTask, TaskExecution
 from server.app.agent.token_counter import count_text_tokens
 from server.app.api.dependencies import (
+    get_artifact_store,
     get_config_store,
     get_scope_dep,
     get_session_agent_manager_dep,
@@ -61,6 +63,7 @@ from server.app.models import RunStatus, SessionConfig, SessionStatus
 from server.app.runtime_projection import RuntimeProjectionService
 from server.app.session_manager import build_session_workspace_path, ensure_session_workspace_path
 from server.app.settings import Settings
+from server.app.storage.artifact_store import ArtifactStore
 from server.app.storage.backend import StorageBackend
 from server.app.storage.config_store import ConfigStore
 
@@ -596,6 +599,7 @@ async def resume_session(
     scope: SessionScope = Depends(get_scope_dep),
     store: StorageBackend = Depends(get_storage_backend_dep),  # noqa: B008
     agent_manager: SessionAgentManager = Depends(get_session_agent_manager_dep),  # noqa: B008
+    artifact_store: ArtifactStore = Depends(get_artifact_store),  # noqa: B008
 ) -> dict[str, str | bool] | StreamingResponse:
     """Resume an interrupted Deep Agents session using native Command(resume=...)."""
     session = await _get_scoped_session(session_id, store, scope)
@@ -610,20 +614,58 @@ async def resume_session(
     if service is None:
         service = agent_manager.register_session(session_id, session.workspace_path)
 
-    active_run = await store.get_active_run(session_id)
-    projection = RuntimeProjectionService(store)
-    if active_run is not None:
-        active_run = await projection.transition_run(
-            active_run,
-            RunStatus.ACTIVE,
-            reason="Human approval resolved",
-            session_status=SessionStatus.ACTIVE,
+    task_runtime = AgentTaskRuntime(
+        store,
+        default_workspace_path=session.workspace_path,
+        artifact_store=artifact_store,
+    )
+    projection = task_runtime.projection
+    runs = await store.list_runs(session_id)
+    interrupted_run = next(
+        (
+            run
+            for run in runs
+            if run.task_id is not None
+            and run.status in {RunStatus.INTERRUPTED, RunStatus.WAITING_FOR_APPROVAL}
+        ),
+        None,
+    )
+    active_run = None
+    execution: TaskExecution | None = None
+    if interrupted_run is not None:
+        if interrupted_run.status == RunStatus.WAITING_FOR_APPROVAL:
+            interrupted_run = await projection.transition_run(
+                interrupted_run,
+                RunStatus.INTERRUPTED,
+                reason="Execution attempt paused for human input",
+                session_status=SessionStatus.WAITING_FOR_APPROVAL,
+            )
+        execution = await task_runtime.continue_task(
+            ContinueTask(
+                task_id=interrupted_run.task_id or "",
+                agent_name=session.agent_name,
+                effective_scope=session.scopes,
+                content=f"Human decision: {request.decision}",
+                metadata={"source": "native-hitl-resume"},
+            )
         )
+        active_run = execution.run
+    else:
+        # Compatibility for pre-task runtime records created before v0.10.
+        legacy_run = await store.get_active_run(session_id)
+        if legacy_run is not None:
+            active_run = await projection.transition_run(
+                legacy_run,
+                RunStatus.ACTIVE,
+                reason="Human approval resolved",
+                session_status=SessionStatus.ACTIVE,
+            )
 
     accept_header = http_request.headers.get("accept", "")
     wants_stream = "text/event-stream" in accept_header.lower()
 
     if not wants_stream:
+        assistant_content: list[str] = []
         async for event in service.resume_response(
             session_id=session_id,
             thread_id=session.thread_id,
@@ -633,6 +675,8 @@ async def resume_session(
             args=request.args,
             scope=session.scopes,
         ):
+            if isinstance(event, TokenEvent):
+                assistant_content.append(event.content)
             if isinstance(event, ResumeErrorEvent):
                 if active_run is not None:
                     await projection.transition_run(
@@ -648,6 +692,11 @@ async def resume_session(
                     detail=event.message,
                 )
             if isinstance(event, DoneEvent) and active_run is not None:
+                if execution is not None:
+                    await task_runtime.persist_assistant_message(
+                        execution,
+                        content="".join(assistant_content),
+                    )
                 await projection.transition_run(
                     active_run,
                     RunStatus.DONE,
@@ -659,6 +708,7 @@ async def resume_session(
     last_event_id = get_last_event_id(http_request)
 
     async def event_generator() -> AsyncGenerator[dict[str, object], None]:
+        assistant_content: list[str] = []
         await store.update_session(session_id=session_id, status=SessionStatus.ACTIVE.value)
         yield EventBuilder.status("resuming")
 
@@ -672,6 +722,7 @@ async def resume_session(
             scope=session.scopes,
         ):
             if isinstance(event, TokenEvent):
+                assistant_content.append(event.content)
                 yield EventBuilder.token(event.content)
             elif isinstance(event, HitlDecisionEvent):
                 if active_run is not None:
@@ -720,7 +771,13 @@ async def resume_session(
                     artifact_id=event.artifact_id,
                 )
             elif isinstance(event, DoneEvent):
+                content = "".join(assistant_content)
                 if active_run is not None:
+                    if execution is not None:
+                        await task_runtime.persist_assistant_message(
+                            execution,
+                            content=content,
+                        )
                     await projection.transition_run(
                         active_run,
                         RunStatus.DONE,
@@ -728,7 +785,11 @@ async def resume_session(
                     )
                 yield EventBuilder.done(
                     message_id="resume",
-                    assistant_data={"content": "resumed", "tool_calls": None, "token_count": 0},
+                    assistant_data={
+                        "content": content,
+                        "tool_calls": None,
+                        "token_count": 0,
+                    },
                 )
             elif isinstance(event, ResumeErrorEvent):
                 if active_run is not None:

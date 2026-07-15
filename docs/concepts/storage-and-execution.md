@@ -90,7 +90,7 @@ Each storage backend also exposes `get_store()`, which returns a LangGraph `Base
 | `SqliteStorageBackend` | `AsyncSqliteStore` (persisted to same database file as checkpointer) |
 | `PostgresStorageBackend` | `AsyncPostgresStore` (separate psycopg connection to same Postgres instance) |
 
-The Store is passed to `create_deep_agent()` and available inside agent nodes and middleware via `runtime.store`. Namespace scoping (via `CognitionContext.effective_scope`) ensures one tenant cannot read another's stored data. See [CognitionContext and Cross-Thread Memory](./agent-runtime.md#cognitioncontext-and-cross-thread-memory) for details.
+The Store is passed to `create_deep_agent()` and available inside agent nodes and middleware via `runtime.store`. Namespace scoping (via `CognitionContext.effective_scope`) ensures one authorized application scope cannot read another's stored data. See [CognitionContext and Cross-Thread Memory](./agent-runtime.md#cognitioncontext-and-cross-thread-memory) for details.
 
 ### Unified StorageBackend
 
@@ -235,7 +235,8 @@ File operations run directly on the host filesystem (for performance); command e
 - Requires Docker daemon and `cognition-sandbox:latest` image
 - `host_workspace` setting maps the workspace path into the container
 
-Best for: production, multi-tenant deployments, any untrusted code.
+Best for: production, runtimes embedded in multi-tenant host applications, and any
+untrusted code.
 
 ```env
 COGNITION_SANDBOX_BACKEND=docker

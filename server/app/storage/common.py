@@ -2,17 +2,21 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 from datetime import UTC, datetime
 from typing import Any, Literal
 
 from server.app.models import (
     Message,
     RunStatus,
+    RuntimeTask,
     Session,
     SessionConfig,
     SessionEvent,
     SessionRun,
     SessionStatus,
+    TaskStatus,
     ToolCall,
 )
 
@@ -23,6 +27,12 @@ def now_utc() -> datetime:
 
 def now_utc_iso() -> str:
     return now_utc().isoformat()
+
+
+def effective_scope_key(scope: dict[str, str] | None) -> str:
+    """Return a stable non-secret hash for exact-scope database indexes."""
+    canonical = json.dumps(scope or {}, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
 def merge_session_config(existing: SessionConfig, incoming: SessionConfig) -> SessionConfig:
@@ -132,6 +142,7 @@ def make_session_run(
     metadata: dict[str, Any] | None = None,
     created_at: str | None = None,
     updated_at: str | None = None,
+    task_id: str | None = None,
 ) -> SessionRun:
     """Create a SessionRun with consistent timestamps."""
     created = created_at or now_utc_iso()
@@ -154,6 +165,42 @@ def make_session_run(
         metadata=metadata or {},
         created_at=created,
         updated_at=updated,
+        task_id=task_id,
+    )
+
+
+def make_runtime_task(
+    *,
+    task_id: str,
+    context_id: str,
+    session_id: str,
+    agent_name: str,
+    status: TaskStatus = TaskStatus.SUBMITTED,
+    effective_scope: dict[str, str] | None = None,
+    current_run_id: str | None = None,
+    last_run_id: str | None = None,
+    idempotency_key: str | None = None,
+    status_reason: str | None = None,
+    metadata: dict[str, Any] | None = None,
+    created_at: str | None = None,
+    updated_at: str | None = None,
+) -> RuntimeTask:
+    """Create a RuntimeTask with consistent timestamps and copied scope."""
+    created = created_at or now_utc_iso()
+    return RuntimeTask(
+        id=task_id,
+        context_id=context_id,
+        session_id=session_id,
+        agent_name=agent_name,
+        status=status,
+        effective_scope=dict(effective_scope or {}),
+        current_run_id=current_run_id,
+        last_run_id=last_run_id,
+        idempotency_key=idempotency_key,
+        status_reason=status_reason,
+        metadata=dict(metadata or {}),
+        created_at=created,
+        updated_at=updated_at or created,
     )
 
 
@@ -170,6 +217,7 @@ def make_session_event(
     trace_id: str | None = None,
     span_id: str | None = None,
     created_at: str | None = None,
+    task_id: str | None = None,
 ) -> SessionEvent:
     """Create a SessionEvent with consistent timestamps."""
     return SessionEvent(
@@ -184,6 +232,7 @@ def make_session_event(
         trace_id=trace_id,
         span_id=span_id,
         created_at=created_at or now_utc_iso(),
+        task_id=task_id,
     )
 
 

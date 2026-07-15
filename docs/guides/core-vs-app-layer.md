@@ -48,7 +48,7 @@ Put a capability in Cognition when it should be consistent across every client a
 Good examples:
 
 - adding a new tool that should be available to the agent across web, CLI, and internal workflows
-- enforcing `X-Cognition-Scope-*` isolation so all clients inherit the same tenant boundary
+- enforcing exact `X-Cognition-Scope-*` isolation so all clients inherit the host application's authorized runtime boundary
 - exposing a stable event like `tool_call` so every app can render tool activity consistently
 - persisting checkpoints so a run can survive reconnects and server restarts
 - exposing agents via A2A so external systems can discover and invoke them

@@ -135,38 +135,10 @@ class AgentDefinition(BaseModel):
 
 ### A2A Exposure
 
-The `a2a_exposed` field controls whether an agent is exposed via the [A2A (Agent-to-Agent)](https://a2a-protocol.org/latest/) protocol. When `True`:
+The `a2a_exposed` field controls whether an agent is exposed via strict [A2A 1.0](https://a2a-protocol.org/latest/) JSON-RPC. When `True`:
 
 - The agent has an Agent Card at `GET /a2a/{agent_name}/.well-known/agent-card.json`
-- The agent appears in `GET /.well-known/agent-card.json` (scope-filtered list)
-- The agent gets a dedicated JSON-RPC endpoint at `POST /a2a/{agent_name}`
-- External A2A clients can discover and invoke the agent
-
-Built-in agents (`default`, `readonly`, etc.) have `a2a_exposed=False` by default. Set it to `True` explicitly for agents you want to expose:
-
-```yaml
-# .cognition/agents/deploy-agent.yaml
-name: deploy-agent
-mode: primary
-a2a_exposed: true
-system_prompt: |
-  You are a deployment agent...
-```
-
-Or via the API:
-
-```bash
-curl -X POST http://localhost:8000/agents \
-  -H "Content-Type: application/json" \
-  -d '{"name": "deploy-agent", "system_prompt": "...", "a2a_exposed": true}'
-```
-
-### A2A Exposure
-
-The `a2a_exposed` field controls whether an agent is exposed via the [A2A (Agent-to-Agent)](https://a2a-protocol.org/latest/) protocol. When `True`:
-
-- The agent has an Agent Card at `GET /a2a/{agent_name}/.well-known/agent-card.json`
-- The agent appears in `GET /.well-known/agent-card.json` (scope-filtered list)
+- The agent is discoverable from `GET /.well-known/agent-card.json?assistant_id={agent_name}`
 - The agent gets a dedicated JSON-RPC endpoint at `POST /a2a/{agent_name}`
 - External A2A clients can discover and invoke the agent
 
@@ -387,7 +359,7 @@ class CognitionContext:
 
 This context serves two purposes:
 
-1. **Store namespace scoping** — `runtime.store` (a LangGraph `BaseStore`) is available inside agent nodes and middleware. `effective_scope` is the natural key for building per-tenant memory namespaces, ensuring one tenant cannot read another's stored memories.
+1. **Store namespace scoping** — `runtime.store` (a LangGraph `BaseStore`) is available inside agent nodes and middleware. `effective_scope` is the natural key for building exact application-scope memory namespaces, preventing one builder-authorized scope from reading another's stored memories.
 
 2. **Middleware access** — any custom middleware can read `runtime.context` to branch on builder-defined scope dimensions without coupling to the HTTP layer.
 

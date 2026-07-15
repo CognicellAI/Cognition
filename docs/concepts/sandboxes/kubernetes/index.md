@@ -144,7 +144,7 @@ This is the same pattern used by `ModalSandbox` (the reference deepagents integr
 
 ## Scoping Labels
 
-`CognitionContext.effective_scope` fields are mapped to `cognition.io/*` labels on the Sandbox CR, enabling multi-tenant visibility:
+`CognitionContext.effective_scope` fields are mapped to `cognition.io/*` labels on the Sandbox CR, enabling scope-aware operational visibility for host applications:
 
 ```python
 labels = {

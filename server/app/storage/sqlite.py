@@ -21,16 +21,20 @@ from langgraph.store.sqlite.aio import AsyncSqliteStore
 from server.app.models import (
     Message,
     RunStatus,
+    RuntimeTask,
     Session,
     SessionConfig,
     SessionEvent,
     SessionRun,
     SessionStatus,
+    TaskStatus,
     ToolCall,
 )
 from server.app.storage.backend import StorageBackend
 from server.app.storage.common import (
+    effective_scope_key,
     make_message,
+    make_runtime_task,
     make_session,
     make_session_event,
     make_session_run,
@@ -109,12 +113,29 @@ class SqliteStorageBackend:
         )
 
         async with aiosqlite.connect(self.db_path) as db:
-            try:
-                await db.execute("ALTER TABLE sessions ADD COLUMN metadata JSON DEFAULT '{}' ")
-                await db.commit()
-            except aiosqlite.OperationalError as exc:
-                if "duplicate column name" not in str(exc).lower():
-                    raise
+            async with db.execute("PRAGMA table_info(sessions)") as cursor:
+                session_columns = {str(row[1]) async for row in cursor}
+            if "metadata" not in session_columns:
+                await db.execute("ALTER TABLE sessions ADD COLUMN metadata JSON DEFAULT '{}'")
+
+            async with db.execute("PRAGMA table_info(session_runs)") as cursor:
+                run_columns = {str(row[1]) async for row in cursor}
+            if "task_id" not in run_columns:
+                await db.execute("ALTER TABLE session_runs ADD COLUMN task_id VARCHAR(36)")
+
+            async with db.execute("PRAGMA table_info(session_events)") as cursor:
+                event_columns = {str(row[1]) async for row in cursor}
+            if "task_id" not in event_columns:
+                await db.execute("ALTER TABLE session_events ADD COLUMN task_id VARCHAR(36)")
+            await db.execute(
+                "CREATE INDEX IF NOT EXISTS idx_session_runs_task "
+                "ON session_runs(task_id, created_at)"
+            )
+            await db.execute(
+                "CREATE INDEX IF NOT EXISTS idx_session_events_task_sequence "
+                "ON session_events(task_id, sequence)"
+            )
+            await db.commit()
 
         logger.info(
             "SQLite storage initialized",
@@ -519,7 +540,7 @@ class SqliteStorageBackend:
                 (session_id,),
             )
             await db.commit()
-            deleted = cursor.rowcount
+            deleted = int(cursor.rowcount)
 
             if deleted > 0:
                 logger.info(
@@ -530,6 +551,190 @@ class SqliteStorageBackend:
             return deleted
 
     # Runtime operations
+    async def create_task(
+        self,
+        task_id: str,
+        context_id: str,
+        session_id: str,
+        agent_name: str,
+        effective_scope: dict[str, str],
+        status: TaskStatus = TaskStatus.SUBMITTED,
+        idempotency_key: str | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> RuntimeTask:
+        """Create a durable task with exact scope ownership."""
+        task = make_runtime_task(
+            task_id=task_id,
+            context_id=context_id,
+            session_id=session_id,
+            agent_name=agent_name,
+            status=status,
+            effective_scope=effective_scope,
+            idempotency_key=idempotency_key,
+            metadata=metadata,
+        )
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute(
+                """
+                INSERT INTO runtime_tasks (
+                    id, context_id, session_id, agent_name, status,
+                    effective_scope, scope_key, current_run_id, last_run_id,
+                    idempotency_key, status_reason, metadata, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    task.id,
+                    task.context_id,
+                    task.session_id,
+                    task.agent_name,
+                    task.status.value,
+                    json.dumps(task.effective_scope, sort_keys=True),
+                    effective_scope_key(task.effective_scope),
+                    task.current_run_id,
+                    task.last_run_id,
+                    task.idempotency_key,
+                    task.status_reason,
+                    json.dumps(task.metadata),
+                    task.created_at,
+                    task.updated_at,
+                ),
+            )
+            await db.commit()
+        return task
+
+    async def get_task(
+        self,
+        task_id: str,
+        effective_scope: dict[str, str],
+        agent_name: str | None = None,
+    ) -> RuntimeTask | None:
+        """Get a task only for its exact scope and optional agent."""
+        query = "SELECT * FROM runtime_tasks WHERE id = ? AND scope_key = ?"
+        params: list[Any] = [task_id, effective_scope_key(effective_scope)]
+        if agent_name is not None:
+            query += " AND agent_name = ?"
+            params.append(agent_name)
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            async with db.execute(query, params) as cursor:
+                row = await cursor.fetchone()
+        if row is None:
+            return None
+        task = self._row_to_task(row)
+        return task if task.effective_scope == effective_scope else None
+
+    async def get_task_by_idempotency_key(
+        self,
+        agent_name: str,
+        effective_scope: dict[str, str],
+        idempotency_key: str,
+    ) -> RuntimeTask | None:
+        """Get a task by its exact agent/scope idempotency namespace."""
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            async with db.execute(
+                """
+                SELECT * FROM runtime_tasks
+                WHERE agent_name = ? AND scope_key = ? AND idempotency_key = ?
+                LIMIT 1
+                """,
+                (agent_name, effective_scope_key(effective_scope), idempotency_key),
+            ) as cursor:
+                row = await cursor.fetchone()
+        if row is None:
+            return None
+        task = self._row_to_task(row)
+        return task if task.effective_scope == effective_scope else None
+
+    async def list_tasks(
+        self,
+        agent_name: str,
+        effective_scope: dict[str, str],
+        context_id: str | None = None,
+        statuses: set[TaskStatus] | None = None,
+        limit: int = 100,
+        cursor: str | None = None,
+    ) -> tuple[list[RuntimeTask], str | None]:
+        """List tasks for an exact agent/scope with stable cursor pagination."""
+        query = "SELECT * FROM runtime_tasks WHERE agent_name = ? AND scope_key = ?"
+        params: list[Any] = [agent_name, effective_scope_key(effective_scope)]
+        if context_id is not None:
+            query += " AND context_id = ?"
+            params.append(context_id)
+        if statuses:
+            placeholders = ", ".join("?" for _ in statuses)
+            query += f" AND status IN ({placeholders})"
+            params.extend(status.value for status in sorted(statuses, key=str))
+        if cursor is not None:
+            query += " AND (created_at, id) < (SELECT created_at, id FROM runtime_tasks WHERE id = ?)"
+            params.append(cursor)
+        page_size = max(1, min(limit, 1000))
+        query += " ORDER BY created_at DESC, id DESC LIMIT ?"
+        params.append(page_size + 1)
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            async with db.execute(query, params) as db_cursor:
+                rows = await db_cursor.fetchall()
+        tasks = [self._row_to_task(row) for row in rows]
+        tasks = [task for task in tasks if task.effective_scope == effective_scope]
+        has_more = len(tasks) > page_size
+        page = tasks[:page_size]
+        return page, page[-1].id if page and has_more else None
+
+    async def update_task(
+        self,
+        task_id: str,
+        effective_scope: dict[str, str],
+        expected_statuses: set[TaskStatus] | None = None,
+        status: TaskStatus | None = None,
+        current_run_id: str | None = None,
+        last_run_id: str | None = None,
+        status_reason: str | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> RuntimeTask | None:
+        """Conditionally update a task while preserving terminal immutability."""
+        current = await self.get_task(task_id, effective_scope)
+        if current is None or (
+            expected_statuses is not None and current.status not in expected_statuses
+        ):
+            return None
+        if status is not None and not TaskStatus.can_transition(current.status, status):
+            return None
+        updates: list[str] = []
+        params: list[Any] = []
+        if status is not None:
+            updates.append("status = ?")
+            params.append(status.value)
+        if current_run_id is not None:
+            updates.append("current_run_id = ?")
+            params.append(current_run_id)
+        if last_run_id is not None:
+            updates.append("last_run_id = ?")
+            params.append(last_run_id)
+        if status_reason is not None:
+            updates.append("status_reason = ?")
+            params.append(status_reason)
+        if metadata is not None:
+            updates.append("metadata = ?")
+            params.append(json.dumps(metadata))
+        if not updates:
+            return current
+        updates.append("updated_at = ?")
+        params.append(now_utc_iso())
+        params.extend([task_id, effective_scope_key(effective_scope), current.status.value])
+        async with aiosqlite.connect(self.db_path) as db:
+            cursor_result = await db.execute(
+                f"""
+                UPDATE runtime_tasks SET {', '.join(updates)}
+                WHERE id = ? AND scope_key = ? AND status = ?
+                """,
+                params,
+            )
+            await db.commit()
+        if cursor_result.rowcount != 1:
+            return None
+        return await self.get_task(task_id, effective_scope)
+
     async def create_run(
         self,
         run_id: str,
@@ -541,6 +746,7 @@ class SqliteStorageBackend:
         parent_run_id: str | None = None,
         trace_id: str | None = None,
         metadata: dict[str, Any] | None = None,
+        task_id: str | None = None,
     ) -> SessionRun:
         """Create a durable run for a session."""
         runs = await self.list_runs(session_id)
@@ -558,21 +764,23 @@ class SqliteStorageBackend:
             metadata=metadata,
             started_at=now if status in {RunStatus.STARTING, RunStatus.ACTIVE} else None,
             last_activity_at=now,
+            task_id=task_id,
         )
         async with aiosqlite.connect(self.db_path) as db:
             await db.execute(
                 """
                 INSERT INTO session_runs (
-                    id, session_id, thread_id, status, effective_scope,
+                    id, session_id, thread_id, task_id, status, effective_scope,
                     idempotency_key, attempt, parent_run_id, started_at,
                     last_activity_at, completed_at, error_code, status_reason,
                     trace_id, metadata, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     run.id,
                     run.session_id,
                     run.thread_id,
+                    run.task_id,
                     run.status.value,
                     json.dumps(run.effective_scope),
                     run.idempotency_key,
@@ -731,8 +939,12 @@ class SqliteStorageBackend:
         effective_scope: dict[str, str] | None = None,
         trace_id: str | None = None,
         span_id: str | None = None,
+        task_id: str | None = None,
     ) -> SessionEvent:
         """Append a durable runtime event."""
+        if task_id is None:
+            run = await self.get_run(run_id)
+            task_id = run.task_id if run is not None else None
         async with aiosqlite.connect(self.db_path) as db:
             async with db.execute(
                 "SELECT COALESCE(MAX(sequence), 0) + 1 FROM session_events WHERE session_id = ?",
@@ -751,18 +963,20 @@ class SqliteStorageBackend:
                 effective_scope=effective_scope,
                 trace_id=trace_id,
                 span_id=span_id,
+                task_id=task_id,
             )
             await db.execute(
                 """
                 INSERT INTO session_events (
-                    id, session_id, run_id, sequence, event_type, visibility,
+                    id, session_id, run_id, task_id, sequence, event_type, visibility,
                     payload, effective_scope, trace_id, span_id, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     event.id,
                     event.session_id,
                     event.run_id,
+                    event.task_id,
                     event.sequence,
                     event.event_type,
                     event.visibility,
@@ -800,6 +1014,7 @@ class SqliteStorageBackend:
         limit: int = 100,
         visibility: Literal["internal", "builder", "end_user"] | None = None,
         event_type: str | None = None,
+        task_id: str | None = None,
     ) -> list[SessionEvent]:
         """List runtime events for a session using cursor-style filters."""
         query = "SELECT * FROM session_events WHERE session_id = ?"
@@ -816,6 +1031,9 @@ class SqliteStorageBackend:
         if event_type is not None:
             query += " AND event_type = ?"
             params.append(event_type)
+        if task_id is not None:
+            query += " AND task_id = ?"
+            params.append(task_id)
         query += " ORDER BY sequence ASC LIMIT ?"
         params.append(limit)
 
@@ -964,6 +1182,25 @@ class SqliteStorageBackend:
             metadata=json.loads(row["metadata"]) if row["metadata"] else {},
             created_at=row["created_at"],
             updated_at=row["updated_at"],
+            task_id=row["task_id"],
+        )
+
+    def _row_to_task(self, row: aiosqlite.Row) -> RuntimeTask:
+        """Convert a database row to a RuntimeTask."""
+        return make_runtime_task(
+            task_id=row["id"],
+            context_id=row["context_id"],
+            session_id=row["session_id"],
+            agent_name=row["agent_name"],
+            status=TaskStatus(row["status"]),
+            effective_scope=json.loads(row["effective_scope"]),
+            current_run_id=row["current_run_id"],
+            last_run_id=row["last_run_id"],
+            idempotency_key=row["idempotency_key"],
+            status_reason=row["status_reason"],
+            metadata=json.loads(row["metadata"]) if row["metadata"] else {},
+            created_at=row["created_at"],
+            updated_at=row["updated_at"],
         )
 
     def _row_to_event(self, row: aiosqlite.Row) -> SessionEvent:
@@ -980,6 +1217,7 @@ class SqliteStorageBackend:
             trace_id=row["trace_id"],
             span_id=row["span_id"],
             created_at=row["created_at"],
+            task_id=row["task_id"],
         )
 
 

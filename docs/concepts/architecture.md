@@ -2,7 +2,7 @@
 
 Cognition is a **headless agent orchestration backend** built on a strict 7-layer architecture. Each layer has a single responsibility, dependencies only flow downward, and no layer imports from a layer above it.
 
-The core promise: define your agent with tools, skills, and a system prompt — Cognition provides the REST API, SSE streaming, durable persistence, sandboxed execution, multi-tenant isolation, and full observability automatically.
+The core promise: define your agent with tools, skills, and a system prompt — Cognition provides the REST API, SSE streaming, durable persistence, sandboxed execution, builder-defined runtime scope isolation, and full observability automatically.
 
 ---
 
@@ -276,12 +276,25 @@ It provides the primary key for scoping LangGraph Store namespaces — ensuring 
 
 #### A2A Protocol Adapter
 
-Cognition exposes agents via the [Agent-to-Agent (A2A)](https://a2a-protocol.org/latest/) protocol through a protocol adapter in `server/app/protocols/a2a/`. The adapter is mounted during startup (`mount_a2a_routes()`) and registers two endpoints:
+Cognition exposes agents via strict [A2A 1.0](https://a2a-protocol.org/latest/)
+JSON-RPC through a Layer 6 adapter in `server/app/protocols/a2a/`. The adapter is
+mounted during startup (`mount_a2a_routes()`) and registers these endpoints:
 
-- **`GET /.well-known/agent-card.json`** — Agent card discovery. Returns A2A-compliant `AgentCard` objects for all agents with `a2a_exposed=True`. Cards are filtered by the request's scope — only agents visible to the caller's scope are listed.
-- **`POST /a2a/{agent_name}`** — JSON-RPC endpoint. Accepts A2A `SendMessage` and `SendStreamingMessage` requests and bridges them to Cognition's `service.stream_response()`. Each agent gets its own card with a dedicated endpoint URL.
+- **`GET /.well-known/agent-card.json[?assistant_id={name}]`** — Returns one scope-visible Agent Card, as required by the well-known A2A discovery shape.
+- **`GET /a2a/{agent_name}/.well-known/agent-card.json`** — Returns a selected agent's card.
+- **`POST /a2a/{agent_name}`** — Implements the six in-scope JSON-RPC methods: send, streaming send, get, list, cancel, and subscribe.
 
-Agents opt in to A2A exposure via the `a2a_exposed` field on `AgentDefinition` (default `False`). Built-in agents are not exposed by default. The adapter uses the A2A SDK (`a2a-sdk>=1.0.0`) for protocol compliance and the `A2A-Version: 1.0` header for version negotiation.
+The protocol adapter contains no independent task truth. A protocol-neutral
+`RuntimeTask` aggregate in Layer 2 owns durable A2A/native task identity and status;
+Layer 4's `AgentTaskRuntime` owns session, run-attempt, message, event, continuation,
+artifact, and cancellation lifecycle. Native REST/SSE and A2A both call that service.
+`contextId` maps to a durable session, while one task can contain multiple runs.
+
+Agents opt in through `a2a_exposed` (default `False`). Agent Cards advertise only
+JSON-RPC 1.0 and implemented capabilities. `A2A-Version: 1.0` performs version
+negotiation. The builder-owned host performs authentication, authorization, agent
+selection, and any tenant routing; Cognition only enforces exact isolation using the
+already-authorized opaque `effective_scope`.
 
 #### Capability Registry
 
@@ -344,4 +357,4 @@ app = Cognition(agent)
 app.run()
 ```
 
-This one call should provision the full 7-layer stack: REST API, SSE streaming, SQLite/Postgres persistence, local/Docker sandbox, LangGraph Store for cross-session memory, OTel tracing, Prometheus metrics, multi-tenant scoping, rate limiting, and an evaluation pipeline. All layers, all infrastructure, from a single agent definition.
+This one call should provision the full 7-layer stack: REST API, SSE streaming, SQLite/Postgres persistence, local/Docker sandbox, LangGraph Store for cross-session memory, OTel tracing, Prometheus metrics, builder-defined scope isolation, rate limiting, and an evaluation pipeline. All layers, all infrastructure, from a single agent definition.
