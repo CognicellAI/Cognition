@@ -17,6 +17,7 @@ from server.app.storage.config_models import (
     GlobalAgentDefaults,
     GlobalProviderDefaults,
     ProviderConfig,
+    SandboxProfile,
     SkillDefinition,
     ToolRegistration,
 )
@@ -63,6 +64,72 @@ def _tool(name: str = "mytool", scope: dict | None = None) -> ToolRegistration:
         scope=scope or {},
         source="api",
     )
+
+
+def _sandbox_profile(
+    name: str = "default",
+    scope: dict | None = None,
+    image_arn: str = "arn:aws:lambda:us-east-1:123456789012:microvm-image:python-agent",
+) -> SandboxProfile:
+    return SandboxProfile(
+        name=name,
+        image_arn=image_arn,
+        scope=scope or {},
+        source="api",
+    )
+
+
+# ---------------------------------------------------------------------------
+# SandboxProfile validation
+# ---------------------------------------------------------------------------
+
+
+class TestSandboxProfileValidation:
+    def test_vpc_egress_requires_connector_arns(self):
+        with pytest.raises(ValueError, match="egress_network_connector_arns"):
+            SandboxProfile(
+                name="vpc-profile",
+                image_arn="arn:aws:lambda:us-east-1:123456789012:microvm-image:python-agent",
+                egress_mode="vpc",
+            )
+
+    def test_image_must_be_lambda_microvm_arn(self):
+        with pytest.raises(ValueError, match="image_arn"):
+            SandboxProfile(
+                name="bad-image",
+                image_arn="arn:aws:ecr:us-east-1:123456789012:repository/runtime",
+            )
+
+    def test_logging_must_select_one_destination(self):
+        with pytest.raises(ValueError, match="exactly one"):
+            SandboxProfile(
+                name="bad-logging",
+                image_arn=("arn:aws:lambda:us-east-1:123456789012:microvm-image:python-agent"),
+                logging={
+                    "disabled": {},
+                    "cloud_watch": {"log_group": "/aws/lambda-microvms/cognition"},
+                },
+            )
+
+    def test_cloudwatch_logging_profile_is_valid(self):
+        profile = SandboxProfile(
+            name="cloudwatch-logging",
+            image_arn="arn:aws:lambda:us-east-1:123456789012:microvm-image:python-agent",
+            logging={
+                "cloud_watch": {
+                    "log_group": "/aws/lambda-microvms/cognition",
+                    "log_stream": "agent-session",
+                }
+            },
+        )
+
+        assert profile.logging is not None
+        assert profile.logging.to_aws_request() == {
+            "cloudWatch": {
+                "logGroup": "/aws/lambda-microvms/cognition",
+                "logStream": "agent-session",
+            }
+        }
 
 
 # ---------------------------------------------------------------------------
@@ -168,6 +235,51 @@ class TestMemoryToolCRUD:
         deleted = await mem_reg.delete_tool("mytool")
         assert deleted is True
         assert await mem_reg.get_tool("mytool") is None
+
+
+# ---------------------------------------------------------------------------
+# MemoryConfigRegistry — Sandbox profile CRUD
+# ---------------------------------------------------------------------------
+
+
+class TestMemorySandboxProfileCRUD:
+    @pytest.mark.asyncio
+    async def test_upsert_and_get(self, mem_reg: MemoryConfigRegistry):
+        await mem_reg.upsert_sandbox_profile(_sandbox_profile())
+        result = await mem_reg.get_sandbox_profile("default")
+        assert result is not None
+        assert result.backend == "aws_lambda_microvm"
+        assert result.egress_mode == "internet"
+
+    @pytest.mark.asyncio
+    async def test_scoped_profile_wins_over_global(self, mem_reg: MemoryConfigRegistry):
+        await mem_reg.upsert_sandbox_profile(
+            _sandbox_profile(
+                "agent-runtime",
+                image_arn=("arn:aws:lambda:us-east-1:123456789012:microvm-image:global"),
+            )
+        )
+        await mem_reg.upsert_sandbox_profile(
+            _sandbox_profile(
+                "agent-runtime",
+                scope={"tenant": "acme"},
+                image_arn="arn:aws:lambda:us-east-1:123456789012:microvm-image:acme",
+            )
+        )
+
+        result = await mem_reg.get_sandbox_profile(
+            "agent-runtime",
+            scope={"tenant": "acme"},
+        )
+        assert result is not None
+        assert result.image_arn.endswith(":acme")
+
+    @pytest.mark.asyncio
+    async def test_delete_profile(self, mem_reg: MemoryConfigRegistry):
+        await mem_reg.upsert_sandbox_profile(_sandbox_profile())
+        deleted = await mem_reg.delete_sandbox_profile("default")
+        assert deleted is True
+        assert await mem_reg.get_sandbox_profile("default") is None
 
 
 # ---------------------------------------------------------------------------
@@ -461,6 +573,18 @@ class TestSqliteConfigRegistry:
             result = await reg.get_global_provider_defaults()
             assert result.provider == "bedrock"
             assert result.model == "claude-3"
+        finally:
+            await reg.close()
+
+    @pytest.mark.asyncio
+    async def test_sandbox_profile_round_trip(self, tmp_path: Path):
+        reg = _make_sqlite_reg(tmp_path)
+        try:
+            profile = _sandbox_profile("lambda-default")
+            await reg.upsert_sandbox_profile(profile)
+            result = await reg.get_sandbox_profile("lambda-default")
+            assert result is not None
+            assert result.image_arn == profile.image_arn
         finally:
             await reg.close()
 

@@ -60,7 +60,7 @@ The Cognition Helm chart deploys the server with `readOnlyRootFilesystem: true`,
 
 The split follows the `langchain-<provider>` convention. `langchain-k8s-sandbox` is published as a standalone package with zero Cognition imports. Cognition wraps it with domain policy (protected paths, scoping labels, session lifecycle).
 
-Design doc for the standalone package: [`packages/langchain-k8s-sandbox/DESIGN.md`](https://github.com/CognicellAI/Cognition/blob/main/packages/langchain-k8s-sandbox/DESIGN.md)
+Design doc for the standalone package: `packages/langchain-k8s-sandbox/DESIGN.md`
 
 ---
 
@@ -273,7 +273,7 @@ Both are created automatically by the Helm chart when `backend=kubernetes`.
 
 ### Example SandboxTemplate
 
-See [`deploy/examples/cognition-sandbox-template.yaml`](https://github.com/CognicellAI/Cognition/blob/main/deploy/examples/cognition-sandbox-template.yaml).
+See `deploy/examples/cognition-sandbox-template.yaml`.
 
 The template must include writable volume mounts for `/tmp` and `/workspace`. The runtime image uses `readOnlyRootFilesystem: true` for security, which makes the root filesystem read-only. Without writable mount points, `BaseSandbox` file operations that write temporary data (e.g., heredoc payloads) will fail with "Read-only file system" errors.
 

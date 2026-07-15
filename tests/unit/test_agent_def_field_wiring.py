@@ -18,13 +18,13 @@ of 12+ fields.
 
 from __future__ import annotations
 
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Iterator
 from typing import Any, cast
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, call, patch
 
 import pytest
 
-from server.app.agent.runtime import DoneEvent, TokenEvent
+from server.app.agent.runtime import DoneEvent, ErrorEvent, TokenEvent
 from server.app.models import Session, SessionConfig, SessionStatus
 
 
@@ -43,6 +43,7 @@ def _make_session(
     agent_name: str = "test-agent",
     provider: str = "mock",
     model: str = "mock-model",
+    scopes: dict[str, str] | None = None,
 ) -> Session:
     return Session(
         id="sess-wire-test",
@@ -55,6 +56,7 @@ def _make_session(
             model=model,
         ),
         agent_name=agent_name,
+        scopes=scopes or {},
         created_at="2026-01-01T00:00:00",
         updated_at="2026-01-01T00:00:00",
     )
@@ -69,6 +71,21 @@ def _make_mock_runtime(*events: Any) -> MagicMock:
     mock = MagicMock()
     mock.astream_events = MagicMock(return_value=_events(*events))
     return mock
+
+
+class _ResolvedModelWithCacheKey:
+    def __init__(self, cache_key: str) -> None:
+        self.model = MagicMock()
+        self.provider = "openai_compatible"
+        self.model_id = "shared-model"
+        self.recursion_limit = 100
+        self.cache_key = cache_key
+
+    def __iter__(self) -> Iterator[Any]:
+        yield self.model
+        yield self.provider
+        yield self.model_id
+        yield self.recursion_limit
 
 
 def _base_patches(mock_runtime: MagicMock, session: Session) -> tuple:
@@ -103,6 +120,7 @@ async def _run(
     patches: tuple,
     session: Session,
     mock_def_registry: Any = None,
+    scope: dict[str, str] | None = None,
 ) -> tuple[list[Any], MagicMock]:
     """Drive stream_response and return (events, create_cognition_agent mock)."""
     from server.app.llm.deep_agent_service import DeepAgentStreamingService
@@ -130,12 +148,14 @@ async def _run(
     with p1, p2, p3 as create_agent_mock, p4:
         if mock_def_registry is not None:
             mock_config_store.get_agent_definition = AsyncMock(
-                side_effect=lambda name, scope=None: mock_def_registry.get(name)
+                side_effect=lambda name, scope=None: mock_def_registry.get(name, scope)
             )
             mock_config_store.list_agent_definitions = AsyncMock(
-                return_value=mock_def_registry.subagents()
-                if hasattr(mock_def_registry, "subagents")
-                else []
+                side_effect=lambda include_hidden=False, scope=None: (
+                    mock_def_registry.subagents(scope)
+                    if hasattr(mock_def_registry, "subagents")
+                    else []
+                )
             )
 
         collected = []
@@ -144,6 +164,7 @@ async def _run(
             thread_id=session.thread_id,
             project_path="/tmp/ws",
             content="hello",
+            scope=scope,
         ):
             collected.append(event)
 
@@ -151,14 +172,14 @@ async def _run(
 
 
 # ---------------------------------------------------------------------------
-# Baseline: no agent_def → falls back gracefully
+# Baseline: no session-bound agent_def → explicit failure
 # ---------------------------------------------------------------------------
 
 
 class TestNoAgentDef:
     @pytest.mark.asyncio
-    async def test_stream_works_without_agent_def(self):
-        """Service must work when no AgentDefinition is found."""
+    async def test_missing_session_agent_fails_without_default_fallback(self):
+        """Missing session agent emits AGENT_NOT_FOUND instead of running default."""
         session = _make_session()
         mock_runtime = _make_mock_runtime(TokenEvent(content="hi"), DoneEvent())
         patches = _base_patches(mock_runtime, session)
@@ -168,8 +189,165 @@ class TestNoAgentDef:
         mock_def_registry.get = MagicMock(return_value=None)
         mock_def_registry.subagents = MagicMock(return_value=[])
 
-        events, _ = await _run(patches, session, mock_def_registry=mock_def_registry)
-        assert any(isinstance(e, DoneEvent) for e in events)
+        events, create_agent_mock = await _run(
+            patches, session, mock_def_registry=mock_def_registry
+        )
+
+        errors = [event for event in events if isinstance(event, ErrorEvent)]
+        assert len(errors) == 1
+        assert errors[0].code == "AGENT_NOT_FOUND"
+        assert "test-agent" in errors[0].message
+        assert mock_def_registry.get.call_args_list == [call("test-agent", None)]
+        create_agent_mock.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_scoped_session_agent_resolution_uses_session_scope(self):
+        """Runtime loads the scoped agent definition bound to the session."""
+        from server.app.agent.definition import AgentDefinition
+
+        scope = {"tenant": "acme", "user": "surface"}
+        session = _make_session(agent_name="scoped-agent", scopes=scope)
+        mock_runtime = _make_mock_runtime(DoneEvent())
+        patches = _base_patches(mock_runtime, session)
+
+        agent_def = AgentDefinition(
+            name="scoped-agent",
+            system_prompt="scoped prompt",
+            skills=["scoped-skill"],
+        )
+
+        class ScopedRegistry:
+            def __init__(self) -> None:
+                self.get_calls: list[tuple[str, dict[str, str] | None]] = []
+                self.subagent_scopes: list[dict[str, str] | None] = []
+
+            def get(self, name: str, query_scope: dict[str, str] | None = None) -> Any:
+                self.get_calls.append((name, query_scope))
+                if name == "scoped-agent" and query_scope == scope:
+                    return agent_def
+                return None
+
+            def subagents(self, query_scope: dict[str, str] | None = None) -> list[Any]:
+                self.subagent_scopes.append(query_scope)
+                return []
+
+        registry = ScopedRegistry()
+
+        _, create_agent_mock = await _run(patches, session, mock_def_registry=registry)
+
+        params = _get_params(create_agent_mock)
+        assert params.system_prompt == "scoped prompt"
+        assert params.skills == ["scoped-skill"]
+        assert registry.get_calls == [("scoped-agent", scope)]
+        assert registry.subagent_scopes == [scope]
+
+    @pytest.mark.asyncio
+    async def test_resolve_agent_config_uses_session_scope(self):
+        """Runtime agent lookup must use the session scope, not unscoped default."""
+        from server.app.agent.definition import AgentDefinition
+        from server.app.llm.deep_agent_service import DeepAgentStreamingService
+        from server.app.settings import Settings
+
+        session_scope = {
+            "tenant": "wasaloon",
+            "user": "kennel-surface-wa-salon-concierge",
+        }
+        session = _make_session(scopes=session_scope)
+        agent_def = AgentDefinition(name="test-agent", system_prompt="scoped")
+
+        service = DeepAgentStreamingService(MagicMock(spec=Settings))
+        mock_config_store = MagicMock()
+        mock_config_store.get_agent_definition = AsyncMock(return_value=agent_def)
+        mock_config_store.list_agent_definitions = AsyncMock(return_value=[agent_def])
+        service._config_store = mock_config_store
+
+        resolved, _ = await service._resolve_agent_config(
+            session=session,
+            project_path="/tmp/ws",
+        )
+
+        assert resolved.agent_def == agent_def
+        mock_config_store.get_agent_definition.assert_awaited_once_with(
+            "test-agent",
+            session_scope,
+        )
+        mock_config_store.list_agent_definitions.assert_awaited_once_with(
+            include_hidden=True,
+            scope=session_scope,
+        )
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("agent_kwargs", "reason"),
+        [
+            ({"hidden": True}, "hidden"),
+            ({"mode": "subagent"}, "not invokable"),
+        ],
+    )
+    async def test_resolve_agent_config_rejects_unavailable_agent(
+        self,
+        agent_kwargs: dict[str, Any],
+        reason: str,
+    ):
+        """Runtime must fail when the session-bound agent is not invokable."""
+        from server.app.agent.definition import AgentDefinition
+        from server.app.llm.deep_agent_service import (
+            AgentDefinitionUnavailableError,
+            DeepAgentStreamingService,
+        )
+        from server.app.settings import Settings
+
+        session = _make_session()
+        agent_def = AgentDefinition(
+            name="test-agent",
+            system_prompt="unavailable",
+            **agent_kwargs,
+        )
+
+        service = DeepAgentStreamingService(MagicMock(spec=Settings))
+        mock_config_store = MagicMock()
+        mock_config_store.get_agent_definition = AsyncMock(return_value=agent_def)
+        mock_config_store.list_agent_definitions = AsyncMock(return_value=[agent_def])
+        service._config_store = mock_config_store
+
+        with pytest.raises(AgentDefinitionUnavailableError, match=reason):
+            await service._resolve_agent_config(
+                session=session,
+                project_path="/tmp/ws",
+            )
+
+    @pytest.mark.asyncio
+    async def test_resolved_model_cache_key_passed_to_create_cognition_agent(self):
+        """Service must forward provider/config identity into the graph cache."""
+        from server.app.agent.definition import AgentDefinition
+
+        session = _make_session(provider="openai_compatible", model="shared-model")
+        mock_runtime = _make_mock_runtime(DoneEvent())
+        patches = _base_patches(mock_runtime, session)
+        cache_key = "resolved:openai_compatible:shared-model:https://one.example"
+        patches = (
+            patches[0],
+            patch(
+                "server.app.llm.deep_agent_service.DeepAgentStreamingService._resolve_model",
+                new_callable=AsyncMock,
+                return_value=_ResolvedModelWithCacheKey(cache_key),
+            ),
+            patches[2],
+            patches[3],
+        )
+        agent_def = AgentDefinition(name="test-agent", system_prompt="test")
+        mock_def_registry = MagicMock()
+        mock_def_registry.get = MagicMock(return_value=agent_def)
+        mock_def_registry.subagents = MagicMock(return_value=[])
+
+        _, create_agent_mock = await _run(
+            patches,
+            session,
+            mock_def_registry=mock_def_registry,
+        )
+
+        params = _get_params(create_agent_mock)
+        assert params.model_cache_key == cache_key
 
 
 # ---------------------------------------------------------------------------
@@ -442,6 +620,54 @@ class TestStructuredOutputAndContextControls:
         params = _get_params(create_agent_mock)
         assert params is not None
         assert params.context_policy == policy
+
+    @pytest.mark.asyncio
+    async def test_blocked_tools_passed_to_create_cognition_agent(self):
+        """blocked_tools from AgentConfig must be forwarded to tool security."""
+        from server.app.agent.definition import AgentConfig, AgentDefinition
+
+        session = _make_session()
+        mock_runtime = _make_mock_runtime(DoneEvent())
+        patches = _base_patches(mock_runtime, session)
+
+        agent_def = AgentDefinition(
+            name="test-agent",
+            system_prompt="test",
+            config=AgentConfig(blocked_tools=["glob", "grep", "ls"]),
+        )
+        mock_def_registry = MagicMock()
+        mock_def_registry.get = MagicMock(return_value=agent_def)
+        mock_def_registry.subagents = MagicMock(return_value=[])
+
+        _, create_agent_mock = await _run(patches, session, mock_def_registry=mock_def_registry)
+
+        params = _get_params(create_agent_mock)
+        assert params is not None
+        assert params.blocked_tools == ["glob", "grep", "ls"]
+
+    @pytest.mark.asyncio
+    async def test_excluded_tools_passed_to_create_cognition_agent(self):
+        """excluded_tools from AgentConfig must be forwarded to tool visibility."""
+        from server.app.agent.definition import AgentConfig, AgentDefinition
+
+        session = _make_session()
+        mock_runtime = _make_mock_runtime(DoneEvent())
+        patches = _base_patches(mock_runtime, session)
+
+        agent_def = AgentDefinition(
+            name="test-agent",
+            system_prompt="test",
+            config=AgentConfig(excluded_tools=["glob", "grep", "ls"]),
+        )
+        mock_def_registry = MagicMock()
+        mock_def_registry.get = MagicMock(return_value=agent_def)
+        mock_def_registry.subagents = MagicMock(return_value=[])
+
+        _, create_agent_mock = await _run(patches, session, mock_def_registry=mock_def_registry)
+
+        params = _get_params(create_agent_mock)
+        assert params is not None
+        assert params.excluded_tools == ["glob", "grep", "ls"]
 
     @pytest.mark.asyncio
     async def test_async_subagents_passed_to_create_cognition_agent(self):

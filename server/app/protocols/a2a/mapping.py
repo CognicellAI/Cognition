@@ -27,7 +27,7 @@ _RUN_STATUS_TO_A2A: dict[str, int] = {
     "queued": TaskState.TASK_STATE_SUBMITTED,
     "starting": TaskState.TASK_STATE_WORKING,
     "active": TaskState.TASK_STATE_WORKING,
-    "idle": TaskState.TASK_STATE_WORKING,
+    "idle": TaskState.TASK_STATE_COMPLETED,
     "waiting_for_approval": TaskState.TASK_STATE_INPUT_REQUIRED,
     "stalled": TaskState.TASK_STATE_WORKING,
     "done": TaskState.TASK_STATE_COMPLETED,

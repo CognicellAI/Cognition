@@ -21,6 +21,11 @@ from server.app.models import Session as CoreSession
 from server.app.models import SessionConfig
 from server.app.models import SessionEvent as CoreSessionEvent
 from server.app.models import SessionRun as CoreSessionRun
+from server.app.storage.config_models import (
+    LambdaMicroVmIdlePolicy,
+    LambdaMicroVmLogging,
+    LambdaMicroVmQuota,
+)
 
 # ============================================================================
 # Session Models
@@ -513,7 +518,7 @@ class HealthStatus(BaseModel):
 
     status: Literal["healthy", "unhealthy"] = Field(..., description="Overall health status")
     version: str = Field(..., description="Server version")
-    active_sessions: int = Field(..., description="Number of active sessions")
+    active_sessions: int = Field(..., description="Number of open non-terminal sessions")
     circuit_breakers: list[CircuitBreakerStatus] = Field(
         default_factory=list, description="Circuit breaker status for each provider"
     )
@@ -742,6 +747,80 @@ class McpServerList(BaseModel):
     count: int
 
 
+class SandboxProfileCreate(BaseModel):
+    """Request to create or replace a sandbox profile."""
+
+    name: str = Field(..., min_length=1, max_length=100)
+    backend: Literal["aws_lambda_microvm"] = Field(default="aws_lambda_microvm")
+    image_arn: str = Field(..., min_length=1)
+    image_version: str | None = None
+    region: str | None = None
+    ingress_network_connector_arns: list[str] = Field(default_factory=list)
+    egress_mode: Literal["internet", "vpc"] = "internet"
+    egress_network_connector_arns: list[str] = Field(default_factory=list)
+    idle_policy: LambdaMicroVmIdlePolicy | None = None
+    logging: LambdaMicroVmLogging | None = None
+    quota: LambdaMicroVmQuota | None = None
+    run_hook_payload: str | None = None
+    maximum_duration_seconds: int = Field(default=3600, gt=0, le=28800)
+    port: int = Field(default=8080, ge=1, le=65535)
+    token_expiration_minutes: int = Field(default=30, gt=0)
+    default_execution_role_arn: str | None = None
+    scope: dict[str, str] = Field(default_factory=dict)
+    extra: dict[str, Any] = Field(default_factory=dict)
+
+
+class SandboxProfileUpdate(BaseModel):
+    """Partial update request for a sandbox profile."""
+
+    image_arn: str | None = Field(default=None, min_length=1)
+    image_version: str | None = None
+    region: str | None = None
+    ingress_network_connector_arns: list[str] | None = None
+    egress_mode: Literal["internet", "vpc"] | None = None
+    egress_network_connector_arns: list[str] | None = None
+    idle_policy: LambdaMicroVmIdlePolicy | None = None
+    logging: LambdaMicroVmLogging | None = None
+    quota: LambdaMicroVmQuota | None = None
+    run_hook_payload: str | None = None
+    maximum_duration_seconds: int | None = Field(default=None, gt=0, le=28800)
+    port: int | None = Field(default=None, ge=1, le=65535)
+    token_expiration_minutes: int | None = Field(default=None, gt=0)
+    default_execution_role_arn: str | None = None
+    extra: dict[str, Any] | None = None
+
+
+class SandboxProfileResponse(BaseModel):
+    """Registered sandbox profile response."""
+
+    name: str
+    backend: Literal["aws_lambda_microvm"]
+    image_arn: str
+    image_version: str | None = None
+    region: str | None = None
+    ingress_network_connector_arns: list[str] = Field(default_factory=list)
+    egress_mode: Literal["internet", "vpc"]
+    egress_network_connector_arns: list[str] = Field(default_factory=list)
+    idle_policy: LambdaMicroVmIdlePolicy | None = None
+    logging: LambdaMicroVmLogging | None = None
+    quota: LambdaMicroVmQuota | None = None
+    run_hook_payload: str | None = None
+    maximum_duration_seconds: int
+    port: int
+    token_expiration_minutes: int
+    default_execution_role_arn: str | None = None
+    scope: dict[str, str] = Field(default_factory=dict)
+    source: Literal["file", "api"]
+    extra: dict[str, Any] = Field(default_factory=dict)
+
+
+class SandboxProfileList(BaseModel):
+    """List of sandbox profiles visible in scope."""
+
+    profiles: list[SandboxProfileResponse]
+    count: int
+
+
 # ============================================================================
 # Capability Models
 # ============================================================================
@@ -836,9 +915,13 @@ class AgentConfigResponse(BaseModel):
     recursion_limit: int | None = None
     tool_token_limit_before_evict: int | None = None
     context_policy: ContextPolicy | None = None
+    excluded_tools: list[str] | None = None
+    blocked_tools: list[str] | None = None
     provider: str | None = None
     model: str | None = None
     timeout_seconds: float | None = None
+    sandbox_profile: str | None = None
+    sandbox_execution_role_arn: str | None = None
 
 
 class AgentList(BaseModel):
@@ -1168,8 +1251,18 @@ class AgentCreate(BaseModel):
     recursion_limit: int | None = Field(default=None)
     tool_token_limit_before_evict: int | None = Field(default=None)
     context_policy: ContextPolicy | None = Field(default=None)
+    excluded_tools: list[str] = Field(default_factory=list)
+    blocked_tools: list[str] = Field(default_factory=list)
     provider: str | None = Field(default=None)
     timeout_seconds: float | None = Field(default=None)
+    sandbox_profile: str | None = Field(
+        default=None,
+        description="Trusted sandbox profile name selected for this agent.",
+    )
+    sandbox_execution_role_arn: str | None = Field(
+        default=None,
+        description="Trusted IAM role ARN assigned to this agent's sandbox runtime.",
+    )
     middleware: list[Any] = Field(default_factory=list)
     subagents: list[dict[str, Any]] = Field(default_factory=list)
     async_subagents: list[AsyncSubagentConfig] = Field(default_factory=list)
@@ -1198,8 +1291,12 @@ class AgentUpdate(BaseModel):
     recursion_limit: int | None = None
     tool_token_limit_before_evict: int | None = None
     context_policy: ContextPolicy | None = None
+    excluded_tools: list[str] | None = None
+    blocked_tools: list[str] | None = None
     provider: str | None = None
     timeout_seconds: float | None = None
+    sandbox_profile: str | None = None
+    sandbox_execution_role_arn: str | None = None
     middleware: list[Any] | None = None
 
 

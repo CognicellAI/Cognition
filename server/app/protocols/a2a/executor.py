@@ -156,6 +156,7 @@ class CognitionA2AExecutor(AgentExecutor):
                 system_prompt=system_prompt,
                 manager=self._agent_manager,
                 scope=scope,
+                run_id=None,
             ):
                 if isinstance(event, TokenEvent):
                     accumulated_text.append(event.content)
@@ -172,7 +173,7 @@ class CognitionA2AExecutor(AgentExecutor):
                             )
                         )
                         return
-                    if event.to_status == "done":
+                    if event.to_status in {"idle", "done"}:
                         await _emit_final_artifact(
                             event_queue, task_id, context_id,
                             "".join(accumulated_text),

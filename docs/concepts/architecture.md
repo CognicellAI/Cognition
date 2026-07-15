@@ -10,13 +10,11 @@ The core promise: define your agent with tools, skills, and a system prompt — 
 
 - [The 7-Layer Model](#the-7-layer-model)
 - [Layer Breakdown](#layer-breakdown)
-  - [Layer 1 — Foundation](#layer-1-foundation)
-  - [Layer 2 — Persistence](#layer-2-persistence)
-  - [Layer 3 — Execution](#layer-3-execution)
-  - [Layer 4 — Agent Runtime](#layer-4-agent-runtime)
-  - Layer 5 — LLM Provider
-  - Layer 6 — API & Streaming
-  - [Layer 7 — Observability](#layer-7-observability)
+  - [Layer 1 — Foundation](#layer-1--foundation)
+  - [Layer 2 — Persistence](#layer-2--persistence)
+  - [Layer 3 — Execution](#layer-3--execution)
+  - [Layer 4 — Agent Runtime](#layer-4--agent-runtime)
+  - [Layer 7 — Observability](#layer-7--observability)
 - [Startup Sequence](#startup-sequence)
 - [The North Star](#the-north-star)
 
@@ -134,12 +132,18 @@ Code execution is isolated from the server process using pluggable backends.
 - Configurable memory and CPU limits
 - Network isolation (`network_mode=none` by default)
 
-**`server/app/agent/sandbox_backend.py`** — Two Cognition-specific backends:
+**`server/app/agent/sandbox_backend.py`** — Cognition-specific sandbox
+wrappers:
 
 - `CognitionLocalSandboxBackend` — Commands executed in the local process using `shlex.split()` + `shell=False`. Protected paths (`.cognition/` by default) block write operations. Per-command `timeout` override supported. No `shell=True` anywhere.
 - `CognitionDockerSandboxBackend` — File operations run directly on the host filesystem; command execution is routed through `DockerExecutionBackend`. Container is created lazily and reused within a session.
+- `CognitionKubernetesSandboxBackend` — Commands execute in Kubernetes-native
+  sandbox pods.
+- `CognitionAwsLambdaMicroVmSandboxBackend` — Commands execute in AWS Lambda
+  MicroVMs launched from trusted sandbox profiles.
 
-`create_sandbox_backend(settings)` selects between them based on `settings.sandbox_backend`.
+`create_sandbox_backend(settings)` selects the configured backend. See
+[Sandboxes](./sandboxes/index.md) for backend-specific behavior and setup.
 
 ---
 
@@ -240,7 +244,7 @@ Key methods: `get_all()`, `get(name)`, `primaries()`, `subagents()`, `reload()`,
 
 **`server/app/agent/cognition_agent.py`** — `create_cognition_agent()` is the async factory that instantiates a Deep Agent from an `AgentDefinition`. In order:
 
-1. Selects the sandbox backend (`local` or `docker`)
+1. Selects the sandbox backend (`local`, `docker`, `kubernetes`, or `aws_lambda_microvm`)
 2. Loads built-in tools: `BrowserTool`, `SearchTool`, `InspectPackageTool`
 3. Loads MCP tools from configured remote servers
 4. Resolves tools from `AgentDefinition.tools` (dotted import paths)
@@ -272,7 +276,7 @@ It provides the primary key for scoping LangGraph Store namespaces — ensuring 
 
 #### A2A Protocol Adapter
 
-Cognition exposes agents via the [Agent-to-Agent (A2A)](https://google.github.io/A2A/) protocol through a protocol adapter in `server/app/protocols/a2a/`. The adapter is mounted during startup (`mount_a2a_routes()`) and registers two endpoints:
+Cognition exposes agents via the [Agent-to-Agent (A2A)](https://a2a-protocol.org/latest/) protocol through a protocol adapter in `server/app/protocols/a2a/`. The adapter is mounted during startup (`mount_a2a_routes()`) and registers two endpoints:
 
 - **`GET /.well-known/agent-card.json`** — Agent card discovery. Returns A2A-compliant `AgentCard` objects for all agents with `a2a_exposed=True`. Cards are filtered by the request's scope — only agents visible to the caller's scope are listed.
 - **`POST /a2a/{agent_name}`** — JSON-RPC endpoint. Accepts A2A `SendMessage` and `SendStreamingMessage` requests and bridges them to Cognition's `service.stream_response()`. Each agent gets its own card with a dedicated endpoint URL.

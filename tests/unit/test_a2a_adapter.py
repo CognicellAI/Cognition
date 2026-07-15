@@ -404,6 +404,10 @@ class TestA2AWireShape:
 
 
 class TestEventToA2AState:
+    def test_run_state_idle(self):
+        event = RunStateEvent(from_status="active", to_status="idle")
+        assert event_to_a2a_state(event) == TaskState.TASK_STATE_COMPLETED
+
     def test_run_state_done(self):
         event = RunStateEvent(from_status="active", to_status="done")
         assert event_to_a2a_state(event) == TaskState.TASK_STATE_COMPLETED
@@ -461,6 +465,7 @@ class TestRunStatusMapping:
         assert set(_RUN_STATUS_TO_A2A.keys()) == expected
 
     def test_terminal_states(self):
+        assert _RUN_STATUS_TO_A2A["idle"] == TaskState.TASK_STATE_COMPLETED
         assert _RUN_STATUS_TO_A2A["done"] == TaskState.TASK_STATE_COMPLETED
         assert _RUN_STATUS_TO_A2A["failed"] == TaskState.TASK_STATE_FAILED
         assert _RUN_STATUS_TO_A2A["aborted"] == TaskState.TASK_STATE_CANCELED

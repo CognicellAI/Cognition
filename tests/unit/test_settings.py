@@ -119,6 +119,12 @@ class TestSettingsValidation:
         with pytest.raises(PydanticValidationError):
             TestSettings(metrics_port=0)
 
+    def test_aws_lambda_microvm_sandbox_backend_is_valid(self):
+        """AWS Lambda MicroVM is a recognized sandbox backend option."""
+        settings = TestSettings(sandbox_backend="aws_lambda_microvm")
+        assert settings.sandbox_backend == "aws_lambda_microvm"
+        assert settings.aws_lambda_microvm_default_profile == "default"
+
 
 class TestSettingsLLMModel:
     """Test get_llm_model method."""

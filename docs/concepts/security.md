@@ -87,11 +87,32 @@ When `COGNITION_SANDBOX_BACKEND=docker`, code runs in a Docker container with al
 
 The container is created from `cognition-sandbox:latest`, a minimal image without unnecessary tools. See [Deployment](../guides/deployment.md) for building the sandbox image.
 
+### AWS Lambda MicroVM Isolation
+
+When `COGNITION_SANDBOX_BACKEND=aws_lambda_microvm`, command execution runs in
+an AWS Lambda MicroVM launched from a trusted `SandboxProfile`.
+
+Key security properties:
+
+- MicroVM image ARN and network connectors come from builder-managed profile
+  config, not model tool arguments.
+- Per-agent `sandbox_execution_role_arn` is resolved from trusted agent config,
+  with profile default role fallback.
+- Cognition requests AWS proxy auth tokens at runtime and keeps them in memory
+  only.
+- Streamed and persisted sandbox metadata contains a role fingerprint, not
+  runtime credentials or auth tokens.
+- The Cognition control-plane IAM identity should be limited to approved
+  MicroVM images, network connectors, and execution roles.
+
+See [AWS Lambda MicroVM Sandbox](./sandboxes/aws-lambda-microvm/index.md) for
+the full backend model.
+
 ---
 
 ## Tool Security
 
-Implemented in `server/app/agent/middleware.py:ToolSecurityMiddleware`.
+Implemented in `server/app/agent/middleware.py:ToolVisibilityMiddleware` and `ToolSecurityMiddleware`.
 
 ### Trust Model
 
@@ -102,15 +123,16 @@ Tool source code (both file-discovered and API-registered) executes with full Py
 | Boundary | Mechanism |
 |---|---|
 | API authorization | Gateway/proxy layer — Cognition assumes authenticated callers |
-| Per-name tool blocking | `ToolSecurityMiddleware` — `COGNITION_BLOCKED_TOOLS` blocklist enforced at call time |
-| Process isolation | Docker sandbox backend — container per session |
-| Network isolation | Docker `network_mode=none` |
+| Per-agent tool visibility | `ToolVisibilityMiddleware` — `config.excluded_tools` removes matching tools from the model-visible schema |
+| Per-name tool blocking | `ToolSecurityMiddleware` — `config.blocked_tools` plus `COGNITION_BLOCKED_TOOLS` are enforced at call time |
+| Process isolation | Docker, Kubernetes, or AWS Lambda MicroVM sandbox backend |
+| Network isolation | Docker `network_mode=none`, Kubernetes network policy, or Lambda MicroVM connector policy |
 | Filesystem isolation | `CognitionLocalSandboxBackend` protected paths |
 | Memory isolation | LangGraph Store namespaces scoped per tenant via `CognitionContext.effective_scope` |
 
 `POST /tools` (API-registered tools) executes arbitrary Python with full privileges. **Restrict this endpoint to authorized administrators at the Gateway/proxy layer.**
 
-For a detailed explanation, see [AGENTS.md — Tool Security Trust Model](https://github.com/CognicellAI/Cognition/blob/main/AGENTS.md).
+For a detailed explanation, see the Tool Security Trust Model section in `AGENTS.md`.
 
 ### Tool Namespace Allowlist
 
@@ -122,7 +144,16 @@ COGNITION_TRUSTED_TOOL_NAMESPACES=["myapp.tools", "cognition_tools"]
 
 If a tool's dotted path does not start with a trusted namespace, it is rejected at agent creation time. An empty `trusted_tool_namespaces` list disables the check (all namespaces allowed — suitable only for development).
 
-### Tool Blocklist
+### Tool Visibility and Blocklists
+
+Per-agent `excluded_tools` and `blocked_tools` serve different purposes:
+
+| Policy | Effect |
+|---|---|
+| `excluded_tools` | Hides matching tools from the model before the model can choose them. Use this to remove inherited Deep Agents harness tools from customer-facing or constrained agents. |
+| `blocked_tools` | Allows the tool to remain visible but denies execution if the model calls it. Use this as a call-time guardrail and audit point. |
+
+If a tool should be both invisible and guarded, include the same tool name in both lists.
 
 `ToolSecurityMiddleware` intercepts every tool call before execution. If the tool name is in the blocked list, the call returns an error `ToolMessage` without executing the tool.
 
@@ -130,9 +161,23 @@ If a tool's dotted path does not start with a trusted namespace, it is rejected 
 COGNITION_BLOCKED_TOOLS=["file_write", "execute_bash"]
 ```
 
+`COGNITION_BLOCKED_TOOLS` is deployment-wide and merges with each agent's `config.blocked_tools`. It does not hide tools from the model-visible schema. Use per-agent `config.excluded_tools` for that.
+
+Agent definitions can set both lists:
+
+```yaml
+config:
+  excluded_tools:
+    - grep
+    - ls
+    - websearch
+  blocked_tools:
+    - execute
+```
+
 The blocked call returns:
 ```
-Tool 'file_write' is blocked by the tool security policy.
+Tool 'file_write' is disabled by server policy.
 ```
 
 ---
@@ -245,6 +290,8 @@ These prevent MIME sniffing, clickjacking, and reflected XSS attacks in browser 
 - [ ] Set `COGNITION_DOCKER_NETWORK=none`
 - [ ] Restrict `POST /tools` to authorized administrators at the Gateway/proxy layer
 - [ ] Set `COGNITION_TRUSTED_TOOL_NAMESPACES` to your allowed namespaces
+- [ ] Use per-agent `excluded_tools` to hide inherited harness tools from agents that should not see them
+- [ ] Use per-agent or global `blocked_tools` for tools that must be denied even if a call is attempted
 - [ ] Set `COGNITION_CORS_ORIGINS` to your specific frontend domains
 - [ ] Set `COGNITION_RATE_LIMIT_PER_MINUTE` appropriate for your load
 - [ ] Never commit API keys; use `.env` or secrets management (Vault, AWS Secrets Manager)

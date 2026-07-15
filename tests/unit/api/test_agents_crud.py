@@ -6,11 +6,14 @@ agent management.
 
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 from fastapi.testclient import TestClient
 
-from server.app.api.dependencies import set_config_store
+from server.app.api.dependencies import get_config_store, get_settings_dep, set_config_store
 from server.app.main import app
+from server.app.settings import Settings
 from server.app.storage.config_store import DefaultConfigStore
 
 client = TestClient(app)
@@ -100,6 +103,10 @@ class TestCreateAgent:
                 "retention": {"logs": "summarize"},
             },
             "timeout_seconds": 45,
+            "sandbox_profile": "lambda-default",
+            "sandbox_execution_role_arn": (
+                "arn:aws:iam::123456789012:role/cognition-agent-runtime"
+            ),
             "middleware": [{"name": "tool_retry", "max_retries": 2}],
             "interrupt_on": {
                 "execute": {
@@ -137,10 +144,41 @@ class TestCreateAgent:
         assert data["config"]["context_policy"]["summarizer_model"] == "fast-summarizer"
         assert data["config"]["context_policy"]["retention"] == {"logs": "summarize"}
         assert data["config"]["timeout_seconds"] == 45
+        assert data["config"]["sandbox_profile"] == "lambda-default"
+        assert (
+            data["config"]["sandbox_execution_role_arn"]
+            == "arn:aws:iam::123456789012:role/cognition-agent-runtime"
+        )
         assert data["interrupt_on"]["execute"]["allowed_decisions"] == ["approve", "reject"]
         assert data["permissions"][0]["paths"] == ["/workspace/repo/**"]
         assert data["async_subagents"][0]["name"] == "researcher"
         assert data["async_subagents"][0]["graph_id"] == "research_graph"
+
+    def test_create_agent_persists_tool_policies(self):
+        response = client.post(
+            "/agents",
+            json={
+                "name": "test-create-tool-policies-agent",
+                "system_prompt": "tool policy create test",
+                "excluded_tools": ["glob", "grep", "ls"],
+                "blocked_tools": ["execute"],
+            },
+        )
+        assert response.status_code == 201
+        assert response.json()["config"]["excluded_tools"] == ["glob", "grep", "ls"]
+        assert response.json()["config"]["blocked_tools"] == ["execute"]
+
+        get_resp = client.get("/agents/test-create-tool-policies-agent")
+        assert get_resp.status_code == 200
+        assert get_resp.json()["config"]["excluded_tools"] == ["glob", "grep", "ls"]
+        assert get_resp.json()["config"]["blocked_tools"] == ["execute"]
+
+        raw = asyncio.run(
+            get_config_store().get_agent_raw("test-create-tool-policies-agent")
+        )
+        assert raw is not None
+        assert raw["config"]["excluded_tools"] == ["glob", "grep", "ls"]
+        assert raw["config"]["blocked_tools"] == ["execute"]
 
     def test_get_preserves_top_level_provider(self):
         client.post(
@@ -257,7 +295,14 @@ class TestUpdateAgent:
         )
         response = client.patch(
             "/agents/test-patch-config-agent",
-            json={"max_tokens": 8000, "timeout_seconds": 30},
+            json={
+                "max_tokens": 8000,
+                "timeout_seconds": 30,
+                "sandbox_profile": "lambda-vpc",
+                "sandbox_execution_role_arn": (
+                    "arn:aws:iam::123456789012:role/cognition-agent-vpc"
+                ),
+            },
         )
         assert response.status_code == 200
         assert response.json()["provider"] == "openai"
@@ -265,6 +310,131 @@ class TestUpdateAgent:
         assert response.json()["config"]["recursion_limit"] == 100
         assert response.json()["config"]["provider"] == "openai"
         assert response.json()["config"]["timeout_seconds"] == 30
+        assert response.json()["config"]["sandbox_profile"] == "lambda-vpc"
+        assert (
+            response.json()["config"]["sandbox_execution_role_arn"]
+            == "arn:aws:iam::123456789012:role/cognition-agent-vpc"
+        )
+
+    def test_patch_agent_persists_blocked_tools(self):
+        client.post(
+            "/agents",
+            json={
+                "name": "test-patch-blocked-tools-agent",
+                "system_prompt": "blocked tools patch test",
+            },
+        )
+        response = client.patch(
+            "/agents/test-patch-blocked-tools-agent",
+            json={"blocked_tools": ["execute", "task", "write_todos"]},
+        )
+        assert response.status_code == 200
+        assert response.json()["config"]["blocked_tools"] == [
+            "execute",
+            "task",
+            "write_todos",
+        ]
+
+        get_resp = client.get("/agents/test-patch-blocked-tools-agent")
+        assert get_resp.status_code == 200
+        assert get_resp.json()["config"]["blocked_tools"] == [
+            "execute",
+            "task",
+            "write_todos",
+        ]
+
+        raw = asyncio.run(get_config_store().get_agent_raw("test-patch-blocked-tools-agent"))
+        assert raw is not None
+        assert raw["config"]["blocked_tools"] == ["execute", "task", "write_todos"]
+
+    def test_patch_agent_persists_excluded_tools(self):
+        client.post(
+            "/agents",
+            json={
+                "name": "test-patch-excluded-tools-agent",
+                "system_prompt": "excluded tools patch test",
+            },
+        )
+        response = client.patch(
+            "/agents/test-patch-excluded-tools-agent",
+            json={"excluded_tools": ["glob", "grep", "inspect_package", "ls"]},
+        )
+        assert response.status_code == 200
+        assert response.json()["config"]["excluded_tools"] == [
+            "glob",
+            "grep",
+            "inspect_package",
+            "ls",
+        ]
+
+        get_resp = client.get("/agents/test-patch-excluded-tools-agent")
+        assert get_resp.status_code == 200
+        assert get_resp.json()["config"]["excluded_tools"] == [
+            "glob",
+            "grep",
+            "inspect_package",
+            "ls",
+        ]
+
+        raw = asyncio.run(get_config_store().get_agent_raw("test-patch-excluded-tools-agent"))
+        assert raw is not None
+        assert raw["config"]["excluded_tools"] == ["glob", "grep", "inspect_package", "ls"]
+
+    def test_patch_scoped_agent_persists_excluded_tools(self):
+        scoped_settings = Settings(scoping_enabled=True, scope_keys=["tenant"])
+        headers = {"X-Cognition-Scope-Tenant": "wasaloon"}
+        app.dependency_overrides[get_settings_dep] = lambda: scoped_settings
+        try:
+            create_resp = client.post(
+                "/agents",
+                json={
+                    "name": "test-scoped-excluded-tools-agent",
+                    "system_prompt": "scoped excluded tools test",
+                },
+                headers=headers,
+            )
+            assert create_resp.status_code == 201
+
+            response = client.patch(
+                "/agents/test-scoped-excluded-tools-agent",
+                json={"excluded_tools": ["glob", "grep", "inspect_package", "ls"]},
+                headers=headers,
+            )
+            assert response.status_code == 200
+            assert response.json()["config"]["excluded_tools"] == [
+                "glob",
+                "grep",
+                "inspect_package",
+                "ls",
+            ]
+
+            get_resp = client.get(
+                "/agents/test-scoped-excluded-tools-agent",
+                headers=headers,
+            )
+            assert get_resp.status_code == 200
+            assert get_resp.json()["config"]["excluded_tools"] == [
+                "glob",
+                "grep",
+                "inspect_package",
+                "ls",
+            ]
+
+            raw = asyncio.run(
+                get_config_store().get_agent_raw(
+                    "test-scoped-excluded-tools-agent",
+                    {"tenant": "wasaloon"},
+                )
+            )
+            assert raw is not None
+            assert raw["config"]["excluded_tools"] == [
+                "glob",
+                "grep",
+                "inspect_package",
+                "ls",
+            ]
+        finally:
+            app.dependency_overrides.pop(get_settings_dep, None)
 
     def test_patch_unrelated_field_preserves_top_level_provider(self):
         client.post(

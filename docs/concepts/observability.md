@@ -76,7 +76,7 @@ Implemented in `server/app/observability/__init__.py`. All metrics are defined a
 | `cognition_request_duration_seconds` | Histogram | `method`, `endpoint` | HTTP request latency |
 | `cognition_llm_call_duration_seconds` | Histogram | `provider`, `model` | LLM API call latency |
 | `cognition_tool_calls_total` | Counter | `tool_name`, `status` | Tool invocations (`success`/`error`) |
-| `cognition_active_sessions` | Gauge | — | Currently active sessions |
+| `cognition_active_sessions` | Gauge | — | Open non-terminal sessions |
 
 When `prometheus_client` is not installed, all metrics fall back to `DummyMetric` — a no-op object that accepts any call without error.
 

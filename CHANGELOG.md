@@ -7,6 +7,61 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [0.11.0] — 2026-07-10
+
+### Highlights
+
+- Introduced the AWS Lambda MicroVM sandbox backend as a production-oriented isolation option for Cognition agents, alongside the existing local, Docker, and Kubernetes sandbox backends.
+- Added scoped sandbox profiles and per-agent Lambda MicroVM execution roles so builder platforms can run tenant/project/user-scoped agents with least-privilege AWS access.
+- Added a builder-owned default Lambda MicroVM runtime image path, including commented runtime source, packaging script, Terraform image creation template, and Cognition-ready sandbox profile output.
+- Hardened Lambda MicroVM lifecycle behavior with quota release, verified teardown, token-free lifecycle metadata, and operator-grade lifecycle events/logs.
+
+### Added
+
+- `aws_lambda_microvm` sandbox backend support with a dedicated `packages/langchain-aws-lambda-microvms` runtime adapter and Cognition integration wrapper.
+- Lambda MicroVM `SandboxProfile` configuration for image ARN/version, region, memory, storage, duration, idle policy, egress mode, network connector ARNs, logging, quotas, and default execution role.
+- Agent-level `sandbox_profile` and `sandbox_execution_role_arn` fields, with execution roles resolved from trusted config/API data instead of model or tool arguments.
+- Runtime command-server contract for Lambda MicroVM images: `/healthz`, `/execute`, `/upload`, `/download`, and safe lifecycle hook endpoints.
+- Public Lambda MicroVM documentation under `docs/concepts/sandboxes/aws-lambda-microvm/`, plus reusable Terraform examples for sandbox prerequisites and default runtime image creation.
+
+### Fixed
+
+- Fixed scoped API-created agents so `POST /sessions`, session agent updates, and runtime execution resolve primary agents using the effective request/session scope.
+- Removed unsafe runtime fallback to the `default` agent when a session references a missing scoped agent; missing runtime definitions now fail explicitly.
+- Fixed Lambda MicroVM quota accounting so terminal runs/sessions release concurrent-session quota without requiring session deletion, while preserving start-rate history.
+- Fixed `/health.active_sessions` to count only non-terminal sessions.
+- Verified Lambda MicroVM teardown before reporting completion, with bounded AWS `GetMicrovm` polling and explicit `teardown_complete`, `teardown_pending`, and `teardown_failed` phases.
+- Fixed agent graph cache identity for string model IDs and provider/model configuration so agent-level model overrides do not reuse stale compiled graphs.
+- Aligned sandbox backend file/glob behavior with the upgraded Deep Agents backend protocol.
+
+### Security
+
+- Refreshed locked runtime dependencies to resolve Dependabot alerts for `pydantic-settings`, `langsmith`, `langchain`, `langchain-anthropic`, `starlette`, `cryptography`, `aiohttp`, `python-multipart`, and `pyjwt`.
+- Kept Lambda MicroVM proxy auth tokens and raw role credentials out of persisted lifecycle metadata, logs, and SSE events.
+
+### Changed
+
+- Refreshed the v0.11 runtime dependency family, including Deep Agents, LangChain, LangGraph, FastAPI/Starlette, OpenTelemetry, provider adapters, OpenAI, and MLflow deploy dependencies.
+- Reorganized public sandbox documentation under `docs/concepts/sandboxes/` with backend-specific pages for local, Docker, Kubernetes, and AWS Lambda MicroVM sandboxes.
+
+---
+
+## [0.10.4] — 2026-06-15
+
+### Fixed
+
+- Fixed per-agent tool policy persistence for `POST /agents` and `PATCH /agents/{name}` so API-provided `blocked_tools` and `excluded_tools` are stored in ConfigRegistry, returned by `GET /agents/{name}`, and forwarded into runtime policy middleware.
+- Fixed inherited Deep Agents harness tool visibility for per-agent `excluded_tools` so tools such as `grep` can be removed from the model-visible tool list before the model can select them.
+- Fixed scoped `PATCH /agents/{name}` responses to reload the same scoped agent row that was updated.
+- Fixed scoped custom primary agent validation for `POST /sessions` and `PATCH /sessions/{session_id}` so agents visible through scoped `GET /agents` can be bound to new or updated sessions.
+- Fixed runtime agent resolution so sessions bound to missing, hidden, or non-primary agents fail explicitly instead of silently falling back to the default agent.
+
+### Documentation
+
+- Clarified that `excluded_tools` hides tools from an agent's model-visible schema, while `blocked_tools` denies execution and is merged with deployment-wide `COGNITION_BLOCKED_TOOLS`.
+
+---
+
 ## [0.10.3] — 2026-05-28
 
 ### Fixed

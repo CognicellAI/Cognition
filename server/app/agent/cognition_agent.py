@@ -39,12 +39,14 @@ from server.app.agent.middleware import (  # noqa: E402
     CognitionStreamingMiddleware,
     ToolArgumentValidationMiddleware,
     ToolSecurityMiddleware,
+    ToolVisibilityMiddleware,
     TrustedRuntimeContextMiddleware,
 )
 from server.app.agent.prompts import SYSTEM_PROMPT  # noqa: E402
 from server.app.agent.sandbox_backend import create_sandbox_backend  # noqa: E402
 from server.app.agent.tools import BrowserTool, InspectPackageTool, SearchTool  # noqa: E402
 from server.app.settings import Settings, get_settings  # noqa: E402
+from server.app.storage.config_models import SandboxProfile  # noqa: E402
 from server.app.storage.config_store import ConfigStore  # noqa: E402
 
 DeepAgentResponseFormat = Any
@@ -117,9 +119,13 @@ class RuntimeContext:
     response_format: str
     tool_token_limit_before_evict: int | None
     context_policy: str
+    excluded_tools: tuple[str, ...]
+    blocked_tools: tuple[str, ...]
     middleware_count: int
     tools_count: int
     sandbox_backend: str
+    sandbox_profile: str
+    sandbox_execution_role_arn: str
     scope: tuple[tuple[str, str], ...]
 
     @classmethod
@@ -138,14 +144,19 @@ class RuntimeContext:
         response_format: str | type[Any] | None,
         tool_token_limit_before_evict: int | None,
         context_policy: Any | None,
+        excluded_tools: Sequence[str] | None,
+        blocked_tools: Sequence[str] | None,
         middleware: Sequence[Any] | None,
         tools: Sequence[Any] | None,
         settings: Settings,
         scope: dict[str, str] | None,
+        sandbox_profile: str | None = None,
+        sandbox_execution_role_arn: str | None = None,
+        model_cache_key: str | None = None,
     ) -> RuntimeContext:
         return cls(
             project_path=str(project_path.resolve()),
-            model_key=_model_cache_key(model),
+            model_key=model_cache_key or _model_cache_key(model),
             store_type=store.__class__.__name__ if store else "None",
             system_prompt=system_prompt or "default",
             memory=tuple(sorted(memory)) if memory else (),
@@ -163,9 +174,13 @@ class RuntimeContext:
             else "None",
             tool_token_limit_before_evict=tool_token_limit_before_evict,
             context_policy=_json_cache_key(context_policy),
+            excluded_tools=tuple(sorted(str(tool) for tool in (excluded_tools or []))),
+            blocked_tools=tuple(sorted(str(tool) for tool in (blocked_tools or []))),
             middleware_count=len(middleware) if middleware else 0,
             tools_count=len(tools) if tools else 0,
             sandbox_backend=settings.sandbox_backend,
+            sandbox_profile=sandbox_profile or settings.aws_lambda_microvm_default_profile,
+            sandbox_execution_role_arn=sandbox_execution_role_arn or "",
             scope=tuple(sorted((scope or {}).items())),
         )
 
@@ -176,6 +191,8 @@ _agent_cache: dict[RuntimeContext, Any] = {}
 def _model_cache_key(model: Any) -> str:
     if model is None:
         return "None"
+    if isinstance(model, str):
+        return f"str:{model}"
     type_name = type(model).__name__
     model_id = (
         getattr(model, "model_name", None)
@@ -366,12 +383,17 @@ class CognitionAgentParams:
     response_format: str | type[Any] | None = None
     tool_token_limit_before_evict: int | None = None
     context_policy: Any | None = None
+    excluded_tools: Sequence[str] | None = None
+    blocked_tools: Sequence[str] | None = None
     middleware: Sequence[Any] | None = None
     tools: Sequence[Any] | None = None
     settings: Settings | None = None
     mcp_configs: Sequence[McpServerConfig] | None = None
     scope: dict[str, str] | None = None
     config_store: ConfigStore | None = None
+    sandbox_profile: str | None = None
+    sandbox_execution_role_arn: str | None = None
+    model_cache_key: str | None = None
 
 
 def _create_sandbox(
@@ -379,7 +401,11 @@ def _create_sandbox(
     sandbox_id: str,
     settings: Settings,
     k8s_labels: dict[str, str] | None,
+    sandbox_profile: str | None = None,
+    sandbox_execution_role_arn: str | None = None,
+    sandbox_profile_config: SandboxProfile | None = None,
 ) -> Any:
+    resolved_profile = sandbox_profile or settings.aws_lambda_microvm_default_profile
     return create_sandbox_backend(
         root_dir=project_path,
         sandbox_id=sandbox_id,
@@ -395,7 +421,35 @@ def _create_sandbox(
         k8s_ttl=settings.k8s_sandbox_ttl,
         k8s_warm_pool=settings.k8s_sandbox_warm_pool,
         labels=k8s_labels or None,
+        aws_lambda_microvm_profile=resolved_profile,
+        aws_lambda_microvm_execution_role_arn=sandbox_execution_role_arn,
+        aws_lambda_microvm_profile_config=sandbox_profile_config,
     )
+
+
+async def _resolve_sandbox_profile_config(
+    *,
+    settings: Settings,
+    config_store: ConfigStore | None,
+    profile_name: str,
+    scope: dict[str, str] | None,
+) -> SandboxProfile | None:
+    """Resolve a trusted SandboxProfile only when the Lambda backend is active."""
+    if settings.sandbox_backend != "aws_lambda_microvm":
+        return None
+    if config_store is None:
+        raise RuntimeError(
+            "COGNITION_SANDBOX_BACKEND=aws_lambda_microvm requires ConfigStore "
+            f"access to resolve SandboxProfile {profile_name!r}."
+        )
+    profile = await config_store.get_sandbox_profile(profile_name, scope)
+    if profile is None:
+        raise RuntimeError(
+            f"SandboxProfile {profile_name!r} was not found for the current scope. "
+            "Register it through /sandbox/profiles or seed sandbox_profiles in "
+            ".cognition/config.yaml before selecting the aws_lambda_microvm backend."
+        )
+    return profile
 
 
 def _inject_subagent_middleware(subagents: list[Any], middleware: list[Any]) -> list[Any]:
@@ -476,18 +530,46 @@ async def create_cognition_agent(params: CognitionAgentParams) -> CognitionAgent
         response_format=params.response_format,
         tool_token_limit_before_evict=params.tool_token_limit_before_evict,
         context_policy=params.context_policy,
+        excluded_tools=params.excluded_tools,
+        blocked_tools=params.blocked_tools,
         middleware=params.middleware,
         tools=params.tools,
         settings=settings,
+        scope=params.scope,
+        sandbox_profile=params.sandbox_profile,
+        sandbox_execution_role_arn=params.sandbox_execution_role_arn,
+        model_cache_key=params.model_cache_key,
+    )
+    resolved_sandbox_profile = params.sandbox_profile or settings.aws_lambda_microvm_default_profile
+    sandbox_profile_config = await _resolve_sandbox_profile_config(
+        settings=settings,
+        config_store=config_store,
+        profile_name=resolved_sandbox_profile,
         scope=params.scope,
     )
 
     cached_agent = get_cached_agent(runtime_ctx)
     if cached_agent is not None:
-        sandbox_backend = _create_sandbox(project_path, sandbox_id, settings, k8s_labels)
+        sandbox_backend = _create_sandbox(
+            project_path,
+            sandbox_id,
+            settings,
+            k8s_labels,
+            sandbox_profile=resolved_sandbox_profile,
+            sandbox_execution_role_arn=params.sandbox_execution_role_arn,
+            sandbox_profile_config=sandbox_profile_config,
+        )
         return CognitionAgentResult(agent=cached_agent, sandbox_backend=sandbox_backend)
 
-    sandbox_backend = _create_sandbox(project_path, sandbox_id, settings, k8s_labels)
+    sandbox_backend = _create_sandbox(
+        project_path,
+        sandbox_id,
+        settings,
+        k8s_labels,
+        sandbox_profile=resolved_sandbox_profile,
+        sandbox_execution_role_arn=params.sandbox_execution_role_arn,
+        sandbox_profile_config=sandbox_profile_config,
+    )
 
     defaults_resolved = False
     agent_defaults: Any = None
@@ -614,7 +696,14 @@ async def create_cognition_agent(params: CognitionAgentParams) -> CognitionAgent
             prompt = SYSTEM_PROMPT
 
     agent_middleware = list(params.middleware) if params.middleware else []
-    blocked_tools = list(settings.blocked_tools) if hasattr(settings, "blocked_tools") else []
+    settings_blocked_tools = settings.blocked_tools if hasattr(settings, "blocked_tools") else []
+    excluded_tools = sorted({*(str(tool) for tool in (params.excluded_tools or []))})
+    blocked_tools = sorted(
+        {
+            *(str(tool) for tool in settings_blocked_tools),
+            *(str(tool) for tool in (params.blocked_tools or [])),
+        }
+    )
 
     built_in_tools = [BrowserTool(), SearchTool(), InspectPackageTool()]
     agent_tools = list(params.tools) if params.tools else []
@@ -659,6 +748,7 @@ async def create_cognition_agent(params: CognitionAgentParams) -> CognitionAgent
             CognitionObservabilityMiddleware(),
             CognitionStreamingMiddleware(),
             TrustedRuntimeContextMiddleware(),
+            ToolVisibilityMiddleware(excluded_tools=excluded_tools),
             ToolSecurityMiddleware(blocked_tools=blocked_tools),
             ToolArgumentValidationMiddleware(),
         ]

@@ -13,16 +13,19 @@ and builds a LangChain BaseChatModel. No custom fallback chains.
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncGenerator
+import hashlib
+import json
+import time
+from collections import deque
+from collections.abc import AsyncGenerator, Mapping
 from dataclasses import dataclass, field
 from typing import Any, cast
 
 import structlog
-from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from server.app.agent.cognition_agent import CognitionAgentParams, create_cognition_agent
-from server.app.agent.resolver import RuntimeResolver
+from server.app.agent.resolver import ResolvedRuntimeModel, RuntimeResolver
 from server.app.agent.runtime import (
     CallbackEvent,  # noqa: F401 — re-exported for consumers of this module
     ContextEvent,
@@ -57,6 +60,21 @@ from server.app.storage.config_store import ConfigStore
 from server.app.storage.factory import create_storage_backend
 
 logger = structlog.get_logger(__name__)
+
+
+class AgentDefinitionUnavailableError(Exception):
+    """Raised when a session-bound agent cannot be used for invocation."""
+
+    def __init__(
+        self,
+        agent_name: str,
+        reason: str,
+        scope: Mapping[str, str] | None = None,
+    ) -> None:
+        super().__init__(f"Invalid or unavailable agent '{agent_name}': {reason}")
+        self.agent_name = agent_name
+        self.reason = reason
+        self.scope_keys = sorted((scope or {}).keys())
 
 
 def _context_policy_dict(policy: Any | None) -> dict[str, Any]:
@@ -119,6 +137,17 @@ def _audit_context_event(event: ContextEvent) -> None:
         pass
 
 
+def _model_cache_key_from_resolved(
+    resolved_model: Any,
+    provider: str,
+    model_id: str,
+) -> str:
+    cache_key = getattr(resolved_model, "cache_key", None)
+    if isinstance(cache_key, str) and cache_key:
+        return cache_key
+    return f"resolved:{provider}:{model_id}"
+
+
 def _resolve_middleware(specs: list[str | dict[str, Any]]) -> list[Any]:
     """Resolve a list of middleware specs to instantiated middleware objects.
 
@@ -156,6 +185,10 @@ class ResolvedAgentConfig:
     response_format: str | None = None
     tool_token_limit_before_evict: int | None = None
     context_policy: Any | None = None
+    sandbox_profile: str | None = None
+    sandbox_execution_role_arn: str | None = None
+    excluded_tools: list[str] = field(default_factory=list)
+    blocked_tools: list[str] = field(default_factory=list)
     subagents: list[Any] = field(default_factory=list)
     async_subagents: list[Any] = field(default_factory=list)
     agent_def: Any = None
@@ -187,6 +220,33 @@ def _has_explicit_agent_field(agent_def: Any, field_name: str) -> bool:
     if isinstance(fields_set, set):
         return field_name in fields_set
     return hasattr(agent_def, field_name)
+
+
+def _scope_fingerprint(scope: Mapping[str, str] | None) -> str | None:
+    """Return a short, stable fingerprint without exposing raw scope values."""
+    if not scope:
+        return None
+    encoded = json.dumps(
+        dict(scope),
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()[:16]
+
+
+def _effective_session_scope(
+    session: Any | None,
+    fallback_scope: Mapping[str, str] | None,
+) -> dict[str, str] | None:
+    """Return the trusted scope for runtime config resolution."""
+    if session is not None and hasattr(session, "scopes"):
+        session_scope = getattr(session, "scopes", None)
+        return dict(session_scope) if session_scope else None
+    return dict(fallback_scope) if fallback_scope else None
+
+
+class SandboxQuotaExceededError(RuntimeError):
+    """Raised when a Cognition-side sandbox quota blocks a session."""
 
 
 class DeepAgentStreamingService:
@@ -237,6 +297,7 @@ class DeepAgentStreamingService:
         session: Any,
         project_path: str,
         system_prompt: str | None = None,
+        scope: Mapping[str, str] | None = None,
     ) -> tuple[ResolvedAgentConfig, list[Any]]:
         """Resolve agent definition fields and custom tools from ConfigStore.
 
@@ -253,16 +314,32 @@ class DeepAgentStreamingService:
         if cs is None or session is None:
             return resolved, custom_tools
 
-        agent_def = await cs.get_agent_definition(session.agent_name)
-        if not agent_def:
-            logger.warning(
-                "Agent definition not found, falling back to 'default'",
-                requested=session.agent_name,
-            )
-            agent_def = await cs.get_agent_definition("default")
-
+        effective_scope = _effective_session_scope(session, scope)
+        agent_def = await cs.get_agent_definition(session.agent_name, effective_scope)
         if agent_def is None:
-            return resolved, custom_tools
+            logger.warning(
+                "Agent definition not found for session execution",
+                requested=session.agent_name,
+                scope_keys=sorted((effective_scope or {}).keys()),
+            )
+            raise AgentDefinitionUnavailableError(
+                session.agent_name,
+                "not found",
+                effective_scope,
+            )
+
+        if agent_def.hidden:
+            raise AgentDefinitionUnavailableError(
+                session.agent_name,
+                "agent is hidden",
+                effective_scope,
+            )
+        if agent_def.mode not in ("primary", "all"):
+            raise AgentDefinitionUnavailableError(
+                session.agent_name,
+                f"agent mode '{agent_def.mode}' is not invokable as a primary agent",
+                effective_scope,
+            )
 
         resolved.agent_def = agent_def
         if resolved.system_prompt is None:
@@ -271,7 +348,10 @@ class DeepAgentStreamingService:
         if agent_def.skills:
             resolved.skills = list(agent_def.skills)
 
-        all_defs = await cs.list_agent_definitions(include_hidden=True)
+        all_defs = await cs.list_agent_definitions(
+            include_hidden=True,
+            scope=effective_scope,
+        )
         workspace_base = str(self.settings.workspace_path)
         resolved.subagents = [
             s.to_subagent(base_path=workspace_base)
@@ -311,6 +391,18 @@ class DeepAgentStreamingService:
         if agent_def.config.context_policy is not None:
             resolved.context_policy = agent_def.config.context_policy
 
+        if agent_def.config.sandbox_profile is not None:
+            resolved.sandbox_profile = agent_def.config.sandbox_profile
+
+        if agent_def.config.sandbox_execution_role_arn is not None:
+            resolved.sandbox_execution_role_arn = agent_def.config.sandbox_execution_role_arn
+
+        if agent_def.config.excluded_tools:
+            resolved.excluded_tools = list(agent_def.config.excluded_tools)
+
+        if agent_def.config.blocked_tools:
+            resolved.blocked_tools = list(agent_def.config.blocked_tools)
+
         if agent_def.middleware:
             resolved.middleware = _resolve_middleware(agent_def.middleware)
 
@@ -325,21 +417,30 @@ class DeepAgentStreamingService:
         system_prompt: str | None = None,
         manager: SessionAgentManager | None = None,
         scope: dict[str, str] | None = None,
+        run_id: str | None = None,
     ) -> AsyncGenerator[StreamEvent, None]:
         """Stream LLM response using DeepAgents with multi-step support."""
         runtime: DeepAgentRuntime | None = None
         try:
             # Get session for config / agent_name resolution
             session = await self.storage_backend.get_session(session_id)
+            effective_scope = _effective_session_scope(session, scope)
 
             agent_cfg, custom_tools = await self._resolve_agent_config(
                 session=session,
                 project_path=project_path,
                 system_prompt=system_prompt,
+                scope=effective_scope,
             )
 
-            model, provider, model_id, recursion_limit = await self._resolve_model(
-                session=session, scope=scope, agent_def=agent_cfg.agent_def
+            resolved_model = await self._resolve_model(
+                session=session, scope=effective_scope, agent_def=agent_cfg.agent_def
+            )
+            model, provider, model_id, recursion_limit = resolved_model
+            model_cache_key = _model_cache_key_from_resolved(
+                resolved_model,
+                provider,
+                model_id,
             )
 
             # Get checkpointer from storage backend
@@ -347,7 +448,7 @@ class DeepAgentStreamingService:
 
             # Load tools registered via POST /tools from ConfigStore.
             config_store_tools = await self._get_runtime_resolver().build_tools(
-                scope=scope,
+                scope=effective_scope,
                 extra_tools=custom_tools if custom_tools else None,
                 allowed_tool_names=agent_cfg.agent_def.tools if agent_cfg.agent_def else None,
             )
@@ -359,14 +460,14 @@ class DeepAgentStreamingService:
             from server.app.agent.cognition_agent import CognitionContext
 
             invocation_context = CognitionContext.from_scope(
-                session.scopes if session and hasattr(session, "scopes") else scope,
+                effective_scope,
                 session_id=session.id if session else session_id,
                 thread_id=session.thread_id if session else thread_id,
                 agent_name=session.agent_name if session else None,
                 metadata=session.metadata if session else None,
             )
 
-            mcp_configs = await self._resolve_mcp_configs(scope=scope)
+            mcp_configs = await self._resolve_mcp_configs(scope=effective_scope)
             context_policy = _effective_context_policy(
                 agent_cfg.context_policy,
                 agent_cfg.tool_token_limit_before_evict,
@@ -375,7 +476,7 @@ class DeepAgentStreamingService:
                 action="policy_resolved",
                 session_id=session.id if session else session_id,
                 run_id=thread_id,
-                scope_keys=sorted((scope or {}).keys()),
+                scope_keys=sorted((effective_scope or {}).keys()),
                 policy=context_policy,
                 input_tokens=count_text_tokens(content),
                 message_count=getattr(session, "message_count", None),
@@ -386,6 +487,7 @@ class DeepAgentStreamingService:
             agent_params = CognitionAgentParams(
                 project_path=project_path,
                 model=model,
+                model_cache_key=model_cache_key,
                 store=store,
                 checkpointer=checkpointer,
                 settings=self.settings,
@@ -403,15 +505,27 @@ class DeepAgentStreamingService:
                 or agent_cfg.response_format,
                 tool_token_limit_before_evict=agent_cfg.tool_token_limit_before_evict,
                 context_policy=agent_cfg.context_policy,
+                excluded_tools=agent_cfg.excluded_tools,
+                blocked_tools=agent_cfg.blocked_tools,
                 middleware=agent_cfg.middleware,
                 mcp_configs=mcp_configs or None,
-                scope=scope,
+                scope=effective_scope,
                 config_store=self._get_config_store(),
+                sandbox_profile=agent_cfg.sandbox_profile,
+                sandbox_execution_role_arn=agent_cfg.sandbox_execution_role_arn,
             )
             agent = await create_cognition_agent(agent_params)
 
             if manager and agent.sandbox_backend is not None:
-                manager.register_sandbox_backend(session_id, agent.sandbox_backend)
+                manager.register_sandbox_backend(
+                    session_id,
+                    agent.sandbox_backend,
+                    run_id=run_id or thread_id,
+                    agent_name=session.agent_name if session else None,
+                    scope=effective_scope,
+                )
+                for sandbox_event in manager.drain_sandbox_events(session_id):
+                    yield sandbox_event
 
             runtime = DeepAgentRuntime(
                 agent=agent.agent,
@@ -446,6 +560,12 @@ class DeepAgentStreamingService:
 
                         elif isinstance(event, ToolResultEvent):
                             acc.set_tool_call(None)
+                            if manager:
+                                for sandbox_event in manager.snapshot_sandbox_backend_events(
+                                    session_id,
+                                    include_runtime_snapshot=False,
+                                ):
+                                    yield sandbox_event
                             yield event
 
                         elif isinstance(event, PlanningEvent) or isinstance(
@@ -498,7 +618,7 @@ class DeepAgentStreamingService:
                     action="usage_snapshot",
                     session_id=session.id if session else session_id,
                     run_id=thread_id,
-                    scope_keys=sorted((scope or {}).keys()),
+                    scope_keys=sorted((effective_scope or {}).keys()),
                     policy=context_policy,
                     input_tokens=acc.input_tokens,
                     output_tokens=acc.output_tokens,
@@ -523,6 +643,19 @@ class DeepAgentStreamingService:
                 session_id=session_id,
             )
             yield ErrorEvent(message=str(e), code="PROVIDER_CONFIG_ERROR")
+        except AgentDefinitionUnavailableError as e:
+            logger.warning(
+                "Session agent definition unavailable",
+                error=str(e),
+                session_id=session_id,
+                agent_name=e.agent_name,
+                reason=e.reason,
+                scope_keys=e.scope_keys,
+            )
+            yield ErrorEvent(message=str(e), code="AGENT_NOT_FOUND")
+        except SandboxQuotaExceededError as e:
+            logger.warning("Sandbox quota exceeded", error=str(e), session_id=session_id)
+            yield ErrorEvent(message=str(e), code="SANDBOX_QUOTA_EXCEEDED")
         except Exception as e:
             logger.error("DeepAgents streaming error", error=str(e), session_id=session_id)
             yield ErrorEvent(message=str(e), code="STREAMING_ERROR")
@@ -543,18 +676,26 @@ class DeepAgentStreamingService:
             if session is None:
                 yield ErrorEvent(message=f"Session not found: {session_id}", code="NOT_FOUND")
                 return
+            effective_scope = _effective_session_scope(session, scope)
 
             agent_cfg, custom_tools = await self._resolve_agent_config(
                 session=session,
                 project_path=project_path,
+                scope=effective_scope,
             )
 
-            model, provider, model_id, recursion_limit = await self._resolve_model(
-                session=session, scope=scope, agent_def=agent_cfg.agent_def
+            resolved_model = await self._resolve_model(
+                session=session, scope=effective_scope, agent_def=agent_cfg.agent_def
+            )
+            model, provider, model_id, recursion_limit = resolved_model
+            model_cache_key = _model_cache_key_from_resolved(
+                resolved_model,
+                provider,
+                model_id,
             )
             checkpointer = await self.storage_backend.get_checkpointer()
             config_store_tools = await self._get_runtime_resolver().build_tools(
-                scope=scope,
+                scope=effective_scope,
                 extra_tools=custom_tools if custom_tools else None,
                 allowed_tool_names=agent_cfg.agent_def.tools if agent_cfg.agent_def else None,
             )
@@ -565,13 +706,13 @@ class DeepAgentStreamingService:
             from server.app.agent.cognition_agent import CognitionContext
 
             invocation_context = CognitionContext.from_scope(
-                session.scopes if hasattr(session, "scopes") else scope,
+                effective_scope,
                 session_id=session.id,
                 thread_id=session.thread_id,
                 agent_name=session.agent_name,
                 metadata=session.metadata,
             )
-            mcp_configs = await self._resolve_mcp_configs(scope=scope)
+            mcp_configs = await self._resolve_mcp_configs(scope=effective_scope)
             context_policy = _effective_context_policy(
                 agent_cfg.context_policy,
                 agent_cfg.tool_token_limit_before_evict,
@@ -580,7 +721,7 @@ class DeepAgentStreamingService:
                 action="policy_resolved",
                 session_id=session.id,
                 run_id=thread_id,
-                scope_keys=sorted((scope or {}).keys()),
+                scope_keys=sorted((effective_scope or {}).keys()),
                 policy=context_policy,
                 input_tokens=0,
                 message_count=getattr(session, "message_count", None),
@@ -591,6 +732,7 @@ class DeepAgentStreamingService:
             agent_params = CognitionAgentParams(
                 project_path=project_path,
                 model=model,
+                model_cache_key=model_cache_key,
                 store=store,
                 checkpointer=checkpointer,
                 settings=self.settings,
@@ -606,10 +748,14 @@ class DeepAgentStreamingService:
                 or agent_cfg.response_format,
                 tool_token_limit_before_evict=agent_cfg.tool_token_limit_before_evict,
                 context_policy=agent_cfg.context_policy,
+                excluded_tools=agent_cfg.excluded_tools,
+                blocked_tools=agent_cfg.blocked_tools,
                 middleware=agent_cfg.middleware,
                 mcp_configs=mcp_configs or None,
-                scope=scope,
+                scope=effective_scope,
                 config_store=self._get_config_store(),
+                sandbox_profile=agent_cfg.sandbox_profile,
+                sandbox_execution_role_arn=agent_cfg.sandbox_execution_role_arn,
             )
             agent = await create_cognition_agent(agent_params)
 
@@ -674,6 +820,16 @@ class DeepAgentStreamingService:
                 "Provider configuration error on resume", error=str(e), session_id=session_id
             )
             yield ErrorEvent(message=str(e), code="PROVIDER_CONFIG_ERROR")
+        except AgentDefinitionUnavailableError as e:
+            logger.warning(
+                "Session agent definition unavailable on resume",
+                error=str(e),
+                session_id=session_id,
+                agent_name=e.agent_name,
+                reason=e.reason,
+                scope_keys=e.scope_keys,
+            )
+            yield ErrorEvent(message=str(e), code="AGENT_NOT_FOUND")
         except Exception as e:
             logger.error(
                 "DeepAgents resume error",
@@ -715,12 +871,12 @@ class DeepAgentStreamingService:
         session: Any,
         scope: dict[str, str] | None,
         agent_def: Any | None = None,
-    ) -> tuple[BaseChatModel, str, str, int]:
+    ) -> ResolvedRuntimeModel:
         """Resolve provider config and build a LangChain BaseChatModel.
 
-        Delegates to RuntimeResolver.resolve_model_for_session().
+        Delegates to RuntimeResolver.resolve_runtime_model_for_session().
         """
-        return await self._get_runtime_resolver().resolve_model_for_session(
+        return await self._get_runtime_resolver().resolve_runtime_model_for_session(
             session=session, scope=scope, agent_def=agent_def
         )
 
@@ -803,6 +959,9 @@ class SessionAgentManager:
         self._active_runtimes: dict[str, list[Any]] = {}
         self._sandbox_backends: dict[str, Any] = {}
         self._sandbox_events: dict[str, asyncio.Queue[SandboxLifecycleEvent]] = {}
+        self._sandbox_correlations: dict[str, dict[str, Any]] = {}
+        self._sandbox_start_history: dict[str, deque[float]] = {}
+        self._sandbox_emitted_lifecycle_phases: dict[str, set[str]] = {}
         self._sandbox_backend_type: str = settings.sandbox_backend
 
     def register_session(
@@ -906,7 +1065,15 @@ class SessionAgentManager:
         logger.warning("No active runtime to abort", session_id=session_id)
         return False
 
-    def register_sandbox_backend(self, session_id: str, backend: Any) -> None:
+    def register_sandbox_backend(
+        self,
+        session_id: str,
+        backend: Any,
+        *,
+        run_id: str | None = None,
+        agent_name: str | None = None,
+        scope: Mapping[str, str] | None = None,
+    ) -> None:
         """Register a sandbox backend for lifecycle tracking.
 
         The backend's ``terminate()`` method will be called when the session
@@ -915,7 +1082,26 @@ class SessionAgentManager:
         Args:
             session_id: Unique session identifier.
             backend: The sandbox backend instance (must have a ``terminate()`` method).
+            run_id: Durable run identifier, if available.
+            agent_name: Agent definition bound to the session.
+            scope: Trusted builder-authorized effective scope.
         """
+        correlation = self._sandbox_correlation(
+            session_id=session_id,
+            backend=backend,
+            run_id=run_id,
+            agent_name=agent_name,
+            scope=scope,
+        )
+        quota = getattr(backend, "quota", None)
+        if quota is not None:
+            self._enforce_sandbox_quota(
+                session_id=session_id,
+                quota_key=str(correlation["quota_key"]),
+                quota=quota,
+            )
+
+        self._sandbox_correlations[session_id] = correlation
         self._sandbox_backends[session_id] = backend
         sandbox_id = getattr(backend, "id", str(id(backend)))
         self._emit_sandbox_event(
@@ -925,9 +1111,254 @@ class SessionAgentManager:
                 phase="provisioned",
                 sandbox_backend=self._sandbox_backend_type,
                 is_warm_pool_hit=getattr(backend, "_warm_pool", None) is not None,
+                metadata=self._sandbox_runtime_metadata(backend, session_id=session_id),
             ),
         )
+        self._sandbox_emitted_lifecycle_phases.setdefault(session_id, set()).add("provisioned")
         logger.debug("Sandbox backend registered", session_id=session_id)
+
+    def _sandbox_correlation(
+        self,
+        *,
+        session_id: str,
+        backend: Any,
+        run_id: str | None,
+        agent_name: str | None,
+        scope: Mapping[str, str] | None,
+    ) -> dict[str, Any]:
+        profile = getattr(backend, "profile", None)
+        scope_keys = sorted((scope or {}).keys())
+        scope_fingerprint = _scope_fingerprint(scope)
+        quota_scope = scope_fingerprint or "global"
+        quota_profile = str(profile or "default")
+        return {
+            "session_id": session_id,
+            "run_id": run_id,
+            "agent_name": agent_name,
+            "profile": profile,
+            "scope_keys": scope_keys,
+            "scope_fingerprint": scope_fingerprint,
+            "quota_key": f"{quota_profile}:{quota_scope}",
+        }
+
+    def _enforce_sandbox_quota(self, *, session_id: str, quota_key: str, quota: Any) -> None:
+        max_concurrent = getattr(quota, "max_concurrent_sessions", None)
+        if max_concurrent is not None:
+            active = sum(
+                1
+                for active_session_id, correlation in self._sandbox_correlations.items()
+                if active_session_id != session_id and correlation.get("quota_key") == quota_key
+            )
+            if active >= max_concurrent:
+                raise SandboxQuotaExceededError(
+                    "Lambda MicroVM sandbox quota exceeded: "
+                    f"max_concurrent_sessions={max_concurrent} for {quota_key}"
+                )
+
+        max_starts = getattr(quota, "max_session_starts_per_minute", None)
+        if max_starts is None:
+            return
+
+        now = time.monotonic()
+        history = self._sandbox_start_history.setdefault(quota_key, deque())
+        cutoff = now - 60.0
+        while history and history[0] < cutoff:
+            history.popleft()
+        if len(history) >= max_starts:
+            raise SandboxQuotaExceededError(
+                "Lambda MicroVM sandbox quota exceeded: "
+                f"max_session_starts_per_minute={max_starts} for {quota_key}"
+            )
+        history.append(now)
+
+    def _sandbox_runtime_metadata(
+        self,
+        backend: Any,
+        *,
+        session_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Return token-free backend runtime metadata when the backend exposes it."""
+        try:
+            metadata = getattr(backend, "runtime_metadata", {})
+        except Exception as exc:
+            logger.debug("Sandbox runtime metadata unavailable", error=str(exc))
+            return {}
+        safe_metadata = dict(metadata) if isinstance(metadata, dict) else {}
+        if session_id is not None:
+            correlation = self._sandbox_correlations.get(session_id)
+            if correlation is not None:
+                safe_metadata["correlation"] = {
+                    key: value
+                    for key, value in correlation.items()
+                    if key != "quota_key" and value is not None
+                }
+        return safe_metadata
+
+    def snapshot_sandbox_backend(
+        self,
+        session_id: str,
+        phase: str = "runtime_snapshot",
+    ) -> SandboxLifecycleEvent | None:
+        """Build a lifecycle event with the current backend metadata snapshot."""
+        backend = self._sandbox_backends.get(session_id)
+        if backend is None:
+            return None
+        metadata = self._sandbox_runtime_metadata(backend, session_id=session_id)
+        if not metadata:
+            return None
+        return SandboxLifecycleEvent(
+            sandbox_id=getattr(backend, "id", str(id(backend))),
+            phase=phase,
+            sandbox_backend=self._sandbox_backend_type,
+            metadata=metadata,
+        )
+
+    def snapshot_sandbox_backend_events(
+        self,
+        session_id: str,
+        *,
+        include_runtime_snapshot: bool = True,
+    ) -> list[SandboxLifecycleEvent]:
+        """Build lifecycle events for newly observed backend phases."""
+        backend = self._sandbox_backends.get(session_id)
+        if backend is None:
+            return []
+        metadata = self._sandbox_runtime_metadata(backend, session_id=session_id)
+        if not metadata:
+            return []
+
+        sandbox_id = getattr(backend, "id", str(id(backend)))
+        emitted = self._sandbox_emitted_lifecycle_phases.setdefault(session_id, set())
+        events: list[SandboxLifecycleEvent] = []
+        lifecycle_phases = metadata.get("lifecycle_phases")
+        if isinstance(lifecycle_phases, list):
+            for raw_phase in lifecycle_phases:
+                phase = str(raw_phase)
+                if phase in emitted:
+                    continue
+                emitted.add(phase)
+                event = SandboxLifecycleEvent(
+                    sandbox_id=sandbox_id,
+                    phase=phase,
+                    sandbox_backend=self._sandbox_backend_type,
+                    metadata=metadata,
+                )
+                self._log_sandbox_lifecycle_event(event)
+                events.append(event)
+
+        if include_runtime_snapshot:
+            event = SandboxLifecycleEvent(
+                sandbox_id=sandbox_id,
+                phase="runtime_snapshot",
+                sandbox_backend=self._sandbox_backend_type,
+                metadata=metadata,
+            )
+            self._log_sandbox_lifecycle_event(event)
+            events.append(event)
+        return events
+
+    def _teardown_phase_from_metadata(self, metadata: Mapping[str, Any]) -> str:
+        teardown_status = metadata.get("teardown_status")
+        if teardown_status == "pending":
+            return "teardown_pending"
+        if teardown_status == "failed":
+            return "teardown_failed"
+        if teardown_status in {"complete", "skipped"}:
+            return "teardown_complete"
+        aws_state = metadata.get("aws_state") or metadata.get("status")
+        if aws_state == "TERMINATED":
+            return "teardown_complete"
+        return "teardown_complete"
+
+    def _log_sandbox_lifecycle_event(self, event: SandboxLifecycleEvent) -> None:
+        metadata = event.metadata or {}
+        correlation = metadata.get("correlation")
+        if not isinstance(correlation, Mapping):
+            correlation = {}
+        fields = {
+            "session_id": correlation.get("session_id"),
+            "run_id": correlation.get("run_id"),
+            "agent_name": correlation.get("agent_name"),
+            "sandbox_profile": metadata.get("profile") or correlation.get("profile"),
+            "sandbox_backend": event.sandbox_backend,
+            "sandbox_id": event.sandbox_id,
+            "microvm_id": metadata.get("microvm_id"),
+            "image": metadata.get("image"),
+            "image_version": metadata.get("image_version"),
+            "region": metadata.get("region"),
+            "aws_state": metadata.get("aws_state") or metadata.get("status"),
+            "execution_role_fingerprint": metadata.get("execution_role_fingerprint"),
+            "scope_fingerprint": correlation.get("scope_fingerprint"),
+            "teardown_status": metadata.get("teardown_status"),
+            "teardown_attempt": metadata.get("teardown_attempt"),
+            "teardown_error_code": metadata.get("teardown_error_code"),
+        }
+        fields = {key: value for key, value in fields.items() if value is not None}
+        if event.phase in {"teardown_pending", "teardown_failed"}:
+            logger.warning("Sandbox lifecycle event", phase=event.phase, **fields)
+        else:
+            logger.info("Sandbox lifecycle event", phase=event.phase, **fields)
+
+    def release_sandbox_backend(self, session_id: str) -> None:
+        """Release only the sandbox backend and quota state for a session."""
+        backend = self._sandbox_backends.pop(session_id, None)
+        if backend is None:
+            self._sandbox_correlations.pop(session_id, None)
+            self._sandbox_emitted_lifecycle_phases.pop(session_id, None)
+            logger.debug("Sandbox backend release skipped", session_id=session_id)
+            return
+
+        sandbox_id = getattr(backend, "id", str(id(backend)))
+        self._emit_sandbox_event(
+            session_id,
+            SandboxLifecycleEvent(
+                sandbox_id=sandbox_id,
+                phase="teardown_started",
+                sandbox_backend=self._sandbox_backend_type,
+                metadata=self._sandbox_runtime_metadata(backend, session_id=session_id),
+            ),
+        )
+        self._sandbox_emitted_lifecycle_phases.setdefault(session_id, set()).add(
+            "teardown_started"
+        )
+        if hasattr(backend, "terminate"):
+            try:
+                backend.terminate()
+                metadata = self._sandbox_runtime_metadata(
+                    backend,
+                    session_id=session_id,
+                )
+                phase = self._teardown_phase_from_metadata(metadata)
+                self._emit_sandbox_event(
+                    session_id,
+                    SandboxLifecycleEvent(
+                        sandbox_id=sandbox_id,
+                        phase=phase,
+                        sandbox_backend=self._sandbox_backend_type,
+                        metadata=metadata,
+                    ),
+                )
+                logger.info("Sandbox backend released", session_id=session_id, phase=phase)
+            except Exception as e:
+                metadata = self._sandbox_runtime_metadata(backend, session_id=session_id)
+                metadata["teardown_status"] = "failed"
+                metadata["teardown_error_code"] = e.__class__.__name__
+                metadata["teardown_error_message"] = str(e)
+                self._emit_sandbox_event(
+                    session_id,
+                    SandboxLifecycleEvent(
+                        sandbox_id=sandbox_id,
+                        phase="teardown_failed",
+                        sandbox_backend=self._sandbox_backend_type,
+                        metadata=metadata,
+                    ),
+                )
+                logger.warning(
+                    "Sandbox backend terminate failed", session_id=session_id, error=str(e)
+                )
+
+        self._sandbox_correlations.pop(session_id, None)
+        self._sandbox_emitted_lifecycle_phases.pop(session_id, None)
 
     def unregister_session(self, session_id: str) -> None:
         """Unregister a session and clean up resources."""
@@ -935,35 +1366,9 @@ class SessionAgentManager:
         self._project_paths.pop(session_id, None)
         self._active_runtimes.pop(session_id, None)
 
-        backend = self._sandbox_backends.pop(session_id, None)
-        if backend is not None:
-            sandbox_id = getattr(backend, "id", str(id(backend)))
-            self._emit_sandbox_event(
-                session_id,
-                SandboxLifecycleEvent(
-                    sandbox_id=sandbox_id,
-                    phase="teardown_started",
-                    sandbox_backend=self._sandbox_backend_type,
-                ),
-            )
-            if hasattr(backend, "terminate"):
-                try:
-                    backend.terminate()
-                    self._emit_sandbox_event(
-                        session_id,
-                        SandboxLifecycleEvent(
-                            sandbox_id=sandbox_id,
-                            phase="teardown_complete",
-                            sandbox_backend=self._sandbox_backend_type,
-                        ),
-                    )
-                    logger.info("Sandbox backend terminated", session_id=session_id)
-                except Exception as e:
-                    logger.warning(
-                        "Sandbox backend terminate failed", session_id=session_id, error=str(e)
-                    )
-
+        self.release_sandbox_backend(session_id)
         self._sandbox_events.pop(session_id, None)
+        self._sandbox_emitted_lifecycle_phases.pop(session_id, None)
         logger.info("Session unregistered", session_id=session_id)
 
     def _emit_sandbox_event(self, session_id: str, event: SandboxLifecycleEvent) -> None:
@@ -972,6 +1377,7 @@ class SessionAgentManager:
             self._sandbox_events[session_id] = asyncio.Queue(maxsize=20)
         try:
             self._sandbox_events[session_id].put_nowait(event)
+            self._log_sandbox_lifecycle_event(event)
         except asyncio.QueueFull:
             pass
 

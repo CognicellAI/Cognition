@@ -17,6 +17,8 @@ config:
   max_tokens: 16000
   recursion_limit: 500
   timeout_seconds: 45
+  sandbox_profile: lambda-default
+  sandbox_execution_role_arn: arn:aws:iam::123456789012:role/cognition-agent
 ---
 You are an investigator.
 """,
@@ -29,6 +31,11 @@ You are an investigator.
     assert definition.config.max_tokens == 16000
     assert definition.config.recursion_limit == 500
     assert definition.config.timeout_seconds == 45
+    assert definition.config.sandbox_profile == "lambda-default"
+    assert (
+        definition.config.sandbox_execution_role_arn
+        == "arn:aws:iam::123456789012:role/cognition-agent"
+    )
 
 
 def test_markdown_config_block_overrides_top_level_fields(tmp_path: Path) -> None:

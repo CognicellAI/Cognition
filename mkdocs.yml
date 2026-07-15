@@ -9,6 +9,7 @@ site_dir: site/docs
 strict: true
 exclude_docs: |
   README.md
+  learn/**
 
 theme:
   name: material
@@ -66,7 +67,20 @@ nav:
       - Sessions & Messages: concepts/sessions-and-messages.md
       - Agent Runtime: concepts/agent-runtime.md
       - Storage & Execution: concepts/storage-and-execution.md
-      - Kubernetes Sandbox: concepts/kubernetes-sandbox.md
+      - Sandboxes:
+          - Overview: concepts/sandboxes/index.md
+          - Local: concepts/sandboxes/local/index.md
+          - Docker: concepts/sandboxes/docker/index.md
+          - Kubernetes: concepts/sandboxes/kubernetes/index.md
+          - AWS Lambda MicroVM:
+              - Overview: concepts/sandboxes/aws-lambda-microvm/index.md
+              - Setup: concepts/sandboxes/aws-lambda-microvm/setup.md
+              - Default Runtime Image: concepts/sandboxes/aws-lambda-microvm/default-runtime-image.md
+              - Profiles: concepts/sandboxes/aws-lambda-microvm/profiles.md
+              - IAM & Networking: concepts/sandboxes/aws-lambda-microvm/iam-and-networking.md
+              - Runtime Command Server: concepts/sandboxes/aws-lambda-microvm/runtime-command-server.md
+              - Lifecycle & Observability: concepts/sandboxes/aws-lambda-microvm/lifecycle-and-observability.md
+              - Troubleshooting: concepts/sandboxes/aws-lambda-microvm/troubleshooting.md
       - Observability: concepts/observability.md
       - Security: concepts/security.md
   - Guides:

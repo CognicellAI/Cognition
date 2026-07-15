@@ -687,6 +687,7 @@ class EventBuilder:
         duration_ms: float | None = None,
         exit_code: int | None = None,
         is_warm_pool_hit: bool = False,
+        metadata: dict[str, Any] | None = None,
     ) -> dict:
         """Create a sandbox lifecycle event."""
         return {
@@ -698,6 +699,7 @@ class EventBuilder:
                 "duration_ms": duration_ms,
                 "exit_code": exit_code,
                 "is_warm_pool_hit": is_warm_pool_hit,
+                "metadata": metadata or {},
             },
         }
 

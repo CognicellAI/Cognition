@@ -24,11 +24,13 @@ All request and response bodies are JSON unless noted. Streaming endpoints retur
   - [`token`](#token)
   - [`tool_call`](#tool_call)
   - [`tool_result`](#tool_result)
-   - [`planning`](#planning) *(reserved)*
-   - [`step_complete`](#step_complete) *(reserved)*
+  - [`planning`](#planning) *(reserved)*
+  - [`step_complete`](#step_complete) *(reserved)*
   - [`delegation`](#delegation)
   - [`status`](#status)
+  - [`interrupt`](#interrupt)
   - [`usage`](#usage)
+  - [`sandbox_lifecycle`](#sandbox_lifecycle)
   - [`error`](#error)
   - [`done`](#done)
 - [Agents](#agents)
@@ -70,6 +72,12 @@ All request and response bodies are JSON unless noted. Streaming endpoints retur
   - [`GET /mcp-servers/{name}`](#get-mcp-serversname)
   - [`PATCH /mcp-servers/{name}`](#patch-mcp-serversname)
   - [`DELETE /mcp-servers/{name}`](#delete-mcp-serversname)
+- [Sandbox Profiles](#sandbox-profiles)
+  - [`GET /sandbox/profiles`](#get-sandboxprofiles)
+  - [`POST /sandbox/profiles`](#post-sandboxprofiles)
+  - [`GET /sandbox/profiles/{name}`](#get-sandboxprofilesname)
+  - [`PATCH /sandbox/profiles/{name}`](#patch-sandboxprofilesname)
+  - [`DELETE /sandbox/profiles/{name}`](#delete-sandboxprofilesname)
 - [Artifacts](#artifacts)
   - [`GET /artifacts`](#get-artifacts)
   - [`POST /artifacts`](#post-artifacts)
@@ -93,6 +101,9 @@ All request and response bodies are JSON unless noted. Streaming endpoints retur
 ### `GET /health`
 
 Returns server health status.
+
+`active_sessions` counts open non-terminal sessions, including idle sessions
+that can still accept follow-up messages.
 
 **Response `200 OK`:**
 ```json
@@ -120,7 +131,9 @@ Readiness probe. Returns `200` when the server has completed startup.
 
 ### `POST /sessions`
 
-Create a new session.
+Create a new reusable conversation session. Each message sent to the session
+creates a run on the session's `thread_id`; successful run completion returns
+the session to `idle` so the same session can receive follow-up messages.
 
 **Request body:**
 ```json
@@ -152,7 +165,7 @@ X-Cognition-Scope-Project: proj-123
   "id": "550e8400-e29b-41d4-a716-446655440000",
   "title": "My session",
   "thread_id": "7f3e4a12-...",
-  "status": "active",
+  "status": "idle",
   "agent_name": "default",
   "metadata": {"repository": "myorg/myrepo", "pr_number": "42"},
   "created_at": "2026-03-02T12:00:00Z",
@@ -161,7 +174,16 @@ X-Cognition-Scope-Project: proj-123
 }
 ```
 
-**Response `422 Unprocessable Entity`:** `agent_name` is not a known primary agent.
+**Response `422 Unprocessable Entity`:** `agent_name` is not a known primary agent in the request scope.
+
+Session status summary:
+
+| Status | Meaning |
+|---|---|
+| `idle` | No run is active; the session can accept a follow-up message |
+| `active` | A run is currently executing |
+| `waiting_for_approval` | A run is paused for human-in-the-loop review; use `POST /sessions/{session_id}/resume` |
+| `aborted`, `failed`, `done`, `expired` | Terminal session states; create a new session for more work |
 
 ### `GET /sessions`
 
@@ -259,7 +281,11 @@ Cancel any in-progress agent operation for this session.
 
 ### `POST /sessions/{session_id}/resume`
 
-Resume an interrupted HITL session after an `interrupt` SSE event.
+Resume an interrupted HITL run after an `interrupt` SSE event.
+
+Use this endpoint only while the session is in `waiting_for_approval`. A normal
+completed message run returns the session to `idle`; send another
+`POST /sessions/{session_id}/messages` request to continue that conversation.
 
 **Request body:**
 ```json
@@ -278,7 +304,9 @@ Resume an interrupted HITL session after an `interrupt` SSE event.
 | `tool_name` | string | Yes | Interrupted tool name |
 | `args` | object | No | Replacement tool args when `decision="edit"`; may include a rejection message for `reject` |
 
-If `Accept: text/event-stream` is sent, Cognition streams the resumed continuation. Otherwise it returns a simple success response.
+If `Accept: text/event-stream` is sent, Cognition streams the resumed
+continuation. Otherwise it returns a simple success response. When the resumed
+run completes successfully, the session returns to `idle`.
 
 **Response `200 OK` (JSON):**
 ```json
@@ -508,6 +536,50 @@ Token usage and estimated cost for this response.
 }
 ```
 
+### `sandbox_lifecycle`
+
+Sandbox backend lifecycle transition. Lambda MicroVM snapshots include
+token-free runtime metadata.
+
+```json
+{
+  "sandbox_id": "microvm-123",
+  "phase": "runtime_snapshot",
+  "sandbox_backend": "aws_lambda_microvm",
+  "duration_ms": null,
+  "exit_code": null,
+  "is_warm_pool_hit": false,
+  "metadata": {
+    "microvm_id": "microvm-123",
+    "endpoint": "https://example.lambda-url.aws",
+    "profile": "default-lambda",
+    "image": "arn:aws:lambda:us-west-2:123456789012:microvm-image:cognition-runtime",
+    "image_version": "1.0",
+    "status": "RUNNING",
+    "region": "us-west-2",
+    "port": 8080,
+    "maximum_duration_seconds": 3600,
+    "logging_mode": "disabled",
+    "quota": {
+      "max_concurrent_sessions": 10,
+      "max_session_starts_per_minute": 30
+    },
+    "execution_role_fingerprint": "abcd1234ef567890",
+    "correlation": {
+      "session_id": "session-123",
+      "run_id": "run-123",
+      "agent_name": "repo-maintainer",
+      "profile": "default-lambda",
+      "scope_keys": ["project", "tenant"],
+      "scope_fingerprint": "0123456789abcdef"
+    }
+  }
+}
+```
+
+Proxy auth tokens and credentials are filtered before lifecycle events are
+streamed or persisted.
+
 ### `error`
 
 A recoverable error occurred. The stream terminates after an error event.
@@ -521,7 +593,8 @@ A recoverable error occurred. The stream terminates after an error event.
 
 ### `done`
 
-The stream is complete. Contains the full assistant message.
+The current run's stream is complete. Contains the full assistant message.
+The session remains reusable unless it has moved to a terminal session state.
 
 ```json
 {
@@ -556,12 +629,31 @@ List all non-hidden agents available in the registry.
       "mode": "primary",
       "hidden": false,
       "native": true,
+      "a2a_exposed": false,
+      "provider": null,
       "model": null,
       "temperature": null,
+      "config": {
+        "temperature": null,
+        "max_tokens": null,
+        "recursion_limit": null,
+        "tool_token_limit_before_evict": null,
+        "context_policy": null,
+        "excluded_tools": [],
+        "blocked_tools": [],
+        "provider": null,
+        "model": null,
+        "timeout_seconds": null
+      },
       "response_format": null,
       "interrupt_on": {},
+      "permissions": [],
       "tools": [],
       "skills": [],
+      "sandbox_profile": null,
+      "sandbox_execution_role_arn": null,
+      "subagents": [],
+      "async_subagents": [],
       "system_prompt": "You are a coding agent..."
     }
   ]
@@ -569,7 +661,7 @@ List all non-hidden agents available in the registry.
 ```
 
 `mode` values: `primary`, `subagent`, `all`.  
-`system_prompt` is truncated to 500 characters in the response.
+`system_prompt` is returned as stored.
 
 **Response `503 Service Unavailable`:** Registry not yet initialized.
 
@@ -580,6 +672,20 @@ Get a specific agent by name.
 **Response `200 OK`:** Agent object  
 **Response `404 Not Found`:** Agent not found or hidden  
 **Response `503 Service Unavailable`:** Registry not yet initialized
+
+### Agent Tool Policy Fields
+
+Agent create/update requests use top-level `excluded_tools` and `blocked_tools` fields.
+Read responses return those values under `config.excluded_tools` and `config.blocked_tools`.
+
+The two fields are intentionally separate:
+
+| Field | Runtime effect | When to use |
+|---|---|---|
+| `excluded_tools` | Removes matching tool names from the model-visible tool schema before the model can select them. | Hide inherited Deep Agents harness tools for a specific agent, such as a customer-facing concierge that should not see `grep`, `ls`, `execute`, or `websearch`. |
+| `blocked_tools` | Denies matching tool calls at execution time through `ToolSecurityMiddleware`. The tool may still be visible unless it is also excluded. | Enforce a call-time safety guard. Per-agent values are merged with deployment-wide `COGNITION_BLOCKED_TOOLS`. |
+
+Use both fields for the same tool name when you want no model affordance plus a runtime guard. Tool names must match the runtime tool name exactly.
 
 ### `POST /agents`
 
@@ -596,8 +702,15 @@ Create or replace an agent definition in the ConfigRegistry.
   "skills": ["python-review"],
   "memory": ["AGENTS.md"],
   "interrupt_on": {},
+  "a2a_exposed": false,
   "model": "gpt-4o",
   "temperature": 0.1,
+  "max_tokens": 4096,
+  "recursion_limit": 100,
+  "excluded_tools": ["glob", "grep", "ls"],
+  "blocked_tools": ["execute"],
+  "sandbox_profile": "default-lambda",
+  "sandbox_execution_role_arn": "arn:aws:iam::123456789012:role/security-auditor-runtime",
   "scope": {}
 }
 ```
@@ -608,12 +721,29 @@ Create or replace an agent definition in the ConfigRegistry.
 | `system_prompt` | string | Agent's system prompt |
 | `description` | string | Human-readable description |
 | `mode` | `"primary"` \| `"subagent"` \| `"all"` | Whether agent can own sessions, be delegated to, or both |
+| `hidden` | boolean | Hide the agent from `GET /agents` list results |
+| `a2a_exposed` | boolean | Expose eligible `primary` or `all` agents through the A2A protocol |
 | `tools` | list[string] | Registry tool names to attach to this agent |
 | `skills` | list[string] | Registry skill names to attach to this agent |
 | `memory` | list[string] | Paths to instruction files (e.g. AGENTS.md) |
 | `interrupt_on` | dict | Tool names mapped to `true` for HITL confirmation |
-| `model` | string | Model override (overrides global default for this agent's sessions) |
+| `permissions` | list[object] | Deep Agents filesystem permission rules |
+| `response_format` | string | Dotted path to a structured output schema |
+| `provider` | string | Provider type override used with `model` |
+| `model` | string | Model override for this agent's sessions |
 | `temperature` | float | Temperature override |
+| `max_tokens` | int | Max output tokens |
+| `recursion_limit` | int | Max agent loop depth |
+| `tool_token_limit_before_evict` | int | Token threshold for evicting large tool output |
+| `context_policy` | object | Context and summarization policy configuration |
+| `excluded_tools` | list[string] | Tool names removed from the model-visible tool list for this agent |
+| `blocked_tools` | list[string] | Tool names denied at execution time for this agent in addition to global `COGNITION_BLOCKED_TOOLS` |
+| `timeout_seconds` | float | Per-agent model request timeout |
+| `middleware` | list | Middleware names or middleware config dicts |
+| `subagents` | list[object] | In-process subagent definitions |
+| `async_subagents` | list[object] | Experimental remote Agent Protocol async subagent definitions |
+| `sandbox_profile` | string | Trusted sandbox profile selected for this agent |
+| `sandbox_execution_role_arn` | string | Trusted IAM role ARN assigned to this agent's sandbox runtime |
 | `scope` | dict | Scope restriction; empty `{}` = global |
 
 **Response `201 Created`:** Agent object  
@@ -630,18 +760,24 @@ Replace an agent definition entirely.
 ### `PATCH /agents/{name}`
 
 Partially update an agent definition. Only provided fields are changed.
+Send an empty list to clear `excluded_tools` or `blocked_tools`. Omit the field to leave the current policy unchanged.
 
 **Request body (all fields optional):**
 ```json
 {
   "system_prompt": "Updated prompt.",
   "model": "claude-sonnet-4-6",
-  "temperature": 0.5
+  "temperature": 0.5,
+  "excluded_tools": ["glob", "grep", "ls"],
+  "blocked_tools": ["execute"],
+  "sandbox_profile": "default-lambda"
 }
 ```
 
 **Response `200 OK`:** Updated agent object  
 **Response `404 Not Found`**
+
+For scoped agents, use the same `X-Cognition-Scope-*` headers used to create or read the agent. The response is reloaded from the matched scoped row after the update.
 
 ### `DELETE /agents/{name}`
 
@@ -1252,6 +1388,147 @@ Delete an MCP server.
 
 ---
 
+## Sandbox Profiles
+
+Manage AWS Lambda MicroVM sandbox profiles at runtime. File-managed profiles
+from `.cognition/config.yaml` have `source: "file"` and cannot be modified or
+deleted via the API.
+
+### `GET /sandbox/profiles`
+
+List sandbox profiles visible in the current scope.
+
+**Response `200 OK`:**
+```json
+{
+  "profiles": [
+    {
+      "name": "default-lambda",
+      "backend": "aws_lambda_microvm",
+      "image_arn": "arn:aws:lambda:us-west-2:123456789012:microvm-image:cognition-runtime",
+      "image_version": "1.0",
+      "region": "us-west-2",
+      "ingress_network_connector_arns": [],
+      "egress_mode": "internet",
+      "egress_network_connector_arns": [],
+      "idle_policy": {
+        "max_idle_duration_seconds": 900,
+        "suspended_duration_seconds": 300,
+        "auto_resume_enabled": true
+      },
+      "logging": {
+        "disabled": {},
+        "cloud_watch": null
+      },
+      "quota": {
+        "max_concurrent_sessions": 10,
+        "max_session_starts_per_minute": 30
+      },
+      "run_hook_payload": null,
+      "maximum_duration_seconds": 3600,
+      "port": 8080,
+      "token_expiration_minutes": 30,
+      "default_execution_role_arn": "arn:aws:iam::123456789012:role/cognition-agent-runtime",
+      "scope": {},
+      "source": "api",
+      "extra": {}
+    }
+  ],
+  "count": 1
+}
+```
+
+### `POST /sandbox/profiles`
+
+Create or replace an API-managed sandbox profile.
+
+**Request body:**
+```json
+{
+  "name": "default-lambda",
+  "backend": "aws_lambda_microvm",
+  "image_arn": "arn:aws:lambda:us-west-2:123456789012:microvm-image:cognition-runtime",
+  "image_version": "1.0",
+  "region": "us-west-2",
+  "egress_mode": "internet",
+  "logging": {
+    "disabled": {}
+  },
+  "quota": {
+    "max_concurrent_sessions": 10,
+    "max_session_starts_per_minute": 30
+  },
+  "maximum_duration_seconds": 3600,
+  "port": 8080,
+  "token_expiration_minutes": 30,
+  "default_execution_role_arn": "arn:aws:iam::123456789012:role/cognition-agent-runtime",
+  "scope": {}
+}
+```
+
+| Field | Type | Required | Default | Description |
+|---|---|---|---|---|
+| `name` | string | Yes | - | Profile selector used by agents |
+| `backend` | `"aws_lambda_microvm"` | No | `aws_lambda_microvm` | Sandbox backend type |
+| `image_arn` | string | Yes | - | Prebuilt Lambda MicroVM image ARN |
+| `image_version` | string | No | `null` | Optional image version |
+| `region` | string | No | image ARN region | AWS region |
+| `ingress_network_connector_arns` | list[string] | No | `[]` | Optional ingress connector ARNs |
+| `egress_mode` | `"internet"` \| `"vpc"` | No | `internet` | Egress policy |
+| `egress_network_connector_arns` | list[string] | No | `[]` | Required when `egress_mode` is `vpc` |
+| `idle_policy` | object | No | `null` | Lambda MicroVM idle lifecycle policy |
+| `logging` | object | No | `null` | Lambda MicroVM logging config; set exactly one of `disabled` or `cloud_watch` |
+| `quota` | object | No | `null` | Cognition-side profile/scope quota policy |
+| `run_hook_payload` | string | No | `null` | Payload sent to the image `/run` lifecycle hook |
+| `maximum_duration_seconds` | int | No | `3600` | Maximum MicroVM runtime, max `28800` |
+| `port` | int | No | `8080` | Runtime command server port |
+| `token_expiration_minutes` | int | No | `30` | AWS proxy auth token TTL requested by Cognition |
+| `default_execution_role_arn` | string | No | `null` | Default IAM execution role for agents using this profile |
+| `scope` | dict | No | `{}` | Scope restriction |
+| `extra` | dict | No | `{}` | Builder metadata |
+
+**Response `201 Created`:** Sandbox profile object
+**Response `409 Conflict`:** Existing profile is file-managed
+**Response `422 Unprocessable Entity`:** Validation error
+
+### `GET /sandbox/profiles/{name}`
+
+Get a sandbox profile by name.
+
+**Response `200 OK`:** Sandbox profile object
+**Response `404 Not Found`**
+
+### `PATCH /sandbox/profiles/{name}`
+
+Partially update an API-managed sandbox profile.
+
+**Request body (all fields optional):**
+```json
+{
+  "egress_mode": "vpc",
+  "egress_network_connector_arns": [
+    "arn:aws:lambda:us-west-2:123456789012:network-connector:private-egress"
+  ]
+}
+```
+
+**Response `200 OK`:** Updated sandbox profile object
+**Response `404 Not Found`**
+**Response `409 Conflict`:** Profile is file-managed
+**Response `422 Unprocessable Entity`:** Invalid profile shape
+
+### `DELETE /sandbox/profiles/{name}`
+
+Delete an API-managed sandbox profile.
+
+**Response `204 No Content`**
+**Response `404 Not Found`**
+**Response `409 Conflict`:** Profile is file-managed
+
+Related: [Lambda MicroVM Sandbox Profiles](../concepts/sandboxes/aws-lambda-microvm/profiles.md).
+
+---
+
 ## Artifacts
 
 Artifacts are durable, scope-aware files that agents and builders can read, write, list, and diff. They provide explicit state outside the model context window for long-running agent handoffs.
@@ -1415,7 +1692,7 @@ Returns the deployment's runtime feature set, package versions, and configuratio
     "langchain_core": "1.4.0"
   },
   "stream_protocols": ["sse"],
-  "sandbox_backends": ["local", "docker", "kubernetes"],
+  "sandbox_backends": ["local", "docker", "kubernetes", "aws_lambda_microvm"],
   "features": {
     "async_subagents": true,
     "mcp": true,
@@ -1432,6 +1709,8 @@ Returns the deployment's runtime feature set, package versions, and configuratio
     "scope_propagation": true,
     "provider_config_crud": true,
     "agent_config_crud": true,
+    "sandbox_profile_crud": true,
+    "aws_lambda_microvm_sandbox": true,
     "model_catalog": true,
     "a2a": true,
     "a2a_jsonrpc": true,
@@ -1462,7 +1741,7 @@ Returns the deployment's runtime feature set, package versions, and configuratio
 
 ## A2A Protocol
 
-Cognition exposes agents via the [Agent-to-Agent (A2A)](https://google.github.io/A2A/) protocol. Only agents with `a2a_exposed: true` on their definition are visible. The adapter is implemented in `server/app/protocols/a2a/` and uses the `a2a-sdk` for protocol compliance.
+Cognition exposes agents via the [Agent-to-Agent (A2A)](https://a2a-protocol.org/latest/) protocol. Only agents with `a2a_exposed: true` on their definition are visible. The adapter is implemented in `server/app/protocols/a2a/` and uses the `a2a-sdk` for protocol compliance.
 
 The A2A protocol surface can be disabled entirely by setting `COGNITION_A2A_ENABLED=false`. When disabled, the `/.well-known/agent-card.json` and `/a2a/{agent_name}` endpoints are not mounted, and `GET /capabilities` reports `a2a: false`.
 

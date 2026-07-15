@@ -1,3 +1,6 @@
+from __future__ import annotations
+
+from dataclasses import dataclass, replace
 from typing import Any, cast
 from unittest.mock import AsyncMock, patch
 
@@ -5,10 +8,12 @@ import pytest
 
 from server.app.agent.cognition_agent import (
     CognitionAgentParams,
+    _model_cache_key,
     clear_agent_cache,
     create_cognition_agent,
 )
 from server.app.agent.definition import AsyncSubagentConfig, ContextPolicy
+from server.app.settings import Settings
 from server.app.storage.config_models import GlobalAgentDefaults
 
 
@@ -22,6 +27,21 @@ class _DefaultsOnlyConfigStore:
         self, scope: dict[str, str] | None = None
     ) -> GlobalAgentDefaults:
         return self._defaults
+
+
+def test_string_model_cache_key_includes_model_id():
+    """Different string model IDs must not reuse the same compiled graph."""
+    assert _model_cache_key("us.amazon.nova-lite-v1:0") != _model_cache_key(
+        "global.anthropic.claude-sonnet-5"
+    )
+
+
+@dataclass(frozen=True)
+class _ModelRequest:
+    tools: list[Any]
+
+    def override(self, **overrides: Any) -> _ModelRequest:
+        return replace(self, **overrides)
 
 
 @pytest.mark.asyncio
@@ -62,6 +82,99 @@ async def test_create_cognition_agent_pluggability():
         middleware_names = [m.name for m in kwargs["middleware"]]
         assert "cognition_observability" in middleware_names
         assert "cognition_streaming" in middleware_names
+    clear_agent_cache()
+
+
+@pytest.mark.asyncio
+async def test_string_model_change_recompiles_agent_graph():
+    """Changing a string model ID should produce a fresh Deep Agents graph."""
+    clear_agent_cache()
+    with patch("server.app.agent.cognition_agent.create_deep_agent") as mock_create:
+        mock_create.return_value = AsyncMock()
+
+        await create_cognition_agent(
+            CognitionAgentParams(
+                project_path=".",
+                model="us.amazon.nova-lite-v1:0",
+            )
+        )
+        await create_cognition_agent(
+            CognitionAgentParams(
+                project_path=".",
+                model="global.anthropic.claude-sonnet-5",
+            )
+        )
+
+        assert mock_create.call_count == 2
+    clear_agent_cache()
+
+
+@pytest.mark.asyncio
+async def test_model_cache_key_change_recompiles_agent_graph():
+    """Provider/config identity changes should recompile even for the same model ID."""
+    clear_agent_cache()
+    with patch("server.app.agent.cognition_agent.create_deep_agent") as mock_create:
+        mock_create.return_value = AsyncMock()
+
+        await create_cognition_agent(
+            CognitionAgentParams(
+                project_path=".",
+                model="shared-model",
+                model_cache_key="resolved:openai_compatible:shared-model:https://one.example",
+            )
+        )
+        await create_cognition_agent(
+            CognitionAgentParams(
+                project_path=".",
+                model="shared-model",
+                model_cache_key="resolved:openai_compatible:shared-model:https://two.example",
+            )
+        )
+
+        assert mock_create.call_count == 2
+
+
+@pytest.mark.asyncio
+async def test_excluded_and_blocked_tools_attach_separate_middleware():
+    """excluded_tools hide tools; blocked_tools deny execution."""
+    clear_agent_cache()
+    with patch("server.app.agent.cognition_agent.create_deep_agent") as mock_create:
+        mock_create.return_value = AsyncMock()
+
+        await create_cognition_agent(
+            CognitionAgentParams(
+                project_path=".",
+                model="mock:model",
+                excluded_tools=["grep"],
+                blocked_tools=["grep"],
+                settings=Settings(blocked_tools=["execute"]),
+            )
+        )
+
+        _, kwargs = mock_create.call_args
+        visibility = next(m for m in kwargs["middleware"] if m.name == "cognition_tool_visibility")
+        security = next(m for m in kwargs["middleware"] if m.name == "cognition_tool_security")
+        request = _ModelRequest(
+            tools=[
+                {"type": "function", "function": {"name": "grep"}},
+                {"name": "execute"},
+                {"name": "safe_tool"},
+            ]
+        )
+
+        seen_request: _ModelRequest | None = None
+
+        def handler(updated: _ModelRequest) -> list[Any]:
+            nonlocal seen_request
+            seen_request = updated
+            return updated.tools
+
+        assert visibility.wrap_model_call(request, handler) == [
+            {"name": "execute"},
+            {"name": "safe_tool"},
+        ]
+        assert seen_request is not None
+        assert security._blocked_tools == {"execute", "grep"}
     clear_agent_cache()
 
 

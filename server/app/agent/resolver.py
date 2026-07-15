@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import importlib
+import importlib.util
 import inspect
+import json
 import os
 import sys
+from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, cast
@@ -65,6 +68,39 @@ class ResolvedModelConfig:
             max_retries=self.max_retries,
             timeout=self.timeout,
         )
+
+    def cache_key(self) -> str:
+        """Return a secret-free identity for the resolved model configuration."""
+        data = {
+            "provider": self.provider,
+            "model_id": self.model_id,
+            "base_url": self.base_url,
+            "region": self.region,
+            "role_arn": self.role_arn,
+            "temperature": self.temperature,
+            "max_tokens": self.max_tokens,
+            "max_retries": self.max_retries,
+            "timeout": self.timeout,
+        }
+        return "resolved:" + json.dumps(data, sort_keys=True, separators=(",", ":"))
+
+
+@dataclass(frozen=True)
+class ResolvedRuntimeModel:
+    """Runtime model plus cache identity."""
+
+    model: BaseChatModel
+    provider: str
+    model_id: str
+    recursion_limit: int
+    cache_key: str
+
+    def as_tuple(self) -> tuple[BaseChatModel, str, str, int]:
+        """Return the legacy runtime model tuple."""
+        return (self.model, self.provider, self.model_id, self.recursion_limit)
+
+    def __iter__(self) -> Iterator[Any]:
+        yield from self.as_tuple()
 
 
 class RuntimeResolver:
@@ -429,12 +465,12 @@ class RuntimeResolver:
             logger.warning("ConfigStore not initialized — MCP servers will not be available")
             return []
 
-    async def resolve_model_for_session(
+    async def resolve_runtime_model_for_session(
         self,
         session: Any,
         scope: dict[str, str] | None = None,
         agent_def: Any | None = None,
-    ) -> tuple[BaseChatModel, str, str, int]:
+    ) -> ResolvedRuntimeModel:
         """Resolve provider config and build a BaseChatModel for a session.
 
         Combines provider resolution priority chain with model building.
@@ -446,7 +482,7 @@ class RuntimeResolver:
                 tier between GlobalProviderDefaults and SessionConfig.
 
         Returns:
-            (model, provider_name, model_id, recursion_limit)
+            Resolved runtime model with provider metadata and cache identity.
 
         Raises:
             LLMProviderConfigError: If the provider is misconfigured.
@@ -469,7 +505,27 @@ class RuntimeResolver:
         model = resolved.build_model(self)
         await self._warn_if_no_tool_call_support(resolved.provider, resolved.model_id)
 
-        return model, resolved.provider, resolved.model_id, resolved.recursion_limit
+        return ResolvedRuntimeModel(
+            model=model,
+            provider=resolved.provider,
+            model_id=resolved.model_id,
+            recursion_limit=resolved.recursion_limit,
+            cache_key=resolved.cache_key(),
+        )
+
+    async def resolve_model_for_session(
+        self,
+        session: Any,
+        scope: dict[str, str] | None = None,
+        agent_def: Any | None = None,
+    ) -> tuple[BaseChatModel, str, str, int]:
+        """Resolve provider config and build a BaseChatModel for a session."""
+        resolved = await self.resolve_runtime_model_for_session(
+            session=session,
+            scope=scope,
+            agent_def=agent_def,
+        )
+        return resolved.as_tuple()
 
     async def resolve_model_config_for_session(
         self,
@@ -487,15 +543,44 @@ class RuntimeResolver:
             provider=target.provider,
             model_id=target.model_id,
             api_key=os.environ.get(target.api_key_env) if target.api_key_env else None,
-            base_url=target.base_url,
-            region=target.region,
-            role_arn=target.role_arn,
+            base_url=self._resolve_base_url(target.provider, target.base_url),
+            region=self._resolve_region(target.provider, target.region),
+            role_arn=self._resolve_role_arn(target.provider, target.role_arn),
             recursion_limit=recursion_limit,
             max_retries=target.max_retries,
             timeout=target.timeout,
             temperature=self._resolve_temperature(session=session, agent_def=agent_def),
             max_tokens=self._resolve_max_tokens(session=session, agent_def=agent_def),
         )
+
+    def _settings_str(self, name: str) -> str | None:
+        value = getattr(self._settings, name, None)
+        if isinstance(value, str) and value:
+            return value
+        return None
+
+    def _resolve_base_url(self, provider: str, base_url: str | None) -> str | None:
+        if base_url:
+            return base_url
+        if provider == "openai":
+            return self._settings_str("openai_api_base")
+        if provider == "openai_compatible":
+            return self._settings_str("openai_compatible_base_url")
+        return None
+
+    def _resolve_region(self, provider: str, region: str | None) -> str | None:
+        if region:
+            return region
+        if provider == "bedrock":
+            return self._settings_str("aws_region")
+        return None
+
+    def _resolve_role_arn(self, provider: str, role_arn: str | None) -> str | None:
+        if role_arn:
+            return role_arn
+        if provider == "bedrock":
+            return self._settings_str("bedrock_role_arn")
+        return None
 
     async def select_model_target_for_session(
         self,

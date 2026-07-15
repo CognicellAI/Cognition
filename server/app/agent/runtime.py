@@ -264,8 +264,8 @@ class SandboxLifecycleEvent(AgentEvent):
     """
 
     sandbox_id: str
-    phase: str  # provisioned, verified, teardown_started, teardown_complete
-    sandbox_backend: str  # local, docker, kubernetes
+    phase: str  # provisioned, runtime_snapshot, launch_*, healthcheck_*, teardown_*
+    sandbox_backend: str  # local, docker, kubernetes, aws_lambda_microvm
     duration_ms: float | None = None
     exit_code: int | None = None
     is_warm_pool_hit: bool = False

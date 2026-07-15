@@ -19,7 +19,7 @@ from typing import Any
 import structlog
 from langchain_core.tools import BaseTool
 
-from server.app.storage.config_models import SkillDefinition, ToolRegistration
+from server.app.storage.config_models import SandboxProfile, SkillDefinition, ToolRegistration
 
 logger = structlog.get_logger(__name__)
 
@@ -147,6 +147,60 @@ async def seed_providers_from_config(
             model=model,
         )
         return False
+
+
+async def seed_sandbox_profiles_from_config(
+    config: dict[str, Any],
+    config_store: Any,
+) -> int:
+    """Seed SandboxProfile entries from the ``sandbox_profiles`` config section."""
+    raw_profiles = config.get("sandbox_profiles")
+    if raw_profiles is None:
+        logger.debug("No sandbox_profiles section in config.yaml — skipping bootstrap")
+        return 0
+
+    if isinstance(raw_profiles, dict):
+        profile_items = []
+        for name, value in raw_profiles.items():
+            if isinstance(value, dict):
+                profile_items.append({"name": name, **value})
+    elif isinstance(raw_profiles, list):
+        profile_items = [item for item in raw_profiles if isinstance(item, dict)]
+    else:
+        logger.warning(
+            "sandbox_profiles section must be a mapping or list",
+            type=type(raw_profiles).__name__,
+        )
+        return 0
+
+    inserted = 0
+    for item in profile_items:
+        try:
+            profile = SandboxProfile.model_validate({**item, "source": "file"})
+        except Exception as exc:
+            logger.warning(
+                "Invalid sandbox profile in config.yaml",
+                profile=item.get("name"),
+                error=str(exc),
+            )
+            continue
+
+        did_insert = await config_store.seed_if_absent(
+            entity_type="sandbox_profile",
+            name=profile.name,
+            scope=profile.scope,
+            definition=profile.model_dump(),
+            source="file",
+        )
+        if did_insert:
+            inserted += 1
+            logger.info(
+                "Sandbox profile seeded from config.yaml",
+                profile=profile.name,
+                backend=profile.backend,
+            )
+
+    return inserted
 
 
 def _resolve_source_dir(source: str, workspace_root: Path) -> Path:
