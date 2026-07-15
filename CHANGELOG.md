@@ -7,6 +7,36 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [0.12.0-rc.1] — 2026-07-15
+
+### Highlights
+
+- Replaced Cognition's preview A2A adapter internals with a strict A2A 1.0 JSON-RPC server backed by the same durable execution lifecycle used by native APIs.
+- Added a protocol-neutral `RuntimeTask` aggregate so task identity and state remain durable while each `SessionRun` represents one execution attempt.
+- Preserved exact builder-authorized `effective_scope` isolation across A2A agents, tasks, contexts, messages, events, artifacts, cancellation, and subscription.
+
+### Breaking Changes
+
+- Removed the previous A2A v0.3 compatibility translation and the internal `server.app.protocols.a2a.wire` module. A2A clients must use the A2A 1.0 JSON-RPC contract, version negotiation, ProtoJSON field representations, and stream envelopes.
+- Replaced the process-local A2A task store and `taskId`-to-`run_id` mapping with durable runtime tasks. Preview task state created by older processes is not carried into the new task model.
+- Terminal A2A tasks now reject continuation and subscription according to the strict lifecycle contract instead of accepting ambiguous follow-up work.
+
+### Added
+
+- Durable runtime-task storage for memory, SQLite, and PostgreSQL backends, with Alembic migration `004_add_runtime_tasks`.
+- Strict A2A operations for send, streaming send, get, list, cancel, and subscribe, including cursor pagination and structured protocol errors.
+- Message-id idempotency, interrupted-task continuation, cancellation-race handling, durable artifact projection, and reconnect-safe task subscription.
+- A2A 1.0 Agent Cards and response version headers for every explicitly exposed agent.
+- A TCK system-under-test harness and CI coverage for the strict JSON-RPC surface.
+
+### Changed
+
+- Native REST/SSE and A2A execution now share `AgentTaskRuntime` lifecycle and persistence primitives instead of maintaining independent task truth.
+- Added direct SQLAlchemy and Alembic runtime dependencies required by Cognition's existing schema and migration surfaces.
+- Generated MkDocs output under `site/` is ignored so local documentation builds do not dirty release worktrees.
+
+---
+
 ## [0.11.0] — 2026-07-10
 
 ### Highlights
