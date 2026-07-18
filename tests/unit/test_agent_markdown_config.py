@@ -11,6 +11,7 @@ def test_markdown_config_block_populates_agent_config(tmp_path: Path) -> None:
     path = tmp_path / "investigator.md"
     path.write_text(
         """---
+display_name: Incident Investigator
 description: Investigates incidents
 temperature: 0.2
 config:
@@ -27,6 +28,7 @@ You are an investigator.
 
     definition = load_agent_definition_from_markdown(path)
 
+    assert definition.display_name == "Incident Investigator"
     assert definition.config.temperature == 0.2
     assert definition.config.max_tokens == 16000
     assert definition.config.recursion_limit == 500

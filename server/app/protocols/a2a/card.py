@@ -23,24 +23,38 @@ def build_agent_card_for_agent(
     """Build an A2A AgentCard for a single Cognition agent.
 
     The card's supportedInterfaces URL points to /a2a/{agent_name}.
-    The card name includes the agent name for client-side identification.
+    The card name uses the public display name when configured and otherwise
+    falls back to the runtime agent name.
 
     The card does NOT expose: system prompt, tool list, skill contents,
     scope values, secrets, or subagent details.
     """
+    public_name = agent.display_name or agent.name
+    has_public_name = agent.display_name is not None
+    card_description = agent.description or (
+        f"Agent: {public_name}"
+        if has_public_name
+        else f"Cognition agent: {public_name}"
+    )
+    skill_description = agent.description or (
+        f"Primary capability for {public_name}"
+        if has_public_name
+        else f"Cognition agent: {public_name}"
+    )
+
     skill = AgentSkill(
-        id=agent.name,
-        name=agent.name,
-        description=agent.description or f"Cognition agent: {agent.name}",
-        tags=["cognition", agent.mode],
+        id="primary" if has_public_name else agent.name,
+        name=public_name,
+        description=skill_description,
+        tags=["primary"] if has_public_name else ["cognition", agent.mode],
         input_modes=["text/plain"],
         output_modes=["text/plain", "application/json"],
         examples=[],
     )
 
     card = AgentCard(
-        name=f"Cognition ({agent.name})",
-        description=agent.description or f"Cognition agent: {agent.name}",
+        name=public_name,
+        description=card_description,
         version=version,
         default_input_modes=["text/plain"],
         default_output_modes=["text/plain", "application/json"],

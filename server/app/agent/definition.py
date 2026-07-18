@@ -178,6 +178,7 @@ class AgentDefinition(BaseModel):
 
     Attributes:
         name: Unique agent identifier.
+        display_name: Optional human-readable name for public presentation.
         system_prompt: System prompt that defines agent behavior.
         tools: List of attached tool names.
         skills: List of attached skill names.
@@ -190,6 +191,7 @@ class AgentDefinition(BaseModel):
     """
 
     name: str = Field(..., min_length=1, max_length=100)
+    display_name: str | None = Field(default=None, min_length=1, max_length=200)
     system_prompt: str = Field(..., min_length=1)
     tools: list[str] = Field(default_factory=list)
     skills: list[str] = Field(default_factory=list)
@@ -584,6 +586,7 @@ def load_agent_definition_from_markdown(path: str | Path) -> AgentDefinition:
 
     definition = AgentDefinition(
         name=name,
+        display_name=frontmatter.get("display_name"),
         system_prompt=body,
         description=frontmatter.get("description"),
         mode=frontmatter.get("mode", "all"),

@@ -42,12 +42,33 @@ class TestA2AExposedField:
 
 
 class TestBuildAgentCardForAgent:
-    def test_card_has_agent_name_in_title(self):
+    def test_card_uses_agent_name_as_title(self):
         agent = AgentDefinition(
             name="my-agent", system_prompt="test", mode="primary", a2a_exposed=True
         )
         card = build_agent_card_for_agent(agent, "http://localhost:8000", "0.10.0")
-        assert card.name == "Cognition (my-agent)"
+        assert card.name == "my-agent"
+
+    def test_card_uses_display_name_for_public_presentation(self):
+        agent = AgentDefinition(
+            name="ka_0cadedacd0b74a509358b48b5e3fd952",
+            display_name="Customer Support Concierge",
+            system_prompt="test",
+            mode="primary",
+            a2a_exposed=True,
+        )
+
+        card = build_agent_card_for_agent(agent, "http://localhost:8000", "0.10.0")
+
+        assert card.name == "Customer Support Concierge"
+        assert card.description == "Agent: Customer Support Concierge"
+        assert len(card.skills) == 1
+        assert card.skills[0].id == "primary"
+        assert card.skills[0].name == "Customer Support Concierge"
+        assert card.skills[0].description == (
+            "Primary capability for Customer Support Concierge"
+        )
+        assert card.skills[0].tags == ["primary"]
 
     def test_card_has_correct_endpoint(self):
         agent = AgentDefinition(
@@ -150,8 +171,10 @@ class TestA2APerAgentCardRoute:
 
         assert response.status_code == 200
         card = response.json()
-        assert card["name"] == "Cognition (scoped-agent)"
-        assert card["supportedInterfaces"][0]["url"] == ("http://example.test/a2a/scoped-agent")
+        assert card["name"] == "scoped-agent"
+        assert card["supportedInterfaces"][0]["url"] == (
+            "http://example.test/a2a/scoped-agent"
+        )
 
     @pytest.mark.asyncio
     async def test_per_agent_card_respects_request_scope(self):

@@ -22,6 +22,7 @@ router = APIRouter(prefix="/agents", tags=["agents"])
 def _agent_to_response(agent: AgentDefinition) -> AgentResponse:
     return AgentResponse(
         name=agent.name,
+        display_name=agent.display_name,
         description=agent.description,
         mode=agent.mode,
         hidden=agent.hidden,
@@ -121,6 +122,7 @@ async def create_agent(
     try:
         definition_data: dict[str, Any] = {
             "name": body.name,
+            "display_name": body.display_name,
             "system_prompt": body.system_prompt,
             "description": body.description,
             "mode": body.mode,
@@ -216,6 +218,8 @@ async def update_agent(
         data, agent_scope = result
 
         updates = body.model_dump(exclude_none=True)
+        if "display_name" in body.model_fields_set:
+            updates["display_name"] = body.display_name
         config_fields = {
             "model",
             "temperature",
