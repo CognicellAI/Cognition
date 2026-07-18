@@ -68,6 +68,7 @@ from server.app.exceptions import (
 from server.app.models import TaskStatus
 from server.app.protocols.a2a.card import build_agent_card_for_agent
 from server.app.protocols.a2a.executor import CognitionA2AExecutor
+from server.app.protocols.a2a.security import A2ACardSecurity, parse_a2a_card_security
 from server.app.protocols.a2a.task_store import (
     CognitionTaskStore,
     effective_scope_from_context,
@@ -428,6 +429,7 @@ async def mount_a2a_routes(
     version: str,
     artifact_store: ArtifactStore | None = None,
     message_id_idempotency: bool = True,
+    card_security: A2ACardSecurity | None = None,
 ) -> None:
     """Mount A2A protocol routes on the FastAPI app.
 
@@ -440,6 +442,11 @@ async def mount_a2a_routes(
     """
     scope_keys = list(settings.scope_keys)
     scoping_enabled = bool(getattr(settings, "scoping_enabled", False))
+    if card_security is None:
+        card_security = parse_a2a_card_security(
+            getattr(settings, "a2a_security_schemes", {}),
+            getattr(settings, "a2a_security_requirements", []),
+        )
 
     runtime = AgentTaskRuntime(
         store,
@@ -533,7 +540,12 @@ async def mount_a2a_routes(
                 status_code=404,
             )
 
-        card = build_agent_card_for_agent(agent, _request_base_url(request), version)
+        card = build_agent_card_for_agent(
+            agent,
+            _request_base_url(request),
+            version,
+            security=card_security,
+        )
         return card_response(card)
 
     async def per_agent_card_handler(request: Request) -> JSONResponse:
@@ -554,7 +566,12 @@ async def mount_a2a_routes(
                 status_code=404,
             )
 
-        card = build_agent_card_for_agent(agent, _request_base_url(request), version)
+        card = build_agent_card_for_agent(
+            agent,
+            _request_base_url(request),
+            version,
+            security=card_security,
+        )
         return card_response(card)
 
     # --- Catch-all JSON-RPC endpoint ---
@@ -601,7 +618,12 @@ async def mount_a2a_routes(
         if not isinstance(payload, dict):
             return _jsonrpc_error_response(None, -32600, "Invalid request")
 
-        card = build_agent_card_for_agent(agent, _request_base_url(request), version)
+        card = build_agent_card_for_agent(
+            agent,
+            _request_base_url(request),
+            version,
+            security=card_security,
+        )
         handler = get_handler(agent.name, card)
         dispatcher = JsonRpcDispatcher(
             request_handler=handler,

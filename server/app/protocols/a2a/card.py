@@ -12,6 +12,7 @@ import structlog
 from a2a.types import AgentCapabilities, AgentCard, AgentInterface, AgentSkill
 
 from server.app.agent.definition import AgentDefinition
+from server.app.protocols.a2a.security import A2ACardSecurity
 
 logger = structlog.get_logger(__name__)
 
@@ -20,6 +21,7 @@ def build_agent_card_for_agent(
     agent: AgentDefinition,
     base_url: str,
     version: str,
+    security: A2ACardSecurity | None = None,
 ) -> AgentCard:
     """Build an A2A AgentCard for a single Cognition agent.
 
@@ -42,6 +44,7 @@ def build_agent_card_for_agent(
         else f"Cognition agent: {public_name}"
     )
     interface_url = agent.a2a_public_interface_url or f"{base_url}/a2a/{agent.name}"
+    security = security or A2ACardSecurity(schemes={}, requirements=())
 
     skill = AgentSkill(
         id="primary" if has_public_name else agent.name,
@@ -75,6 +78,8 @@ def build_agent_card_for_agent(
                 protocol_version="1.0",
             )
         ],
+        security_schemes=security.schemes,
+        security_requirements=list(security.requirements),
         skills=[skill],
     )
 

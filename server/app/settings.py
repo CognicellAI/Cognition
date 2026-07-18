@@ -234,6 +234,21 @@ class Settings(BaseSettings):
             "Individual agents still require a2a_exposed=true to be visible."
         ),
     )
+    a2a_security_schemes: dict[str, dict[str, Any]] = Field(
+        default_factory=dict,
+        alias="COGNITION_A2A_SECURITY_SCHEMES",
+        description=(
+            "Canonical A2A ProtoJSON map of public Agent Card authentication schemes. "
+            "This is discovery metadata only and must never contain credentials."
+        ),
+    )
+    a2a_security_requirements: list[dict[str, Any]] = Field(
+        default_factory=list,
+        alias="COGNITION_A2A_SECURITY_REQUIREMENTS",
+        description=(
+            "Canonical A2A ProtoJSON security requirements applied to generated Agent Cards."
+        ),
+    )
 
     # SSE (Server-Sent Events) settings
     sse_heartbeat_interval_seconds: float = Field(

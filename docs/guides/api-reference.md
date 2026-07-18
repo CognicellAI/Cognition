@@ -1756,6 +1756,12 @@ messages, events, and artifacts exactly by it; it does not own tenant or IAM mod
 
 The A2A protocol surface can be disabled entirely by setting `COGNITION_A2A_ENABLED=false`. When disabled, the `/.well-known/agent-card.json` and `/a2a/{agent_name}` endpoints are not mounted, and `GET /capabilities` reports `a2a: false`.
 
+For endpoints protected by builder-owned ingress, configure public authentication
+discovery with `COGNITION_A2A_SECURITY_SCHEMES` and
+`COGNITION_A2A_SECURITY_REQUIREMENTS`. Both values use canonical A2A ProtoJSON.
+Cognition validates them during startup and publishes them on every generated
+card; it does not enforce the advertised authentication scheme.
+
 ### `GET /.well-known/agent-card.json`
 
 Return one scope-visible A2A `AgentCard`. Use `?assistant_id={agent_name}` when a
@@ -1780,12 +1786,31 @@ X-Cognition-Scope-User: alice
       "protocolVersion": "1.0"
     }
   ],
-  "version": "0.12.0-rc.3",
+  "version": "0.12.0-rc.4",
   "capabilities": {
     "streaming": true,
     "pushNotifications": false,
     "extendedAgentCard": false
   },
+  "securitySchemes": {
+    "oauth2": {
+      "oauth2SecurityScheme": {
+        "description": "Machine credentials",
+        "flows": {
+          "clientCredentials": {
+            "tokenUrl": "https://auth.example.com/oauth/token",
+            "scopes": {
+              "a2a.invoke": "Invoke the agent"
+            }
+          }
+        },
+        "oauth2MetadataUrl": "https://auth.example.com/.well-known/openid-configuration"
+      }
+    }
+  },
+  "securityRequirements": [
+    {"schemes": {"oauth2": {}}}
+  ],
   "defaultInputModes": ["text/plain"],
   "defaultOutputModes": ["text/plain", "application/json"],
   "skills": [
