@@ -29,6 +29,7 @@ See AGENTS.md for category definitions, DoD requirements, and precedence rules.
 
 | Date | Description | Issue | Layer | Status |
 |------|-------------|-------|-------|--------|
+| 2026-07-18 | Remove Cognition implementation branding from A2A Agent Card names so cards identify the configured agent directly. | Kennel Agent Card identity report | 6 | Completed |
 | 2026-07-10 | Verify Lambda MicroVM teardown before reporting completion and emit token-free lifecycle events/logs for launch, auth token creation, healthchecks, runtime snapshots, and teardown outcomes. | v0.11 rc Lambda MicroVM operator observability follow-up | 3/6/7 | Completed |
 | 2026-07-02 | Fix rc.3 scoped agent execution and Lambda MicroVM quota leaks — session validation/runtime resolution now use effective scope, runtime no longer silently falls back to `default`, completed runs return sessions to `idle`, terminal session cleanup releases sandbox quota, and health counts non-terminal sessions. | Kennel rc.3 production-pilot findings | 3/4/6/7 | Completed |
 | 2026-06-27 | Fix scoped API-created agents being rejected by `POST /sessions` and `PATCH /sessions/{id}` agent validation because session routes checked primary-agent eligibility without request scope. | Kennel rc.2 Lambda MicroVM smoke report | 4/6 | Completed |
@@ -190,6 +191,7 @@ The following fallback patterns exist and are tracked for removal. They produce 
 
 | Task | Layer | Status | Acceptance Criteria | Effort | Dependencies |
 |------|-------|--------|---------------------|--------|--------------|
+| **Optional public agent display name** | Layer 4/6 | Completed | `AgentDefinition`, agent CRUD, and persisted definitions support an optional `display_name`; A2A cards use it for `AgentCard.name` and the synthesized public skill without changing runtime lookup, routing, session binding, or deletion; the public skill uses `id="primary"` when a display name is configured; definitions without it retain existing behavior; focused definition, CRUD, and A2A tests pass. | 0.5 day | Existing per-agent A2A adapter and ConfigRegistry persistence |
 | **Configurable agent recursion_limit and max_tokens** | Layer 4 | Completed | `agent_recursion_limit` configurable via env/Settings/YAML (default: 1000); `llm_max_tokens` wired to model factories (default: 20000) | 0.5 days | None |
 | **MCP server wiring** | Layer 4/5 | Completed | `COGNITION_MCP_SERVERS` env var / YAML key configures remote MCP servers; each entry validated (HTTP/HTTPS only) at startup; tools from MCP servers available to agent in all execution paths | 0.5 days | None |
 | **Bedrock IAM role support** | Layer 5 | Completed | Ambient credentials (instance profile, ECS task role, Lambda, IRSA) work without any key configuration; `COGNITION_BEDROCK_ROLE_ARN` enables cross-account role assumption; `AWS_SESSION_TOKEN` supported for STS temp credentials; partial key pair raises clear error | 0.5 days | None |

@@ -85,6 +85,28 @@ class TestGetAgent:
 
 
 class TestCreateAgent:
+    def test_create_agent_persists_display_name(self):
+        response = client.post(
+            "/agents",
+            json={
+                "name": "ka_create_display_name",
+                "display_name": "Customer Support Concierge",
+                "system_prompt": "Help customers.",
+            },
+        )
+
+        assert response.status_code == 201
+        assert response.json()["name"] == "ka_create_display_name"
+        assert response.json()["display_name"] == "Customer Support Concierge"
+
+        get_response = client.get("/agents/ka_create_display_name")
+        assert get_response.status_code == 200
+        assert get_response.json()["display_name"] == "Customer Support Concierge"
+
+        raw = asyncio.run(get_config_store().get_agent_raw("ka_create_display_name"))
+        assert raw is not None
+        assert raw["display_name"] == "Customer Support Concierge"
+
     def test_create_new_agent(self):
         payload = {
             "name": "test-create-agent",
@@ -227,6 +249,34 @@ class TestCreateAgent:
 
 
 class TestUpdateAgent:
+    def test_patch_agent_updates_and_clears_display_name(self):
+        client.post(
+            "/agents",
+            json={
+                "name": "ka_patch_display_name",
+                "display_name": "Original Name",
+                "system_prompt": "Help customers.",
+            },
+        )
+
+        update_response = client.patch(
+            "/agents/ka_patch_display_name",
+            json={"display_name": "Updated Name"},
+        )
+        assert update_response.status_code == 200
+        assert update_response.json()["display_name"] == "Updated Name"
+
+        clear_response = client.patch(
+            "/agents/ka_patch_display_name",
+            json={"display_name": None},
+        )
+        assert clear_response.status_code == 200
+        assert clear_response.json()["display_name"] is None
+
+        raw = asyncio.run(get_config_store().get_agent_raw("ka_patch_display_name"))
+        assert raw is not None
+        assert raw["display_name"] is None
+
     def test_put_agent_updates_definition(self):
         """PUT should fully replace the agent definition."""
         # Create

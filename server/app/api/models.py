@@ -856,7 +856,11 @@ class CapabilityResponse(BaseModel):
 class AgentResponse(BaseModel):
     """Agent information for API responses."""
 
-    name: str = Field(..., description="Agent name")
+    name: str = Field(..., description="Stable agent runtime identifier")
+    display_name: str | None = Field(
+        None,
+        description="Optional human-readable name used for public Agent presentation",
+    )
     description: str | None = Field(None, description="Agent description")
     mode: Literal["primary", "subagent", "all"] = Field(..., description="Agent mode")
     hidden: bool = Field(..., description="Whether agent is hidden from listings")
@@ -1231,7 +1235,18 @@ class ProviderTestResponse(BaseModel):
 class AgentCreate(BaseModel):
     """Request to create or replace an agent definition."""
 
-    name: str = Field(..., min_length=1, max_length=100, description="Agent identifier")
+    name: str = Field(
+        ...,
+        min_length=1,
+        max_length=100,
+        description="Stable agent runtime identifier",
+    )
+    display_name: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=200,
+        description="Optional human-readable name used for public Agent presentation",
+    )
     system_prompt: str = Field(default="", description="System prompt text")
     description: str | None = Field(default=None)
     mode: Literal["primary", "subagent", "all"] = Field(default="primary")
@@ -1272,6 +1287,12 @@ class AgentCreate(BaseModel):
 class AgentUpdate(BaseModel):
     """Request to partially update an agent definition."""
 
+    display_name: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=200,
+        description="Optional human-readable name used for public Agent presentation",
+    )
     system_prompt: str | None = None
     description: str | None = None
     mode: Literal["primary", "subagent", "all"] | None = None
