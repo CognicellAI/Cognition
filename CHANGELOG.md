@@ -7,6 +7,17 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [0.12.0-rc.4] — 2026-07-18
+
+### Added
+
+- Added deployment-level `COGNITION_A2A_SECURITY_SCHEMES` and `COGNITION_A2A_SECURITY_REQUIREMENTS` configuration for canonical A2A authentication discovery metadata.
+
+### Fixed
+
+- Generated Agent Cards now publish validated security schemes and requirements for gateway-protected A2A endpoints, fail startup on invalid metadata or undeclared scheme references, and retain unauthenticated defaults when the settings are omitted.
+- Updated the reported Cognition version to `0.12.0-rc.4` for the new release candidate.
+
 ## [0.12.0-rc.3] — 2026-07-18
 
 ### Added

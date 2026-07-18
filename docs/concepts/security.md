@@ -232,6 +232,13 @@ are visible; set it only on agents intended for A2A access.
 
 **Global disable**: Set `COGNITION_A2A_ENABLED=false` to prevent the A2A protocol surface from being mounted at all. When disabled, the endpoints do not exist and `GET /capabilities` reports `a2a: false`.
 
+**Authentication discovery**: When trusted ingress protects the advertised A2A
+interface, set `COGNITION_A2A_SECURITY_SCHEMES` and
+`COGNITION_A2A_SECURITY_REQUIREMENTS` to canonical A2A ProtoJSON. Cognition
+publishes the validated values in its Agent Cards but does not enforce them.
+Gateway enforcement must match the card. Because Agent Cards are public, never
+place client secrets, bearer tokens, or private credentials in these values.
+
 ---
 
 ## Rate Limiting
