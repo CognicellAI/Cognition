@@ -28,6 +28,7 @@ def _agent_to_response(agent: AgentDefinition) -> AgentResponse:
         hidden=agent.hidden,
         native=agent.native,
         a2a_exposed=agent.a2a_exposed,
+        a2a_public_interface_url=agent.a2a_public_interface_url,
         provider=agent.config.provider,
         model=agent.config.model,
         temperature=agent.config.temperature,
@@ -128,6 +129,7 @@ async def create_agent(
             "mode": body.mode,
             "hidden": body.hidden,
             "a2a_exposed": body.a2a_exposed,
+            "a2a_public_interface_url": body.a2a_public_interface_url,
             "native": False,
             "tools": body.tools,
             "skills": body.skills,
@@ -220,6 +222,8 @@ async def update_agent(
         updates = body.model_dump(exclude_none=True)
         if "display_name" in body.model_fields_set:
             updates["display_name"] = body.display_name
+        if "a2a_public_interface_url" in body.model_fields_set:
+            updates["a2a_public_interface_url"] = body.a2a_public_interface_url
         config_fields = {
             "model",
             "temperature",

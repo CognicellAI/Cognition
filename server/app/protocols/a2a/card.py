@@ -1,8 +1,9 @@
 """Per-agent A2A Agent Card generation from Cognition agent definitions.
 
-Each A2A-exposed agent gets its own AgentCard with a dedicated JSON-RPC
-endpoint at /a2a/{agent_name}. Builders control exposure via the
-a2a_exposed field on AgentDefinition. No agent is exposed by default.
+Each A2A-exposed agent gets its own AgentCard. Builders can advertise an
+externally routed JSON-RPC endpoint with ``a2a_public_interface_url``; otherwise
+Cognition falls back to its dedicated ``/a2a/{agent_name}`` route. Builders
+control exposure via the ``a2a_exposed`` field. No agent is exposed by default.
 """
 
 from __future__ import annotations
@@ -22,7 +23,8 @@ def build_agent_card_for_agent(
 ) -> AgentCard:
     """Build an A2A AgentCard for a single Cognition agent.
 
-    The card's supportedInterfaces URL points to /a2a/{agent_name}.
+    The card's supportedInterfaces URL uses the configured public interface URL
+    when present and otherwise points to /a2a/{agent_name}.
     The card name uses the public display name when configured and otherwise
     falls back to the runtime agent name.
 
@@ -32,15 +34,14 @@ def build_agent_card_for_agent(
     public_name = agent.display_name or agent.name
     has_public_name = agent.display_name is not None
     card_description = agent.description or (
-        f"Agent: {public_name}"
-        if has_public_name
-        else f"Cognition agent: {public_name}"
+        f"Agent: {public_name}" if has_public_name else f"Cognition agent: {public_name}"
     )
     skill_description = agent.description or (
         f"Primary capability for {public_name}"
         if has_public_name
         else f"Cognition agent: {public_name}"
     )
+    interface_url = agent.a2a_public_interface_url or f"{base_url}/a2a/{agent.name}"
 
     skill = AgentSkill(
         id="primary" if has_public_name else agent.name,
@@ -70,7 +71,7 @@ def build_agent_card_for_agent(
         supported_interfaces=[
             AgentInterface(
                 protocol_binding="JSONRPC",
-                url=f"{base_url}/a2a/{agent.name}",
+                url=interface_url,
                 protocol_version="1.0",
             )
         ],
@@ -80,6 +81,6 @@ def build_agent_card_for_agent(
     logger.info(
         "A2A Agent Card built",
         agent_name=agent.name,
-        endpoint=f"/a2a/{agent.name}",
+        interface_url=interface_url,
     )
     return card

@@ -79,6 +79,22 @@ class TestBuildAgentCardForAgent:
         assert card.supported_interfaces[0].url == "http://localhost:8000/a2a/my-agent"
         assert card.supported_interfaces[0].protocol_binding == "JSONRPC"
 
+    def test_card_uses_configured_public_interface_url_exactly(self):
+        public_url = "https://opaque.agents.example.com/a2a?channel=public"
+        agent = AgentDefinition(
+            name="ka_private_runtime_name",
+            display_name="Customer Support Concierge",
+            system_prompt="test",
+            mode="primary",
+            a2a_exposed=True,
+            a2a_public_interface_url=public_url,
+        )
+
+        card = build_agent_card_for_agent(agent, "http://private:8000", "0.12.0-rc.3")
+
+        assert card.supported_interfaces[0].url == public_url
+        assert "ka_private_runtime_name" not in card.supported_interfaces[0].url
+
     def test_card_has_streaming_capability(self):
         agent = AgentDefinition(name="test", system_prompt="test", mode="primary", a2a_exposed=True)
         card = build_agent_card_for_agent(agent, "http://localhost:8000", "0.10.0")
@@ -216,6 +232,50 @@ class TestA2APerAgentCardRoute:
             )
 
         assert response.status_code == 404
+
+    @pytest.mark.asyncio
+    async def test_per_agent_card_uses_configured_public_interface_url(self):
+        from server.app.protocols.a2a.routes import mount_a2a_routes
+        from server.app.storage.config_registry import MemoryConfigRegistry
+        from server.app.storage.config_store import DefaultConfigStore
+
+        app = FastAPI()
+        settings = MagicMock()
+        settings.scope_keys = []
+        config_store = DefaultConfigStore(MemoryConfigRegistry())
+        public_url = "https://opaque.agents.example.com/a2a"
+        await config_store.upsert_agent(
+            "ka_private_runtime_name",
+            {},
+            {
+                "name": "ka_private_runtime_name",
+                "display_name": "Customer Support Concierge",
+                "system_prompt": "test",
+                "mode": "primary",
+                "a2a_exposed": True,
+                "a2a_public_interface_url": public_url,
+            },
+        )
+        await mount_a2a_routes(
+            app,
+            settings=settings,
+            config_store=config_store,
+            session_agent_manager=MagicMock(),
+            store=MagicMock(),
+            version="0.12.0-rc.3",
+        )
+
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(
+            transport=transport,
+            base_url="http://private:8000",
+        ) as client:
+            response = await client.get("/a2a/ka_private_runtime_name/.well-known/agent-card.json")
+
+        assert response.status_code == 200
+        card = response.json()
+        assert card["name"] == "Customer Support Concierge"
+        assert card["supportedInterfaces"][0]["url"] == public_url
 
 
 class TestA2AExposureFiltering:

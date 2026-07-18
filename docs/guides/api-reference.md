@@ -625,11 +625,13 @@ List all non-hidden agents available in the registry.
   "agents": [
     {
       "name": "default",
+      "display_name": null,
       "description": "Full-access coding agent with all tools enabled",
       "mode": "primary",
       "hidden": false,
       "native": true,
       "a2a_exposed": false,
+      "a2a_public_interface_url": null,
       "provider": null,
       "model": null,
       "temperature": null,
@@ -695,6 +697,7 @@ Create or replace an agent definition in the ConfigRegistry.
 ```json
 {
   "name": "security-auditor",
+  "display_name": "Security Auditor",
   "system_prompt": "You are a security expert. Audit code for vulnerabilities.",
   "description": "Audits code for security issues",
   "mode": "subagent",
@@ -703,6 +706,7 @@ Create or replace an agent definition in the ConfigRegistry.
   "memory": ["AGENTS.md"],
   "interrupt_on": {},
   "a2a_exposed": false,
+  "a2a_public_interface_url": "https://agents.example.com/security-auditor/a2a",
   "model": "gpt-4o",
   "temperature": 0.1,
   "max_tokens": 4096,
@@ -718,11 +722,13 @@ Create or replace an agent definition in the ConfigRegistry.
 | Field | Type | Description |
 |---|---|---|
 | `name` | string | Agent identifier (1–100 chars) |
+| `display_name` | string | Optional human-readable name used for public Agent presentation without changing runtime lookup |
 | `system_prompt` | string | Agent's system prompt |
 | `description` | string | Human-readable description |
 | `mode` | `"primary"` \| `"subagent"` \| `"all"` | Whether agent can own sessions, be delegated to, or both |
 | `hidden` | boolean | Hide the agent from `GET /agents` list results |
 | `a2a_exposed` | boolean | Expose eligible `primary` or `all` agents through the A2A protocol |
+| `a2a_public_interface_url` | string | Optional absolute HTTP(S) JSON-RPC endpoint advertised exactly in the Agent Card; credentials and fragments are rejected |
 | `tools` | list[string] | Registry tool names to attach to this agent |
 | `skills` | list[string] | Registry skill names to attach to this agent |
 | `memory` | list[string] | Paths to instruction files (e.g. AGENTS.md) |
@@ -1765,16 +1771,16 @@ X-Cognition-Scope-User: alice
 **Response `200 OK`:**
 ```json
 {
-  "name": "Cognition (deploy-agent)",
+  "name": "Deployment Assistant",
   "description": "Handles deployment workflows",
   "supportedInterfaces": [
     {
-      "url": "http://localhost:8000/a2a/deploy-agent",
+      "url": "https://agents.example.com/deployment/a2a",
       "protocolBinding": "JSONRPC",
       "protocolVersion": "1.0"
     }
   ],
-  "version": "0.10.3",
+  "version": "0.12.0-rc.3",
   "capabilities": {
     "streaming": true,
     "pushNotifications": false,
@@ -1782,9 +1788,24 @@ X-Cognition-Scope-User: alice
   },
   "defaultInputModes": ["text/plain"],
   "defaultOutputModes": ["text/plain", "application/json"],
-  "skills": []
+  "skills": [
+    {
+      "id": "primary",
+      "name": "Deployment Assistant",
+      "description": "Handles deployment workflows",
+      "tags": ["primary"],
+      "inputModes": ["text/plain"],
+      "outputModes": ["text/plain", "application/json"]
+    }
+  ]
 }
 ```
+
+When the agent definition includes `a2a_public_interface_url`, Cognition uses
+that value exactly for `supportedInterfaces[].url`. Otherwise it derives the
+URL from the incoming request and `/a2a/{agent_name}` for backward
+compatibility. `display_name` affects only public presentation; internal lookup
+and the fallback route continue to use `name`.
 
 Only agents visible in the exact supplied scope with `a2a_exposed=True` are
 returned. Built-in agents are not exposed by default.

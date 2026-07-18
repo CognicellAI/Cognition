@@ -7,6 +7,18 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [0.12.0-rc.3] — 2026-07-18
+
+### Added
+
+- Added optional `display_name` agent configuration for human-readable A2A Agent Card and synthesized skill presentation without changing the stable runtime lookup name.
+- Added optional `a2a_public_interface_url` agent configuration for builder-routed public A2A endpoints.
+
+### Fixed
+
+- Agent Cards now advertise the configured public A2A interface URL exactly when supplied, while preserving the request-derived `/a2a/{agent_name}` fallback for existing definitions.
+- Updated the reported Cognition version to `0.12.0-rc.3` so card and health metadata match the published release candidate.
+
 ## [0.12.0-rc.1] — 2026-07-15
 
 ### Highlights

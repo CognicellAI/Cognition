@@ -13,6 +13,7 @@ def test_markdown_config_block_populates_agent_config(tmp_path: Path) -> None:
         """---
 display_name: Incident Investigator
 description: Investigates incidents
+a2a_public_interface_url: https://opaque.agents.example.com/a2a
 temperature: 0.2
 config:
   max_tokens: 16000
@@ -29,6 +30,7 @@ You are an investigator.
     definition = load_agent_definition_from_markdown(path)
 
     assert definition.display_name == "Incident Investigator"
+    assert definition.a2a_public_interface_url == "https://opaque.agents.example.com/a2a"
     assert definition.config.temperature == 0.2
     assert definition.config.max_tokens == 16000
     assert definition.config.recursion_limit == 500

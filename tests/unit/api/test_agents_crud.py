@@ -85,6 +85,50 @@ class TestGetAgent:
 
 
 class TestCreateAgent:
+    def test_create_agent_persists_public_a2a_interface_url(self):
+        public_url = "https://opaque.agents.example.com/a2a"
+        response = client.post(
+            "/agents",
+            json={
+                "name": "ka_create_public_a2a_url",
+                "system_prompt": "Help customers.",
+                "a2a_exposed": True,
+                "a2a_public_interface_url": public_url,
+            },
+        )
+
+        assert response.status_code == 201
+        assert response.json()["a2a_public_interface_url"] == public_url
+
+        get_response = client.get("/agents/ka_create_public_a2a_url")
+        assert get_response.status_code == 200
+        assert get_response.json()["a2a_public_interface_url"] == public_url
+
+        raw = asyncio.run(get_config_store().get_agent_raw("ka_create_public_a2a_url"))
+        assert raw is not None
+        assert raw["a2a_public_interface_url"] == public_url
+
+    @pytest.mark.parametrize(
+        "public_url",
+        [
+            "opaque.agents.example.com/a2a",
+            "ftp://opaque.agents.example.com/a2a",
+            "https://user:secret@opaque.agents.example.com/a2a",
+            "https://opaque.agents.example.com/a2a#fragment",
+        ],
+    )
+    def test_create_agent_rejects_invalid_public_a2a_interface_url(self, public_url: str) -> None:
+        response = client.post(
+            "/agents",
+            json={
+                "name": "ka_invalid_public_a2a_url",
+                "system_prompt": "Help customers.",
+                "a2a_public_interface_url": public_url,
+            },
+        )
+
+        assert response.status_code == 422
+
     def test_create_agent_persists_display_name(self):
         response = client.post(
             "/agents",
@@ -249,6 +293,36 @@ class TestCreateAgent:
 
 
 class TestUpdateAgent:
+    def test_patch_agent_updates_and_clears_public_a2a_interface_url(self):
+        original_url = "https://original.agents.example.com/a2a"
+        updated_url = "https://updated.agents.example.com/a2a"
+        client.post(
+            "/agents",
+            json={
+                "name": "ka_patch_public_a2a_url",
+                "system_prompt": "Help customers.",
+                "a2a_public_interface_url": original_url,
+            },
+        )
+
+        update_response = client.patch(
+            "/agents/ka_patch_public_a2a_url",
+            json={"a2a_public_interface_url": updated_url},
+        )
+        assert update_response.status_code == 200
+        assert update_response.json()["a2a_public_interface_url"] == updated_url
+
+        clear_response = client.patch(
+            "/agents/ka_patch_public_a2a_url",
+            json={"a2a_public_interface_url": None},
+        )
+        assert clear_response.status_code == 200
+        assert clear_response.json()["a2a_public_interface_url"] is None
+
+        raw = asyncio.run(get_config_store().get_agent_raw("ka_patch_public_a2a_url"))
+        assert raw is not None
+        assert raw["a2a_public_interface_url"] is None
+
     def test_patch_agent_updates_and_clears_display_name(self):
         client.post(
             "/agents",

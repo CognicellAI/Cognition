@@ -14,14 +14,15 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
+from urllib.parse import urlsplit
 
 import structlog
 
 logger = structlog.get_logger(__name__)
 
 from langchain_core.tools import BaseTool
-from pydantic import BaseModel, Field, field_validator
+from pydantic import AfterValidator, BaseModel, Field, field_validator
 
 try:
     import yaml
@@ -29,6 +30,33 @@ try:
     HAS_YAML = True
 except ImportError:
     HAS_YAML = False
+
+
+def _validate_a2a_public_interface_url(value: str) -> str:
+    """Validate an absolute public HTTP(S) A2A interface URL without rewriting it."""
+    if not value or any(character.isspace() for character in value):
+        raise ValueError("A2A public interface URL must not be empty or contain whitespace")
+
+    try:
+        parsed = urlsplit(value)
+        hostname = parsed.hostname
+        _ = parsed.port
+    except ValueError as exc:
+        raise ValueError("A2A public interface URL is malformed") from exc
+
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc or not hostname:
+        raise ValueError("A2A public interface URL must be an absolute HTTP(S) URL")
+    if parsed.username is not None or parsed.password is not None:
+        raise ValueError("A2A public interface URL must not contain credentials")
+    if parsed.fragment:
+        raise ValueError("A2A public interface URL must not contain a fragment")
+    return value
+
+
+A2APublicInterfaceUrl = Annotated[
+    str,
+    AfterValidator(_validate_a2a_public_interface_url),
+]
 
 
 class ContextPolicy(BaseModel):
@@ -179,6 +207,8 @@ class AgentDefinition(BaseModel):
     Attributes:
         name: Unique agent identifier.
         display_name: Optional human-readable name for public presentation.
+        a2a_public_interface_url: Optional externally routed A2A endpoint advertised
+            in the Agent Card.
         system_prompt: System prompt that defines agent behavior.
         tools: List of attached tool names.
         skills: List of attached skill names.
@@ -210,6 +240,7 @@ class AgentDefinition(BaseModel):
     hidden: bool = Field(default=False)
     native: bool = Field(default=False)
     a2a_exposed: bool = Field(default=False)
+    a2a_public_interface_url: A2APublicInterfaceUrl | None = Field(default=None)
 
     @field_validator("name")
     @classmethod
@@ -587,6 +618,7 @@ def load_agent_definition_from_markdown(path: str | Path) -> AgentDefinition:
     definition = AgentDefinition(
         name=name,
         display_name=frontmatter.get("display_name"),
+        a2a_public_interface_url=frontmatter.get("a2a_public_interface_url"),
         system_prompt=body,
         description=frontmatter.get("description"),
         mode=frontmatter.get("mode", "all"),
@@ -603,6 +635,7 @@ def load_agent_definition_from_markdown(path: str | Path) -> AgentDefinition:
 
 
 __all__ = [
+    "A2APublicInterfaceUrl",
     "AgentConfig",
     "AgentDefinition",
     "AsyncSubagentConfig",
