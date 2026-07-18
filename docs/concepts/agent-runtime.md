@@ -109,7 +109,8 @@ Every consumer of the runtime (streaming endpoint, tests, evaluators) deals only
 
 ```python
 class AgentDefinition(BaseModel):
-    name: str
+    name: str                       # Stable runtime lookup identifier
+    display_name: str | None = None # Optional public presentation name
     system_prompt: str | PromptConfig | None = None
     tools: list[str] = []           # registry tool names
     skills: list[str] = []          # registry skill names
@@ -123,6 +124,7 @@ class AgentDefinition(BaseModel):
     hidden: bool = False
     native: bool = False            # True for built-in agents
     a2a_exposed: bool = False       # Expose via A2A protocol (default: off)
+    a2a_public_interface_url: str | None = None  # External JSON-RPC endpoint
 ```
 
 ### Agent Modes
@@ -142,13 +144,22 @@ The `a2a_exposed` field controls whether an agent is exposed via strict [A2A 1.0
 - The agent gets a dedicated JSON-RPC endpoint at `POST /a2a/{agent_name}`
 - External A2A clients can discover and invoke the agent
 
+Set `a2a_public_interface_url` when a gateway or builder platform exposes the
+agent at a different public endpoint. Cognition advertises that absolute HTTP(S)
+URL exactly in `supportedInterfaces`. If it is omitted, Cognition derives the
+interface URL from the incoming request and its private
+`/a2a/{agent_name}` route for backward compatibility. The configured URL must
+not contain credentials or a fragment.
+
 Built-in agents (`default`, `readonly`, etc.) have `a2a_exposed=False` by default. Set it to `True` explicitly for agents you want to expose:
 
 ```yaml
 # .cognition/agents/deploy-agent.yaml
 name: deploy-agent
+display_name: Deployment Assistant
 mode: primary
 a2a_exposed: true
+a2a_public_interface_url: https://agents.example.com/deployment/a2a
 system_prompt: |
   You are a deployment agent...
 ```
@@ -158,7 +169,7 @@ Or via the API:
 ```bash
 curl -X POST http://localhost:8000/agents \
   -H "Content-Type: application/json" \
-  -d '{"name": "deploy-agent", "system_prompt": "...", "a2a_exposed": true}'
+  -d '{"name": "deploy-agent", "display_name": "Deployment Assistant", "system_prompt": "...", "a2a_exposed": true, "a2a_public_interface_url": "https://agents.example.com/deployment/a2a"}'
 ```
 
 ### System Prompt Sources

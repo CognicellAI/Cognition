@@ -29,6 +29,7 @@ See AGENTS.md for category definitions, DoD requirements, and precedence rules.
 
 | Date | Description | Issue | Layer | Status |
 |------|-------------|-------|-------|--------|
+| 2026-07-18 | Honor a builder-configured external A2A interface URL in Agent Cards while retaining the request-derived per-agent route as a backward-compatible fallback. | Kennel `0.12.0-rc2` public Agent Card URL report | 2/6 | Completed |
 | 2026-07-18 | Remove Cognition implementation branding from A2A Agent Card names so cards identify the configured agent directly. | Kennel Agent Card identity report | 6 | Completed |
 | 2026-07-10 | Verify Lambda MicroVM teardown before reporting completion and emit token-free lifecycle events/logs for launch, auth token creation, healthchecks, runtime snapshots, and teardown outcomes. | v0.11 rc Lambda MicroVM operator observability follow-up | 3/6/7 | Completed |
 | 2026-07-02 | Fix rc.3 scoped agent execution and Lambda MicroVM quota leaks — session validation/runtime resolution now use effective scope, runtime no longer silently falls back to `default`, completed runs return sessions to `idle`, terminal session cleanup releases sandbox quota, and health counts non-terminal sessions. | Kennel rc.3 production-pilot findings | 3/4/6/7 | Completed |

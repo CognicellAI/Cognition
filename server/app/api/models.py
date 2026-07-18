@@ -12,6 +12,7 @@ from typing import Any, Literal
 from pydantic import AnyHttpUrl, BaseModel, Field
 
 from server.app.agent.definition import (
+    A2APublicInterfaceUrl,
     AsyncSubagentConfig,
     ContextPolicy,
     FilesystemPermissionConfig,
@@ -865,7 +866,13 @@ class AgentResponse(BaseModel):
     mode: Literal["primary", "subagent", "all"] = Field(..., description="Agent mode")
     hidden: bool = Field(..., description="Whether agent is hidden from listings")
     native: bool = Field(..., description="Whether agent is built-in")
-    a2a_exposed: bool = Field(default=False, description="Whether agent is exposed via A2A protocol")
+    a2a_exposed: bool = Field(
+        default=False, description="Whether agent is exposed via A2A protocol"
+    )
+    a2a_public_interface_url: A2APublicInterfaceUrl | None = Field(
+        default=None,
+        description="Externally routed A2A endpoint advertised in the Agent Card",
+    )
     provider: str | None = Field(
         None,
         description="Deprecated compatibility field. Use config.provider instead.",
@@ -1252,6 +1259,10 @@ class AgentCreate(BaseModel):
     mode: Literal["primary", "subagent", "all"] = Field(default="primary")
     hidden: bool = Field(default=False)
     a2a_exposed: bool = Field(default=False, description="Expose agent via A2A protocol")
+    a2a_public_interface_url: A2APublicInterfaceUrl | None = Field(
+        default=None,
+        description="Externally routed A2A endpoint advertised in the Agent Card",
+    )
     tools: list[str] = Field(default_factory=list)
     skills: list[str] = Field(default_factory=list)
     memory: list[str] = Field(default_factory=list)
@@ -1298,6 +1309,10 @@ class AgentUpdate(BaseModel):
     mode: Literal["primary", "subagent", "all"] | None = None
     hidden: bool | None = None
     a2a_exposed: bool | None = None
+    a2a_public_interface_url: A2APublicInterfaceUrl | None = Field(
+        default=None,
+        description="Externally routed A2A endpoint advertised in the Agent Card",
+    )
     tools: list[str] | None = None
     skills: list[str] | None = None
     memory: list[str] | None = None
