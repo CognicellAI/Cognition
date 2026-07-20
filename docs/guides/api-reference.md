@@ -630,8 +630,13 @@ List all non-hidden agents available in the registry.
       "mode": "primary",
       "hidden": false,
       "native": true,
-      "a2a_exposed": false,
-      "a2a_public_interface_url": null,
+      "a2a": {
+        "exposed": false,
+        "public_interface_url": null,
+        "default_input_modes": ["text/plain", "application/json"],
+        "default_output_modes": ["text/plain", "application/json"],
+        "skills": []
+      },
       "provider": null,
       "model": null,
       "temperature": null,
@@ -705,8 +710,13 @@ Create or replace an agent definition in the ConfigRegistry.
   "skills": ["python-review"],
   "memory": ["AGENTS.md"],
   "interrupt_on": {},
-  "a2a_exposed": false,
-  "a2a_public_interface_url": "https://agents.example.com/security-auditor/a2a",
+  "a2a": {
+    "exposed": false,
+    "public_interface_url": "https://agents.example.com/security-auditor/a2a",
+    "default_input_modes": ["text/plain", "application/json"],
+    "default_output_modes": ["text/plain", "application/json"],
+    "skills": []
+  },
   "model": "gpt-4o",
   "temperature": 0.1,
   "max_tokens": 4096,
@@ -727,8 +737,7 @@ Create or replace an agent definition in the ConfigRegistry.
 | `description` | string | Human-readable description |
 | `mode` | `"primary"` \| `"subagent"` \| `"all"` | Whether agent can own sessions, be delegated to, or both |
 | `hidden` | boolean | Hide the agent from `GET /agents` list results |
-| `a2a_exposed` | boolean | Expose eligible `primary` or `all` agents through the A2A protocol |
-| `a2a_public_interface_url` | string | Optional absolute HTTP(S) JSON-RPC endpoint advertised exactly in the Agent Card; credentials and fragments are rejected |
+| `a2a` | object | A2A exposure and public Agent Card presentation. See the [A2A Builder Guide](a2a.md). |
 | `tools` | list[string] | Registry tool names to attach to this agent |
 | `skills` | list[string] | Registry skill names to attach to this agent |
 | `memory` | list[string] | Paths to instruction files (e.g. AGENTS.md) |
@@ -1748,7 +1757,7 @@ Returns the deployment's runtime feature set, package versions, and configuratio
 ## A2A Protocol
 
 Cognition exposes agents as strict [A2A 1.0](https://a2a-protocol.org/latest/)
-JSON-RPC servers. Only agents with `a2a_exposed: true` are visible. Cognition
+JSON-RPC servers. Only agents with `a2a.exposed: true` are visible. Cognition
 implements the execution data plane: the embedding application authenticates and
 authorizes callers, then supplies trusted `X-Cognition-Scope-*` headers. Cognition
 carries that opaque builder-defined scope and isolates agents, tasks, contexts,
@@ -1833,14 +1842,17 @@ X-Cognition-Scope-User: alice
 }
 ```
 
-When the agent definition includes `a2a_public_interface_url`, Cognition uses
+When the agent definition includes `a2a.public_interface_url`, Cognition uses
 that value exactly for `supportedInterfaces[].url`. Otherwise it derives the
-URL from the incoming request and `/a2a/{agent_name}` for backward
-compatibility. `display_name` affects only public presentation; internal lookup
+URL from the incoming request and `/a2a/{agent_name}`. `display_name` affects only public presentation; internal lookup
 and the fallback route continue to use `name`.
 
-Only agents visible in the exact supplied scope with `a2a_exposed=True` are
+Only agents visible in the exact supplied scope with `a2a.exposed=true` are
 returned. Built-in agents are not exposed by default.
+
+Builders configure default MIME modes and public Agent Card skills under the
+nested `a2a` object. See the [A2A Builder Guide](a2a.md) for the complete
+discovery contract and the distinction between public and runtime skills.
 
 ### `POST /a2a/{agent_name}`
 

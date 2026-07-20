@@ -24,6 +24,8 @@ If you want a course sequence rather than reference material, use
   dependency rules.
 - [Extending Agents](guides/extending-agents.md): add memory, skills, tools,
   subagents, middleware, MCP servers, and custom providers.
+- [A2A Builder Guide](guides/a2a.md): publish, describe, and securely expose
+  agents through A2A 1.0.
 - [AWS Lambda MicroVM Sandbox Setup](concepts/sandboxes/aws-lambda-microvm/setup.md):
   configure AWS-native MicroVM sandbox isolation for agent commands.
 
@@ -50,6 +52,7 @@ If you want a course sequence rather than reference material, use
 | [Core vs App Layer](guides/core-vs-app-layer.md) | Builder responsibilities: what belongs in Cognition versus your product |
 | [Configuration](guides/configuration.md) | YAML keys and environment variables |
 | [Extending Agents](guides/extending-agents.md) | Add memory, skills, tools, subagents, middleware, MCP servers, A2A exposure, and custom providers |
+| [A2A Builder Guide](guides/a2a.md) | Configure Agent Cards, public skills, media modes, message Parts, authentication discovery, and scope isolation |
 | [Deployment](guides/deployment.md) | Docker Compose, PostgreSQL, migrations, and production hardening |
 | [API Reference](guides/api-reference.md) | REST endpoints, SSE events, artifacts, A2A protocol, capabilities, and scoping headers |
 | [Release Checklist](guides/release-checklist.md) | Release process for Cognition versions |

@@ -66,6 +66,7 @@ nav:
       - Architecture: concepts/architecture.md
       - Sessions & Messages: concepts/sessions-and-messages.md
       - Agent Runtime: concepts/agent-runtime.md
+      - A2A Message Parts: concepts/a2a-message-parts.md
       - Storage & Execution: concepts/storage-and-execution.md
       - Sandboxes:
           - Overview: concepts/sandboxes/index.md
@@ -88,6 +89,7 @@ nav:
       - Core vs App Layer: guides/core-vs-app-layer.md
       - Configuration: guides/configuration.md
       - Extending Agents: guides/extending-agents.md
+      - A2A Builder Guide: guides/a2a.md
       - Deployment: guides/deployment.md
       - API Reference: guides/api-reference.md
       - Release Checklist: guides/release-checklist.md

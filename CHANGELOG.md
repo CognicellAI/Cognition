@@ -13,6 +13,11 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - Added ordered inbound A2A 1.0 `text`, `data`, `raw`, and `url` Part normalization. Inline bytes and URL references become inert, task-linked artifacts under the request's exact scope; URL Parts are never fetched implicitly.
 - Added `COGNITION_A2A_MAX_RAW_PART_BYTES` to reject oversized inline inputs before model execution, and advertised generic `application/json` input support in generated Agent Cards.
+- Added builder-configurable public A2A skills and default/per-skill MIME modes for Agent Card discovery.
+
+### Changed
+
+- Consolidated all A2A-only agent configuration under the typed `a2a` object: `exposed`, `public_interface_url`, `default_input_modes`, `default_output_modes`, and `skills`. The pre-release flat `a2a_exposed` and `a2a_public_interface_url` fields are replaced by this nested contract.
 
 ## [0.12.0-rc.4] — 2026-07-18
 

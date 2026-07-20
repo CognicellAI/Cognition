@@ -231,7 +231,7 @@ class Settings(BaseSettings):
         description=(
             "Enable the A2A (Agent-to-Agent) protocol adapter. "
             "When true, mounts /.well-known/agent-card.json and /a2a/{agent_name} endpoints. "
-            "Individual agents still require a2a_exposed=true to be visible."
+            "Individual agents still require a2a.exposed=true to be visible."
         ),
     )
     a2a_security_schemes: dict[str, dict[str, Any]] = Field(

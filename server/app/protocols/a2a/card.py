@@ -1,9 +1,8 @@
 """Per-agent A2A Agent Card generation from Cognition agent definitions.
 
-Each A2A-exposed agent gets its own AgentCard. Builders can advertise an
-externally routed JSON-RPC endpoint with ``a2a_public_interface_url``; otherwise
-Cognition falls back to its dedicated ``/a2a/{agent_name}`` route. Builders
-control exposure via the ``a2a_exposed`` field. No agent is exposed by default.
+Each A2A-exposed agent gets its own AgentCard. Builders configure exposure,
+the public JSON-RPC endpoint, MIME modes, and public skills under ``agent.a2a``.
+No agent is exposed by default.
 """
 
 from __future__ import annotations
@@ -43,25 +42,41 @@ def build_agent_card_for_agent(
         if has_public_name
         else f"Cognition agent: {public_name}"
     )
-    interface_url = agent.a2a_public_interface_url or f"{base_url}/a2a/{agent.name}"
+    interface_url = agent.a2a.public_interface_url or f"{base_url}/a2a/{agent.name}"
     security = security or A2ACardSecurity(schemes={}, requirements=())
 
-    skill = AgentSkill(
-        id="primary" if has_public_name else agent.name,
-        name=public_name,
-        description=skill_description,
-        tags=["primary"] if has_public_name else ["cognition", agent.mode],
-        input_modes=["text/plain", "application/json"],
-        output_modes=["text/plain", "application/json"],
-        examples=[],
-    )
+    if agent.a2a.skills:
+        skills = [
+            AgentSkill(
+                id=skill.id,
+                name=skill.name,
+                description=skill.description,
+                tags=skill.tags,
+                examples=skill.examples,
+                input_modes=skill.input_modes,
+                output_modes=skill.output_modes,
+            )
+            for skill in agent.a2a.skills
+        ]
+    else:
+        skills = [
+            AgentSkill(
+                id="primary" if has_public_name else agent.name,
+                name=public_name,
+                description=skill_description,
+                tags=["primary"] if has_public_name else ["cognition", agent.mode],
+                input_modes=agent.a2a.default_input_modes,
+                output_modes=agent.a2a.default_output_modes,
+                examples=[],
+            )
+        ]
 
     card = AgentCard(
         name=public_name,
         description=card_description,
         version=version,
-        default_input_modes=["text/plain", "application/json"],
-        default_output_modes=["text/plain", "application/json"],
+        default_input_modes=agent.a2a.default_input_modes,
+        default_output_modes=agent.a2a.default_output_modes,
         # Explicitly publish every capability flag.  The protocol uses
         # presence-sensitive fields, so omitting ``pushNotifications`` or
         # ``extendedAgentCard`` would leave clients unable to distinguish an
@@ -80,7 +95,7 @@ def build_agent_card_for_agent(
         ],
         security_schemes=security.schemes,
         security_requirements=list(security.requirements),
-        skills=[skill],
+        skills=skills,
     )
 
     logger.info(

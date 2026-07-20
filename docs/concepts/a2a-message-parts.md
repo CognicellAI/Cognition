@@ -66,12 +66,13 @@ An A2A Part's content variant and its `mediaType` are separate concepts. Agent
 Card input modes advertise MIME types, not the names `text`, `data`, `raw`, or
 `url`.
 
-The generic adapter advertises `text/plain` and `application/json`: those are the
-formats Cognition can place directly into model context for every agent. Raw and
-URL Parts are accepted as attachment references regardless of their declared MIME
-type, but Cognition does not claim that the selected model or tools can interpret
-every possible format. Agents should advertise additional input MIME types only
-when their configured model or tools actually support them.
+The default card modes are `text/plain` and `application/json`: those are the
+formats Cognition can place directly into model context for every agent. Builders
+can override defaults and declare per-skill modes under `a2a`, but should advertise
+additional MIME types only when the configured model or tools actually support
+them end to end. Raw and URL Parts are accepted as attachment references without
+implying that every selected model can interpret their media types. See the
+[A2A Builder Guide](../guides/a2a.md) for the public discovery contract.
 
 ## Failure behavior
 

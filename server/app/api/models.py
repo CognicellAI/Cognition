@@ -9,10 +9,10 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import AnyHttpUrl, BaseModel, Field
+from pydantic import AnyHttpUrl, BaseModel, ConfigDict, Field
 
 from server.app.agent.definition import (
-    A2APublicInterfaceUrl,
+    A2AConfig,
     AsyncSubagentConfig,
     ContextPolicy,
     FilesystemPermissionConfig,
@@ -866,12 +866,9 @@ class AgentResponse(BaseModel):
     mode: Literal["primary", "subagent", "all"] = Field(..., description="Agent mode")
     hidden: bool = Field(..., description="Whether agent is hidden from listings")
     native: bool = Field(..., description="Whether agent is built-in")
-    a2a_exposed: bool = Field(
-        default=False, description="Whether agent is exposed via A2A protocol"
-    )
-    a2a_public_interface_url: A2APublicInterfaceUrl | None = Field(
-        default=None,
-        description="Externally routed A2A endpoint advertised in the Agent Card",
+    a2a: A2AConfig = Field(
+        default_factory=A2AConfig,
+        description="A2A exposure and public Agent Card presentation",
     )
     provider: str | None = Field(
         None,
@@ -1242,6 +1239,8 @@ class ProviderTestResponse(BaseModel):
 class AgentCreate(BaseModel):
     """Request to create or replace an agent definition."""
 
+    model_config = ConfigDict(extra="forbid")
+
     name: str = Field(
         ...,
         min_length=1,
@@ -1258,10 +1257,9 @@ class AgentCreate(BaseModel):
     description: str | None = Field(default=None)
     mode: Literal["primary", "subagent", "all"] = Field(default="primary")
     hidden: bool = Field(default=False)
-    a2a_exposed: bool = Field(default=False, description="Expose agent via A2A protocol")
-    a2a_public_interface_url: A2APublicInterfaceUrl | None = Field(
-        default=None,
-        description="Externally routed A2A endpoint advertised in the Agent Card",
+    a2a: A2AConfig = Field(
+        default_factory=A2AConfig,
+        description="A2A exposure and public Agent Card presentation",
     )
     tools: list[str] = Field(default_factory=list)
     skills: list[str] = Field(default_factory=list)
@@ -1298,6 +1296,8 @@ class AgentCreate(BaseModel):
 class AgentUpdate(BaseModel):
     """Request to partially update an agent definition."""
 
+    model_config = ConfigDict(extra="forbid")
+
     display_name: str | None = Field(
         default=None,
         min_length=1,
@@ -1308,10 +1308,9 @@ class AgentUpdate(BaseModel):
     description: str | None = None
     mode: Literal["primary", "subagent", "all"] | None = None
     hidden: bool | None = None
-    a2a_exposed: bool | None = None
-    a2a_public_interface_url: A2APublicInterfaceUrl | None = Field(
+    a2a: A2AConfig | None = Field(
         default=None,
-        description="Externally routed A2A endpoint advertised in the Agent Card",
+        description="A2A exposure and public Agent Card presentation; null resets defaults",
     )
     tools: list[str] | None = None
     skills: list[str] | None = None

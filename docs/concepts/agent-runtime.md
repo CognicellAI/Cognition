@@ -123,8 +123,7 @@ class AgentDefinition(BaseModel):
     description: str | None = None
     hidden: bool = False
     native: bool = False            # True for built-in agents
-    a2a_exposed: bool = False       # Expose via A2A protocol (default: off)
-    a2a_public_interface_url: str | None = None  # External JSON-RPC endpoint
+    a2a: A2AConfig = A2AConfig()    # Exposure and public Agent Card contract
 ```
 
 ### Agent Modes
@@ -137,7 +136,7 @@ class AgentDefinition(BaseModel):
 
 ### A2A Exposure
 
-The `a2a_exposed` field controls whether an agent is exposed via strict [A2A 1.0](https://a2a-protocol.org/latest/) JSON-RPC. When `True`:
+The nested `a2a.exposed` field controls whether an agent is exposed via strict [A2A 1.0](https://a2a-protocol.org/latest/) JSON-RPC. When `True`:
 
 - The agent has an Agent Card at `GET /a2a/{agent_name}/.well-known/agent-card.json`
 - The agent is discoverable from `GET /.well-known/agent-card.json?assistant_id={agent_name}`
@@ -149,22 +148,23 @@ reference Parts. Text and data become model context; raw and URL Parts become
 scoped, task-linked artifact references and are never implicitly executed or
 fetched. See [A2A Message Parts](a2a-message-parts.md) for the complete contract.
 
-Set `a2a_public_interface_url` when a gateway or builder platform exposes the
+Set `a2a.public_interface_url` when a gateway or builder platform exposes the
 agent at a different public endpoint. Cognition advertises that absolute HTTP(S)
 URL exactly in `supportedInterfaces`. If it is omitted, Cognition derives the
 interface URL from the incoming request and its private
 `/a2a/{agent_name}` route for backward compatibility. The configured URL must
 not contain credentials or a fragment.
 
-Built-in agents (`default`, `readonly`, etc.) have `a2a_exposed=False` by default. Set it to `True` explicitly for agents you want to expose:
+Built-in agents (`default`, `readonly`, etc.) have `a2a.exposed=false` by default. Set it to `true` explicitly for agents you want to expose:
 
 ```yaml
 # .cognition/agents/deploy-agent.yaml
 name: deploy-agent
 display_name: Deployment Assistant
 mode: primary
-a2a_exposed: true
-a2a_public_interface_url: https://agents.example.com/deployment/a2a
+a2a:
+  exposed: true
+  public_interface_url: https://agents.example.com/deployment/a2a
 system_prompt: |
   You are a deployment agent...
 ```
@@ -174,8 +174,12 @@ Or via the API:
 ```bash
 curl -X POST http://localhost:8000/agents \
   -H "Content-Type: application/json" \
-  -d '{"name": "deploy-agent", "display_name": "Deployment Assistant", "system_prompt": "...", "a2a_exposed": true, "a2a_public_interface_url": "https://agents.example.com/deployment/a2a"}'
+  -d '{"name": "deploy-agent", "display_name": "Deployment Assistant", "system_prompt": "...", "a2a": {"exposed": true, "public_interface_url": "https://agents.example.com/deployment/a2a"}}'
 ```
+
+Builders can also configure default MIME modes and public Agent Card skills
+under `a2a`. See the [A2A Builder Guide](../guides/a2a.md) for the complete
+contract. Public A2A skills remain separate from root-level runtime `skills`.
 
 ### System Prompt Sources
 
@@ -307,7 +311,7 @@ curl http://localhost:8000/agents
 curl http://localhost:8000/agents/readonly
 ```
 
-Response fields include `name`, `description`, `mode`, `hidden`, `native`, `a2a_exposed`, `model`, `temperature`, `response_format`, `interrupt_on`, `tools`, `skills`, and a truncated `system_prompt` (max 500 characters).
+Response fields include `name`, `description`, `mode`, `hidden`, `native`, `a2a`, `model`, `temperature`, `response_format`, `interrupt_on`, `tools`, `skills`, and `system_prompt`.
 
 ### Capability Discovery
 

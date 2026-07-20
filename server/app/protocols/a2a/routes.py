@@ -438,7 +438,7 @@ async def mount_a2a_routes(
     2. Catch-all JSON-RPC at /a2a/{agent_name}
 
     Both resolve agents at request time. No restart needed when agents
-    are created or have a2a_exposed toggled.
+    are created or have ``a2a.exposed`` toggled.
     """
     scope_keys = list(settings.scope_keys)
     scoping_enabled = bool(getattr(settings, "scoping_enabled", False))
@@ -527,7 +527,7 @@ async def mount_a2a_routes(
 
         agents = await config_store.list_agent_definitions(scope=scope or None)
         a2a_agents = sorted(
-            [a for a in agents if a.a2a_exposed and a.mode != "subagent" and not a.hidden],
+            [a for a in agents if a.a2a.exposed and a.mode != "subagent" and not a.hidden],
             key=lambda agent: agent.name,
         )
 
@@ -565,7 +565,7 @@ async def mount_a2a_routes(
         agent_name = request.path_params.get("agent_name", "")
         scope = _extract_scope(dict(request.headers), scope_keys)
         agent = await config_store.get_agent_definition(agent_name, scope=scope or None)
-        if agent is None or not agent.a2a_exposed or agent.mode == "subagent" or agent.hidden:
+        if agent is None or not agent.a2a.exposed or agent.mode == "subagent" or agent.hidden:
             return JSONResponse(
                 {"error": "Agent not found"},
                 status_code=404,
@@ -594,7 +594,7 @@ async def mount_a2a_routes(
 
         # Look up agent at request time
         agent = await config_store.get_agent_definition(agent_name, scope=scope or None)
-        if agent is None or not agent.a2a_exposed or agent.mode == "subagent" or agent.hidden:
+        if agent is None or not agent.a2a.exposed or agent.mode == "subagent" or agent.hidden:
             return JSONResponse(
                 {"error": "Agent not found"},
                 status_code=404,

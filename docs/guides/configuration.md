@@ -645,7 +645,7 @@ scoping:
     - "project"
 
 # A2A is auto-mounted when enabled. Unauthenticated deployments need no extra config.
-# Expose agents via A2A by setting a2a_exposed: true on their definition.
+# Expose agents via A2A by setting a2a.exposed: true on their definition.
 # Set COGNITION_A2A_ENABLED=false to disable the A2A protocol surface entirely.
 # Gateway-protected deployments can publish authentication discovery through
 # COGNITION_A2A_SECURITY_SCHEMES and COGNITION_A2A_SECURITY_REQUIREMENTS.

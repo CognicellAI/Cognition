@@ -45,7 +45,7 @@ async def _ensure_a2a_agent():
                 "system_prompt": "You are a helpful assistant. Reply concisely.",
                 "description": "A2A test agent",
                 "mode": "primary",
-                "a2a_exposed": True,
+                "a2a": {"exposed": True},
             },
             headers={"X-Cognition-Scope-User": "test-user"},
         )

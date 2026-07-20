@@ -214,7 +214,7 @@ class AgentDefinition(BaseModel):
     description: str | None
     hidden: bool
     native: bool                      # True for built-in agents (default, readonly)
-    a2a_exposed: bool                 # Expose via A2A protocol (default: False)
+    a2a: A2AConfig                    # Exposure and public Agent Card contract
 ```
 
 `AgentConfig` carries per-agent LLM overrides that slot between the global ConfigRegistry default and any session-level override:
@@ -290,7 +290,7 @@ Layer 4's `AgentTaskRuntime` owns session, run-attempt, message, event, continua
 artifact, and cancellation lifecycle. Native REST/SSE and A2A both call that service.
 `contextId` maps to a durable session, while one task can contain multiple runs.
 
-Agents opt in through `a2a_exposed` (default `False`). Agent Cards advertise only
+Agents opt in through `a2a.exposed` (default `false`). Agent Cards advertise only
 JSON-RPC 1.0 and implemented capabilities. `A2A-Version: 1.0` performs version
 negotiation. The builder-owned host performs authentication, authorization, agent
 selection, and any tenant routing; Cognition only enforces exact isolation using the

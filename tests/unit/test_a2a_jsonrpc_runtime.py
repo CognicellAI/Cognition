@@ -115,7 +115,7 @@ async def _build_client(
             "name": "researcher",
             "system_prompt": "Research carefully",
             "mode": "primary",
-            "a2a_exposed": True,
+            "a2a": {"exposed": True},
         },
     )
     artifact_store = artifact_store or MemoryArtifactStore()
