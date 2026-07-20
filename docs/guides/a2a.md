@@ -1,24 +1,26 @@
-# A2A Builder Guide
+# Configure and Invoke an A2A Agent
 
-Cognition exposes selected agents as strict A2A 1.0 JSON-RPC servers. It owns
-Agent Card generation, protocol validation, durable task execution, streaming,
-and exact-scope isolation. The embedding application or gateway remains
-responsible for authenticating callers and authorizing the scope supplied to
-Cognition.
+This guide publishes one Cognition agent through A2A 1.0, configures its Agent
+Card, and sends a message through the JSON-RPC endpoint.
 
-## Enable the protocol surface
+For the implementation model and design boundaries, start with
+[A2A in Cognition](../concepts/a2a/index.md).
 
-A2A routes are enabled by default. Set `COGNITION_A2A_ENABLED=false` to prevent
-the well-known discovery and per-agent JSON-RPC routes from being mounted.
+## 1. Enable A2A
 
-Enabling the deployment surface does not publish every agent. Each eligible
-agent must also opt in with `a2a.exposed: true`. Hidden agents and agents whose
-mode is `subagent` are never exposed.
+A2A routes are enabled by default. Ensure the deployment does not set:
 
-## Configure an A2A agent
+```bash
+COGNITION_A2A_ENABLED=false
+```
 
-All A2A-only agent configuration lives under the `a2a` key. `display_name` and
-`description` remain general agent presentation fields and stay at the root.
+This deployment setting only mounts the protocol surface. Each agent must also
+opt in individually.
+
+## 2. Configure the agent
+
+All agent-level A2A settings live under `a2a`. `display_name` and `description`
+remain at the root because they are general agent presentation fields.
 
 ```yaml
 # .cognition/agents/document-agent.yaml
@@ -29,12 +31,8 @@ mode: primary
 a2a:
   exposed: true
   public_interface_url: https://agents.example.com/document-intelligence/a2a
-  default_input_modes:
-    - text/plain
-    - application/json
-  default_output_modes:
-    - text/plain
-    - application/json
+  default_input_modes: [text/plain, application/json]
+  default_output_modes: [text/plain, application/json]
   skills:
     - id: document-analysis
       name: Document Analysis
@@ -48,7 +46,7 @@ system_prompt: |
   Analyze documents using the tools and policies available to you.
 ```
 
-The same contract is accepted by `POST /agents`:
+The same definition can be created through the API:
 
 ```bash
 curl -X POST http://localhost:8000/agents \
@@ -82,57 +80,27 @@ curl -X POST http://localhost:8000/agents \
 JSON
 ```
 
-### A2A configuration reference
+Use [Agent Cards and Public Skills](../concepts/a2a/agent-cards.md) to choose
+accurate media modes and keep public capabilities separate from runtime skills.
+The exact field contract is listed in the
+[API Reference](api-reference.md#post-agents).
 
-| Field | Default | Contract |
-|---|---|---|
-| `exposed` | `false` | Publishes an eligible agent through A2A when `true`. |
-| `public_interface_url` | `null` | Absolute HTTP(S) JSON-RPC URL advertised exactly in the Agent Card. Credentials and fragments are rejected. |
-| `default_input_modes` | `text/plain`, `application/json` | Non-empty list of MIME media types accepted generally by the agent. |
-| `default_output_modes` | `text/plain`, `application/json` | Non-empty list of MIME media types produced generally by the agent. |
-| `skills` | `[]` | Public A2A capability descriptors. These are separate from Cognition runtime skills. |
+## 3. Configure authentication discovery
 
-Each public skill requires a unique `id`, human-readable `name` and
-`description`, and at least one `tag`. `examples`, `input_modes`, and
-`output_modes` are optional. When a skill declares modes, they override the
-card defaults for that skill.
+If a gateway protects the public endpoint, configure canonical A2A ProtoJSON:
 
-If `a2a.skills` is empty, Cognition synthesizes one `primary` skill from the
-agent's public name, description, and default modes.
+```bash
+COGNITION_A2A_SECURITY_SCHEMES='{"oauth2":{"oauth2SecurityScheme":{"flows":{"clientCredentials":{"tokenUrl":"https://auth.example.com/oauth/token","scopes":{"a2a.invoke":"Invoke the agent"}}}}}}'
+COGNITION_A2A_SECURITY_REQUIREMENTS='[{"schemes":{"oauth2":{}}}]'
+```
 
-## Choose accurate media modes
+Cognition publishes this metadata; the gateway must enforce the matching
+authentication policy. See [Security and Scoping](../concepts/a2a/security-and-scoping.md)
+before exposing an agent publicly.
 
-Agent Card modes are MIME types such as `text/plain`, `application/json`,
-`application/pdf`, or `image/png`. They are not A2A Part field names.
+## 4. Retrieve the Agent Card
 
-Advertise a media type only when the complete agent configuration can reliably
-interpret or produce it. Cognition can safely receive and persist an
-`image/png` attachment, but transport support alone does not mean that the
-selected model or tools can understand the image.
-
-Cognition validates MIME syntax and unique public skill IDs. Whether a model,
-tool, or workflow actually fulfills the advertised capability remains the
-builder's contract.
-
-## Understand Parts and artifacts
-
-A2A messages can mix four Part content variants in order:
-
-| Part | Cognition behavior |
-|---|---|
-| `text` | Added directly to model context. |
-| `data` | Added as a delimited JSON block. |
-| `raw` | Stored base64-encoded as a scoped, task-linked artifact. |
-| `url` | Stored as a scoped URL reference; never fetched automatically. |
-
-Part representation and media type are independent. An image can be delivered
-inline as `raw` or by reference as `url`, with `mediaType: image/png` in either
-case. See [A2A Message Parts](../concepts/a2a-message-parts.md) for limits,
-idempotency, persistence, and sandbox behavior.
-
-## Discover and invoke an agent
-
-Retrieve a specific card:
+Use the same trusted scope used when the agent was created:
 
 ```bash
 curl \
@@ -140,7 +108,10 @@ curl \
   http://localhost:8000/a2a/document-agent/.well-known/agent-card.json
 ```
 
-Send a mixed-Part message:
+Confirm that the response advertises the expected public name, interface URL,
+MIME modes, skills, and authentication requirements.
+
+## 5. Send a message
 
 ```bash
 curl -X POST http://localhost:8000/a2a/document-agent \
@@ -167,52 +138,36 @@ curl -X POST http://localhost:8000/a2a/document-agent \
 JSON
 ```
 
-The same trusted scope must be supplied when creating, discovering, invoking,
-continuing, listing, or canceling scoped resources.
+See [Message Parts and Artifacts](../concepts/a2a/message-parts.md) before
+accepting files or remote references. URL Parts are stored as references and are
+not downloaded automatically.
 
-## Supported protocol surface
+## 6. Stream a response
 
-Cognition advertises the `JSONRPC` binding and A2A protocol version `1.0`.
-Supported operations are:
+Send the same message with `method: SendStreamingMessage`. The response is an
+A2A JSON-RPC event stream containing ordered task, status, message, and artifact
+updates. Use `SubscribeToTask` to reconnect to an existing non-terminal task.
 
-- `SendMessage`
-- `SendStreamingMessage`
-- `GetTask`
-- `ListTasks`
-- `CancelTask`
-- `SubscribeToTask`
+See [Tasks and Streaming](../concepts/a2a/tasks-and-streaming.md) for durable
+identity, continuation, cancellation, and replay behavior.
 
-Streaming is enabled. Push notifications, gRPC, HTTP+JSON, and authenticated
-extended Agent Cards are not currently exposed.
+## 7. Verify isolation
 
-## Authentication discovery
+Before deployment, repeat discovery and task/artifact reads with a different
+scope and verify that Cognition returns not found or an empty scoped collection.
+Use the same authorized scope for creation, discovery, invocation,
+continuation, listing, subscription, and cancellation.
 
-Configure `COGNITION_A2A_SECURITY_SCHEMES` and
-`COGNITION_A2A_SECURITY_REQUIREMENTS` with canonical A2A ProtoJSON when a
-gateway protects the public endpoint. Cognition validates and publishes that
-metadata; the gateway must enforce the matching authentication policy.
+## Troubleshooting
 
-Never put client secrets, bearer tokens, or private credentials in an Agent
-Card. Cards are public discovery documents.
+| Symptom | Check |
+|---|---|
+| Agent Card returns `404` | Confirm `a2a.exposed: true`, an eligible `primary` or `all` mode, visibility, and the exact scope headers. |
+| Card advertises a private URL | Set `a2a.public_interface_url` to the externally routed JSON-RPC endpoint. |
+| Media type is rejected | Confirm valid MIME syntax and that the card or selected public skill advertises the format. |
+| Raw Part is rejected | Check `COGNITION_A2A_MAX_RAW_PART_BYTES` and base64 validity. |
+| URL content is not available | URL Parts are references; provide an explicit authorized retrieval tool if remote fetching is required. |
+| Authentication metadata is missing | Configure both security environment values and restart Cognition so startup validation runs. |
 
-## Scope and security boundary
-
-Cognition treats configured `X-Cognition-Scope-*` headers as trusted ingress.
-It carries the exact effective scope across agent lookup, tasks, contexts,
-sessions, runs, events, artifacts, continuation, subscription, and
-cancellation. Cross-scope identifiers are reported as not found.
-
-Builders own authentication, authorization, route selection, and the mapping
-from authenticated claims to scope headers. Cognition does not own tenant,
-organization, membership, role, billing, or entitlement models.
-
-## Public versus runtime skills
-
-`a2a.skills` describes public capabilities for discovery. The root-level
-`skills` field attaches Cognition runtime instruction packages. Cognition never
-publishes runtime skill names, prompts, tools, subagents, scope values, or
-secrets in the Agent Card.
-
-Keep these surfaces deliberately separate: a public capability can be backed
-by several private runtime skills and tools, while a private runtime skill does
-not necessarily represent a stable external contract.
+For complete JSON-RPC requests, responses, headers, and errors, see the
+[A2A API Reference](api-reference.md#a2a-protocol).

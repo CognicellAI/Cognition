@@ -530,7 +530,7 @@ curl -X POST http://localhost:8000/agents \
 2. **JSON-RPC endpoint** — Each agent gets a dedicated endpoint at `POST /a2a/{agent_name}`. The agent is resolved at request time, so agents created after server startup are immediately available.
 3. **Scope-aware runtime isolation** — Trusted ingress supplies builder-defined `X-Cognition-Scope-*` headers. Cognition carries the exact scope through tasks, contexts, runs, messages, events, and artifacts without becoming the application's tenant or IAM system.
 4. **Shared durable lifecycle** — Native REST/SSE and A2A use the same task/session/run service. A2A tasks survive restarts, continuation creates a new run under the same task, and subscriptions replay durable events.
-5. **Typed message Parts** — Text and structured data enter model context. Inline bytes and URL references become scoped, task-linked artifacts; receiving a URL never performs an implicit network request. Mixed-Part order is preserved. See [A2A Message Parts](../concepts/a2a-message-parts.md).
+5. **Typed message Parts** — Text and structured data enter model context. Inline bytes and URL references become scoped, task-linked artifacts; receiving a URL never performs an implicit network request. Mixed-Part order is preserved. See [A2A Message Parts](../concepts/a2a/message-parts.md).
 
 ### A2A Client Example
 

@@ -66,7 +66,12 @@ nav:
       - Architecture: concepts/architecture.md
       - Sessions & Messages: concepts/sessions-and-messages.md
       - Agent Runtime: concepts/agent-runtime.md
-      - A2A Message Parts: concepts/a2a-message-parts.md
+      - A2A:
+          - Overview: concepts/a2a/index.md
+          - Agent Cards & Public Skills: concepts/a2a/agent-cards.md
+          - Message Parts & Artifacts: concepts/a2a/message-parts.md
+          - Tasks & Streaming: concepts/a2a/tasks-and-streaming.md
+          - Security & Scoping: concepts/a2a/security-and-scoping.md
       - Storage & Execution: concepts/storage-and-execution.md
       - Sandboxes:
           - Overview: concepts/sandboxes/index.md

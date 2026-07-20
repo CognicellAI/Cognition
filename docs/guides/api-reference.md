@@ -1762,6 +1762,8 @@ implements the execution data plane: the embedding application authenticates and
 authorizes callers, then supplies trusted `X-Cognition-Scope-*` headers. Cognition
 carries that opaque builder-defined scope and isolates agents, tasks, contexts,
 messages, events, and artifacts exactly by it; it does not own tenant or IAM models.
+See [A2A in Cognition](../concepts/a2a/index.md) for the implementation model and
+the [A2A Builder Guide](a2a.md) for configuration and invocation steps.
 
 The A2A protocol surface can be disabled entirely by setting `COGNITION_A2A_ENABLED=false`. When disabled, the `/.well-known/agent-card.json` and `/a2a/{agent_name}` endpoints are not mounted, and `GET /capabilities` reports `a2a: false`.
 
@@ -1769,7 +1771,7 @@ The A2A protocol surface can be disabled entirely by setting `COGNITION_A2A_ENAB
 variants. Text and structured data are normalized into ordered model context;
 inline raw bytes and URL references become opaque, task-linked artifacts under
 the request's exact `effective_scope`. URL Parts are not fetched implicitly.
-See [A2A Message Parts](../concepts/a2a-message-parts.md) for persistence,
+See [A2A Message Parts](../concepts/a2a/message-parts.md) for persistence,
 idempotency, sandbox, and failure semantics.
 
 For endpoints protected by builder-owned ingress, configure public authentication

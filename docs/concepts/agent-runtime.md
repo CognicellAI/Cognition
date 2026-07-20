@@ -146,7 +146,7 @@ The nested `a2a.exposed` field controls whether an agent is exposed via strict [
 Incoming A2A messages support text, structured data, inline raw bytes, and URL
 reference Parts. Text and data become model context; raw and URL Parts become
 scoped, task-linked artifact references and are never implicitly executed or
-fetched. See [A2A Message Parts](a2a-message-parts.md) for the complete contract.
+fetched. See [A2A Message Parts](a2a/message-parts.md) for the complete contract.
 
 Set `a2a.public_interface_url` when a gateway or builder platform exposes the
 agent at a different public endpoint. Cognition advertises that absolute HTTP(S)
@@ -178,8 +178,9 @@ curl -X POST http://localhost:8000/agents \
 ```
 
 Builders can also configure default MIME modes and public Agent Card skills
-under `a2a`. See the [A2A Builder Guide](../guides/a2a.md) for the complete
-contract. Public A2A skills remain separate from root-level runtime `skills`.
+under `a2a`. See [Agent Cards and Public Skills](a2a/agent-cards.md) for the
+discovery model and the [A2A Builder Guide](../guides/a2a.md) for setup. Public
+A2A skills remain separate from root-level runtime `skills`.
 
 ### System Prompt Sources
 

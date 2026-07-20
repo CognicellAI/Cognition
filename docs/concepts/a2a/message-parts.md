@@ -72,7 +72,7 @@ can override defaults and declare per-skill modes under `a2a`, but should advert
 additional MIME types only when the configured model or tools actually support
 them end to end. Raw and URL Parts are accepted as attachment references without
 implying that every selected model can interpret their media types. See the
-[A2A Builder Guide](../guides/a2a.md) for the public discovery contract.
+[A2A Builder Guide](../../guides/a2a.md) for the public discovery contract.
 
 ## Failure behavior
 

@@ -217,6 +217,8 @@ Additional MCP security measures:
 ## A2A Protocol Boundary
 
 The A2A (Agent-to-Agent) protocol adapter is a Cognition protocol surface, not an app-layer concern.
+See [A2A Security and Scoping](a2a/security-and-scoping.md) for the focused
+protocol-boundary model.
 
 **Security boundary**: Trusted ingress supplies configured `X-Cognition-Scope-*`
 headers. Per-agent card discovery, root discovery, and JSON-RPC dispatch are filtered
@@ -244,7 +246,7 @@ place client secrets, bearer tokens, or private credentials in these values.
 Raw bytes and URL references are persisted as task-linked artifacts under that
 scope. Receiving a Part never executes a file or fetches a URL. Interpretation,
 retrieval, and transformation require an explicit builder-authorized tool or
-sandbox operation. See [A2A Message Parts](a2a-message-parts.md).
+sandbox operation. See [A2A Message Parts](a2a/message-parts.md).
 
 ---
 
