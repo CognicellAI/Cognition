@@ -17,9 +17,9 @@ import hashlib
 import json
 import time
 from collections import deque
-from collections.abc import AsyncGenerator, Mapping
+from collections.abc import AsyncGenerator, AsyncIterator, Mapping
 from dataclasses import dataclass, field
-from typing import Any, cast
+from typing import Any, TypeVar, cast
 
 import structlog
 from langchain_core.messages import HumanMessage, SystemMessage
@@ -63,6 +63,8 @@ from server.app.storage.config_store import ConfigStore
 from server.app.storage.factory import create_storage_backend
 
 logger = structlog.get_logger(__name__)
+
+_EventT = TypeVar("_EventT")
 
 
 class AgentDefinitionUnavailableError(Exception):
@@ -216,6 +218,21 @@ class StreamAccumulator:
     @property
     def in_tool_call(self) -> bool:
         return self._current_tool_call is not None
+
+
+async def _with_execution_timeout(
+    events: AsyncIterator[_EventT],
+    timeout_seconds: float | None,
+) -> AsyncIterator[_EventT]:
+    """Yield runtime events while enforcing the configured turn deadline."""
+    if timeout_seconds is None:
+        async for event in events:
+            yield event
+        return
+
+    async with asyncio.timeout(timeout_seconds):
+        async for event in events:
+            yield event
 
 
 def _has_explicit_agent_field(agent_def: Any, field_name: str) -> bool:
@@ -544,14 +561,22 @@ class DeepAgentStreamingService:
             messages = self._build_messages(content, None)
 
             acc = StreamAccumulator(input_tokens=count_text_tokens(content))
+            execution_timeout_seconds = (
+                agent_cfg.agent_def.config.timeout_seconds
+                if agent_cfg.agent_def is not None
+                else None
+            )
 
             runtime_exception: Exception | None = None
 
             try:
                 try:
-                    async for event in runtime.astream_events(
-                        {"messages": messages},
-                        thread_id=thread_id,
+                    async for event in _with_execution_timeout(
+                        runtime.astream_events(
+                            {"messages": messages},
+                            thread_id=thread_id,
+                        ),
+                        execution_timeout_seconds,
                     ):
                         if isinstance(event, TokenEvent):
                             acc.record_token(event.content)
@@ -592,6 +617,22 @@ class DeepAgentStreamingService:
 
                     # DoneEvent from the runtime is absorbed here; we emit our own below.
 
+                except TimeoutError:
+                    await runtime.abort(thread_id)
+                    logger.warning(
+                        "Agent execution deadline exceeded",
+                        session_id=session_id,
+                        thread_id=thread_id,
+                        timeout_seconds=execution_timeout_seconds,
+                    )
+                    yield ErrorEvent(
+                        message=(
+                            "Agent execution exceeded the configured "
+                            f"{execution_timeout_seconds:g} second deadline"
+                        ),
+                        code="EXECUTION_TIMEOUT",
+                    )
+                    return
                 except asyncio.CancelledError:
                     raise
                 except Exception as exc:
