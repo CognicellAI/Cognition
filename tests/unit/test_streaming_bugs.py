@@ -28,6 +28,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from server.app.agent.runtime import (
+    ArtifactEvent,
     DoneEvent,
     TokenEvent,
     UsageEvent,
@@ -228,6 +229,32 @@ class TestExactlyOneDoneEvent:
         assert isinstance(collected[-1], DoneEvent), (
             f"Last event should be DoneEvent, got {type(collected[-1]).__name__}"
         )
+
+    @pytest.mark.asyncio
+    async def test_structured_artifact_passes_through_shared_service(self):
+        """Structured runtime output must reach native and protocol adapters."""
+        from server.app.llm.deep_agent_service import DeepAgentStreamingService
+
+        session = _make_session()
+        artifact = ArtifactEvent(
+            artifact_id="structured-response",
+            name="structured-response",
+            kind="data",
+            value={"answer": 42},
+            media_type="application/json",
+        )
+        mock_runtime = _make_mock_runtime(artifact, DoneEvent())
+        service = DeepAgentStreamingService(_make_settings())
+        service.storage_backend = MagicMock()
+        service.storage_backend.get_session = AsyncMock(return_value=session)
+        service.storage_backend.get_checkpointer = AsyncMock(return_value=MagicMock())
+        service.storage_backend.get_store = AsyncMock(return_value=MagicMock())
+
+        p1, p2, p3, p4 = _stream_patches(mock_runtime, session)
+        with p1, p2, p3, p4:
+            collected = await _collect(service, session)
+
+        assert artifact in collected
 
 
 # ---------------------------------------------------------------------------

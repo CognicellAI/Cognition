@@ -9,6 +9,10 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- Projected validated Deep Agents `structured_response` state as an outbound A2A data artifact and added bidirectional wire coverage for text, data, raw, and URL Parts.
+
 ## [0.12.0-rc.5] — 2026-07-19
 
 ### Added
