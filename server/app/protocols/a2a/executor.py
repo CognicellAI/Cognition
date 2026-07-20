@@ -38,7 +38,7 @@ from server.app.agent.task_runtime import (
 )
 from server.app.exceptions import RuntimeTaskConflictError, RuntimeTaskNotFoundError
 from server.app.models import RunStatus, TaskStatus
-from server.app.protocols.a2a.mapping import extract_text_from_parts
+from server.app.protocols.a2a.inbound import InvalidA2APartError, normalize_a2a_parts
 from server.app.protocols.a2a.task_store import (
     CognitionTaskStore,
     effective_scope_from_context,
@@ -73,22 +73,31 @@ class CognitionA2AExecutor(AgentExecutor):
         *,
         agent_name: str,
         message_id_idempotency: bool = True,
+        max_raw_part_bytes: int = 10 * 1024 * 1024,
     ) -> None:
         self._runtime = runtime
         self._task_store = task_store
         self._agent_manager = session_agent_manager
         self._agent_name = agent_name
         self._message_id_idempotency = message_id_idempotency
+        self._max_raw_part_bytes = max_raw_part_bytes
 
     async def execute(self, context: RequestContext, event_queue: EventQueue) -> None:
         """Create/continue a task, stream execution, and persist before emitting."""
         if context.call_context is None or not context.task_id or not context.context_id:
             raise InvalidParamsError(message="Task and context identifiers are required")
         scope = effective_scope_from_context(context.call_context)
-        user_text = (
-            extract_text_from_parts(context.message.parts) if context.message else ""
-        ) or "(empty message)"
         message_id = context.message.message_id if context.message else None
+        try:
+            normalized = normalize_a2a_parts(
+                context.message.parts if context.message else (),
+                task_id=context.task_id,
+                message_id=message_id,
+                max_raw_part_bytes=self._max_raw_part_bytes,
+            )
+        except InvalidA2APartError as exc:
+            raise InvalidParamsError(message=str(exc)) from exc
+        user_text = normalized.content or "(empty message)"
         persisted_message_id = message_id if self._message_id_idempotency else None
         idempotency_key = message_id or context.task_id if self._message_id_idempotency else None
         execution: TaskExecution | None = None
@@ -137,6 +146,8 @@ class CognitionA2AExecutor(AgentExecutor):
                         return
                 await event_queue.enqueue_event(await self._task_store.project(execution.task))
                 return
+
+            await self._runtime.persist_input_artifacts(execution, normalized.artifacts)
 
             service = self._agent_manager.get_service(execution.session.id)
             if service is None:

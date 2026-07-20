@@ -529,6 +529,7 @@ curl -X POST http://localhost:8000/agents \
 2. **JSON-RPC endpoint** — Each agent gets a dedicated endpoint at `POST /a2a/{agent_name}`. The agent is resolved at request time, so agents created after server startup are immediately available.
 3. **Scope-aware runtime isolation** — Trusted ingress supplies builder-defined `X-Cognition-Scope-*` headers. Cognition carries the exact scope through tasks, contexts, runs, messages, events, and artifacts without becoming the application's tenant or IAM system.
 4. **Shared durable lifecycle** — Native REST/SSE and A2A use the same task/session/run service. A2A tasks survive restarts, continuation creates a new run under the same task, and subscriptions replay durable events.
+5. **Typed message Parts** — Text and structured data enter model context. Inline bytes and URL references become scoped, task-linked artifacts; receiving a URL never performs an implicit network request. Mixed-Part order is preserved. See [A2A Message Parts](../concepts/a2a-message-parts.md).
 
 ### A2A Client Example
 
@@ -563,6 +564,25 @@ resp = httpx.post(
     },
 )
 ```
+
+Messages may combine all A2A 1.0 Part content variants:
+
+```json
+{
+  "role": "ROLE_USER",
+  "messageId": "analyze-input-1",
+  "parts": [
+    {"text": "Analyze this payload", "mediaType": "text/plain"},
+    {"data": {"priority": 3}, "mediaType": "application/json"},
+    {"raw": "aGVsbG8=", "filename": "note.txt", "mediaType": "text/plain"},
+    {"url": "https://example.com/report.pdf", "filename": "report.pdf", "mediaType": "application/pdf"}
+  ]
+}
+```
+
+The URL is retained as a scoped reference; Cognition does not download it during
+request handling. File parsing and remote retrieval require explicit tools and
+the deployment's sandbox/network policy.
 
 ### Constraints
 

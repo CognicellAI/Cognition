@@ -117,6 +117,19 @@ class TaskExecution:
 
 
 @dataclass(frozen=True)
+class TaskInputArtifact:
+    """Protocol-neutral, inert input attachment for one task execution."""
+
+    id: str
+    kind: str
+    content: str
+    content_encoding: str
+    media_type: str | None
+    filename: str | None
+    metadata: dict[str, Any]
+
+
+@dataclass(frozen=True)
 class TaskPage:
     """Cursor page of durable runtime tasks."""
 
@@ -549,6 +562,75 @@ class AgentTaskRuntime:
                     source="api",
                 )
             )
+        return updated
+
+    async def persist_input_artifacts(
+        self,
+        execution: TaskExecution,
+        artifacts: Sequence[TaskInputArtifact],
+    ) -> RuntimeTask:
+        """Persist inert, task-linked inputs under the execution's exact scope."""
+        if not artifacts:
+            return execution.task
+
+        current = await self._require_task(
+            execution.task.id,
+            execution.task.agent_name,
+            execution.task.effective_scope,
+        )
+        new_descriptors = [
+            {
+                "artifact_id": artifact.id,
+                "kind": artifact.kind,
+                "content_encoding": artifact.content_encoding,
+                "filename": artifact.filename,
+                "media_type": artifact.media_type,
+                "metadata": artifact.metadata,
+            }
+            for artifact in artifacts
+        ]
+        descriptors = [dict(item) for item in current.metadata.get("input_artifacts", [])]
+        new_ids = {item["artifact_id"] for item in new_descriptors}
+        descriptors = [item for item in descriptors if item.get("artifact_id") not in new_ids]
+        descriptors.extend(new_descriptors)
+        updated = await self._store.update_task(
+            current.id,
+            current.effective_scope,
+            expected_statuses={current.status},
+            metadata={**current.metadata, "input_artifacts": descriptors},
+        )
+        if updated is None:
+            raise RuntimeTaskConflictError(
+                f"Task '{current.id}' changed while input artifacts were persisted",
+                task_id=current.id,
+            )
+
+        if self._artifact_store is not None:
+            from server.app.storage.config_models import ArtifactDefinition
+
+            for artifact in artifacts:
+                default_type = (
+                    "application/octet-stream" if artifact.kind == "raw" else "text/uri-list"
+                )
+                await self._artifact_store.upsert_artifact(
+                    ArtifactDefinition(
+                        id=artifact.id,
+                        name=artifact.id,
+                        artifact_type="artifact",
+                        content=artifact.content,
+                        content_type=artifact.media_type or default_type,
+                        run_id=execution.run.id,
+                        visibility="run",
+                        scope=execution.task.effective_scope,
+                        source="api",
+                    )
+                )
+        await self.projection.append_event(
+            execution.run,
+            "artifact.input.persisted",
+            payload={"count": len(artifacts)},
+            visibility="internal",
+        )
         return updated
 
     async def _begin_execution(

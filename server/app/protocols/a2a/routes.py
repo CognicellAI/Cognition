@@ -471,6 +471,11 @@ async def mount_a2a_routes(
                 session_agent_manager=session_agent_manager,
                 agent_name=agent_name,
                 message_id_idempotency=message_id_idempotency,
+                max_raw_part_bytes=getattr(
+                    settings,
+                    "a2a_max_raw_part_bytes",
+                    10 * 1024 * 1024,
+                ),
             )
             context_builder = _IdempotentRequestContextBuilder(
                 task_store,

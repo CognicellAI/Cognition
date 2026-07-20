@@ -249,6 +249,12 @@ class Settings(BaseSettings):
             "Canonical A2A ProtoJSON security requirements applied to generated Agent Cards."
         ),
     )
+    a2a_max_raw_part_bytes: int = Field(
+        default=10 * 1024 * 1024,
+        ge=1,
+        alias="COGNITION_A2A_MAX_RAW_PART_BYTES",
+        description="Maximum decoded size accepted for one inbound A2A raw Part.",
+    )
 
     # SSE (Server-Sent Events) settings
     sse_heartbeat_interval_seconds: float = Field(

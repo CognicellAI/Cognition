@@ -239,6 +239,13 @@ publishes the validated values in its Agent Cards but does not enforce them.
 Gateway enforcement must match the card. Because Agent Cards are public, never
 place client secrets, bearer tokens, or private credentials in these values.
 
+**Message Parts**: Every inbound A2A Part inherits the trusted request's exact
+`effective_scope`; Part metadata, filenames, and URLs cannot set or alter scope.
+Raw bytes and URL references are persisted as task-linked artifacts under that
+scope. Receiving a Part never executes a file or fetches a URL. Interpretation,
+retrieval, and transformation require an explicit builder-authorized tool or
+sandbox operation. See [A2A Message Parts](a2a-message-parts.md).
+
 ---
 
 ## Rate Limiting

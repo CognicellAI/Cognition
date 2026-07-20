@@ -1756,6 +1756,13 @@ messages, events, and artifacts exactly by it; it does not own tenant or IAM mod
 
 The A2A protocol surface can be disabled entirely by setting `COGNITION_A2A_ENABLED=false`. When disabled, the `/.well-known/agent-card.json` and `/a2a/{agent_name}` endpoints are not mounted, and `GET /capabilities` reports `a2a: false`.
 
+`SendMessage` and `SendStreamingMessage` accept all A2A 1.0 Part content
+variants. Text and structured data are normalized into ordered model context;
+inline raw bytes and URL references become opaque, task-linked artifacts under
+the request's exact `effective_scope`. URL Parts are not fetched implicitly.
+See [A2A Message Parts](../concepts/a2a-message-parts.md) for persistence,
+idempotency, sandbox, and failure semantics.
+
 For endpoints protected by builder-owned ingress, configure public authentication
 discovery with `COGNITION_A2A_SECURITY_SCHEMES` and
 `COGNITION_A2A_SECURITY_REQUIREMENTS`. Both values use canonical A2A ProtoJSON.
@@ -1811,7 +1818,7 @@ X-Cognition-Scope-User: alice
   "securityRequirements": [
     {"schemes": {"oauth2": {}}}
   ],
-  "defaultInputModes": ["text/plain"],
+  "defaultInputModes": ["text/plain", "application/json"],
   "defaultOutputModes": ["text/plain", "application/json"],
   "skills": [
     {
@@ -1819,7 +1826,7 @@ X-Cognition-Scope-User: alice
       "name": "Deployment Assistant",
       "description": "Handles deployment workflows",
       "tags": ["primary"],
-      "inputModes": ["text/plain"],
+      "inputModes": ["text/plain", "application/json"],
       "outputModes": ["text/plain", "application/json"]
     }
   ]
@@ -1857,12 +1864,21 @@ X-Cognition-Scope-User: alice
       "role": "ROLE_USER",
       "messageId": "msg-123",
       "parts": [
-        {"text": "Deploy the staging environment", "mediaType": "text/plain"}
+        {"text": "Deploy the staging environment", "mediaType": "text/plain"},
+        {"data": {"changeTicket": "CHG-42"}, "mediaType": "application/json"},
+        {"raw": "cmVsZWFzZTogdjEuMg==", "filename": "release.txt", "mediaType": "text/plain"},
+        {"url": "https://example.com/runbook.pdf", "filename": "runbook.pdf", "mediaType": "application/pdf"}
       ]
     }
   }
 }
 ```
+
+Parts are processed in wire order. `data` is rendered as a delimited JSON block.
+`raw` and `url` become artifact references in the normalized user message; their
+payload or remote content is not inserted into the prompt. Part metadata cannot
+override trusted request scope. A Part with no content variant is rejected before
+the model run starts.
 
 **Supported methods:**
 

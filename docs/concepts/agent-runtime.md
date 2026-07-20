@@ -144,6 +144,11 @@ The `a2a_exposed` field controls whether an agent is exposed via strict [A2A 1.0
 - The agent gets a dedicated JSON-RPC endpoint at `POST /a2a/{agent_name}`
 - External A2A clients can discover and invoke the agent
 
+Incoming A2A messages support text, structured data, inline raw bytes, and URL
+reference Parts. Text and data become model context; raw and URL Parts become
+scoped, task-linked artifact references and are never implicitly executed or
+fetched. See [A2A Message Parts](a2a-message-parts.md) for the complete contract.
+
 Set `a2a_public_interface_url` when a gateway or builder platform exposes the
 agent at a different public endpoint. Cognition advertises that absolute HTTP(S)
 URL exactly in `supportedInterfaces`. If it is omitted, Cognition derives the

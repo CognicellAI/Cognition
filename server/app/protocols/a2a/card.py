@@ -51,7 +51,7 @@ def build_agent_card_for_agent(
         name=public_name,
         description=skill_description,
         tags=["primary"] if has_public_name else ["cognition", agent.mode],
-        input_modes=["text/plain"],
+        input_modes=["text/plain", "application/json"],
         output_modes=["text/plain", "application/json"],
         examples=[],
     )
@@ -60,7 +60,7 @@ def build_agent_card_for_agent(
         name=public_name,
         description=card_description,
         version=version,
-        default_input_modes=["text/plain"],
+        default_input_modes=["text/plain", "application/json"],
         default_output_modes=["text/plain", "application/json"],
         # Explicitly publish every capability flag.  The protocol uses
         # presence-sensitive fields, so omitting ``pushNotifications`` or

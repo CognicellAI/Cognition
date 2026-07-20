@@ -21,7 +21,6 @@ from server.app.protocols.a2a.card import build_agent_card_for_agent
 from server.app.protocols.a2a.mapping import (
     _RUN_STATUS_TO_A2A,
     event_to_a2a_state,
-    extract_text_from_parts,
     is_hitl_pause,
 )
 from server.app.protocols.a2a.routes import _task_signature
@@ -65,9 +64,7 @@ class TestBuildAgentCardForAgent:
         assert len(card.skills) == 1
         assert card.skills[0].id == "primary"
         assert card.skills[0].name == "Customer Support Concierge"
-        assert card.skills[0].description == (
-            "Primary capability for Customer Support Concierge"
-        )
+        assert card.skills[0].description == ("Primary capability for Customer Support Concierge")
         assert card.skills[0].tags == ["primary"]
 
     def test_card_has_correct_endpoint(self):
@@ -99,6 +96,13 @@ class TestBuildAgentCardForAgent:
         agent = AgentDefinition(name="test", system_prompt="test", mode="primary", a2a_exposed=True)
         card = build_agent_card_for_agent(agent, "http://localhost:8000", "0.10.0")
         assert card.capabilities.streaming is True
+
+    def test_card_advertises_generic_text_and_json_inputs(self):
+        agent = AgentDefinition(name="test", system_prompt="test", mode="primary", a2a_exposed=True)
+        card = build_agent_card_for_agent(agent, "http://localhost:8000", "0.10.0")
+
+        assert card.default_input_modes == ["text/plain", "application/json"]
+        assert card.skills[0].input_modes == ["text/plain", "application/json"]
 
     def test_card_has_single_skill(self):
         agent = AgentDefinition(
@@ -188,9 +192,7 @@ class TestA2APerAgentCardRoute:
         assert response.status_code == 200
         card = response.json()
         assert card["name"] == "scoped-agent"
-        assert card["supportedInterfaces"][0]["url"] == (
-            "http://example.test/a2a/scoped-agent"
-        )
+        assert card["supportedInterfaces"][0]["url"] == ("http://example.test/a2a/scoped-agent")
 
     @pytest.mark.asyncio
     async def test_per_agent_card_respects_request_scope(self):
@@ -349,30 +351,6 @@ class TestExecutorAgentName:
             agent_name="my-agent",
         )
         assert executor._agent_name == "my-agent"
-
-
-class TestExtractTextFromParts:
-    def test_single_text_part(self):
-        from a2a.types import Part
-
-        parts = [Part(text="hello world", media_type="text/plain")]
-        assert extract_text_from_parts(parts) == "hello world"
-
-    def test_multiple_text_parts(self):
-        from a2a.types import Part
-
-        parts = [
-            Part(text="line one", media_type="text/plain"),
-            Part(text="line two", media_type="text/plain"),
-        ]
-        assert extract_text_from_parts(parts) == "line one\nline two"
-
-    def test_empty_parts(self):
-        assert extract_text_from_parts([]) == ""
-
-    def test_current_text_part_shape(self):
-        parts = [{"kind": "text", "text": "hello world"}]
-        assert extract_text_from_parts(parts) == "hello world"
 
 
 class TestEventToA2AState:

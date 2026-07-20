@@ -10,6 +10,23 @@ from server.app.storage.sqlite import SqliteStorageBackend
 
 
 @pytest.fixture(autouse=True)
+def reject_mock_filesystem_paths(monkeypatch: pytest.MonkeyPatch):
+    """Fail tests that accidentally use mock representations as real paths."""
+    original_mkdir = Path.mkdir
+
+    def guarded_mkdir(
+        path: Path,
+        mode: int = 0o777,
+        parents: bool = False,
+        exist_ok: bool = False,
+    ) -> None:
+        assert "MagicMock" not in str(path), f"Refusing to create mocked path: {path}"
+        original_mkdir(path, mode=mode, parents=parents, exist_ok=exist_ok)
+
+    monkeypatch.setattr(Path, "mkdir", guarded_mkdir)
+
+
+@pytest.fixture(autouse=True)
 async def setup_storage_backend():
     """Automatically set up storage backend and DI providers for all tests."""
     from server.app.api.dependencies import (

@@ -34,6 +34,7 @@ If you want a course sequence rather than reference material, use
 | [Architecture](concepts/architecture.md) | The 7-layer architecture, dependency rules, and batteries-included design |
 | [Sessions & Messages](concepts/sessions-and-messages.md) | Session lifecycle, message persistence, SSE streaming, and reconnection |
 | [Agent Runtime](concepts/agent-runtime.md) | Agent runtime protocol, definitions, A2A exposure, and multi-agent registry |
+| [A2A Message Parts](concepts/a2a-message-parts.md) | Text, structured data, inline bytes, URL references, scoping, and execution boundaries |
 | [Storage & Execution](concepts/storage-and-execution.md) | Storage and execution backend protocols and implementations |
 | [Sandboxes](concepts/sandboxes/index.md) | Local, Docker, Kubernetes, and AWS Lambda MicroVM execution backends |
 | [Kubernetes Sandbox](concepts/sandboxes/kubernetes/index.md) | K8s-native sandbox isolation using the agent-sandbox CRD and controller |
