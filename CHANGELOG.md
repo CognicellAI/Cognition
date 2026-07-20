@@ -9,6 +9,8 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.12.0-rc.5] — 2026-07-19
+
 ### Added
 
 - Added ordered inbound A2A 1.0 `text`, `data`, `raw`, and `url` Part normalization. Inline bytes and URL references become inert, task-linked artifacts under the request's exact scope; URL Parts are never fetched implicitly.

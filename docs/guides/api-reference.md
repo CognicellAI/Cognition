@@ -1804,7 +1804,7 @@ X-Cognition-Scope-User: alice
       "protocolVersion": "1.0"
     }
   ],
-  "version": "0.12.0-rc.4",
+  "version": "0.12.0-rc.5",
   "capabilities": {
     "streaming": true,
     "pushNotifications": false,
