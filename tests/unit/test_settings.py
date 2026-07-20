@@ -58,6 +58,7 @@ class TestSettingsDefaults:
         settings = TestSettings()
         assert settings.a2a_security_schemes == {}
         assert settings.a2a_security_requirements == []
+        assert settings.a2a_max_raw_part_bytes == 10 * 1024 * 1024
 
 
 class TestA2ASecuritySettings:

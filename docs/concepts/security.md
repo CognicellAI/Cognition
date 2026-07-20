@@ -217,6 +217,8 @@ Additional MCP security measures:
 ## A2A Protocol Boundary
 
 The A2A (Agent-to-Agent) protocol adapter is a Cognition protocol surface, not an app-layer concern.
+See [A2A Security and Scoping](a2a/security-and-scoping.md) for the focused
+protocol-boundary model.
 
 **Security boundary**: Trusted ingress supplies configured `X-Cognition-Scope-*`
 headers. Per-agent card discovery, root discovery, and JSON-RPC dispatch are filtered
@@ -227,7 +229,7 @@ cross-scope or cross-agent identifier is reported as not found.
 **Builder responsibility**: Cognition does not perform end-user authentication or
 own tenant, organization, membership, role, billing, entitlement, or route-selection
 models. Authorization must be completed by the embedding application or trusted
-gateway before requests reach Cognition. `a2a_exposed` controls which definitions
+gateway before requests reach Cognition. `a2a.exposed` controls which definitions
 are visible; set it only on agents intended for A2A access.
 
 **Global disable**: Set `COGNITION_A2A_ENABLED=false` to prevent the A2A protocol surface from being mounted at all. When disabled, the endpoints do not exist and `GET /capabilities` reports `a2a: false`.
@@ -238,6 +240,13 @@ interface, set `COGNITION_A2A_SECURITY_SCHEMES` and
 publishes the validated values in its Agent Cards but does not enforce them.
 Gateway enforcement must match the card. Because Agent Cards are public, never
 place client secrets, bearer tokens, or private credentials in these values.
+
+**Message Parts**: Every inbound A2A Part inherits the trusted request's exact
+`effective_scope`; Part metadata, filenames, and URLs cannot set or alter scope.
+Raw bytes and URL references are persisted as task-linked artifacts under that
+scope. Receiving a Part never executes a file or fetches a URL. Interpretation,
+retrieval, and transformation require an explicit builder-authorized tool or
+sandbox operation. See [A2A Message Parts](a2a/message-parts.md).
 
 ---
 
@@ -320,5 +329,5 @@ These prevent MIME sniffing, clickjacking, and reflected XSS attacks in browser 
 - [ ] Never commit API keys; use `.env` or secrets management (Vault, AWS Secrets Manager)
 - [ ] Run the sandbox image from a minimal, audited base image
 - [ ] Set `COGNITION_PROTECTED_PATHS` to include any sensitive directories
-- [ ] Review which agents have `a2a_exposed: true` — only expose agents intended for external A2A access
+- [ ] Review which agents have `a2a.exposed: true` — only expose agents intended for external A2A access
 - [ ] Restrict `/mcp-servers` CRUD to authorized administrators (MCP server headers contain credentials)

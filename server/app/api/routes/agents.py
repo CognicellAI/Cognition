@@ -4,7 +4,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
 
-from server.app.agent.definition import AgentDefinition
+from server.app.agent.definition import A2AConfig, AgentDefinition
 from server.app.api.dependencies import get_config_store, get_scope_dep
 from server.app.api.models import (
     AgentConfigResponse,
@@ -27,8 +27,7 @@ def _agent_to_response(agent: AgentDefinition) -> AgentResponse:
         mode=agent.mode,
         hidden=agent.hidden,
         native=agent.native,
-        a2a_exposed=agent.a2a_exposed,
-        a2a_public_interface_url=agent.a2a_public_interface_url,
+        a2a=agent.a2a,
         provider=agent.config.provider,
         model=agent.config.model,
         temperature=agent.config.temperature,
@@ -128,8 +127,7 @@ async def create_agent(
             "description": body.description,
             "mode": body.mode,
             "hidden": body.hidden,
-            "a2a_exposed": body.a2a_exposed,
-            "a2a_public_interface_url": body.a2a_public_interface_url,
+            "a2a": body.a2a.model_dump(mode="json"),
             "native": False,
             "tools": body.tools,
             "skills": body.skills,
@@ -222,8 +220,8 @@ async def update_agent(
         updates = body.model_dump(exclude_none=True)
         if "display_name" in body.model_fields_set:
             updates["display_name"] = body.display_name
-        if "a2a_public_interface_url" in body.model_fields_set:
-            updates["a2a_public_interface_url"] = body.a2a_public_interface_url
+        if "a2a" in body.model_fields_set:
+            updates["a2a"] = (body.a2a or A2AConfig()).model_dump(mode="json")
         config_fields = {
             "model",
             "temperature",

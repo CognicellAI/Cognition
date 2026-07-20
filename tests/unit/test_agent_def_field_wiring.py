@@ -19,6 +19,7 @@ of 12+ fields.
 from __future__ import annotations
 
 from collections.abc import AsyncGenerator, Iterator
+from pathlib import Path
 from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock, call, patch
 
@@ -127,6 +128,7 @@ async def _run(
     from server.app.settings import Settings
 
     s = MagicMock(spec=Settings)
+    s.workspace_path = Path(session.workspace_path)
     s.trusted_tool_namespaces = ["server.app.tools"]
     service = DeepAgentStreamingService(s)
     mock_storage = MagicMock()
@@ -255,7 +257,9 @@ class TestNoAgentDef:
         session = _make_session(scopes=session_scope)
         agent_def = AgentDefinition(name="test-agent", system_prompt="scoped")
 
-        service = DeepAgentStreamingService(MagicMock(spec=Settings))
+        settings = MagicMock(spec=Settings)
+        settings.workspace_path = Path(session.workspace_path)
+        service = DeepAgentStreamingService(settings)
         mock_config_store = MagicMock()
         mock_config_store.get_agent_definition = AsyncMock(return_value=agent_def)
         mock_config_store.list_agent_definitions = AsyncMock(return_value=[agent_def])
@@ -304,7 +308,9 @@ class TestNoAgentDef:
             **agent_kwargs,
         )
 
-        service = DeepAgentStreamingService(MagicMock(spec=Settings))
+        settings = MagicMock(spec=Settings)
+        settings.workspace_path = Path(session.workspace_path)
+        service = DeepAgentStreamingService(settings)
         mock_config_store = MagicMock()
         mock_config_store.get_agent_definition = AsyncMock(return_value=agent_def)
         mock_config_store.list_agent_definitions = AsyncMock(return_value=[agent_def])

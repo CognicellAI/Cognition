@@ -231,7 +231,7 @@ class Settings(BaseSettings):
         description=(
             "Enable the A2A (Agent-to-Agent) protocol adapter. "
             "When true, mounts /.well-known/agent-card.json and /a2a/{agent_name} endpoints. "
-            "Individual agents still require a2a_exposed=true to be visible."
+            "Individual agents still require a2a.exposed=true to be visible."
         ),
     )
     a2a_security_schemes: dict[str, dict[str, Any]] = Field(
@@ -248,6 +248,12 @@ class Settings(BaseSettings):
         description=(
             "Canonical A2A ProtoJSON security requirements applied to generated Agent Cards."
         ),
+    )
+    a2a_max_raw_part_bytes: int = Field(
+        default=10 * 1024 * 1024,
+        ge=1,
+        alias="COGNITION_A2A_MAX_RAW_PART_BYTES",
+        description="Maximum decoded size accepted for one inbound A2A raw Part.",
     )
 
     # SSE (Server-Sent Events) settings

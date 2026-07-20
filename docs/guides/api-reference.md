@@ -630,8 +630,13 @@ List all non-hidden agents available in the registry.
       "mode": "primary",
       "hidden": false,
       "native": true,
-      "a2a_exposed": false,
-      "a2a_public_interface_url": null,
+      "a2a": {
+        "exposed": false,
+        "public_interface_url": null,
+        "default_input_modes": ["text/plain", "application/json"],
+        "default_output_modes": ["text/plain", "application/json"],
+        "skills": []
+      },
       "provider": null,
       "model": null,
       "temperature": null,
@@ -705,8 +710,13 @@ Create or replace an agent definition in the ConfigRegistry.
   "skills": ["python-review"],
   "memory": ["AGENTS.md"],
   "interrupt_on": {},
-  "a2a_exposed": false,
-  "a2a_public_interface_url": "https://agents.example.com/security-auditor/a2a",
+  "a2a": {
+    "exposed": false,
+    "public_interface_url": "https://agents.example.com/security-auditor/a2a",
+    "default_input_modes": ["text/plain", "application/json"],
+    "default_output_modes": ["text/plain", "application/json"],
+    "skills": []
+  },
   "model": "gpt-4o",
   "temperature": 0.1,
   "max_tokens": 4096,
@@ -727,8 +737,7 @@ Create or replace an agent definition in the ConfigRegistry.
 | `description` | string | Human-readable description |
 | `mode` | `"primary"` \| `"subagent"` \| `"all"` | Whether agent can own sessions, be delegated to, or both |
 | `hidden` | boolean | Hide the agent from `GET /agents` list results |
-| `a2a_exposed` | boolean | Expose eligible `primary` or `all` agents through the A2A protocol |
-| `a2a_public_interface_url` | string | Optional absolute HTTP(S) JSON-RPC endpoint advertised exactly in the Agent Card; credentials and fragments are rejected |
+| `a2a` | object | A2A exposure and public Agent Card presentation. See the [A2A Builder Guide](a2a.md). |
 | `tools` | list[string] | Registry tool names to attach to this agent |
 | `skills` | list[string] | Registry skill names to attach to this agent |
 | `memory` | list[string] | Paths to instruction files (e.g. AGENTS.md) |
@@ -1748,13 +1757,22 @@ Returns the deployment's runtime feature set, package versions, and configuratio
 ## A2A Protocol
 
 Cognition exposes agents as strict [A2A 1.0](https://a2a-protocol.org/latest/)
-JSON-RPC servers. Only agents with `a2a_exposed: true` are visible. Cognition
+JSON-RPC servers. Only agents with `a2a.exposed: true` are visible. Cognition
 implements the execution data plane: the embedding application authenticates and
 authorizes callers, then supplies trusted `X-Cognition-Scope-*` headers. Cognition
 carries that opaque builder-defined scope and isolates agents, tasks, contexts,
 messages, events, and artifacts exactly by it; it does not own tenant or IAM models.
+See [A2A in Cognition](../concepts/a2a/index.md) for the implementation model and
+the [A2A Builder Guide](a2a.md) for configuration and invocation steps.
 
 The A2A protocol surface can be disabled entirely by setting `COGNITION_A2A_ENABLED=false`. When disabled, the `/.well-known/agent-card.json` and `/a2a/{agent_name}` endpoints are not mounted, and `GET /capabilities` reports `a2a: false`.
+
+`SendMessage` and `SendStreamingMessage` accept all A2A 1.0 Part content
+variants. Text and structured data are normalized into ordered model context;
+inline raw bytes and URL references become opaque, task-linked artifacts under
+the request's exact `effective_scope`. URL Parts are not fetched implicitly.
+See [A2A Message Parts](../concepts/a2a/message-parts.md) for persistence,
+idempotency, sandbox, and failure semantics.
 
 For endpoints protected by builder-owned ingress, configure public authentication
 discovery with `COGNITION_A2A_SECURITY_SCHEMES` and
@@ -1811,7 +1829,7 @@ X-Cognition-Scope-User: alice
   "securityRequirements": [
     {"schemes": {"oauth2": {}}}
   ],
-  "defaultInputModes": ["text/plain"],
+  "defaultInputModes": ["text/plain", "application/json"],
   "defaultOutputModes": ["text/plain", "application/json"],
   "skills": [
     {
@@ -1819,21 +1837,24 @@ X-Cognition-Scope-User: alice
       "name": "Deployment Assistant",
       "description": "Handles deployment workflows",
       "tags": ["primary"],
-      "inputModes": ["text/plain"],
+      "inputModes": ["text/plain", "application/json"],
       "outputModes": ["text/plain", "application/json"]
     }
   ]
 }
 ```
 
-When the agent definition includes `a2a_public_interface_url`, Cognition uses
+When the agent definition includes `a2a.public_interface_url`, Cognition uses
 that value exactly for `supportedInterfaces[].url`. Otherwise it derives the
-URL from the incoming request and `/a2a/{agent_name}` for backward
-compatibility. `display_name` affects only public presentation; internal lookup
+URL from the incoming request and `/a2a/{agent_name}`. `display_name` affects only public presentation; internal lookup
 and the fallback route continue to use `name`.
 
-Only agents visible in the exact supplied scope with `a2a_exposed=True` are
+Only agents visible in the exact supplied scope with `a2a.exposed=true` are
 returned. Built-in agents are not exposed by default.
+
+Builders configure default MIME modes and public Agent Card skills under the
+nested `a2a` object. See the [A2A Builder Guide](a2a.md) for the complete
+discovery contract and the distinction between public and runtime skills.
 
 ### `POST /a2a/{agent_name}`
 
@@ -1857,12 +1878,21 @@ X-Cognition-Scope-User: alice
       "role": "ROLE_USER",
       "messageId": "msg-123",
       "parts": [
-        {"text": "Deploy the staging environment", "mediaType": "text/plain"}
+        {"text": "Deploy the staging environment", "mediaType": "text/plain"},
+        {"data": {"changeTicket": "CHG-42"}, "mediaType": "application/json"},
+        {"raw": "cmVsZWFzZTogdjEuMg==", "filename": "release.txt", "mediaType": "text/plain"},
+        {"url": "https://example.com/runbook.pdf", "filename": "runbook.pdf", "mediaType": "application/pdf"}
       ]
     }
   }
 }
 ```
+
+Parts are processed in wire order. `data` is rendered as a delimited JSON block.
+`raw` and `url` become artifact references in the normalized user message; their
+payload or remote content is not inserted into the prompt. Part metadata cannot
+override trusted request scope. A Part with no content variant is rejected before
+the model run starts.
 
 **Supported methods:**
 

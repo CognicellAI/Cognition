@@ -131,7 +131,7 @@ def create_app() -> FastAPI:
                 "system_prompt": "A2A TCK system under test",
                 "description": "Cognition A2A 1.0 conformance agent",
                 "mode": "primary",
-                "a2a_exposed": True,
+                "a2a": {"exposed": True},
             },
         )
         await mount_a2a_routes(

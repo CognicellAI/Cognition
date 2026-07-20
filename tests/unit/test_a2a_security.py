@@ -10,7 +10,7 @@ import pytest
 from fastapi import FastAPI
 from google.protobuf.json_format import MessageToDict  # type: ignore[import-untyped]
 
-from server.app.agent.definition import AgentDefinition
+from server.app.agent.definition import A2AConfig, AgentDefinition
 from server.app.protocols.a2a.card import build_agent_card_for_agent
 from server.app.protocols.a2a.security import (
     A2ASecurityConfigurationError,
@@ -47,7 +47,7 @@ def test_parse_security_and_publish_canonical_agent_card_fields() -> None:
         name="private-runtime-name",
         display_name="Customer Support Concierge",
         system_prompt="Help customers.",
-        a2a_exposed=True,
+        a2a=A2AConfig(exposed=True),
     )
 
     card = build_agent_card_for_agent(
@@ -129,7 +129,7 @@ async def test_mounted_card_uses_deployment_security_settings() -> None:
             "name": "support-agent",
             "system_prompt": "Help customers.",
             "mode": "primary",
-            "a2a_exposed": True,
+            "a2a": {"exposed": True},
         },
     )
     await mount_a2a_routes(

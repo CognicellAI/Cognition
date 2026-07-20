@@ -163,7 +163,7 @@ class TestScopePreservation:
                 "name": "shared-agent",
                 "system_prompt": "alice prompt",
                 "mode": "primary",
-                "a2a_exposed": True,
+                "a2a": {"exposed": True},
             },
             "api",
         )
@@ -174,7 +174,7 @@ class TestScopePreservation:
                 "name": "shared-agent",
                 "system_prompt": "bob prompt",
                 "mode": "primary",
-                "a2a_exposed": True,
+                "a2a": {"exposed": True},
             },
             "api",
         )

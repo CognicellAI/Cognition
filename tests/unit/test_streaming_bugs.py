@@ -21,6 +21,7 @@ Bug 3 — model in usage event reports gpt-4o regardless of provider:
 from __future__ import annotations
 
 from collections.abc import AsyncGenerator
+from pathlib import Path
 from typing import Any, Literal
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -54,6 +55,8 @@ def _make_settings(
 
     s = MagicMock(spec=Settings)
     # These remain in Settings (infrastructure config)
+    s.persistence_backend = "memory"
+    s.workspace_path = Path("/tmp/ws")
     s.trusted_tool_namespaces = ["server.app.tools"]
     return s
 

@@ -30,8 +30,10 @@ class _FakeAgentService:
         self._store = store
         self.started = asyncio.Event()
         self.release = asyncio.Event()
+        self.calls: list[dict] = []
 
     async def stream_response(self, **kwargs):
+        self.calls.append(kwargs)
         messages = await self._store.list_messages_for_session(kwargs["session_id"])
         message_id = messages[-1].id
         if message_id.startswith("slow-message"):
@@ -101,6 +103,8 @@ async def _build_client(
     store: StorageBackend,
     tmp_path,
     manager: _FakeSessionAgentManager | None = None,
+    artifact_store: MemoryArtifactStore | None = None,
+    max_raw_part_bytes: int = 10 * 1024 * 1024,
 ) -> httpx.AsyncClient:
     app = FastAPI()
     config_store = DefaultConfigStore(MemoryConfigRegistry())
@@ -111,15 +115,16 @@ async def _build_client(
             "name": "researcher",
             "system_prompt": "Research carefully",
             "mode": "primary",
-            "a2a_exposed": True,
+            "a2a": {"exposed": True},
         },
     )
-    artifact_store = MemoryArtifactStore()
+    artifact_store = artifact_store or MemoryArtifactStore()
 
     class _Settings:
         scope_keys = ["account"]
         scoping_enabled = True
         workspace_path = tmp_path
+        a2a_max_raw_part_bytes = max_raw_part_bytes
 
     await mount_a2a_routes(
         app,
@@ -399,6 +404,77 @@ async def test_message_only_and_non_text_artifact_variants_are_supported(
         )
         url_part = url.json()["result"]["task"]["artifacts"][0]["parts"][0]
         assert url_part["url"] == "https://example.com/output.txt"
+
+
+async def test_all_inbound_part_variants_are_ordered_scoped_and_inert(
+    setup_storage_backend: StorageBackend,
+    tmp_path,
+) -> None:
+    manager = _FakeSessionAgentManager(setup_storage_backend)
+    artifact_store = MemoryArtifactStore()
+    client = await _build_client(
+        setup_storage_backend,
+        tmp_path,
+        manager,
+        artifact_store,
+    )
+    request = _send_request("all-input-parts")
+    request["params"]["message"]["parts"] = [
+        {"text": "Analyze", "mediaType": "text/plain"},
+        {"data": {"priority": 3}, "mediaType": "application/json"},
+        {
+            "raw": "aGVsbG8=",
+            "filename": "../../note.txt",
+            "mediaType": "text/plain",
+        },
+        {
+            "url": "https://example.com/report.pdf",
+            "filename": "report.pdf",
+            "mediaType": "application/pdf",
+        },
+    ]
+
+    async with client:
+        response = await client.post("/a2a/researcher", json=request)
+        retry = await client.post("/a2a/researcher", json=request)
+
+    assert response.json()["result"]["task"]["status"]["state"] == ("TASK_STATE_COMPLETED")
+    assert retry.json()["result"]["task"]["id"] == (response.json()["result"]["task"]["id"])
+    assert len(manager.service.calls) == 1
+    content = manager.service.calls[-1]["content"]
+    assert content.index("Analyze") < content.index("A2A data Part 1")
+    assert content.index("A2A data Part 1") < content.index("A2A raw Part 2")
+    assert content.index("A2A raw Part 2") < content.index("A2A url Part 3")
+
+    artifacts = await artifact_store.list_artifacts(scope={"account": "acme"})
+    artifacts = [item for item in artifacts if item.id.startswith("a2a-input-")]
+    assert [(item.content_type, item.content) for item in artifacts] == [
+        ("text/plain", "aGVsbG8="),
+        ("application/pdf", "https://example.com/report.pdf"),
+    ]
+    assert await artifact_store.list_artifacts(scope={"account": "other"}) == []
+    assert all(item.name.startswith("a2a-input-") for item in artifacts)
+
+
+async def test_oversized_raw_input_fails_before_task_or_model_execution(
+    setup_storage_backend: StorageBackend,
+    tmp_path,
+) -> None:
+    manager = _FakeSessionAgentManager(setup_storage_backend)
+    client = await _build_client(
+        setup_storage_backend,
+        tmp_path,
+        manager,
+        max_raw_part_bytes=4,
+    )
+    request = _send_request("oversized-input")
+    request["params"]["message"]["parts"] = [{"raw": "aGVsbG8="}]
+
+    async with client:
+        response = await client.post("/a2a/researcher", json=request)
+
+    assert "error" in response.json()
+    assert manager.service.calls == []
 
 
 async def test_input_required_continues_same_task_with_new_attempt_and_can_cancel(

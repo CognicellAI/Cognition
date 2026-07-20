@@ -445,6 +445,7 @@ for the end-to-end setup flow and Terraform example.
 | `security.trusted_tool_namespaces` | `COGNITION_TRUSTED_TOOL_NAMESPACES` | `[]` | Allowed Python namespaces for tool imports; empty = allow all |
 | `security.blocked_tools` | `COGNITION_BLOCKED_TOOLS` | `[]` | Deployment-wide tool names no agent can invoke; merged with per-agent `blocked_tools` and enforced by `ToolSecurityMiddleware` |
 | `security.a2a_enabled` | `COGNITION_A2A_ENABLED` | `true` | Enable/disable the A2A protocol adapter (`/.well-known/agent-card.json` + `/a2a/{agent_name}`) |
+| — | `COGNITION_A2A_MAX_RAW_PART_BYTES` | `10485760` | Maximum decoded size of one inbound A2A `raw` Part; oversized Parts are rejected before a model run starts |
 | — | `COGNITION_A2A_SECURITY_SCHEMES` | `{}` | Canonical A2A ProtoJSON map of public authentication scheme names to `SecurityScheme` objects |
 | — | `COGNITION_A2A_SECURITY_REQUIREMENTS` | `[]` | Canonical A2A ProtoJSON array of `SecurityRequirement` objects applied to every generated card |
 
@@ -644,7 +645,7 @@ scoping:
     - "project"
 
 # A2A is auto-mounted when enabled. Unauthenticated deployments need no extra config.
-# Expose agents via A2A by setting a2a_exposed: true on their definition.
+# Expose agents via A2A by setting a2a.exposed: true on their definition.
 # Set COGNITION_A2A_ENABLED=false to disable the A2A protocol surface entirely.
 # Gateway-protected deployments can publish authentication discovery through
 # COGNITION_A2A_SECURITY_SCHEMES and COGNITION_A2A_SECURITY_REQUIREMENTS.
