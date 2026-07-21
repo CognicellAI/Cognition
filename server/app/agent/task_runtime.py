@@ -538,7 +538,12 @@ class AgentTaskRuntime:
             "artifact.updated",
             payload={
                 "artifact_id": artifact_id,
+                "name": name,
                 "kind": kind,
+                "value": encoded_value,
+                "media_type": media_type,
+                "filename": filename,
+                "description": description,
                 "append": append,
                 "last_chunk": last_chunk,
             },

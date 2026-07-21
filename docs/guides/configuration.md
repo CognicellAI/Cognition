@@ -475,6 +475,13 @@ the host's tenant, membership, role, or entitlement model.
 
 ---
 
+## A2A Runtime Hardening
+
+The deployment-level A2A durability, streaming, retention, and resource-limit
+settings are documented in [Configure and Invoke an A2A Agent](a2a.md#durability-and-resource-controls).
+They use the `COGNITION_A2A_*` namespace and do not alter agent-level Agent Card
+configuration under `AgentDefinition.a2a`.
+
 ## SSE Streaming
 
 | YAML key | Environment variable | Default | Description |

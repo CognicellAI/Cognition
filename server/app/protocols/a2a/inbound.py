@@ -32,6 +32,10 @@ def normalize_a2a_parts(
     task_id: str,
     message_id: str | None,
     max_raw_part_bytes: int,
+    max_parts: int = 64,
+    max_message_bytes: int = 16 * 1024 * 1024,
+    max_text_part_bytes: int = 2 * 1024 * 1024,
+    max_data_part_bytes: int = 2 * 1024 * 1024,
 ) -> NormalizedA2AMessage:
     """Normalize all A2A 1.0 Part variants while preserving wire order.
 
@@ -42,18 +46,39 @@ def normalize_a2a_parts(
     artifacts: list[TaskInputArtifact] = []
     stable_message_id = message_id or "anonymous"
 
-    for index, part in enumerate(parts):
+    materialized = tuple(parts)
+    if len(materialized) > max_parts:
+        raise InvalidA2APartError(f"A2A message exceeds the {max_parts}-Part limit")
+    total_bytes = 0
+
+    for index, part in enumerate(materialized):
         kind = part.WhichOneof("content")
         if kind is None:
             raise InvalidA2APartError(f"A2A message Part {index} has no content")
 
         if kind == "text":
+            size = len(part.text.encode("utf-8"))
+            if size > max_text_part_bytes:
+                raise InvalidA2APartError(
+                    f"A2A text Part {index} exceeds the {max_text_part_bytes}-byte limit"
+                )
+            total_bytes += size
             blocks.append(part.text)
             continue
         if kind == "data":
             value = MessageToDict(part.data)
+            compact_data = json.dumps(
+                value, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+            )
+            encoded_data = json.dumps(value, ensure_ascii=False, sort_keys=True)
+            size = len(compact_data.encode("utf-8"))
+            if size > max_data_part_bytes:
+                raise InvalidA2APartError(
+                    f"A2A data Part {index} exceeds the {max_data_part_bytes}-byte limit"
+                )
+            total_bytes += size
             blocks.append(
-                f"[A2A data Part {index}]\n{json.dumps(value, ensure_ascii=False, sort_keys=True)}"
+                f"[A2A data Part {index}]\n{encoded_data}"
             )
             continue
 
@@ -68,9 +93,16 @@ def normalize_a2a_parts(
                 )
             content = base64.b64encode(part.raw).decode("ascii")
             content_encoding = "base64"
+            total_bytes += len(part.raw)
         else:
             content = part.url
             content_encoding = "uri"
+            total_bytes += len(part.url.encode("utf-8"))
+
+        if total_bytes > max_message_bytes:
+            raise InvalidA2APartError(
+                f"A2A message exceeds the {max_message_bytes}-byte aggregate limit"
+            )
 
         artifacts.append(
             TaskInputArtifact(
@@ -95,6 +127,11 @@ def normalize_a2a_parts(
             sort_keys=True,
         )
         blocks.append(f"[A2A {kind} Part {index}]\n{details}")
+
+    if total_bytes > max_message_bytes:
+        raise InvalidA2APartError(
+            f"A2A message exceeds the {max_message_bytes}-byte aggregate limit"
+        )
 
     return NormalizedA2AMessage(content="\n\n".join(blocks), artifacts=tuple(artifacts))
 

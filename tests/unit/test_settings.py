@@ -59,6 +59,10 @@ class TestSettingsDefaults:
         assert settings.a2a_security_schemes == {}
         assert settings.a2a_security_requirements == []
         assert settings.a2a_max_raw_part_bytes == 10 * 1024 * 1024
+        assert settings.a2a_max_parts == 64
+        assert settings.a2a_max_message_bytes == 16 * 1024 * 1024
+        assert settings.a2a_stream_chunk_bytes == 4096
+        assert settings.a2a_terminal_task_ttl_seconds == 0
 
 
 class TestA2ASecuritySettings:
