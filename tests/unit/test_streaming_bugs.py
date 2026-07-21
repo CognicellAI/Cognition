@@ -20,6 +20,7 @@ Bug 3 — model in usage event reports gpt-4o regardless of provider:
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncGenerator
 from pathlib import Path
 from typing import Any, Literal
@@ -30,6 +31,7 @@ import pytest
 from server.app.agent.runtime import (
     ArtifactEvent,
     DoneEvent,
+    ErrorEvent,
     TokenEvent,
     UsageEvent,
 )
@@ -156,6 +158,13 @@ async def _runtime_raises(exc: Exception) -> AsyncGenerator[Any, None]:
     if False:
         yield None
     raise exc
+
+
+async def _runtime_never_finishes() -> AsyncGenerator[Any, None]:
+    """Model a provider stream that opens but never terminates."""
+    if False:
+        yield None
+    await asyncio.Event().wait()
 
 
 # ---------------------------------------------------------------------------
@@ -410,3 +419,55 @@ class TestRuntimeErrorsSurface:
         error_events = [e for e in collected if getattr(e, "code", None) == "STREAMING_ERROR"]
         assert len(error_events) == 1
         assert "graph blew up" in error_events[0].message
+
+
+class TestExecutionTimeout:
+    """Configured agent deadlines must terminate stalled provider streams."""
+
+    @pytest.mark.asyncio
+    async def test_timeout_aborts_runtime_and_emits_stable_error(self):
+        from server.app.agent.definition import AgentConfig, AgentDefinition
+        from server.app.llm.deep_agent_service import (
+            DeepAgentStreamingService,
+            ResolvedAgentConfig,
+        )
+
+        session = _make_session()
+        mock_runtime = MagicMock()
+        mock_runtime.astream_events = MagicMock(return_value=_runtime_never_finishes())
+        mock_runtime.abort = AsyncMock(return_value=True)
+        service = DeepAgentStreamingService(_make_settings())
+        service.storage_backend = MagicMock()
+        service.storage_backend.get_session = AsyncMock(return_value=session)
+        service.storage_backend.get_checkpointer = AsyncMock(return_value=MagicMock())
+        service.storage_backend.get_store = AsyncMock(return_value=MagicMock())
+
+        agent_definition = AgentDefinition(
+            name="timeout-agent",
+            system_prompt="Remain bounded",
+            config=AgentConfig(timeout_seconds=0.01),
+        )
+        resolved = ResolvedAgentConfig(agent_def=agent_definition)
+        p1, p2, p3, p4 = _stream_patches(mock_runtime, session)
+        with (
+            p1,
+            p2,
+            p3,
+            p4,
+            patch.object(
+                service,
+                "_resolve_agent_config",
+                new=AsyncMock(return_value=(resolved, [])),
+            ),
+        ):
+            collected = await _collect(service, session)
+
+        timeout_events = [
+            event
+            for event in collected
+            if isinstance(event, ErrorEvent) and event.code == "EXECUTION_TIMEOUT"
+        ]
+        assert len(timeout_events) == 1
+        assert "0.01 second deadline" in timeout_events[0].message
+        mock_runtime.abort.assert_awaited_once_with(session.thread_id)
+        assert not any(isinstance(event, DoneEvent) for event in collected)
