@@ -9,6 +9,10 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- Enforced `agent.config.timeout_seconds` as a shared execution deadline. Stalled provider streams are aborted and native or A2A callers now receive a terminal `EXECUTION_TIMEOUT` failure instead of an indefinitely open response.
+
 ## [0.12.0-rc.5] — 2026-07-19
 
 ### Added

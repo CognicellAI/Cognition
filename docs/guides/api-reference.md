@@ -753,7 +753,7 @@ Create or replace an agent definition in the ConfigRegistry.
 | `context_policy` | object | Context and summarization policy configuration |
 | `excluded_tools` | list[string] | Tool names removed from the model-visible tool list for this agent |
 | `blocked_tools` | list[string] | Tool names denied at execution time for this agent in addition to global `COGNITION_BLOCKED_TOOLS` |
-| `timeout_seconds` | float | Per-agent model request timeout |
+| `timeout_seconds` | float | Per-agent execution deadline. A stalled provider or agent run is aborted and reported as failed when the deadline expires. |
 | `middleware` | list | Middleware names or middleware config dicts |
 | `subagents` | list[object] | In-process subagent definitions |
 | `async_subagents` | list[object] | Experimental remote Agent Protocol async subagent definitions |

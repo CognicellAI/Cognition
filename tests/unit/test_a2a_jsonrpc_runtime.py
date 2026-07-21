@@ -13,6 +13,7 @@ from server.app.agent.runtime import (
     ArtifactEvent,
     DirectMessageEvent,
     DoneEvent,
+    ErrorEvent,
     InterruptEvent,
     TokenEvent,
 )
@@ -47,6 +48,12 @@ class _FakeAgentService:
                 tool_call_id="approval-1",
                 tool_name="publish",
                 args={},
+            )
+            return
+        if message_id.startswith("execution-timeout"):
+            yield ErrorEvent(
+                message="Agent execution exceeded the configured deadline",
+                code="EXECUTION_TIMEOUT",
             )
             return
         if message_id.startswith("tck-artifact-data"):
@@ -327,6 +334,41 @@ async def test_send_streaming_uses_1_0_wrappers_and_terminal_subscribe_is_reject
         )
 
         assert subscribe.json()["error"]["code"] == -32004
+
+
+async def test_streaming_execution_timeout_emits_failed_terminal_status(
+    setup_storage_backend: StorageBackend,
+    tmp_path,
+) -> None:
+    client = await _build_client(setup_storage_backend, tmp_path)
+    stream_request = _send_request("execution-timeout-message")
+    stream_request["method"] = "SendStreamingMessage"
+    events: list[dict] = []
+
+    async with client:
+        async with client.stream(
+            "POST",
+            "/a2a/researcher",
+            json=stream_request,
+            headers={"Accept": "text/event-stream"},
+        ) as response:
+            async for line in response.aiter_lines():
+                if line.startswith("data: "):
+                    events.append(json.loads(line[6:]))
+
+    terminal = [
+        event["result"]["statusUpdate"]
+        for event in events
+        if "statusUpdate" in event.get("result", {})
+    ]
+    assert terminal[-1]["status"]["state"] == "TASK_STATE_FAILED"
+    task_id = terminal[-1]["taskId"]
+    task = await setup_storage_backend.get_task(task_id, {"account": "acme"})
+    assert task is not None
+    assert task.status.value == "failed"
+    run = await setup_storage_backend.get_run(task.last_run_id or task.current_run_id or "")
+    assert run is not None
+    assert run.error_code == "EXECUTION_TIMEOUT"
 
 
 async def test_jsonrpc_trailing_slash_and_wrong_content_type_are_protocol_responses(
