@@ -151,6 +151,34 @@ updates. Use `SubscribeToTask` to reconnect to an existing non-terminal task.
 See [Tasks and Streaming](../concepts/a2a/tasks-and-streaming.md) for durable
 identity, continuation, cancellation, and replay behavior.
 
+### Durability and resource controls
+
+Cognition coalesces model tokens into bounded artifact updates. Each update is
+persisted before it is emitted, so a disconnected subscriber can replay ordered
+updates through `SubscribeToTask`; disconnecting does not cancel execution.
+Tune the deployment without changing Agent Cards:
+
+| Environment variable | Default | Purpose |
+|---|---:|---|
+| `COGNITION_A2A_MAX_PARTS` | `64` | Maximum Parts in one inbound message |
+| `COGNITION_A2A_MAX_MESSAGE_BYTES` | `16777216` | Aggregate decoded inbound bytes |
+| `COGNITION_A2A_MAX_TEXT_PART_BYTES` | `2097152` | Maximum UTF-8 bytes in one text Part |
+| `COGNITION_A2A_MAX_DATA_PART_BYTES` | `2097152` | Maximum canonical JSON bytes in one data Part |
+| `COGNITION_A2A_MAX_RAW_PART_BYTES` | `10485760` | Maximum decoded bytes in one raw Part |
+| `COGNITION_A2A_MAX_OUTPUT_ARTIFACTS` | `100` | Maximum distinct artifacts per execution |
+| `COGNITION_A2A_MAX_OUTPUT_BYTES` | `16777216` | Aggregate output limit per execution |
+| `COGNITION_A2A_STREAM_CHUNK_BYTES` | `4096` | Target size for durable text chunks |
+| `COGNITION_A2A_STREAM_FLUSH_INTERVAL_SECONDS` | `0.25` | Maximum active-stream coalescing interval |
+| `COGNITION_A2A_TERMINAL_TASK_TTL_SECONDS` | `0` | Terminal task retention; zero disables deletion |
+| `COGNITION_A2A_CLEANUP_INTERVAL_SECONDS` | `3600` | Minimum cleanup interval per active agent/scope |
+| `COGNITION_A2A_CLEANUP_BATCH_SIZE` | `100` | Maximum tasks removed per cleanup pass |
+| `COGNITION_A2A_CLEANUP_GRACE_SECONDS` | `300` | Additional terminal-state safety window |
+
+Cleanup runs opportunistically for exact agent/scope namespaces receiving A2A
+traffic. It never deletes active tasks or unrelated data in a shared context.
+After a retained task is deleted, its former message-id idempotency key may be
+used for a new task.
+
 ## 7. Verify isolation
 
 Before deployment, repeat discovery and task/artifact reads with a different
@@ -166,6 +194,7 @@ continuation, listing, subscription, and cancellation.
 | Card advertises a private URL | Set `a2a.public_interface_url` to the externally routed JSON-RPC endpoint. |
 | Media type is rejected | Confirm valid MIME syntax and that the card or selected public skill advertises the format. |
 | Raw Part is rejected | Check `COGNITION_A2A_MAX_RAW_PART_BYTES` and base64 validity. |
+| Retry returns invalid parameters | A `messageId` was reused with execution-relevant content that differs from the original request. |
 | URL content is not available | URL Parts are references; provide an explicit authorized retrieval tool if remote fetching is required. |
 | Authentication metadata is missing | Configure both security environment values and restart Cognition so startup validation runs. |
 

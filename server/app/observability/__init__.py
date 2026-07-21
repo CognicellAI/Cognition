@@ -16,12 +16,13 @@ import structlog
 
 # Optional imports with fallbacks
 try:
-    from prometheus_client import Counter, Histogram, start_http_server
+    from prometheus_client import Counter, Gauge, Histogram, start_http_server
 
     PROMETHEUS_AVAILABLE = True
 except ImportError:
     PROMETHEUS_AVAILABLE = False
     Counter = None  # type: ignore[assignment,misc]
+    Gauge = None  # type: ignore[assignment,misc]
     Histogram = None  # type: ignore[assignment,misc]
     start_http_server = None  # type: ignore[assignment]
 
@@ -118,6 +119,68 @@ if PROMETHEUS_AVAILABLE:
         "Session lifecycle events",
         ["event_type"],  # created, resumed, closed, expired
     )
+    A2A_REQUESTS_TOTAL = Counter(
+        "cognition_a2a_requests_total",
+        "A2A operations by outcome",
+        ["operation", "outcome"],
+    )
+    RUNTIME_TASK_TRANSITIONS_TOTAL = Counter(
+        "cognition_runtime_task_transitions_total",
+        "Durable task lifecycle transitions",
+        ["transport", "status"],
+    )
+    RUNTIME_ACTIVE_TASKS = Gauge(
+        "cognition_runtime_active_tasks",
+        "Task executions active in this process",
+        ["transport"],
+    )
+    A2A_ACTIVE_SUBSCRIBERS = Gauge(
+        "cognition_a2a_active_subscribers",
+        "A2A subscribers active in this process",
+    )
+    RUNTIME_TIME_TO_FIRST_OUTPUT = Histogram(
+        "cognition_runtime_time_to_first_output_seconds",
+        "Time from task execution start to first output",
+        ["transport"],
+    )
+    RUNTIME_TASK_DURATION = Histogram(
+        "cognition_runtime_task_duration_seconds",
+        "Task execution duration",
+        ["transport", "outcome"],
+    )
+    A2A_STREAM_CHUNK_BYTES = Histogram(
+        "cognition_a2a_stream_chunk_bytes",
+        "Encoded bytes per emitted A2A artifact chunk",
+    )
+    A2A_STREAM_FLUSH_DURATION = Histogram(
+        "cognition_a2a_stream_flush_duration_seconds",
+        "Time required to persist and emit one A2A stream chunk",
+    )
+    A2A_SUBSCRIPTIONS_TOTAL = Counter(
+        "cognition_a2a_subscriptions_total",
+        "A2A subscription lifecycle events",
+        ["outcome"],
+    )
+    A2A_IDEMPOTENCY_TOTAL = Counter(
+        "cognition_a2a_idempotency_total",
+        "A2A idempotency outcomes",
+        ["outcome"],
+    )
+    A2A_LIMIT_REJECTIONS_TOTAL = Counter(
+        "cognition_a2a_limit_rejections_total",
+        "A2A requests or outputs rejected by resource limits",
+        ["direction", "limit"],
+    )
+    RUNTIME_TASK_CLEANUP_TOTAL = Counter(
+        "cognition_runtime_task_cleanup_total",
+        "Durable task retention cleanup outcomes",
+        ["transport", "outcome"],
+    )
+    RUNTIME_TASK_CLEANUP_DURATION = Histogram(
+        "cognition_runtime_task_cleanup_duration_seconds",
+        "Durable task retention cleanup duration",
+        ["transport"],
+    )
 else:
     # Dummy metrics that do nothing
     class DummyMetric:
@@ -126,6 +189,9 @@ else:
             return self
 
         def inc(self, *args: Any, **kwargs: Any) -> None:
+            """No-op."""
+
+        def dec(self, *args: Any, **kwargs: Any) -> None:
             """No-op."""
 
         def observe(self, *args: Any, **kwargs: Any) -> None:
@@ -141,6 +207,19 @@ else:
     RUNTIME_EVENT_COUNT = DummyMetric()  # type: ignore[assignment]
     RUN_TRANSITION_COUNT = DummyMetric()  # type: ignore[assignment]
     SESSION_COUNT = DummyMetric()  # type: ignore[assignment]
+    A2A_REQUESTS_TOTAL = DummyMetric()  # type: ignore[assignment]
+    RUNTIME_TASK_TRANSITIONS_TOTAL = DummyMetric()  # type: ignore[assignment]
+    RUNTIME_ACTIVE_TASKS = DummyMetric()  # type: ignore[assignment]
+    A2A_ACTIVE_SUBSCRIBERS = DummyMetric()  # type: ignore[assignment]
+    RUNTIME_TIME_TO_FIRST_OUTPUT = DummyMetric()  # type: ignore[assignment]
+    RUNTIME_TASK_DURATION = DummyMetric()  # type: ignore[assignment]
+    A2A_STREAM_CHUNK_BYTES = DummyMetric()  # type: ignore[assignment]
+    A2A_STREAM_FLUSH_DURATION = DummyMetric()  # type: ignore[assignment]
+    A2A_SUBSCRIPTIONS_TOTAL = DummyMetric()  # type: ignore[assignment]
+    A2A_IDEMPOTENCY_TOTAL = DummyMetric()  # type: ignore[assignment]
+    A2A_LIMIT_REJECTIONS_TOTAL = DummyMetric()  # type: ignore[assignment]
+    RUNTIME_TASK_CLEANUP_TOTAL = DummyMetric()  # type: ignore[assignment]
+    RUNTIME_TASK_CLEANUP_DURATION = DummyMetric()  # type: ignore[assignment]
 
 
 def setup_tracing(

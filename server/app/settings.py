@@ -255,6 +255,64 @@ class Settings(BaseSettings):
         alias="COGNITION_A2A_MAX_RAW_PART_BYTES",
         description="Maximum decoded size accepted for one inbound A2A raw Part.",
     )
+    a2a_max_parts: int = Field(default=64, ge=1, alias="COGNITION_A2A_MAX_PARTS")
+    a2a_max_message_bytes: int = Field(
+        default=16 * 1024 * 1024,
+        ge=1,
+        alias="COGNITION_A2A_MAX_MESSAGE_BYTES",
+    )
+    a2a_max_text_part_bytes: int = Field(
+        default=2 * 1024 * 1024,
+        ge=1,
+        alias="COGNITION_A2A_MAX_TEXT_PART_BYTES",
+    )
+    a2a_max_data_part_bytes: int = Field(
+        default=2 * 1024 * 1024,
+        ge=1,
+        alias="COGNITION_A2A_MAX_DATA_PART_BYTES",
+    )
+    a2a_max_output_artifacts: int = Field(
+        default=100,
+        ge=1,
+        alias="COGNITION_A2A_MAX_OUTPUT_ARTIFACTS",
+    )
+    a2a_max_output_bytes: int = Field(
+        default=16 * 1024 * 1024,
+        ge=1,
+        alias="COGNITION_A2A_MAX_OUTPUT_BYTES",
+    )
+    a2a_stream_chunk_bytes: int = Field(
+        default=4096,
+        ge=1,
+        alias="COGNITION_A2A_STREAM_CHUNK_BYTES",
+    )
+    a2a_stream_flush_interval_seconds: float = Field(
+        default=0.25,
+        gt=0,
+        alias="COGNITION_A2A_STREAM_FLUSH_INTERVAL_SECONDS",
+    )
+    a2a_terminal_task_ttl_seconds: int = Field(
+        default=0,
+        ge=0,
+        alias="COGNITION_A2A_TERMINAL_TASK_TTL_SECONDS",
+        description="Terminal A2A task retention. Zero disables automatic deletion.",
+    )
+    a2a_cleanup_interval_seconds: float = Field(
+        default=3600.0,
+        gt=0,
+        alias="COGNITION_A2A_CLEANUP_INTERVAL_SECONDS",
+    )
+    a2a_cleanup_batch_size: int = Field(
+        default=100,
+        ge=1,
+        le=1000,
+        alias="COGNITION_A2A_CLEANUP_BATCH_SIZE",
+    )
+    a2a_cleanup_grace_seconds: int = Field(
+        default=300,
+        ge=0,
+        alias="COGNITION_A2A_CLEANUP_GRACE_SECONDS",
+    )
 
     # SSE (Server-Sent Events) settings
     sse_heartbeat_interval_seconds: float = Field(

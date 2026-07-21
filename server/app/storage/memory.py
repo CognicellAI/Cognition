@@ -416,6 +416,27 @@ class MemoryStorageBackend:
         task.updated_at = now_utc_iso()
         return task
 
+    async def delete_task_data(
+        self, task_id: str, effective_scope: dict[str, str]
+    ) -> bool:
+        """Delete only terminal, exact-scope data owned by one task."""
+        task = await self.get_task(task_id, effective_scope)
+        if task is None or not TaskStatus.is_terminal(task.status):
+            return False
+        run_ids = {run.id for run in self._runs.values() if run.task_id == task_id}
+        for event_id in [key for key, event in self._events.items() if event.task_id == task_id]:
+            del self._events[event_id]
+        for message_id in [
+            key
+            for key, message in self._messages.items()
+            if (message.metadata or {}).get("task_id") == task_id
+        ]:
+            del self._messages[message_id]
+        for run_id in run_ids:
+            self._runs.pop(run_id, None)
+        del self._tasks[task_id]
+        return True
+
     async def create_run(
         self,
         run_id: str,
