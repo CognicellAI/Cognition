@@ -9,10 +9,17 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.12.0-rc.6] — 2026-07-21
+
+### Added
+
+- Added durable, coalesced A2A artifact streaming with replay-safe subscriptions, request fingerprint conflict detection, inbound and generated-output limits, scope-aware terminal-task retention cleanup, and A2A runtime telemetry.
+
 ### Fixed
 
 - Projected validated Deep Agents `structured_response` state as an outbound A2A data artifact and added bidirectional wire coverage for text, data, raw, and URL Parts.
 - Enforced `agent.config.timeout_seconds` as a shared execution deadline. Stalled provider streams are aborted and native or A2A callers now receive a terminal `EXECUTION_TIMEOUT` failure instead of an indefinitely open response.
+- Ensured replayed A2A task subscriptions end with the durable terminal task state after artifact-update events.
 
 ## [0.12.0-rc.5] — 2026-07-19
 
