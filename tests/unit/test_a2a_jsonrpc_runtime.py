@@ -189,6 +189,49 @@ async def test_duplicate_in_flight_message_recovers_same_working_task(
         assert completed_task["status"]["state"] == "TASK_STATE_COMPLETED"
 
 
+async def test_subscribe_replay_ends_with_terminal_task_after_artifact_updates(
+    setup_storage_backend: StorageBackend,
+    tmp_path,
+) -> None:
+    """A replayed artifact update must not follow the terminal task event."""
+    manager = _FakeSessionAgentManager(setup_storage_backend)
+    client = await _build_client(setup_storage_backend, tmp_path, manager)
+    request = _send_request("slow-message-subscribe-order")
+
+    async def collect_subscription(task_id: str) -> list[dict]:
+        events: list[dict] = []
+        async with client.stream(
+            "POST",
+            "/a2a/researcher",
+            json={
+                "jsonrpc": "2.0",
+                "id": "subscribe-order",
+                "method": "SubscribeToTask",
+                "params": {"id": task_id},
+            },
+            headers={"Accept": "text/event-stream"},
+        ) as response:
+            async for line in response.aiter_lines():
+                if line.startswith("data: "):
+                    events.append(json.loads(line[6:]))
+        return events
+
+    async with client:
+        execution = asyncio.create_task(client.post("/a2a/researcher", json=request))
+        await asyncio.wait_for(manager.service.started.wait(), timeout=1)
+        duplicate = await client.post("/a2a/researcher", json=request)
+        task_id = duplicate.json()["result"]["task"]["id"]
+        subscription = asyncio.create_task(collect_subscription(task_id))
+        await asyncio.sleep(0.05)
+        manager.service.release.set()
+        await execution
+        events = await subscription
+
+    results = [event["result"] for event in events]
+    assert any("artifactUpdate" in result for result in results)
+    assert results[-1]["task"]["status"]["state"] == "TASK_STATE_COMPLETED"
+
+
 def _send_request(message_id: str = "message-1") -> dict:
     return {
         "jsonrpc": "2.0",

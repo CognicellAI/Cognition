@@ -304,6 +304,7 @@ class _ScopedRequestHandler(DefaultRequestHandler):
         yield current
 
         signature = _task_signature(current)
+        terminal_projection: Task | None = None
         A2A_ACTIVE_SUBSCRIBERS.inc()
         A2A_SUBSCRIPTIONS_TOTAL.labels(outcome="started").inc()
         try:
@@ -322,6 +323,14 @@ class _ScopedRequestHandler(DefaultRequestHandler):
                 if projected is None:
                     raise TaskNotFoundError
                 new_signature = _task_signature(projected)
+                if _is_terminal_task(projected):
+                    # Durable events are replayed in causal order, but task
+                    # projection reads can observe the terminal state while
+                    # replaying an earlier event. Defer it so an artifact
+                    # update can never become the stream's final event.
+                    terminal_projection = projected
+                    signature = new_signature
+                    continue
                 if new_signature != signature:
                     signature = new_signature
                     yield projected
@@ -330,6 +339,11 @@ class _ScopedRequestHandler(DefaultRequestHandler):
         finally:
             A2A_ACTIVE_SUBSCRIBERS.dec()
             A2A_SUBSCRIPTIONS_TOTAL.labels(outcome="ended").inc()
+
+        if terminal_projection is None:
+            terminal_projection = await self._cognition_task_store.get(params.id, context)
+        if terminal_projection is not None and _is_terminal_task(terminal_projection):
+            yield terminal_projection
 
     async def _idempotent_task_response(
         self,
