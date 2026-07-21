@@ -85,3 +85,12 @@ Cognition returns an A2A content/parameter error before starting a run when:
 
 Unknown media types are retained as metadata for raw and URL artifacts. They are
 not interpreted or executed by the adapter.
+
+## Outbound Parts
+
+Cognition serializes protocol-neutral runtime artifacts as the matching A2A
+Part variant: text, structured data, inline raw bytes, or a URL reference.
+Deep Agents structured output configured with `response_format` is published as
+an `application/json` data artifact. Cognition does not parse ordinary text that
+happens to look like JSON; builders must configure a response schema or emit an
+explicit data artifact when consumers require machine-readable output.

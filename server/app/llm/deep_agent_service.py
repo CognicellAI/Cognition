@@ -600,6 +600,7 @@ class DeepAgentStreamingService:
                             event,
                             (
                                 DelegationEvent,
+                                ArtifactEvent,
                                 StatusEvent,
                                 StepCompleteEvent,
                                 InterruptEvent,

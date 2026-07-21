@@ -7,6 +7,7 @@ import json
 from typing import cast
 
 import httpx
+import pytest
 from fastapi import FastAPI
 
 from server.app.agent.runtime import (
@@ -446,6 +447,58 @@ async def test_message_only_and_non_text_artifact_variants_are_supported(
         )
         url_part = url.json()["result"]["task"]["artifacts"][0]["parts"][0]
         assert url_part["url"] == "https://example.com/output.txt"
+
+
+@pytest.mark.parametrize(
+    ("message_id", "variant", "expected"),
+    [
+        ("stream-output-text", "text", "A2A works"),
+        ("tck-artifact-data-stream", "data", {"key": "value", "count": 42}),
+        ("tck-artifact-file-stream", "raw", "ZmlsZSBvdXRwdXQ="),
+        (
+            "tck-artifact-file-url-stream",
+            "url",
+            "https://example.com/output.txt",
+        ),
+    ],
+)
+async def test_all_outbound_part_variants_stream_on_the_a2a_wire(
+    setup_storage_backend: StorageBackend,
+    tmp_path,
+    message_id: str,
+    variant: str,
+    expected: object,
+) -> None:
+    client = await _build_client(setup_storage_backend, tmp_path)
+    request = _send_request(message_id)
+    request["method"] = "SendStreamingMessage"
+    events: list[dict] = []
+
+    async with client:
+        async with client.stream(
+            "POST",
+            "/a2a/researcher",
+            json=request,
+            headers={"Accept": "text/event-stream"},
+        ) as response:
+            async for line in response.aiter_lines():
+                if line.startswith("data: "):
+                    events.append(json.loads(line[6:]))
+
+    artifact_updates = [
+        event["result"]["artifactUpdate"]
+        for event in events
+        if "artifactUpdate" in event.get("result", {})
+    ]
+    assert len(artifact_updates) == 1
+    part = artifact_updates[0]["artifact"]["parts"][0]
+    assert part[variant] == expected
+    assert artifact_updates[0]["lastChunk"] is True
+    assert any(
+        event["result"].get("statusUpdate", {}).get("status", {}).get("state")
+        == "TASK_STATE_COMPLETED"
+        for event in events
+    )
 
 
 async def test_all_inbound_part_variants_are_ordered_scoped_and_inert(

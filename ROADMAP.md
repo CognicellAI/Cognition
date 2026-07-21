@@ -29,6 +29,7 @@ See AGENTS.md for category definitions, DoD requirements, and precedence rules.
 
 | Date | Description | Issue | Layer | Status |
 |------|-------------|-------|-------|--------|
+| 2026-07-20 | Project validated Deep Agents structured responses into outbound A2A data artifacts and verify text, data, raw, and URL Parts bidirectionally on JSON-RPC and SSE wire paths. | A2A outbound Part coverage gap | 4/6 | Completed |
 | 2026-07-20 | Enforce the configured per-agent execution deadline across shared native and A2A streaming so stalled provider streams terminate with a durable failure. | Kennel `0.12.0-rc5` live A2A streaming report | 4/6 | Completed |
 | 2026-07-19 | Prevent unit-test settings mocks from being coerced into real `MagicMock`-named workspace directories; use concrete temporary/in-memory paths and fail tests that attempt mocked filesystem writes. | Test-suite filesystem leak | 1/2 | Completed |
 | 2026-07-18 | Publish validated deployment-level A2A authentication schemes and requirements in generated Agent Cards without moving authentication enforcement into Cognition. | Kennel `0.12.0-rc3` authentication-discovery blocker | 1/6 | Completed |
