@@ -31,6 +31,7 @@ See AGENTS.md for category definitions, DoD requirements, and precedence rules.
 |------|-------------|-------|-------|--------|
 | 2026-07-20 | Project validated Deep Agents structured responses into outbound A2A data artifacts and verify text, data, raw, and URL Parts bidirectionally on JSON-RPC and SSE wire paths. | A2A outbound Part coverage gap | 4/6 | Completed |
 | 2026-07-20 | Enforce the configured per-agent execution deadline across shared native and A2A streaming so stalled provider streams terminate with a durable failure. | Kennel `0.12.0-rc5` live A2A streaming report | 4/6 | Completed |
+| 2026-07-20 | Reject conflicting A2A message-id retries by comparing a canonical request fingerprint instead of silently reusing a task created for different input. | A2A idempotency conflict | 2/4/6 | Completed |
 | 2026-07-19 | Prevent unit-test settings mocks from being coerced into real `MagicMock`-named workspace directories; use concrete temporary/in-memory paths and fail tests that attempt mocked filesystem writes. | Test-suite filesystem leak | 1/2 | Completed |
 | 2026-07-18 | Publish validated deployment-level A2A authentication schemes and requirements in generated Agent Cards without moving authentication enforcement into Cognition. | Kennel `0.12.0-rc3` authentication-discovery blocker | 1/6 | Completed |
 | 2026-07-18 | Honor a builder-configured external A2A interface URL in Agent Cards while retaining the request-derived per-agent route as a backward-compatible fallback. | Kennel `0.12.0-rc2` public Agent Card URL report | 2/6 | Completed |
@@ -121,6 +122,7 @@ The following fallback patterns exist and are tracked for removal. They produce 
 
 | Description | Target Metric | Before | After | Layer | Status |
 |-------------|---------------|--------|-------|-------|--------|
+| Coalesce durable A2A token output and add bounded request/output handling | Durable writes per streamed response | One write per model token | Bounded by configured byte/time chunk thresholds | 2/4/6/7 | Completed |
 | Strict mypy type checking for all production code (`server/`, `client/`) | Production mypy errors | ~341 errors | 0 errors | 1–6 | Completed |
 | Ruff lint cleanup for `feature/config-registry` — unused imports, unsorted import blocks, unused `type: ignore` comments (12 auto-fixed; 10 mypy suppressions removed as stubs are now available) | Lint/mypy errors | 12 ruff + 10 mypy | 0 | 1–6 | Completed |
 

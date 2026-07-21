@@ -156,3 +156,45 @@ async def test_run_and_events_retain_task_correlation(task_store: StorageBackend
     assert event.task_id == "task-1"
     events = await task_store.list_events("context-1", task_id="task-1")
     assert [item.id for item in events] == ["event-1"]
+
+
+@pytest.mark.asyncio
+async def test_delete_task_data_is_terminal_exact_scope_and_task_local(
+    task_store: StorageBackend,
+) -> None:
+    scope = {"project": "kennel"}
+    await _session(task_store, "context-1", scope)
+    for task_id in ("expired", "retained"):
+        await task_store.create_task(
+            task_id=task_id,
+            context_id="context-1",
+            session_id="context-1",
+            agent_name="analyst",
+            effective_scope=scope,
+        )
+        await task_store.create_run(
+            run_id=f"run-{task_id}",
+            session_id="context-1",
+            thread_id="thread-1",
+            status=RunStatus.ACTIVE,
+            effective_scope=scope,
+            task_id=task_id,
+        )
+        await task_store.append_event(
+            event_id=f"event-{task_id}",
+            session_id="context-1",
+            run_id=f"run-{task_id}",
+            event_type="run.started",
+            effective_scope=scope,
+            task_id=task_id,
+        )
+
+    assert not await task_store.delete_task_data("expired", scope)
+    await task_store.update_task("expired", scope, status=TaskStatus.WORKING)
+    await task_store.update_task("expired", scope, status=TaskStatus.COMPLETED)
+    assert not await task_store.delete_task_data("expired", {"project": "other"})
+    assert await task_store.delete_task_data("expired", scope)
+    assert await task_store.get_task("expired", scope) is None
+    assert await task_store.get_run("run-expired") is None
+    assert await task_store.list_events("context-1", task_id="expired") == []
+    assert await task_store.get_task("retained", scope) is not None
