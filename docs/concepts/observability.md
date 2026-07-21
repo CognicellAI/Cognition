@@ -77,6 +77,26 @@ Implemented in `server/app/observability/__init__.py`. All metrics are defined a
 | `cognition_llm_call_duration_seconds` | Histogram | `provider`, `model` | LLM API call latency |
 | `cognition_tool_calls_total` | Counter | `tool_name`, `status` | Tool invocations (`success`/`error`) |
 | `cognition_active_sessions` | Gauge | — | Open non-terminal sessions |
+| `cognition_a2a_requests_total` | Counter | `operation`, `outcome` | A2A operation outcomes |
+| `cognition_runtime_task_transitions_total` | Counter | `transport`, `status` | Durable task transitions |
+| `cognition_runtime_active_tasks` | Gauge | `transport` | Active in-process executions |
+| `cognition_a2a_active_subscribers` | Gauge | — | Active A2A subscribers |
+| `cognition_runtime_time_to_first_output_seconds` | Histogram | `transport` | Time to first output |
+| `cognition_runtime_task_duration_seconds` | Histogram | `transport`, `outcome` | Execution duration |
+| `cognition_a2a_stream_chunk_bytes` | Histogram | — | Coalesced artifact-update size |
+| `cognition_a2a_stream_flush_duration_seconds` | Histogram | — | Persist-and-enqueue latency |
+| `cognition_a2a_subscriptions_total` | Counter | `outcome` | Subscription lifecycle outcomes |
+| `cognition_a2a_idempotency_total` | Counter | `outcome` | Retry reuse and conflicts |
+| `cognition_a2a_limit_rejections_total` | Counter | `direction`, `limit` | Resource-limit rejections |
+| `cognition_runtime_task_cleanup_total` | Counter | `transport`, `outcome` | Retention cleanup results |
+| `cognition_runtime_task_cleanup_duration_seconds` | Histogram | `transport` | Cleanup pass duration |
+
+A2A adapter metrics intentionally exclude agent names, task/message IDs, and raw scope
+values. Runtime metrics use the bounded `transport` label (currently `a2a`) so
+the same metric families can cover native API and future protocol adapters.
+Recommended alerts cover sustained limit rejections, idempotency conflicts,
+cleanup errors, increasing time-to-first-event, and nonzero active tasks without
+corresponding terminal transitions.
 
 When `prometheus_client` is not installed, all metrics fall back to `DummyMetric` — a no-op object that accepts any call without error.
 

@@ -23,6 +23,12 @@ from email.utils import format_datetime
 from typing import TYPE_CHECKING, Any
 
 import structlog
+from a2a.helpers.proto_helpers import (
+    new_data_artifact_update_event,
+    new_raw_artifact_update_event,
+    new_text_artifact_update_event,
+    new_url_artifact_update_event,
+)
 from a2a.server.agent_execution import RequestContext, SimpleRequestContextBuilder
 from a2a.server.context import ServerCallContext
 from a2a.server.events import Event
@@ -42,6 +48,7 @@ from a2a.types import (
 )
 from a2a.utils.errors import (
     ContentTypeNotSupportedError,
+    InvalidParamsError,
     TaskNotCancelableError,
     TaskNotFoundError,
     UnsupportedOperationError,
@@ -66,8 +73,15 @@ from server.app.exceptions import (
     RuntimeTaskNotFoundError,
 )
 from server.app.models import TaskStatus
+from server.app.observability import (
+    A2A_ACTIVE_SUBSCRIBERS,
+    A2A_REQUESTS_TOTAL,
+    A2A_SUBSCRIPTIONS_TOTAL,
+)
 from server.app.protocols.a2a.card import build_agent_card_for_agent
 from server.app.protocols.a2a.executor import CognitionA2AExecutor
+from server.app.protocols.a2a.idempotency import request_fingerprint
+from server.app.protocols.a2a.retention import A2ARetentionManager
 from server.app.protocols.a2a.security import A2ACardSecurity, parse_a2a_card_security
 from server.app.protocols.a2a.task_store import (
     CognitionTaskStore,
@@ -239,6 +253,7 @@ class _ScopedRequestHandler(DefaultRequestHandler):
         params: SendMessageRequest,
         context: ServerCallContext,
     ) -> Any:
+        await self._bind_request_fingerprint(params, context)
         existing = await self._idempotent_task_response(params, context)
         return existing if existing is not None else await super().on_message_send(params, context)
 
@@ -248,6 +263,7 @@ class _ScopedRequestHandler(DefaultRequestHandler):
         params: SendMessageRequest,
         context: ServerCallContext,
     ) -> AsyncGenerator[Event, None]:
+        await self._bind_request_fingerprint(params, context)
         existing = await self._idempotent_task_response(params, context)
         if existing is not None:
             yield existing
@@ -288,10 +304,20 @@ class _ScopedRequestHandler(DefaultRequestHandler):
         yield current
 
         signature = _task_signature(current)
+        A2A_ACTIVE_SUBSCRIBERS.inc()
+        A2A_SUBSCRIPTIONS_TOTAL.labels(outcome="started").inc()
         try:
-            async for _event in self._runtime.subscribe(
+            async for runtime_event in self._runtime.subscribe(
                 SubscribeTask(params.id, self._agent_name, scope)
             ):
+                artifact_update = _artifact_update_from_runtime_event(
+                    current.id,
+                    current.context_id,
+                    runtime_event.payload,
+                ) if runtime_event.event_type == "artifact.updated" else None
+                if artifact_update is not None:
+                    yield artifact_update
+                    continue
                 projected = await self._cognition_task_store.get(params.id, context)
                 if projected is None:
                     raise TaskNotFoundError
@@ -301,6 +327,9 @@ class _ScopedRequestHandler(DefaultRequestHandler):
                     yield projected
         except RuntimeTaskNotFoundError as exc:
             raise TaskNotFoundError from exc
+        finally:
+            A2A_ACTIVE_SUBSCRIBERS.dec()
+            A2A_SUBSCRIPTIONS_TOTAL.labels(outcome="ended").inc()
 
     async def _idempotent_task_response(
         self,
@@ -325,9 +354,44 @@ class _ScopedRequestHandler(DefaultRequestHandler):
             # A distinct message naming an input-required task is a
             # continuation, not a duplicate submission.
             return None
+        fingerprint = context.state.get("a2a_request_fingerprint")
+        stored_fingerprint = task.metadata.get("a2a_request_fingerprint")
+        if stored_fingerprint is not None and fingerprint != stored_fingerprint:
+            from server.app.observability import A2A_IDEMPOTENCY_TOTAL
+
+            A2A_IDEMPOTENCY_TOTAL.labels(outcome="conflict").inc()
+            raise InvalidParamsError(
+                message="A2A message_id was already used for a different request"
+            )
+        from server.app.observability import A2A_IDEMPOTENCY_TOTAL
+
+        A2A_IDEMPOTENCY_TOTAL.labels(outcome="reused").inc()
         if task.metadata.get("interaction_mode") == "message":
             return await self._cognition_task_store.project_message(task)
         return await self._cognition_task_store.project(task)
+
+    async def _bind_request_fingerprint(
+        self,
+        params: SendMessageRequest,
+        context: ServerCallContext,
+    ) -> None:
+        """Attach the canonical fingerprint before idempotency short-circuiting."""
+        task_id = self._idempotent_context_builder.task_id_for(params, context)
+        if task_id is None:
+            return
+        existing = await self._cognition_task_store.get(task_id, context)
+        context_id = (
+            existing.context_id
+            if existing is not None
+            else str(uuid.uuid5(uuid.NAMESPACE_URL, f"cognition:a2a-context:{task_id}"))
+        )
+        context.state["a2a_request_fingerprint"] = request_fingerprint(
+            params,
+            agent_name=self._agent_name,
+            effective_scope=effective_scope_from_context(context),
+            task_id=task_id,
+            context_id=context_id,
+        )
 
 
 def _is_terminal_task(task: Task) -> bool:
@@ -342,6 +406,69 @@ def _is_terminal_task(task: Task) -> bool:
 def _task_signature(task: Task) -> bytes:
     """Return a deterministic projection signature for subscription changes."""
     return bytes(task.SerializeToString(deterministic=True))
+
+
+def _artifact_update_from_runtime_event(
+    task_id: str,
+    context_id: str,
+    payload: dict[str, Any],
+) -> Event | None:
+    """Rehydrate a persisted artifact update for reconnecting subscribers."""
+    kind = payload.get("kind")
+    name = str(payload.get("name") or "response")
+    artifact_id = str(payload.get("artifact_id") or "response")
+    media_type = payload.get("media_type")
+    media_type = str(media_type) if media_type is not None else None
+    append = bool(payload.get("append"))
+    last_chunk = bool(payload.get("last_chunk"))
+    if kind == "text":
+        return new_text_artifact_update_event(
+            task_id=task_id,
+            context_id=context_id,
+            name=name,
+            text=str(payload.get("value") or ""),
+            artifact_id=artifact_id,
+            append=append,
+            last_chunk=last_chunk,
+        )
+    if kind == "data" and isinstance(payload.get("value"), dict):
+        return new_data_artifact_update_event(
+            task_id=task_id,
+            context_id=context_id,
+            name=name,
+            data=payload["value"],
+            artifact_id=artifact_id,
+            media_type=media_type,
+            append=append,
+            last_chunk=last_chunk,
+        )
+    if kind == "raw" and isinstance(payload.get("value"), str):
+        import base64
+
+        return new_raw_artifact_update_event(
+            raw=base64.b64decode(payload["value"]),
+            filename=payload.get("filename"),
+            task_id=task_id,
+            context_id=context_id,
+            name=name,
+            artifact_id=artifact_id,
+            media_type=media_type,
+            append=append,
+            last_chunk=last_chunk,
+        )
+    if kind == "url":
+        return new_url_artifact_update_event(
+            url=str(payload.get("value") or ""),
+            filename=payload.get("filename"),
+            task_id=task_id,
+            context_id=context_id,
+            name=name,
+            artifact_id=artifact_id,
+            media_type=media_type,
+            append=append,
+            last_chunk=last_chunk,
+        )
+    return None
 
 
 def _jsonrpc_error_response(
@@ -454,6 +581,15 @@ async def mount_a2a_routes(
         artifact_store=artifact_store,
     )
     handlers: dict[str, _ScopedRequestHandler] = {}
+    retention = A2ARetentionManager(
+        runtime,
+        store,
+        artifact_store,
+        ttl_seconds=getattr(settings, "a2a_terminal_task_ttl_seconds", 0),
+        interval_seconds=getattr(settings, "a2a_cleanup_interval_seconds", 3600.0),
+        batch_size=getattr(settings, "a2a_cleanup_batch_size", 100),
+        grace_seconds=getattr(settings, "a2a_cleanup_grace_seconds", 300),
+    )
     cards_last_modified = format_datetime(datetime.now(UTC), usegmt=True)
 
     def get_handler(agent_name: str, card: Any) -> _ScopedRequestHandler:
@@ -475,6 +611,22 @@ async def mount_a2a_routes(
                     settings,
                     "a2a_max_raw_part_bytes",
                     10 * 1024 * 1024,
+                ),
+                max_parts=getattr(settings, "a2a_max_parts", 64),
+                max_message_bytes=getattr(settings, "a2a_max_message_bytes", 16 * 1024 * 1024),
+                max_text_part_bytes=getattr(
+                    settings, "a2a_max_text_part_bytes", 2 * 1024 * 1024
+                ),
+                max_data_part_bytes=getattr(
+                    settings, "a2a_max_data_part_bytes", 2 * 1024 * 1024
+                ),
+                max_output_artifacts=getattr(settings, "a2a_max_output_artifacts", 100),
+                max_output_bytes=getattr(
+                    settings, "a2a_max_output_bytes", 16 * 1024 * 1024
+                ),
+                stream_chunk_bytes=getattr(settings, "a2a_stream_chunk_bytes", 4096),
+                stream_flush_interval_seconds=getattr(
+                    settings, "a2a_stream_flush_interval_seconds", 0.25
                 ),
             )
             context_builder = _IdempotentRequestContextBuilder(
@@ -600,6 +752,8 @@ async def mount_a2a_routes(
                 status_code=404,
             )
 
+        await retention.maybe_cleanup(agent.name, scope or {})
+
         if request.headers.get("content-type", "").split(";", 1)[0].strip().lower() != (
             "application/json"
         ):
@@ -622,6 +776,16 @@ async def mount_a2a_routes(
             return _jsonrpc_error_response(None, -32700, "Parse error")
         if not isinstance(payload, dict):
             return _jsonrpc_error_response(None, -32600, "Invalid request")
+        operation = payload.get("method")
+        known_operations = {
+            "SendMessage",
+            "SendStreamingMessage",
+            "GetTask",
+            "ListTasks",
+            "CancelTask",
+            "SubscribeToTask",
+        }
+        operation_label = operation if operation in known_operations else "unknown"
 
         card = build_agent_card_for_agent(
             agent,
@@ -641,6 +805,7 @@ async def mount_a2a_routes(
             _discard_unknown_proto_fields(payload),
         )
         sdk_response = await dispatcher.handle_requests(sdk_request)
+        A2A_REQUESTS_TOTAL.labels(operation=operation_label, outcome="handled").inc()
         sdk_response.headers.setdefault("a2a-version", CURRENT_A2A_VERSION)
         return sdk_response
 

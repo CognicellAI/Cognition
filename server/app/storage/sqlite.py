@@ -735,6 +735,27 @@ class SqliteStorageBackend:
             return None
         return await self.get_task(task_id, effective_scope)
 
+    async def delete_task_data(
+        self, task_id: str, effective_scope: dict[str, str]
+    ) -> bool:
+        """Delete only terminal, exact-scope data owned by one task."""
+        current = await self.get_task(task_id, effective_scope)
+        if current is None or not TaskStatus.is_terminal(current.status):
+            return False
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute("DELETE FROM session_events WHERE task_id = ?", (task_id,))
+            await db.execute(
+                "DELETE FROM messages WHERE json_extract(metadata, '$.task_id') = ?",
+                (task_id,),
+            )
+            await db.execute("DELETE FROM session_runs WHERE task_id = ?", (task_id,))
+            cursor = await db.execute(
+                "DELETE FROM runtime_tasks WHERE id = ? AND scope_key = ?",
+                (task_id, effective_scope_key(effective_scope)),
+            )
+            await db.commit()
+        return cursor.rowcount == 1
+
     async def create_run(
         self,
         run_id: str,

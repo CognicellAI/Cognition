@@ -321,6 +321,12 @@ class RuntimeStore(Protocol):
         """Conditionally update a task, returning None on mismatch/not-found."""
         ...
 
+    async def delete_task_data(
+        self, task_id: str, effective_scope: dict[str, str]
+    ) -> bool:
+        """Delete a terminal task and its task-owned runtime projections."""
+        ...
+
     async def create_run(
         self,
         run_id: str,
@@ -567,6 +573,12 @@ class StorageBackend(Protocol):
         metadata: dict[str, Any] | None = None,
     ) -> RuntimeTask | None:
         """Conditionally update a task, returning None on mismatch/not-found."""
+        ...
+
+    async def delete_task_data(
+        self, task_id: str, effective_scope: dict[str, str]
+    ) -> bool:
+        """Delete a terminal task and its task-owned runtime projections."""
         ...
 
     async def create_run(
