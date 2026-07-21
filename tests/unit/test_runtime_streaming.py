@@ -28,7 +28,6 @@ from langchain_core.messages import AIMessageChunk, ToolMessage
 from langchain_core.messages.tool import ToolCallChunk
 
 from server.app.agent.runtime import (
-    ArtifactEvent,
     DeepAgentRuntime,
     DelegationEvent,
     DoneEvent,
@@ -39,7 +38,6 @@ from server.app.agent.runtime import (
     ToolResultEvent,
     ToolSafetyEvent,
 )
-from tests.fixtures.schemas import AgentResult
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -161,42 +159,6 @@ class TestTokenStreaming:
         runtime = _make_runtime(_ai_token("hi"))
         events = await _collect(runtime)
         assert isinstance(events[-1], DoneEvent)
-
-
-class TestStructuredOutputStreaming:
-    """Validated root-agent output becomes one protocol-neutral data artifact."""
-
-    @pytest.mark.asyncio
-    async def test_pydantic_structured_response_yields_data_artifact(self):
-        response = AgentResult(summary="Looks good")
-        runtime = _make_runtime(
-            _make_chunk(
-                "updates",
-                {"model": {"structured_response": response}},
-            )
-        )
-
-        events = await _collect(runtime)
-
-        artifacts = [event for event in events if isinstance(event, ArtifactEvent)]
-        assert len(artifacts) == 1
-        assert artifacts[0].kind == "data"
-        assert artifacts[0].media_type == "application/json"
-        assert artifacts[0].value == response.model_dump(mode="json")
-
-    @pytest.mark.asyncio
-    async def test_subagent_structured_response_is_not_published_as_root_output(self):
-        runtime = _make_runtime(
-            _make_chunk(
-                "updates",
-                {"model": {"structured_response": {"private": True}}},
-                ns=("tools:subagent-call",),
-            )
-        )
-
-        events = await _collect(runtime)
-
-        assert not any(isinstance(event, ArtifactEvent) for event in events)
 
 
 # ---------------------------------------------------------------------------

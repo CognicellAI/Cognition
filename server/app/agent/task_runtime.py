@@ -117,12 +117,13 @@ class TaskExecution:
 
 
 @dataclass(frozen=True)
-class TaskInputArtifact:
-    """Protocol-neutral, inert input attachment for one task execution."""
+class TaskInputPart:
+    """Protocol-neutral, lossless input part for one task execution."""
 
     id: str
+    index: int
     kind: str
-    content: str
+    value: Any
     content_encoding: str
     media_type: str | None
     filename: str | None
@@ -569,61 +570,79 @@ class AgentTaskRuntime:
             )
         return updated
 
-    async def persist_input_artifacts(
+    async def persist_input_parts(
         self,
         execution: TaskExecution,
-        artifacts: Sequence[TaskInputArtifact],
+        parts: Sequence[TaskInputPart],
+        *,
+        message_id: str,
+        message_metadata: dict[str, Any] | None = None,
+        message_extensions: Sequence[str] = (),
+        reference_task_ids: Sequence[str] = (),
     ) -> RuntimeTask:
-        """Persist inert, task-linked inputs under the execution's exact scope."""
-        if not artifacts:
-            return execution.task
-
+        """Persist lossless input Parts under the execution's exact scope."""
         current = await self._require_task(
             execution.task.id,
             execution.task.agent_name,
             execution.task.effective_scope,
         )
-        new_descriptors = [
+        new_descriptors: list[dict[str, Any]] = [
             {
-                "artifact_id": artifact.id,
-                "kind": artifact.kind,
-                "content_encoding": artifact.content_encoding,
-                "filename": artifact.filename,
-                "media_type": artifact.media_type,
-                "metadata": artifact.metadata,
+                "part_id": part.id,
+                "index": part.index,
+                "kind": part.kind,
+                "value": part.value,
+                "content_encoding": part.content_encoding,
+                "filename": part.filename,
+                "media_type": part.media_type,
+                "metadata": part.metadata,
             }
-            for artifact in artifacts
+            for part in parts
         ]
-        descriptors = [dict(item) for item in current.metadata.get("input_artifacts", [])]
-        new_ids = {item["artifact_id"] for item in new_descriptors}
-        descriptors = [item for item in descriptors if item.get("artifact_id") not in new_ids]
+        descriptors = [dict(item) for item in current.metadata.get("input_parts", [])]
+        new_ids = {item["part_id"] for item in new_descriptors}
+        descriptors = [item for item in descriptors if item.get("part_id") not in new_ids]
         descriptors.extend(new_descriptors)
+        input_messages = [dict(item) for item in current.metadata.get("input_messages", [])]
+        message_descriptor = {
+            "message_id": message_id,
+            "part_ids": [part.id for part in parts],
+            "metadata": dict(message_metadata or {}),
+            "extensions": [str(value) for value in message_extensions],
+            "reference_task_ids": [str(value) for value in reference_task_ids],
+        }
+        input_messages = [item for item in input_messages if item.get("message_id") != message_id]
+        input_messages.append(message_descriptor)
         updated = await self._store.update_task(
             current.id,
             current.effective_scope,
             expected_statuses={current.status},
-            metadata={**current.metadata, "input_artifacts": descriptors},
+            metadata={
+                **current.metadata,
+                "input_parts": descriptors,
+                "input_messages": input_messages,
+            },
         )
         if updated is None:
             raise RuntimeTaskConflictError(
-                f"Task '{current.id}' changed while input artifacts were persisted",
+                f"Task '{current.id}' changed while input Parts were persisted",
                 task_id=current.id,
             )
 
         if self._artifact_store is not None:
             from server.app.storage.config_models import ArtifactDefinition
 
-            for artifact in artifacts:
-                default_type = (
-                    "application/octet-stream" if artifact.kind == "raw" else "text/uri-list"
-                )
+            for part in parts:
+                if part.kind not in {"raw", "url"}:
+                    continue
+                default_type = "application/octet-stream" if part.kind == "raw" else "text/uri-list"
                 await self._artifact_store.upsert_artifact(
                     ArtifactDefinition(
-                        id=artifact.id,
-                        name=artifact.id,
+                        id=part.id,
+                        name=part.id,
                         artifact_type="artifact",
-                        content=artifact.content,
-                        content_type=artifact.media_type or default_type,
+                        content=str(part.value),
+                        content_type=part.media_type or default_type,
                         run_id=execution.run.id,
                         visibility="run",
                         scope=execution.task.effective_scope,
@@ -632,8 +651,8 @@ class AgentTaskRuntime:
                 )
         await self.projection.append_event(
             execution.run,
-            "artifact.input.persisted",
-            payload={"count": len(artifacts)},
+            "part.input.persisted",
+            payload={"count": len(parts)},
             visibility="internal",
         )
         return updated

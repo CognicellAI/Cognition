@@ -19,7 +19,7 @@ Architecture:
 from __future__ import annotations
 
 from collections.abc import AsyncIterator, Mapping
-from dataclasses import asdict, dataclass, field, is_dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Literal, Protocol, cast, runtime_checkable
@@ -409,26 +409,6 @@ def _extract_todos_from_update(update: Any) -> list[dict[str, Any]] | None:
         todos = state_update.get("todos")
         if isinstance(todos, list):
             return [_normalize_todo_item(todo) for todo in todos]
-    return None
-
-
-def _extract_structured_response(update: Any) -> dict[str, Any] | None:
-    """Extract a JSON-object structured response from a root graph update."""
-    if not isinstance(update, Mapping):
-        return None
-
-    candidates: list[Any] = [update]
-    candidates.extend(value for value in update.values() if isinstance(value, Mapping))
-    for candidate in candidates:
-        if not isinstance(candidate, Mapping) or "structured_response" not in candidate:
-            continue
-        response = candidate["structured_response"]
-        if hasattr(response, "model_dump"):
-            response = response.model_dump(mode="json")
-        elif is_dataclass(response) and not isinstance(response, type):
-            response = asdict(response)
-        if isinstance(response, Mapping):
-            return {str(key): value for key, value in response.items()}
     return None
 
 
@@ -859,8 +839,6 @@ class DeepAgentRuntime:
             previous_todos: list[dict[str, Any]] = []
             emitted_initial_plan = False
             interrupt_emitted = False
-            structured_response_emitted = False
-
             async for chunk in self._agent.astream(
                 agent_input,
                 config=config,
@@ -978,18 +956,6 @@ class DeepAgentRuntime:
                             else None,
                             summary_id=str(file_path) if file_path is not None else None,
                         )
-
-                    if not ns and not structured_response_emitted:
-                        structured_response = _extract_structured_response(data)
-                        if structured_response is not None:
-                            structured_response_emitted = True
-                            yield ArtifactEvent(
-                                artifact_id="structured-response",
-                                name="structured-response",
-                                kind="data",
-                                value=structured_response,
-                                media_type="application/json",
-                            )
 
                     is_subagent = any(s.startswith("tools:") for s in ns)
 

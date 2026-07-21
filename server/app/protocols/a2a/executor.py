@@ -21,6 +21,7 @@ from a2a.server.agent_execution import AgentExecutor, RequestContext
 from a2a.server.events import EventQueue
 from a2a.types import Role, TaskArtifactUpdateEvent, TaskState, TaskStatusUpdateEvent
 from a2a.utils.errors import InvalidParamsError, TaskNotFoundError
+from google.protobuf.json_format import MessageToDict  # type: ignore[import-untyped]
 
 from server.app.agent.runtime import (
     ArtifactEvent,
@@ -138,6 +139,17 @@ class CognitionA2AExecutor(AgentExecutor):
                     max_message_bytes=self._max_message_bytes,
                     max_text_part_bytes=self._max_text_part_bytes,
                     max_data_part_bytes=self._max_data_part_bytes,
+                    message_metadata=(
+                        MessageToDict(context.message.metadata)
+                        if context.message and context.message.HasField("metadata")
+                        else None
+                    ),
+                    message_extensions=(
+                        tuple(context.message.extensions) if context.message else ()
+                    ),
+                    reference_task_ids=(
+                        tuple(context.message.reference_task_ids) if context.message else ()
+                    ),
                 )
         except InvalidA2APartError as exc:
             from server.app.observability import A2A_LIMIT_REJECTIONS_TOTAL
@@ -205,7 +217,14 @@ class CognitionA2AExecutor(AgentExecutor):
             RUNTIME_ACTIVE_TASKS.labels(transport="a2a").inc()
             active_metric = True
 
-            await self._runtime.persist_input_artifacts(execution, normalized.artifacts)
+            await self._runtime.persist_input_parts(
+                execution,
+                normalized.parts,
+                message_id=normalized.message_id,
+                message_metadata=normalized.metadata,
+                message_extensions=normalized.extensions,
+                reference_task_ids=normalized.reference_task_ids,
+            )
 
             service = self._agent_manager.get_service(execution.session.id)
             if service is None:
@@ -263,6 +282,7 @@ class CognitionA2AExecutor(AgentExecutor):
                     first_output_recorded = True
                 streamed_chunk = True
                 last_flush_at = time.monotonic()
+
             system_prompt = execution.session.config.system_prompt
             source = service.stream_response(
                 session_id=execution.session.id,
@@ -324,7 +344,9 @@ class CognitionA2AExecutor(AgentExecutor):
                     output_bytes += artifact_bytes
                     output_artifact_ids.add(event.artifact_id)
                     if output_bytes > self._max_output_bytes:
-                        await self._fail_output_limit(execution, event_queue, "OUTPUT_BYTES_EXCEEDED")
+                        await self._fail_output_limit(
+                            execution, event_queue, "OUTPUT_BYTES_EXCEEDED"
+                        )
                         return
                     if len(output_artifact_ids) > self._max_output_artifacts:
                         await self._fail_output_limit(
@@ -352,7 +374,9 @@ class CognitionA2AExecutor(AgentExecutor):
                     chunk_buffer.append(event.content)
                     output_bytes += len(event.content.encode("utf-8"))
                     if output_bytes > self._max_output_bytes:
-                        await self._fail_output_limit(execution, event_queue, "OUTPUT_BYTES_EXCEEDED")
+                        await self._fail_output_limit(
+                            execution, event_queue, "OUTPUT_BYTES_EXCEEDED"
+                        )
                         return
                     buffered_bytes = len("".join(chunk_buffer).encode("utf-8"))
                     elapsed = time.monotonic() - last_flush_at
@@ -476,9 +500,7 @@ class CognitionA2AExecutor(AgentExecutor):
                 RUNTIME_TASK_DURATION.labels(transport="a2a", outcome=outcome).observe(
                     time.monotonic() - execution_started
                 )
-                RUNTIME_TASK_TRANSITIONS_TOTAL.labels(
-                    transport="a2a", status=outcome
-                ).inc()
+                RUNTIME_TASK_TRANSITIONS_TOTAL.labels(transport="a2a", status=outcome).inc()
 
     async def _fail_output_limit(
         self,
@@ -639,9 +661,7 @@ def _artifact_size(kind: str, value: Any) -> int:
     return len(str(value).encode("utf-8"))
 
 
-async def _with_flush_ticks(
-    source: AsyncIterator[Any], interval: float
-) -> AsyncIterator[Any]:
+async def _with_flush_ticks(source: AsyncIterator[Any], interval: float) -> AsyncIterator[Any]:
     """Yield source events plus periodic ticks without cancelling the producer."""
     iterator = aiter(source)
     pending: asyncio.Future[Any] = asyncio.ensure_future(anext(iterator))

@@ -128,7 +128,11 @@ curl -X POST http://localhost:8000/a2a/document-agent \
       "messageId": "message-1",
       "role": "ROLE_USER",
       "parts": [
-        {"text": "Summarize this document.", "mediaType": "text/plain"},
+        {
+          "text": "Summarize this document.",
+          "mediaType": "text/plain",
+          "metadata": {"responseMediaType": "application/json"}
+        },
         {"data": {"priority": 3}, "mediaType": "application/json"},
         {"url": "https://files.example.com/contract.pdf", "filename": "contract.pdf", "mediaType": "application/pdf"}
       ]
@@ -140,7 +144,8 @@ JSON
 
 See [Message Parts and Artifacts](../concepts/a2a/message-parts.md) before
 accepting files or remote references. URL Parts are stored as references and are
-not downloaded automatically.
+not downloaded automatically. Part and Message metadata are preserved as
+untrusted application context; they never override Cognition scope or policy.
 
 ## 6. Stream a response
 
