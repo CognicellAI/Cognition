@@ -9,6 +9,8 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.12.0-rc.7] — 2026-07-22
+
 ### Fixed
 
 - Removed the A2A-specific `response_format` projection: a deployed Pydantic model no longer determines whether a generic A2A response becomes a DataPart.
