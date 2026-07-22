@@ -9,6 +9,47 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.12.0] — 2026-07-22
+
+### Highlights
+
+- Replaced Cognition's preview A2A adapter with an A2A 1.0 JSON-RPC runtime backed by the same durable, scope-aware execution lifecycle as the native API.
+- Added bidirectional `text`, `data`, `raw`, and `url` Part handling, durable coalesced artifact streaming, reconnect-safe replay, and bounded resource consumption for production A2A integrations.
+- Expanded Agent Card configuration so builders can publish human-readable names, externally routed interface URLs, authentication discovery metadata, skills, and supported MIME modes without exposing private runtime identifiers.
+
+### Breaking Changes
+
+- Removed the preview A2A v0.3 translation layer. A2A clients must use the A2A 1.0 JSON-RPC methods, wire representations, and streaming envelopes.
+- Replaced process-local A2A task state with durable runtime tasks. Task state created by older preview releases is not migrated into the v0.12.0 lifecycle.
+- Consolidated A2A agent configuration under the typed `a2a` object. The pre-release flat `a2a_exposed` and `a2a_public_interface_url` fields are no longer supported.
+
+### Added
+
+- Added durable `RuntimeTask` persistence for memory, SQLite, and PostgreSQL backends, including A2A send, streaming send, get, list, cancel, and subscribe operations.
+- Added message-id idempotency with request-fingerprint conflict detection, interrupted-task continuation, cancellation-race handling, and deterministic terminal task projection.
+- Added durable, coalesced artifact-update events with ordered replay, multiple-subscriber isolation, slow-consumer protection, and terminal-state recovery after reconnects or restarts.
+- Added configurable inbound and generated-output limits, terminal-task retention cleanup, A2A Prometheus metrics, OpenTelemetry spans, and structured correlation fields.
+- Added ordered inbound normalization for A2A 1.0 `text`, `data`, `raw`, and `url` Parts. Inline content and URL references are persisted as inert, task-linked artifacts under the exact effective scope; Cognition does not fetch URL Parts implicitly.
+- Added builder-configurable Agent Card display names, public interface URLs, authentication schemes and requirements, public skills, and default or per-skill MIME modes.
+- Added official A2A 1.0 JSON-RPC TCK coverage to CI and the pre-release image validation workflow.
+
+### Fixed
+
+- Preserved every DataPart JSON value and all inbound Part and Message context through task persistence, model rendering, and durable artifact replay.
+- Enforced exact effective-scope isolation for public A2A route resolution and persisted task, message, event, and artifact access.
+- Enforced each agent's configured execution timeout across native and A2A streaming, producing a durable `EXECUTION_TIMEOUT` failure when a provider stalls.
+- Ensured replayed subscriptions terminate with the persisted terminal task state after all artifact updates have been delivered.
+- Removed the A2A-specific `response_format` projection so generic A2A response typing is not coupled to a deployed Pydantic model.
+
+### Security
+
+- Added fail-closed scope checks, bounded Part and output sizes, and non-fetching URL Part semantics to prevent cross-scope fallback and unbounded or implicit external input processing.
+
+### Changed
+
+- Native REST/SSE and A2A execution now share `AgentTaskRuntime`, persistence, timeout, and observability primitives instead of maintaining separate task truth.
+- Synthesized Agent Card skills use a public `primary` identifier and display metadata rather than Cognition's private runtime lookup name.
+
 ## [0.12.0-rc.7] — 2026-07-22
 
 ### Fixed
