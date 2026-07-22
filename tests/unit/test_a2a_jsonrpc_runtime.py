@@ -9,6 +9,7 @@ from typing import cast
 import httpx
 import pytest
 from fastapi import FastAPI
+from google.protobuf.json_format import MessageToDict  # type: ignore[import-untyped]
 
 from server.app.agent.runtime import (
     ArtifactEvent,
@@ -19,7 +20,7 @@ from server.app.agent.runtime import (
     TokenEvent,
 )
 from server.app.llm.deep_agent_service import SessionAgentManager
-from server.app.protocols.a2a.routes import mount_a2a_routes
+from server.app.protocols.a2a.routes import _artifact_update_from_runtime_event, mount_a2a_routes
 from server.app.settings import Settings
 from server.app.storage.artifact_store import MemoryArtifactStore
 from server.app.storage.backend import StorageBackend
@@ -57,12 +58,28 @@ class _FakeAgentService:
                 code="EXECUTION_TIMEOUT",
             )
             return
-        if message_id.startswith("tck-artifact-data"):
+        data_values: dict[str, object] = {
+            "object": {"key": "value", "count": 42},
+            "array": ["proposal", 2],
+            "string": "proposal",
+            "number": 7,
+            "boolean": True,
+            "null": None,
+        }
+        data_variant = next(
+            (
+                name
+                for name in data_values
+                if message_id.startswith(f"tck-artifact-data-{name}")
+            ),
+            None,
+        )
+        if data_variant is not None:
             yield ArtifactEvent(
                 artifact_id="data-output",
                 name="response",
                 kind="data",
-                value={"key": "value", "count": 42},
+                value=data_values[data_variant],
                 media_type="application/json",
             )
             yield DoneEvent()
@@ -532,7 +549,7 @@ async def test_message_only_and_non_text_artifact_variants_are_supported(
 
         data = await client.post(
             "/a2a/researcher",
-            json=_send_request("tck-artifact-data-1"),
+            json=_send_request("tck-artifact-data-object-1"),
         )
         assert data.json()["result"]["task"]["artifacts"][0]["parts"][0]["data"] == {
             "key": "value",
@@ -556,10 +573,54 @@ async def test_message_only_and_non_text_artifact_variants_are_supported(
 
 
 @pytest.mark.parametrize(
+    ("variant", "expected"),
+    [
+        ("object", {"key": "value", "count": 42}),
+        ("array", ["proposal", 2]),
+        ("string", "proposal"),
+        ("number", 7),
+        ("boolean", True),
+        ("null", None),
+    ],
+)
+async def test_task_projection_preserves_every_data_json_value(
+    setup_storage_backend: StorageBackend,
+    tmp_path,
+    variant: str,
+    expected: object,
+) -> None:
+    """Completed task retrieval must preserve the complete DataPart value union."""
+    client = await _build_client(setup_storage_backend, tmp_path)
+    async with client:
+        sent = await client.post(
+            "/a2a/researcher",
+            json=_send_request(f"tck-artifact-data-{variant}-task"),
+        )
+        task = sent.json()["result"]["task"]
+        fetched = await client.post(
+            "/a2a/researcher",
+            json={
+                "jsonrpc": "2.0",
+                "id": f"get-{variant}",
+                "method": "GetTask",
+                "params": {"id": task["id"]},
+            },
+        )
+
+    assert task["artifacts"][0]["parts"][0]["data"] == expected
+    assert fetched.json()["result"]["artifacts"][0]["parts"][0]["data"] == expected
+
+
+@pytest.mark.parametrize(
     ("message_id", "variant", "expected"),
     [
         ("stream-output-text", "text", "A2A works"),
-        ("tck-artifact-data-stream", "data", {"key": "value", "count": 42}),
+        ("tck-artifact-data-object-stream", "data", {"key": "value", "count": 42}),
+        ("tck-artifact-data-array-stream", "data", ["proposal", 2]),
+        ("tck-artifact-data-string-stream", "data", "proposal"),
+        ("tck-artifact-data-number-stream", "data", 7),
+        ("tck-artifact-data-boolean-stream", "data", True),
+        ("tck-artifact-data-null-stream", "data", None),
         ("tck-artifact-file-stream", "raw", "ZmlsZSBvdXRwdXQ="),
         (
             "tck-artifact-file-url-stream",
@@ -607,6 +668,37 @@ async def test_all_outbound_part_variants_stream_on_the_a2a_wire(
     )
 
 
+@pytest.mark.parametrize(
+    "value",
+    [
+        {"proposal": "one"},
+        ["proposal", 2],
+        "proposal",
+        7,
+        True,
+        None,
+    ],
+)
+def test_data_artifact_replay_preserves_every_json_value(value: object) -> None:
+    """Reconnect replay must preserve the full A2A DataPart value union."""
+    event = _artifact_update_from_runtime_event(
+        "task-1",
+        "context-1",
+        {
+            "artifact_id": "data-1",
+            "name": "response",
+            "kind": "data",
+            "value": value,
+            "media_type": "application/json",
+            "last_chunk": True,
+        },
+    )
+
+    assert event is not None
+    assert event.artifact.parts[0].WhichOneof("content") == "data"
+    assert MessageToDict(event.artifact.parts[0].data) == value
+
+
 async def test_all_inbound_part_variants_are_ordered_scoped_and_inert(
     setup_storage_backend: StorageBackend,
     tmp_path,
@@ -620,9 +712,24 @@ async def test_all_inbound_part_variants_are_ordered_scoped_and_inert(
         artifact_store,
     )
     request = _send_request("all-input-parts")
+    request["params"]["message"].update(
+        {
+            "extensions": ["https://example.com/decision-room/v1"],
+            "metadata": {"roomId": "room-1"},
+            "referenceTaskIds": ["task-parent"],
+        }
+    )
     request["params"]["message"]["parts"] = [
-        {"text": "Analyze", "mediaType": "text/plain"},
-        {"data": {"priority": 3}, "mediaType": "application/json"},
+        {
+            "text": "Analyze",
+            "mediaType": "text/plain",
+            "metadata": {"schema": {"type": "object"}},
+        },
+        {
+            "data": {"priority": 3},
+            "mediaType": "application/json",
+            "metadata": {"contractVersion": "1.0"},
+        },
         {
             "raw": "aGVsbG8=",
             "filename": "../../note.txt",
@@ -646,6 +753,36 @@ async def test_all_inbound_part_variants_are_ordered_scoped_and_inert(
     assert content.index("Analyze") < content.index("A2A data Part 1")
     assert content.index("A2A data Part 1") < content.index("A2A raw Part 2")
     assert content.index("A2A raw Part 2") < content.index("A2A url Part 3")
+    assert "decision-room/v1" in content
+    assert '"roomId": "room-1"' in content
+    assert '"schema": {"type": "object"}' in content
+
+    task_id = response.json()["result"]["task"]["id"]
+    stored_task = await setup_storage_backend.get_task(
+        task_id,
+        {"account": "acme"},
+        "researcher",
+    )
+    assert stored_task is not None
+    assert [part["kind"] for part in stored_task.metadata["input_parts"]] == [
+        "text",
+        "data",
+        "raw",
+        "url",
+    ]
+    assert stored_task.metadata["input_parts"][0]["metadata"] == {
+        "schema": {"type": "object"}
+    }
+    assert stored_task.metadata["input_parts"][1]["value"] == {"priority": 3.0}
+    assert stored_task.metadata["input_messages"] == [
+        {
+            "message_id": "all-input-parts",
+            "part_ids": [part["part_id"] for part in stored_task.metadata["input_parts"]],
+            "metadata": {"roomId": "room-1"},
+            "extensions": ["https://example.com/decision-room/v1"],
+            "reference_task_ids": ["task-parent"],
+        }
+    ]
 
     artifacts = await artifact_store.list_artifacts(scope={"account": "acme"})
     artifacts = [item for item in artifacts if item.id.startswith("a2a-input-")]

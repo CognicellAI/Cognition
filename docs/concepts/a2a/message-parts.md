@@ -9,14 +9,24 @@ caller cannot supply or override scope through Part metadata.
 
 | A2A Part content | Cognition representation | Model-visible form |
 |---|---|---|
-| `text` | User-message text | Text, preserving Part order |
-| `data` | Structured JSON value | A delimited JSON block, preserving structure |
+| `text` | Canonical input Part plus user-message text | Text with an annotation block when Part fields accompany it |
+| `data` | Canonical input Part containing any JSON value | A delimited JSON block, preserving value and Part fields |
 | `raw` | Scoped, task-linked input artifact | An artifact reference with filename and media type |
 | `url` | Scoped, task-linked URL artifact | A URL-artifact reference with filename and media type |
 
 Mixed messages preserve Part order in the normalized user message. A message may
 contain any combination of the four variants. Cognition rejects a Part whose A2A
 content oneof is unset instead of silently dropping it.
+
+Every Part is also persisted in a canonical task-local representation containing
+its content kind and value, `mediaType`, `filename`, and `metadata`. Message
+metadata, extension URIs, and reference task IDs are persisted alongside the
+ordered Part IDs. The model-visible rendering is derived from this representation;
+it is not the durable source of truth.
+
+The `data` variant accepts every JSON value permitted by A2A: object, array,
+string, number, boolean, and null. Cognition does not narrow DataParts to JSON
+objects.
 
 `raw` contains inline bytes on the A2A wire. Cognition persists those bytes as a
 base64-encoded artifact representation so they remain JSON-safe and can be
@@ -83,14 +93,14 @@ Cognition returns an A2A content/parameter error before starting a run when:
 - raw content is malformed or exceeds configured request limits; or
 - required Part fields are invalid under the A2A schema.
 
-Unknown media types are retained as metadata for raw and URL artifacts. They are
-not interpreted or executed by the adapter.
+Unknown media types and Part metadata are retained for every content variant.
+They are not interpreted as authorization or executed by the adapter.
 
 ## Outbound Parts
 
 Cognition serializes protocol-neutral runtime artifacts as the matching A2A
 Part variant: text, structured data, inline raw bytes, or a URL reference.
-Deep Agents structured output configured with `response_format` is published as
-an `application/json` data artifact. Cognition does not parse ordinary text that
-happens to look like JSON; builders must configure a response schema or emit an
-explicit data artifact when consumers require machine-readable output.
+Cognition does not infer a data Part from ordinary text that happens to look
+like JSON. A runtime `data` artifact is projected as an A2A DataPart without
+requiring a preconfigured application schema; consumers validate any
+application-specific contract.

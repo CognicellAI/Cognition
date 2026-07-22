@@ -445,12 +445,12 @@ def _artifact_update_from_runtime_event(
             append=append,
             last_chunk=last_chunk,
         )
-    if kind == "data" and isinstance(payload.get("value"), dict):
+    if kind == "data":
         return new_data_artifact_update_event(
             task_id=task_id,
             context_id=context_id,
             name=name,
-            data=payload["value"],
+            data=payload.get("value"),
             artifact_id=artifact_id,
             media_type=media_type,
             append=append,

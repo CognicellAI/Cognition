@@ -29,6 +29,9 @@ See AGENTS.md for category definitions, DoD requirements, and precedence rules.
 
 | Date | Description | Issue | Layer | Status |
 |------|-------------|-------|-------|--------|
+| 2026-07-21 | Persist a canonical ordered representation of every inbound A2A Part plus Message metadata, extensions, and references; derive model rendering without losing `mediaType`, filename, metadata, or content type. | A2A Part/message fidelity audit | 2/4/6 | Completed |
+| 2026-07-21 | Remove the A2A-specific `response_format` to DataPart projection so generic A2A output does not depend on a builder-installed Python schema. | Decision Room bring-your-own-agent interoperability | 4/6 | Completed |
+| 2026-07-21 | Preserve every valid A2A `DataPart` JSON value (object, array, string, number, boolean, and null) through inbound normalization, durable artifacts, and streaming replay. | A2A Part §4.1.6 DataPart conformance | 2/4/6 | Completed |
 | 2026-07-20 | Project validated Deep Agents structured responses into outbound A2A data artifacts and verify text, data, raw, and URL Parts bidirectionally on JSON-RPC and SSE wire paths. | A2A outbound Part coverage gap | 4/6 | Completed |
 | 2026-07-20 | Enforce the configured per-agent execution deadline across shared native and A2A streaming so stalled provider streams terminate with a durable failure. | Kennel `0.12.0-rc5` live A2A streaming report | 4/6 | Completed |
 | 2026-07-20 | Reject conflicting A2A message-id retries by comparing a canonical request fingerprint instead of silently reusing a task created for different input. | A2A idempotency conflict | 2/4/6 | Completed |
