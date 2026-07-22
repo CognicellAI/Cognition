@@ -10,7 +10,7 @@ Cognition uses a convention-over-configuration model. Most extensions require ze
 | Tools | Python functions | Yes | Yes |
 | Middleware | Python classes | Yes | No |
 | MCP servers | Remote HTTP/SSE endpoints | No | Yes |
-| A2A exposure | `a2a_exposed: true` on agent definition | No | Yes |
+| A2A exposure | `a2a.exposed: true` on agent definition | No | Yes |
 | Custom LLM providers | Python factories | Yes | No |
 
 ---
@@ -498,17 +498,19 @@ Only HTTP/HTTPS URLs are accepted — stdio-based MCP servers are not supported 
 
 ## 7. Exposing Agents via A2A
 
-Cognition can expose agents via the [Agent-to-Agent (A2A)](https://a2a-protocol.org/latest/) protocol, allowing external systems to discover and invoke your agents.
+Cognition can expose agents as strict [A2A 1.0](https://a2a-protocol.org/latest/)
+JSON-RPC servers, allowing external systems to discover and invoke them.
 
 ### Opting In
 
-Set `a2a_exposed: true` on any agent definition:
+Set `a2a.exposed: true` on any agent definition:
 
 ```yaml
 # .cognition/agents/deploy-agent.yaml
 name: deploy-agent
 mode: primary
-a2a_exposed: true
+a2a:
+  exposed: true
 description: Handles deployment workflows
 system_prompt: |
   You are a deployment agent. Deploy applications safely and report results.
@@ -519,15 +521,16 @@ Or via the API:
 ```bash
 curl -X POST http://localhost:8000/agents \
   -H "Content-Type: application/json" \
-  -d '{"name": "deploy-agent", "system_prompt": "...", "a2a_exposed": true}'
+  -d '{"name": "deploy-agent", "system_prompt": "...", "a2a": {"exposed": true}}'
 ```
 
 ### How It Works
 
-1. **Agent card discovery** — `GET /a2a/{agent_name}/.well-known/agent-card.json` returns the A2A `AgentCard` for that agent. `GET /.well-known/agent-card.json` also lists exposed agents visible to the caller's scope.
+1. **Agent card discovery** — `GET /a2a/{agent_name}/.well-known/agent-card.json` returns the A2A `AgentCard` for that agent. `GET /.well-known/agent-card.json?assistant_id={agent_name}` returns the same single-card shape from the standard well-known path.
 2. **JSON-RPC endpoint** — Each agent gets a dedicated endpoint at `POST /a2a/{agent_name}`. The agent is resolved at request time, so agents created after server startup are immediately available.
-3. **Scope-aware** — A2A requests must include `X-Cognition-Scope-*` headers. Only agents visible in the caller's scope are discoverable and invocable.
-4. **Bridging** — The `CognitionA2AExecutor` bridges A2A requests to Cognition's `service.stream_response()`, reusing the full agent runtime, tools, middleware, and persistence.
+3. **Scope-aware runtime isolation** — Trusted ingress supplies builder-defined `X-Cognition-Scope-*` headers. Cognition carries the exact scope through tasks, contexts, runs, messages, events, and artifacts without becoming the application's tenant or IAM system.
+4. **Shared durable lifecycle** — Native REST/SSE and A2A use the same task/session/run service. A2A tasks survive restarts, continuation creates a new run under the same task, and subscriptions replay durable events.
+5. **Typed message Parts** — Text and structured data enter model context. Inline bytes and URL references become scoped, task-linked artifacts; receiving a URL never performs an implicit network request. Mixed-Part order is preserved. See [A2A Message Parts](../concepts/a2a/message-parts.md).
 
 ### A2A Client Example
 
@@ -547,29 +550,55 @@ resp = httpx.post(
     json={
         "jsonrpc": "2.0",
         "id": "1",
-        "method": "message/send",
+        "method": "SendMessage",
         "params": {
             "message": {
-                "role": "user",
-                "parts": [{"kind": "text", "text": "Deploy staging"}],
+                "messageId": "deploy-staging-1",
+                "role": "ROLE_USER",
+                "parts": [{"text": "Deploy staging", "mediaType": "text/plain"}],
             }
         },
     },
     headers={
+        "A2A-Version": "1.0",
         "X-Cognition-Scope-User": "alice",
     },
 )
 ```
 
+Messages may combine all A2A 1.0 Part content variants:
+
+```json
+{
+  "role": "ROLE_USER",
+  "messageId": "analyze-input-1",
+  "parts": [
+    {"text": "Analyze this payload", "mediaType": "text/plain"},
+    {"data": {"priority": 3}, "mediaType": "application/json"},
+    {"raw": "aGVsbG8=", "filename": "note.txt", "mediaType": "text/plain"},
+    {"url": "https://example.com/report.pdf", "filename": "report.pdf", "mediaType": "application/pdf"}
+  ]
+}
+```
+
+The URL is retained as a scoped reference; Cognition does not download it during
+request handling. File parsing and remote retrieval require explicit tools and
+the deployment's sandbox/network policy.
+
 ### Constraints
 
-- Built-in agents (`default`, `readonly`) have `a2a_exposed=False` by default
+- Built-in agents (`default`, `readonly`) have `a2a.exposed=false` by default
 - Only `primary` and `all` mode agents can be exposed via A2A
 - If `A2A-Version` is omitted, Cognition treats the request as the current supported A2A version
 - Dynamically registered agents are scope-bound. Use the same `X-Cognition-Scope-*` headers when creating, discovering, and invoking an agent.
+- JSON-RPC is the only advertised binding. Push notifications, gRPC, HTTP+JSON, and extended cards are disabled.
+- The supported methods are `SendMessage`, `SendStreamingMessage`, `GetTask`, `ListTasks`, `CancelTask`, and `SubscribeToTask`.
 - A2A does not add any additional services — endpoints are part of the main Cognition server
 
-For full A2A protocol details, see the [A2A SDK documentation](https://github.com/a2aproject/a2a-python).
+For the complete Cognition builder contract—including public skills, MIME modes,
+Agent Cards, message Parts, authentication discovery, and scope isolation—see
+the [A2A Builder Guide](a2a.md). For protocol details, see the
+[A2A SDK documentation](https://github.com/a2aproject/a2a-python).
 
 ---
 

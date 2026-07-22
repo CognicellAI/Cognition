@@ -20,13 +20,20 @@ depends_on: str | Sequence[str] | None = None
 
 def upgrade() -> None:
     """Add enriched fields to messages table."""
-    # Add new columns to messages table
+    existing = {
+        column["name"] for column in sa.inspect(op.get_bind()).get_columns("messages")
+    }
     with op.batch_alter_table("messages") as batch_op:
-        batch_op.add_column(sa.Column("tool_calls", sa.Text(), nullable=True))
-        batch_op.add_column(sa.Column("tool_call_id", sa.Text(), nullable=True))
-        batch_op.add_column(sa.Column("token_count", sa.Integer(), nullable=True))
-        batch_op.add_column(sa.Column("model_used", sa.Text(), nullable=True))
-        batch_op.add_column(sa.Column("metadata", sa.Text(), nullable=True))
+        if "tool_calls" not in existing:
+            batch_op.add_column(sa.Column("tool_calls", sa.Text(), nullable=True))
+        if "tool_call_id" not in existing:
+            batch_op.add_column(sa.Column("tool_call_id", sa.Text(), nullable=True))
+        if "token_count" not in existing:
+            batch_op.add_column(sa.Column("token_count", sa.Integer(), nullable=True))
+        if "model_used" not in existing:
+            batch_op.add_column(sa.Column("model_used", sa.Text(), nullable=True))
+        if "metadata" not in existing:
+            batch_op.add_column(sa.Column("metadata", sa.Text(), nullable=True))
 
 
 def downgrade() -> None:

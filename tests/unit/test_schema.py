@@ -9,6 +9,7 @@ from server.app.storage.schema import (
     get_table_names,
     messages_table,
     metadata,
+    runtime_tasks_table,
     session_events_table,
     session_runs_table,
     sessions_table,
@@ -29,7 +30,8 @@ class TestSchemaDefinitions:
         assert "artifacts" in table_names
         assert "session_runs" in table_names
         assert "session_events" in table_names
-        assert len(table_names) == 7
+        assert "runtime_tasks" in table_names
+        assert len(table_names) == 8
 
     def test_sessions_table_columns(self) -> None:
         """Test sessions table has expected columns."""
@@ -80,6 +82,7 @@ class TestSchemaDefinitions:
             "id",
             "session_id",
             "thread_id",
+            "task_id",
             "status",
             "effective_scope",
             "idempotency_key",
@@ -102,6 +105,7 @@ class TestSchemaDefinitions:
             "id",
             "session_id",
             "run_id",
+            "task_id",
             "sequence",
             "event_type",
             "visibility",
@@ -115,18 +119,41 @@ class TestSchemaDefinitions:
         for col in expected_columns:
             assert col in columns, f"Missing column: {col}"
 
+    def test_runtime_tasks_table_columns(self) -> None:
+        """Test runtime_tasks has neutral task identity and scope columns."""
+        columns = get_column_names("runtime_tasks")
+        expected_columns = {
+            "id",
+            "context_id",
+            "session_id",
+            "agent_name",
+            "status",
+            "effective_scope",
+            "scope_key",
+            "current_run_id",
+            "last_run_id",
+            "idempotency_key",
+            "status_reason",
+            "metadata",
+            "created_at",
+            "updated_at",
+        }
+        assert expected_columns.issubset(columns)
+
     def test_table_access(self) -> None:
         """Test direct table access."""
         assert sessions_table.name == "sessions"
         assert messages_table.name == "messages"
         assert session_runs_table.name == "session_runs"
         assert session_events_table.name == "session_events"
+        assert runtime_tasks_table.name == "runtime_tasks"
 
         # Verify primary keys
         assert "id" in [col.name for col in sessions_table.primary_key.columns]
         assert "id" in [col.name for col in messages_table.primary_key.columns]
         assert "id" in [col.name for col in session_runs_table.primary_key.columns]
         assert "id" in [col.name for col in session_events_table.primary_key.columns]
+        assert "id" in [col.name for col in runtime_tasks_table.primary_key.columns]
 
 
 class TestSchemaCreation:
@@ -156,6 +183,7 @@ class TestSchemaCreation:
             assert "messages" in tables
             assert "session_runs" in tables
             assert "session_events" in tables
+            assert "runtime_tasks" in tables
 
             engine.dispose()
 

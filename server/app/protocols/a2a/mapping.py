@@ -8,7 +8,6 @@ TaskState values.
 from __future__ import annotations
 
 import uuid
-from typing import Any
 
 import structlog
 from a2a.types import TaskState
@@ -29,9 +28,11 @@ _RUN_STATUS_TO_A2A: dict[str, int] = {
     "active": TaskState.TASK_STATE_WORKING,
     "idle": TaskState.TASK_STATE_COMPLETED,
     "waiting_for_approval": TaskState.TASK_STATE_INPUT_REQUIRED,
+    "interrupted": TaskState.TASK_STATE_INPUT_REQUIRED,
     "stalled": TaskState.TASK_STATE_WORKING,
     "done": TaskState.TASK_STATE_COMPLETED,
     "failed": TaskState.TASK_STATE_FAILED,
+    "rejected": TaskState.TASK_STATE_REJECTED,
     "aborted": TaskState.TASK_STATE_CANCELED,
     "aborting": TaskState.TASK_STATE_WORKING,
     "expired": TaskState.TASK_STATE_FAILED,
@@ -60,17 +61,6 @@ def event_to_a2a_state(event: StreamEvent) -> int | None:
 
 def is_hitl_pause(event: StreamEvent) -> bool:
     return isinstance(event, RunStateEvent) and event.to_status == "waiting_for_approval"
-
-
-def extract_text_from_parts(parts: Any) -> str:
-    """Extract text content from A2A Message parts."""
-    texts: list[str] = []
-    for part in parts:
-        if isinstance(part, dict) and part.get("text"):
-            texts.append(str(part["text"]))
-        elif hasattr(part, "text") and part.text:
-            texts.append(part.text)
-    return "\n".join(texts) if texts else ""
 
 
 def build_task_id() -> str:

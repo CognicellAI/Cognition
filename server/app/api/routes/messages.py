@@ -24,7 +24,9 @@ import structlog
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import StreamingResponse
 
+from server.app.agent.task_runtime import AgentTaskRuntime, SubmitTask
 from server.app.api.dependencies import (
+    get_artifact_store,
     get_rate_limiter_dep,
     get_scope_dep,
     get_session_agent_manager_dep,
@@ -40,6 +42,7 @@ from server.app.api.models import (
 )
 from server.app.api.scoping import SessionScope
 from server.app.api.sse import EventBuilder, SSEStream, get_last_event_id
+from server.app.exceptions import RuntimeTaskConflictError
 from server.app.llm.deep_agent_service import (
     CallbackEvent,
     ContextEvent,
@@ -68,6 +71,7 @@ from server.app.runtime_projection import (
     enrich_sse_event,
 )
 from server.app.settings import Settings
+from server.app.storage.artifact_store import ArtifactStore
 from server.app.storage.backend import StorageBackend
 
 router = APIRouter(prefix="/sessions/{session_id}/messages", tags=["messages"])
@@ -209,10 +213,10 @@ async def agent_event_stream(
         workspace_path: Path to the workspace root.
         settings: Application settings.
         agent_manager: Manager for session agent lifecycle.
-        scope: Optional scope dict for multi-tenant isolation.
+        scope: Optional builder-authorized runtime isolation scope.
             Propagated to the agent runtime so that scope-aware
             backends (e.g. ConfigRegistrySkillsBackend) can filter
-            skills, providers, and other config by tenant.
+            skills, providers, and other config by application scope.
         parent_message_id: Optional user message ID used as the parent for
             projected assistant tool-call messages.
 
@@ -297,7 +301,14 @@ async def agent_event_stream(
                             id=event.tool_call_id,
                         )
                     ],
-                    metadata={"projection_source": "runtime_tool_call"},
+                    metadata={
+                        "projection_source": "runtime_tool_call",
+                        **(
+                            {"task_id": run.task_id, "run_id": run.id}
+                            if run is not None and run.task_id is not None
+                            else {}
+                        ),
+                    },
                 )
                 await _refresh_session_message_count(store, session_id)
                 sse = EventBuilder.tool_call(
@@ -329,6 +340,11 @@ async def agent_event_stream(
                     metadata={
                         "exit_code": event.exit_code,
                         "projection_source": "runtime_tool_result",
+                        **(
+                            {"task_id": run.task_id, "run_id": run.id}
+                            if run is not None and run.task_id is not None
+                            else {}
+                        ),
                     },
                 )
                 await _refresh_session_message_count(store, session_id)
@@ -457,7 +473,7 @@ async def agent_event_stream(
                 if projection is not None and run is not None:
                     run, durable_state = await projection.transition_run_with_event(
                         run,
-                        RunStatus.WAITING_FOR_APPROVAL,
+                        RunStatus.INTERRUPTED,
                         reason="Human approval required",
                     )
                     run_state_event = enrich_sse_event(
@@ -865,6 +881,7 @@ async def send_message(
     settings: Settings = Depends(get_settings_dep),  # noqa: B008
     agent_manager: SessionAgentManager = Depends(get_session_agent_manager_dep),  # noqa: B008
     store: StorageBackend = Depends(get_storage_backend_dep),  # noqa: B008
+    artifact_store: ArtifactStore = Depends(get_artifact_store),  # noqa: B008
     rate_limiter: RateLimiter = Depends(get_rate_limiter_dep),  # noqa: B008
     scope: SessionScope = Depends(get_scope_dep),  # noqa: B008
 ) -> StreamingResponse:
@@ -945,15 +962,45 @@ async def send_message(
             ),
         )
 
-    projection = RuntimeProjectionService(store)
+    effective_scope = scope.get_all() if not scope.is_empty() else session.scopes
+    task_runtime = AgentTaskRuntime(
+        store,
+        default_workspace_path=workspace_path,
+        artifact_store=artifact_store,
+    )
     try:
-        run = await projection.begin_run(
-            session=session,
-            effective_scope=scope.get_all() if not scope.is_empty() else session.scopes,
-            idempotency_key=request.idempotency_key,
-            metadata={"source": "message"},
+        execution = await task_runtime.submit(
+            SubmitTask(
+                context_id=session.id,
+                agent_name=session.agent_name,
+                effective_scope=effective_scope,
+                content=request.content,
+                parent_message_id=request.parent_id,
+                idempotency_key=(
+                    f"native:{session.id}:{request.idempotency_key}"
+                    if request.idempotency_key
+                    else None
+                ),
+                workspace_path=workspace_path,
+                session_config=session.config,
+                metadata={"source": "native-rest"},
+            )
         )
+        if execution.reused:
+            raise RuntimeTaskConflictError(
+                f"Idempotency key was already used for task '{execution.task.id}'",
+                task_id=execution.task.id,
+            )
+        run = execution.run
+        user_message = execution.user_message
+        projection = task_runtime.projection
+    except RuntimeTaskConflictError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=str(exc),
+        ) from exc
     except ActiveRunConflictError as exc:
+        # Kept for compatibility with callers of the projection service.
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=(
@@ -969,21 +1016,6 @@ async def send_message(
         thread_id = str(uuid.uuid4())
         # Store thread_id on session for persistence
         session.thread_id = thread_id
-
-    user_message = await store.create_message(
-        message_id=str(uuid.uuid4()),
-        session_id=session_id,
-        role="user",
-        content=request.content,
-        parent_id=request.parent_id,
-    )
-
-    await projection.append_event(
-        run,
-        "message.user.accepted",
-        payload={"message_id": user_message.id, "content_length": len(request.content)},
-    )
-    await projection.refresh_message_count(session_id)
 
     event_stream = agent_event_stream(
         session_id,
@@ -1026,24 +1058,16 @@ async def send_message(
                             ]
 
                         persist_message_id = message_id or str(uuid.uuid4())
-                        await store.create_message(
+                        persisted = await task_runtime.persist_assistant_message(
+                            execution,
                             message_id=persist_message_id,
-                            session_id=session_id,
-                            role="assistant",
-                            content=assistant_data.get("content"),
-                            parent_id=user_message.id,
+                            content=assistant_data.get("content") or "",
                             tool_calls=tc_objects,
                             token_count=assistant_data.get("token_count"),
                             model_used=assistant_data.get("model_used"),
                             metadata=assistant_data.get("metadata"),
                         )
-                        await _refresh_session_message_count(store, session_id)
-                        await projection.append_event(
-                            run,
-                            "message.assistant.persisted",
-                            payload={"message_id": persist_message_id},
-                        )
-                        message_id = persist_message_id
+                        message_id = persisted.id
                         event_data = dict(event.get("data", {}))
                         event_data["message_id"] = persist_message_id
                         event = {**event, "data": event_data}

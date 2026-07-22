@@ -24,16 +24,20 @@ from psycopg_pool import AsyncConnectionPool
 from server.app.models import (
     Message,
     RunStatus,
+    RuntimeTask,
     Session,
     SessionConfig,
     SessionEvent,
     SessionRun,
     SessionStatus,
+    TaskStatus,
     ToolCall,
 )
 from server.app.storage.backend import StorageBackend
 from server.app.storage.common import (
+    effective_scope_key,
     make_message,
+    make_runtime_task,
     make_session,
     make_session_event,
     make_session_run,
@@ -145,6 +149,21 @@ class PostgresStorageBackend:
             except Exception as exc:
                 if "already exists" not in str(exc).lower():
                     raise
+
+            await conn.execute(
+                "ALTER TABLE session_runs ADD COLUMN IF NOT EXISTS task_id VARCHAR(36)"
+            )
+            await conn.execute(
+                "ALTER TABLE session_events ADD COLUMN IF NOT EXISTS task_id VARCHAR(36)"
+            )
+            await conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_session_runs_task "
+                "ON session_runs(task_id, created_at)"
+            )
+            await conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_session_events_task_sequence "
+                "ON session_events(task_id, sequence)"
+            )
 
             # Sessions table
             await conn.execute(
@@ -617,6 +636,219 @@ class PostgresStorageBackend:
             return deleted_count
 
     # Runtime operations
+    async def create_task(
+        self,
+        task_id: str,
+        context_id: str,
+        session_id: str,
+        agent_name: str,
+        effective_scope: dict[str, str],
+        status: TaskStatus = TaskStatus.SUBMITTED,
+        idempotency_key: str | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> RuntimeTask:
+        """Create a durable task with exact scope ownership."""
+        task = make_runtime_task(
+            task_id=task_id,
+            context_id=context_id,
+            session_id=session_id,
+            agent_name=agent_name,
+            status=status,
+            effective_scope=effective_scope,
+            idempotency_key=idempotency_key,
+            metadata=metadata,
+        )
+        async with self._pool.acquire() as conn:
+            await conn.execute(
+                """
+                INSERT INTO runtime_tasks (
+                    id, context_id, session_id, agent_name, status,
+                    effective_scope, scope_key, current_run_id, last_run_id,
+                    idempotency_key, status_reason, metadata, created_at, updated_at
+                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+                """,
+                task.id,
+                task.context_id,
+                task.session_id,
+                task.agent_name,
+                task.status.value,
+                json.dumps(task.effective_scope),
+                effective_scope_key(task.effective_scope),
+                task.current_run_id,
+                task.last_run_id,
+                task.idempotency_key,
+                task.status_reason,
+                json.dumps(task.metadata),
+                datetime.fromisoformat(task.created_at),
+                datetime.fromisoformat(task.updated_at),
+            )
+        return task
+
+    async def get_task(
+        self,
+        task_id: str,
+        effective_scope: dict[str, str],
+        agent_name: str | None = None,
+    ) -> RuntimeTask | None:
+        """Get a task only for its exact scope and optional agent."""
+        query = "SELECT * FROM runtime_tasks WHERE id = $1 AND scope_key = $2"
+        params: list[Any] = [task_id, effective_scope_key(effective_scope)]
+        if agent_name is not None:
+            query += " AND agent_name = $3"
+            params.append(agent_name)
+        async with self._pool.acquire() as conn:
+            row = await conn.fetchrow(query, *params)
+        if row is None:
+            return None
+        task = self._row_to_task(row)
+        return task if task.effective_scope == effective_scope else None
+
+    async def get_task_by_idempotency_key(
+        self,
+        agent_name: str,
+        effective_scope: dict[str, str],
+        idempotency_key: str,
+    ) -> RuntimeTask | None:
+        """Get a task by its exact agent/scope idempotency namespace."""
+        async with self._pool.acquire() as conn:
+            row = await conn.fetchrow(
+                """
+                SELECT * FROM runtime_tasks
+                WHERE agent_name = $1 AND scope_key = $2 AND idempotency_key = $3
+                LIMIT 1
+                """,
+                agent_name,
+                effective_scope_key(effective_scope),
+                idempotency_key,
+            )
+        if row is None:
+            return None
+        task = self._row_to_task(row)
+        return task if task.effective_scope == effective_scope else None
+
+    async def list_tasks(
+        self,
+        agent_name: str,
+        effective_scope: dict[str, str],
+        context_id: str | None = None,
+        statuses: set[TaskStatus] | None = None,
+        limit: int = 100,
+        cursor: str | None = None,
+    ) -> tuple[list[RuntimeTask], str | None]:
+        """List tasks for an exact agent/scope with stable cursor pagination."""
+        query = "SELECT * FROM runtime_tasks WHERE agent_name = $1 AND scope_key = $2"
+        params: list[Any] = [agent_name, effective_scope_key(effective_scope)]
+        param_index = 3
+        if context_id is not None:
+            query += f" AND context_id = ${param_index}"
+            params.append(context_id)
+            param_index += 1
+        if statuses:
+            query += f" AND status = ANY(${param_index}::text[])"
+            params.append([status.value for status in statuses])
+            param_index += 1
+        if cursor is not None:
+            query += (
+                f" AND (created_at, id) < "
+                f"(SELECT created_at, id FROM runtime_tasks WHERE id = ${param_index})"
+            )
+            params.append(cursor)
+            param_index += 1
+        page_size = max(1, min(limit, 1000))
+        query += f" ORDER BY created_at DESC, id DESC LIMIT ${param_index}"
+        params.append(page_size + 1)
+        async with self._pool.acquire() as conn:
+            rows = await conn.fetch(query, *params)
+        tasks = [self._row_to_task(row) for row in rows]
+        tasks = [task for task in tasks if task.effective_scope == effective_scope]
+        has_more = len(tasks) > page_size
+        page = tasks[:page_size]
+        return page, page[-1].id if page and has_more else None
+
+    async def update_task(
+        self,
+        task_id: str,
+        effective_scope: dict[str, str],
+        expected_statuses: set[TaskStatus] | None = None,
+        status: TaskStatus | None = None,
+        current_run_id: str | None = None,
+        last_run_id: str | None = None,
+        status_reason: str | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> RuntimeTask | None:
+        """Conditionally update a task while preserving terminal immutability."""
+        current = await self.get_task(task_id, effective_scope)
+        if current is None or (
+            expected_statuses is not None and current.status not in expected_statuses
+        ):
+            return None
+        if status is not None and not TaskStatus.can_transition(current.status, status):
+            return None
+        updates: list[str] = []
+        params: list[Any] = []
+        param_index = 1
+        values: list[tuple[str, Any]] = []
+        if status is not None:
+            values.append(("status", status.value))
+        if current_run_id is not None:
+            values.append(("current_run_id", current_run_id))
+        if last_run_id is not None:
+            values.append(("last_run_id", last_run_id))
+        if status_reason is not None:
+            values.append(("status_reason", status_reason))
+        if metadata is not None:
+            values.append(("metadata", json.dumps(metadata)))
+        if not values:
+            return current
+        for column, value in values:
+            updates.append(f"{column} = ${param_index}")
+            params.append(value)
+            param_index += 1
+        updates.append(f"updated_at = ${param_index}")
+        params.append(now_utc())
+        param_index += 1
+        where_task = param_index
+        params.append(task_id)
+        param_index += 1
+        where_scope = param_index
+        params.append(effective_scope_key(effective_scope))
+        param_index += 1
+        where_status = param_index
+        params.append(current.status.value)
+        async with self._pool.acquire() as conn:
+            result = await conn.execute(
+                f"""
+                UPDATE runtime_tasks SET {', '.join(updates)}
+                WHERE id = ${where_task} AND scope_key = ${where_scope}
+                  AND status = ${where_status}
+                """,
+                *params,
+            )
+        if result != "UPDATE 1":
+            return None
+        return await self.get_task(task_id, effective_scope)
+
+    async def delete_task_data(
+        self, task_id: str, effective_scope: dict[str, str]
+    ) -> bool:
+        """Delete only terminal, exact-scope data owned by one task."""
+        current = await self.get_task(task_id, effective_scope)
+        if current is None or not TaskStatus.is_terminal(current.status):
+            return False
+        async with self._pool.acquire() as conn, conn.transaction():
+            await conn.execute("DELETE FROM session_events WHERE task_id = $1", task_id)
+            await conn.execute(
+                "DELETE FROM messages WHERE metadata->>'task_id' = $1",
+                task_id,
+            )
+            await conn.execute("DELETE FROM session_runs WHERE task_id = $1", task_id)
+            result = await conn.execute(
+                "DELETE FROM runtime_tasks WHERE id = $1 AND scope_key = $2",
+                task_id,
+                effective_scope_key(effective_scope),
+            )
+        return result == "DELETE 1"
+
     async def create_run(
         self,
         run_id: str,
@@ -628,6 +860,7 @@ class PostgresStorageBackend:
         parent_run_id: str | None = None,
         trace_id: str | None = None,
         metadata: dict[str, Any] | None = None,
+        task_id: str | None = None,
     ) -> SessionRun:
         """Create a durable run for a session."""
         runs = await self.list_runs(session_id)
@@ -649,21 +882,23 @@ class PostgresStorageBackend:
             last_activity_at=now.isoformat(),
             created_at=now.isoformat(),
             updated_at=now.isoformat(),
+            task_id=task_id,
         )
         async with self._pool.acquire() as conn:
             await conn.execute(
                 """
                 INSERT INTO session_runs (
-                    id, session_id, thread_id, status, effective_scope,
+                    id, session_id, thread_id, task_id, status, effective_scope,
                     idempotency_key, attempt, parent_run_id, started_at,
                     last_activity_at, completed_at, error_code, status_reason,
                     trace_id, metadata, created_at, updated_at
                 ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
-                          $11, $12, $13, $14, $15, $16, $17)
+                          $11, $12, $13, $14, $15, $16, $17, $18)
                 """,
                 run.id,
                 run.session_id,
                 run.thread_id,
+                run.task_id,
                 run.status.value,
                 json.dumps(run.effective_scope),
                 run.idempotency_key,
@@ -822,8 +1057,12 @@ class PostgresStorageBackend:
         effective_scope: dict[str, str] | None = None,
         trace_id: str | None = None,
         span_id: str | None = None,
+        task_id: str | None = None,
     ) -> SessionEvent:
         """Append a durable runtime event."""
+        if task_id is None:
+            run = await self.get_run(run_id)
+            task_id = run.task_id if run is not None else None
         async with self._pool.acquire() as conn:
             async with conn.transaction():
                 await conn.execute("SELECT pg_advisory_xact_lock(hashtext($1))", session_id)
@@ -846,18 +1085,20 @@ class PostgresStorageBackend:
                     effective_scope=effective_scope,
                     trace_id=trace_id,
                     span_id=span_id,
+                    task_id=task_id,
                 )
                 created_at = datetime.fromisoformat(event.created_at)
                 await conn.execute(
                     """
                     INSERT INTO session_events (
-                        id, session_id, run_id, sequence, event_type, visibility,
+                        id, session_id, run_id, task_id, sequence, event_type, visibility,
                         payload, effective_scope, trace_id, span_id, created_at
-                    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+                    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
                     """,
                     event.id,
                     event.session_id,
                     event.run_id,
+                    event.task_id,
                     event.sequence,
                     event.event_type,
                     event.visibility,
@@ -904,6 +1145,7 @@ class PostgresStorageBackend:
         limit: int = 100,
         visibility: Literal["internal", "builder", "end_user"] | None = None,
         event_type: str | None = None,
+        task_id: str | None = None,
     ) -> list[SessionEvent]:
         """List runtime events for a session using cursor-style filters."""
         query = "SELECT * FROM session_events WHERE session_id = $1"
@@ -924,6 +1166,10 @@ class PostgresStorageBackend:
         if event_type is not None:
             query += f" AND event_type = ${param_idx}"
             params.append(event_type)
+            param_idx += 1
+        if task_id is not None:
+            query += f" AND task_id = ${param_idx}"
+            params.append(task_id)
             param_idx += 1
         query += f" ORDER BY sequence ASC LIMIT ${param_idx}"
         params.append(limit)
@@ -1118,6 +1364,25 @@ class PostgresStorageBackend:
             metadata=_json_dict(row.get("metadata")),
             created_at=_dt_iso(row["created_at"]) or now_utc().isoformat(),
             updated_at=_dt_iso(row["updated_at"]) or now_utc().isoformat(),
+            task_id=row.get("task_id"),
+        )
+
+    def _row_to_task(self, row: asyncpg.Record) -> RuntimeTask:
+        """Convert a database row to a RuntimeTask."""
+        return make_runtime_task(
+            task_id=row["id"],
+            context_id=row["context_id"],
+            session_id=row["session_id"],
+            agent_name=row["agent_name"],
+            status=TaskStatus(row["status"]),
+            effective_scope=_json_dict(row.get("effective_scope")),
+            current_run_id=row.get("current_run_id"),
+            last_run_id=row.get("last_run_id"),
+            idempotency_key=row.get("idempotency_key"),
+            status_reason=row.get("status_reason"),
+            metadata=_json_dict(row.get("metadata")),
+            created_at=_dt_iso(row["created_at"]) or now_utc().isoformat(),
+            updated_at=_dt_iso(row["updated_at"]) or now_utc().isoformat(),
         )
 
     def _row_to_event(self, row: asyncpg.Record) -> SessionEvent:
@@ -1134,6 +1399,7 @@ class PostgresStorageBackend:
             trace_id=row.get("trace_id"),
             span_id=row.get("span_id"),
             created_at=_dt_iso(row["created_at"]) or now_utc().isoformat(),
+            task_id=row.get("task_id"),
         )
 
 

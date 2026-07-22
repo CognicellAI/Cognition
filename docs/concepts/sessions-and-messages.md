@@ -1,6 +1,6 @@
 # Sessions & Messages
 
-A **session** is the unit of conversation in Cognition. It owns a LangGraph thread, binds to a specific agent, carries optional tenant scope, and persists across server restarts. Every message sent to a session creates a **run** and streams that run back over Server-Sent Events (SSE).
+A **session** is the unit of conversation in Cognition. It owns a LangGraph thread, binds to a specific agent, carries optional builder-authorized runtime scope, and persists across server restarts. Every message sent to a session creates a **run** and streams that run back over Server-Sent Events (SSE).
 
 ---
 

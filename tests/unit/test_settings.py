@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
+from typing import Any
 
 import pytest
 from pydantic import SecretStr
@@ -51,6 +53,45 @@ class TestSettingsDefaults:
         settings = TestSettings()
         assert settings.otel_endpoint is None
         assert settings.metrics_port == 9090
+
+    def test_default_a2a_security_discovery_is_empty(self):
+        settings = TestSettings()
+        assert settings.a2a_security_schemes == {}
+        assert settings.a2a_security_requirements == []
+        assert settings.a2a_max_raw_part_bytes == 10 * 1024 * 1024
+        assert settings.a2a_max_parts == 64
+        assert settings.a2a_max_message_bytes == 16 * 1024 * 1024
+        assert settings.a2a_stream_chunk_bytes == 4096
+        assert settings.a2a_terminal_task_ttl_seconds == 0
+
+
+class TestA2ASecuritySettings:
+    """Test JSON environment parsing for public Agent Card security metadata."""
+
+    def test_parses_a2a_security_environment_json(self, monkeypatch: pytest.MonkeyPatch):
+        schemes = {
+            "oauth2": {
+                "oauth2SecurityScheme": {
+                    "flows": {
+                        "clientCredentials": {
+                            "tokenUrl": "https://auth.example.com/oauth/token",
+                            "scopes": {"a2a.invoke": "Invoke the agent"},
+                        }
+                    }
+                }
+            }
+        }
+        requirements: list[dict[str, Any]] = [{"schemes": {"oauth2": {}}}]
+        monkeypatch.setenv("COGNITION_A2A_SECURITY_SCHEMES", json.dumps(schemes))
+        monkeypatch.setenv(
+            "COGNITION_A2A_SECURITY_REQUIREMENTS",
+            json.dumps(requirements),
+        )
+
+        settings = TestSettings()
+
+        assert settings.a2a_security_schemes == schemes
+        assert settings.a2a_security_requirements == requirements
 
 
 class TestSettingsSecrets:

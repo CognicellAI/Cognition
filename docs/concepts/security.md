@@ -1,14 +1,22 @@
 # Security
 
-Cognition is designed to run untrusted agent workloads in multi-tenant environments. Security controls are applied at every layer — network, process, filesystem, and API. This document describes each control, where it is implemented, and how to configure it.
+Cognition is designed to run untrusted agent workloads, including as the execution
+runtime inside a multi-tenant host application. Security controls are applied at
+every layer — network, process, filesystem, and API. The host application owns
+authentication, tenancy, membership, roles, and entitlements; Cognition enforces
+the authorized runtime scope it receives.
 
 ---
 
-## Multi-Tenant Session Scoping
+## Builder-Defined Runtime Scoping
 
 Implemented in `server/app/api/scoping.py`.
 
-Session scoping is Cognition's multi-tenancy mechanism. When enabled, every session carries a set of key-value pairs (its `effective_scope`), and API requests must supply matching headers. Scopes prevent one tenant's sessions from being visible or accessible to another tenant.
+Session scoping is Cognition's runtime isolation mechanism. When enabled, every
+session carries opaque builder-authorized key-value pairs (`effective_scope`), and
+API requests must supply matching trusted headers. Exact scope enforcement prevents
+one application scope from observing or mutating another. It does not create a
+tenant domain model inside Cognition.
 
 Scope keys are **builder-defined** — Cognition does not hardcode a vocabulary. Choose keys that match your application's tenancy model (e.g. `user`, `tenant`, `project`, `env`).
 
@@ -128,7 +136,7 @@ Tool source code (both file-discovered and API-registered) executes with full Py
 | Process isolation | Docker, Kubernetes, or AWS Lambda MicroVM sandbox backend |
 | Network isolation | Docker `network_mode=none`, Kubernetes network policy, or Lambda MicroVM connector policy |
 | Filesystem isolation | `CognitionLocalSandboxBackend` protected paths |
-| Memory isolation | LangGraph Store namespaces scoped per tenant via `CognitionContext.effective_scope` |
+| Memory isolation | LangGraph Store namespaces derived from exact `CognitionContext.effective_scope` |
 
 `POST /tools` (API-registered tools) executes arbitrary Python with full privileges. **Restrict this endpoint to authorized administrators at the Gateway/proxy layer.**
 
@@ -209,12 +217,36 @@ Additional MCP security measures:
 ## A2A Protocol Boundary
 
 The A2A (Agent-to-Agent) protocol adapter is a Cognition protocol surface, not an app-layer concern.
+See [A2A Security and Scoping](a2a/security-and-scoping.md) for the focused
+protocol-boundary model.
 
-**Security boundary**: A2A requests must include `X-Cognition-Scope-*` headers. Per-agent card discovery at `/a2a/{agent_name}/.well-known/agent-card.json`, root discovery, and JSON-RPC endpoints are scope-filtered — only agents visible in the caller's scope are discoverable and invocable. Dynamically registered agents remain bound to the scope used at creation time, so callers must provide the same trusted scope headers for discovery and invocation.
+**Security boundary**: Trusted ingress supplies configured `X-Cognition-Scope-*`
+headers. Per-agent card discovery, root discovery, and JSON-RPC dispatch are filtered
+by exact builder-defined scope. Tasks, contexts, runs, messages, events, artifacts,
+continuation, subscriptions, and cancellation retain that immutable scope. A
+cross-scope or cross-agent identifier is reported as not found.
 
-**Builder responsibility**: Cognition does not perform end-user authentication on A2A requests. Authorization must be handled at the gateway/proxy layer before requests reach Cognition. The `a2a_exposed` flag on `AgentDefinition` controls which agents are visible — set it explicitly to `True` only for agents intended for external A2A access.
+**Builder responsibility**: Cognition does not perform end-user authentication or
+own tenant, organization, membership, role, billing, entitlement, or route-selection
+models. Authorization must be completed by the embedding application or trusted
+gateway before requests reach Cognition. `a2a.exposed` controls which definitions
+are visible; set it only on agents intended for A2A access.
 
 **Global disable**: Set `COGNITION_A2A_ENABLED=false` to prevent the A2A protocol surface from being mounted at all. When disabled, the endpoints do not exist and `GET /capabilities` reports `a2a: false`.
+
+**Authentication discovery**: When trusted ingress protects the advertised A2A
+interface, set `COGNITION_A2A_SECURITY_SCHEMES` and
+`COGNITION_A2A_SECURITY_REQUIREMENTS` to canonical A2A ProtoJSON. Cognition
+publishes the validated values in its Agent Cards but does not enforce them.
+Gateway enforcement must match the card. Because Agent Cards are public, never
+place client secrets, bearer tokens, or private credentials in these values.
+
+**Message Parts**: Every inbound A2A Part inherits the trusted request's exact
+`effective_scope`; Part metadata, filenames, and URLs cannot set or alter scope.
+Raw bytes and URL references are persisted as task-linked artifacts under that
+scope. Receiving a Part never executes a file or fetches a URL. Interpretation,
+retrieval, and transformation require an explicit builder-authorized tool or
+sandbox operation. See [A2A Message Parts](a2a/message-parts.md).
 
 ---
 
@@ -297,5 +329,5 @@ These prevent MIME sniffing, clickjacking, and reflected XSS attacks in browser 
 - [ ] Never commit API keys; use `.env` or secrets management (Vault, AWS Secrets Manager)
 - [ ] Run the sandbox image from a minimal, audited base image
 - [ ] Set `COGNITION_PROTECTED_PATHS` to include any sensitive directories
-- [ ] Review which agents have `a2a_exposed: true` — only expose agents intended for external A2A access
+- [ ] Review which agents have `a2a.exposed: true` — only expose agents intended for external A2A access
 - [ ] Restrict `/mcp-servers` CRUD to authorized administrators (MCP server headers contain credentials)

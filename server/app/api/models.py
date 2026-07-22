@@ -9,9 +9,10 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import AnyHttpUrl, BaseModel, Field
+from pydantic import AnyHttpUrl, BaseModel, ConfigDict, Field
 
 from server.app.agent.definition import (
+    A2AConfig,
     AsyncSubagentConfig,
     ContextPolicy,
     FilesystemPermissionConfig,
@@ -856,12 +857,19 @@ class CapabilityResponse(BaseModel):
 class AgentResponse(BaseModel):
     """Agent information for API responses."""
 
-    name: str = Field(..., description="Agent name")
+    name: str = Field(..., description="Stable agent runtime identifier")
+    display_name: str | None = Field(
+        None,
+        description="Optional human-readable name used for public Agent presentation",
+    )
     description: str | None = Field(None, description="Agent description")
     mode: Literal["primary", "subagent", "all"] = Field(..., description="Agent mode")
     hidden: bool = Field(..., description="Whether agent is hidden from listings")
     native: bool = Field(..., description="Whether agent is built-in")
-    a2a_exposed: bool = Field(default=False, description="Whether agent is exposed via A2A protocol")
+    a2a: A2AConfig = Field(
+        default_factory=A2AConfig,
+        description="A2A exposure and public Agent Card presentation",
+    )
     provider: str | None = Field(
         None,
         description="Deprecated compatibility field. Use config.provider instead.",
@@ -1231,12 +1239,28 @@ class ProviderTestResponse(BaseModel):
 class AgentCreate(BaseModel):
     """Request to create or replace an agent definition."""
 
-    name: str = Field(..., min_length=1, max_length=100, description="Agent identifier")
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(
+        ...,
+        min_length=1,
+        max_length=100,
+        description="Stable agent runtime identifier",
+    )
+    display_name: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=200,
+        description="Optional human-readable name used for public Agent presentation",
+    )
     system_prompt: str = Field(default="", description="System prompt text")
     description: str | None = Field(default=None)
     mode: Literal["primary", "subagent", "all"] = Field(default="primary")
     hidden: bool = Field(default=False)
-    a2a_exposed: bool = Field(default=False, description="Expose agent via A2A protocol")
+    a2a: A2AConfig = Field(
+        default_factory=A2AConfig,
+        description="A2A exposure and public Agent Card presentation",
+    )
     tools: list[str] = Field(default_factory=list)
     skills: list[str] = Field(default_factory=list)
     memory: list[str] = Field(default_factory=list)
@@ -1272,11 +1296,22 @@ class AgentCreate(BaseModel):
 class AgentUpdate(BaseModel):
     """Request to partially update an agent definition."""
 
+    model_config = ConfigDict(extra="forbid")
+
+    display_name: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=200,
+        description="Optional human-readable name used for public Agent presentation",
+    )
     system_prompt: str | None = None
     description: str | None = None
     mode: Literal["primary", "subagent", "all"] | None = None
     hidden: bool | None = None
-    a2a_exposed: bool | None = None
+    a2a: A2AConfig | None = Field(
+        default=None,
+        description="A2A exposure and public Agent Card presentation; null resets defaults",
+    )
     tools: list[str] | None = None
     skills: list[str] | None = None
     memory: list[str] | None = None

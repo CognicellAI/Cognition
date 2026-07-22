@@ -78,17 +78,64 @@ class RunStatus(StrEnum):
     STARTING = "starting"
     ACTIVE = "active"
     WAITING_FOR_APPROVAL = "waiting_for_approval"
+    INTERRUPTED = "interrupted"
     STALLED = "stalled"
     ABORTING = "aborting"
     ABORTED = "aborted"
     FAILED = "failed"
+    REJECTED = "rejected"
     DONE = "done"
 
     @classmethod
     def is_terminal(cls, status: RunStatus | str) -> bool:
         """Check whether a run status is terminal."""
         status_str = status.value if isinstance(status, RunStatus) else status
-        return status_str in {"aborted", "failed", "done"}
+        return status_str in {"interrupted", "aborted", "failed", "rejected", "done"}
+
+
+class TaskStatus(StrEnum):
+    """Protocol-neutral lifecycle state for a durable unit of requested work."""
+
+    SUBMITTED = "submitted"
+    WORKING = "working"
+    INPUT_REQUIRED = "input_required"
+    AUTH_REQUIRED = "auth_required"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    CANCELED = "canceled"
+    REJECTED = "rejected"
+
+    @classmethod
+    def is_terminal(cls, status: TaskStatus | str) -> bool:
+        """Return whether a task state is immutable and terminal."""
+        value = status.value if isinstance(status, TaskStatus) else status
+        return value in {"completed", "failed", "canceled", "rejected"}
+
+    @classmethod
+    def can_transition(cls, current: TaskStatus | str, target: TaskStatus | str) -> bool:
+        """Return whether the neutral task state transition is valid."""
+        current_value = current.value if isinstance(current, TaskStatus) else current
+        target_value = target.value if isinstance(target, TaskStatus) else target
+        if current_value == target_value:
+            return True
+        transitions: dict[str, set[str]] = {
+            "submitted": {"working", "failed", "canceled", "rejected"},
+            "working": {
+                "input_required",
+                "auth_required",
+                "completed",
+                "failed",
+                "canceled",
+                "rejected",
+            },
+            "input_required": {"working", "failed", "canceled", "rejected"},
+            "auth_required": {"working", "failed", "canceled", "rejected"},
+            "completed": set(),
+            "failed": set(),
+            "canceled": set(),
+            "rejected": set(),
+        }
+        return target_value in transitions.get(current_value, set())
 
 
 class PromptConfig(BaseModel):
@@ -283,6 +330,25 @@ class Message:
 
 
 @dataclass
+class RuntimeTask:
+    """Durable protocol-neutral unit of requested agent work."""
+
+    id: str
+    context_id: str
+    session_id: str
+    agent_name: str
+    status: TaskStatus
+    effective_scope: dict[str, str]
+    created_at: str
+    updated_at: str
+    current_run_id: str | None = None
+    last_run_id: str | None = None
+    idempotency_key: str | None = None
+    status_reason: str | None = None
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
 class SessionRun:
     """Durable execution attempt inside a session."""
 
@@ -303,6 +369,7 @@ class SessionRun:
     status_reason: str | None = None
     trace_id: str | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
+    task_id: str | None = None
 
 
 @dataclass
@@ -320,6 +387,7 @@ class SessionEvent:
     created_at: str
     trace_id: str | None = None
     span_id: str | None = None
+    task_id: str | None = None
 
 
 @dataclass

@@ -74,3 +74,6 @@ mlflow.db
 # Local planning docs
 localdocs/
 claurst
+
+# Generated MkDocs site
+site/

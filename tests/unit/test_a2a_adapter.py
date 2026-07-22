@@ -6,10 +6,11 @@ from unittest.mock import MagicMock
 
 import httpx
 import pytest
+from a2a.helpers.proto_helpers import new_text_artifact
 from a2a.types import TaskState
 from fastapi import FastAPI
 
-from server.app.agent.definition import AgentDefinition
+from server.app.agent.definition import A2AConfig, A2APublicSkill, AgentDefinition
 from server.app.agent.runtime import (
     DoneEvent,
     ErrorEvent,
@@ -20,55 +21,143 @@ from server.app.protocols.a2a.card import build_agent_card_for_agent
 from server.app.protocols.a2a.mapping import (
     _RUN_STATUS_TO_A2A,
     event_to_a2a_state,
-    extract_text_from_parts,
     is_hitl_pause,
 )
-from server.app.protocols.a2a.wire import (
-    normalize_request_for_sdk,
-    normalize_response_to_public,
-    normalize_stream_item_to_public,
-)
+from server.app.protocols.a2a.routes import _task_signature
 
 
-class TestA2AExposedField:
-    def test_default_a2a_exposed_is_false(self):
+class TestA2AConfig:
+    def test_default_a2a_exposure_is_false(self):
         agent = AgentDefinition(name="test", system_prompt="test prompt")
-        assert agent.a2a_exposed is False
+        assert agent.a2a.exposed is False
 
-    def test_a2a_exposed_can_be_set_true(self):
-        agent = AgentDefinition(name="test", system_prompt="test prompt", a2a_exposed=True)
-        assert agent.a2a_exposed is True
-
-    def test_a2a_exposed_can_be_set_false_explicitly(self):
+    def test_a2a_exposure_can_be_set_true(self):
         agent = AgentDefinition(
-            name="test", system_prompt="test prompt", a2a_exposed=False
+            name="test", system_prompt="test prompt", a2a=A2AConfig(exposed=True)
         )
-        assert agent.a2a_exposed is False
+        assert agent.a2a.exposed is True
+
+    def test_a2a_exposure_can_be_set_false_explicitly(self):
+        agent = AgentDefinition(
+            name="test", system_prompt="test prompt", a2a=A2AConfig(exposed=False)
+        )
+        assert agent.a2a.exposed is False
+
+    def test_rejects_invalid_media_type(self):
+        with pytest.raises(ValueError, match="Invalid A2A media type"):
+            A2AConfig(default_input_modes=["pdf"])
+
+    def test_rejects_duplicate_public_skill_ids(self):
+        skill = A2APublicSkill(
+            id="primary",
+            name="Primary",
+            description="Primary capability",
+            tags=["primary"],
+        )
+        with pytest.raises(ValueError, match="skill IDs must be unique"):
+            A2AConfig(skills=[skill, skill])
 
 
 class TestBuildAgentCardForAgent:
-    def test_card_has_agent_name_in_title(self):
+    def test_card_uses_agent_name_as_title(self):
         agent = AgentDefinition(
-            name="my-agent", system_prompt="test", mode="primary", a2a_exposed=True
+            name="my-agent", system_prompt="test", mode="primary", a2a=A2AConfig(exposed=True)
         )
         card = build_agent_card_for_agent(agent, "http://localhost:8000", "0.10.0")
-        assert card.name == "Cognition (my-agent)"
+        assert card.name == "my-agent"
+
+    def test_card_uses_display_name_for_public_presentation(self):
+        agent = AgentDefinition(
+            name="ka_0cadedacd0b74a509358b48b5e3fd952",
+            display_name="Customer Support Concierge",
+            system_prompt="test",
+            mode="primary",
+            a2a=A2AConfig(exposed=True),
+        )
+
+        card = build_agent_card_for_agent(agent, "http://localhost:8000", "0.10.0")
+
+        assert card.name == "Customer Support Concierge"
+        assert card.description == "Agent: Customer Support Concierge"
+        assert len(card.skills) == 1
+        assert card.skills[0].id == "primary"
+        assert card.skills[0].name == "Customer Support Concierge"
+        assert card.skills[0].description == ("Primary capability for Customer Support Concierge")
+        assert card.skills[0].tags == ["primary"]
 
     def test_card_has_correct_endpoint(self):
         agent = AgentDefinition(
-            name="my-agent", system_prompt="test", mode="primary", a2a_exposed=True
+            name="my-agent", system_prompt="test", mode="primary", a2a=A2AConfig(exposed=True)
         )
         card = build_agent_card_for_agent(agent, "http://localhost:8000", "0.10.0")
         assert len(card.supported_interfaces) == 1
         assert card.supported_interfaces[0].url == "http://localhost:8000/a2a/my-agent"
         assert card.supported_interfaces[0].protocol_binding == "JSONRPC"
 
+    def test_card_uses_configured_public_interface_url_exactly(self):
+        public_url = "https://opaque.agents.example.com/a2a?channel=public"
+        agent = AgentDefinition(
+            name="ka_private_runtime_name",
+            display_name="Customer Support Concierge",
+            system_prompt="test",
+            mode="primary",
+            a2a=A2AConfig(exposed=True, public_interface_url=public_url),
+        )
+
+        card = build_agent_card_for_agent(agent, "http://private:8000", "0.12.0-rc.3")
+
+        assert card.supported_interfaces[0].url == public_url
+        assert "ka_private_runtime_name" not in card.supported_interfaces[0].url
+
     def test_card_has_streaming_capability(self):
         agent = AgentDefinition(
-            name="test", system_prompt="test", mode="primary", a2a_exposed=True
+            name="test", system_prompt="test", mode="primary", a2a=A2AConfig(exposed=True)
         )
         card = build_agent_card_for_agent(agent, "http://localhost:8000", "0.10.0")
         assert card.capabilities.streaming is True
+
+    def test_card_advertises_generic_text_and_json_inputs(self):
+        agent = AgentDefinition(
+            name="test", system_prompt="test", mode="primary", a2a=A2AConfig(exposed=True)
+        )
+        card = build_agent_card_for_agent(agent, "http://localhost:8000", "0.10.0")
+
+        assert card.default_input_modes == ["text/plain", "application/json"]
+        assert card.skills[0].input_modes == ["text/plain", "application/json"]
+
+    def test_card_publishes_builder_configured_modes_and_skills(self):
+        agent = AgentDefinition(
+            name="document-agent",
+            display_name="Document Intelligence",
+            system_prompt="test",
+            mode="primary",
+            a2a=A2AConfig(
+                exposed=True,
+                default_input_modes=["text/plain", "application/pdf"],
+                default_output_modes=["application/json"],
+                skills=[
+                    A2APublicSkill(
+                        id="document-analysis",
+                        name="Document Analysis",
+                        description="Extracts and summarizes PDF documents.",
+                        tags=["documents", "pdf"],
+                        examples=["Summarize the attached contract."],
+                        input_modes=["application/pdf"],
+                        output_modes=["text/plain", "application/json"],
+                    )
+                ],
+            ),
+        )
+
+        card = build_agent_card_for_agent(agent, "http://localhost:8000", "0.12.0")
+
+        assert card.default_input_modes == ["text/plain", "application/pdf"]
+        assert card.default_output_modes == ["application/json"]
+        assert len(card.skills) == 1
+        assert card.skills[0].id == "document-analysis"
+        assert card.skills[0].examples == ["Summarize the attached contract."]
+        assert card.skills[0].input_modes == ["application/pdf"]
+        assert card.skills[0].output_modes == ["text/plain", "application/json"]
 
     def test_card_has_single_skill(self):
         agent = AgentDefinition(
@@ -76,7 +165,7 @@ class TestBuildAgentCardForAgent:
             system_prompt="test",
             mode="primary",
             description="Coding assistant",
-            a2a_exposed=True,
+            a2a=A2AConfig(exposed=True),
         )
         card = build_agent_card_for_agent(agent, "http://localhost:8000", "0.10.0")
         assert len(card.skills) == 1
@@ -85,7 +174,7 @@ class TestBuildAgentCardForAgent:
 
     def test_card_uses_default_description_when_none(self):
         agent = AgentDefinition(
-            name="coder", system_prompt="test", mode="primary", a2a_exposed=True
+            name="coder", system_prompt="test", mode="primary", a2a=A2AConfig(exposed=True)
         )
         card = build_agent_card_for_agent(agent, "http://localhost:8000", "0.10.0")
         assert card.skills[0].description == "Cognition agent: coder"
@@ -95,7 +184,7 @@ class TestBuildAgentCardForAgent:
             name="coder",
             system_prompt="SECRET PROMPT TEXT",
             mode="primary",
-            a2a_exposed=True,
+            a2a=A2AConfig(exposed=True),
         )
         card = build_agent_card_for_agent(agent, "http://localhost:8000", "0.10.0")
         card_str = str(card)
@@ -107,7 +196,7 @@ class TestBuildAgentCardForAgent:
             system_prompt="test",
             mode="primary",
             tools=["tool1", "tool2"],
-            a2a_exposed=True,
+            a2a=A2AConfig(exposed=True),
         )
         card = build_agent_card_for_agent(agent, "http://localhost:8000", "0.10.0")
         card_str = str(card)
@@ -133,7 +222,7 @@ class TestA2APerAgentCardRoute:
                 "name": "scoped-agent",
                 "system_prompt": "test",
                 "mode": "primary",
-                "a2a_exposed": True,
+                "a2a": {"exposed": True},
             },
         )
         await mount_a2a_routes(
@@ -157,10 +246,8 @@ class TestA2APerAgentCardRoute:
 
         assert response.status_code == 200
         card = response.json()
-        assert card["name"] == "Cognition (scoped-agent)"
-        assert card["supportedInterfaces"][0]["url"] == (
-            "http://example.test/a2a/scoped-agent"
-        )
+        assert card["name"] == "scoped-agent"
+        assert card["supportedInterfaces"][0]["url"] == ("http://example.test/a2a/scoped-agent")
 
     @pytest.mark.asyncio
     async def test_per_agent_card_respects_request_scope(self):
@@ -179,7 +266,7 @@ class TestA2APerAgentCardRoute:
                 "name": "scoped-agent",
                 "system_prompt": "test",
                 "mode": "primary",
-                "a2a_exposed": True,
+                "a2a": {"exposed": True},
             },
         )
         await mount_a2a_routes(
@@ -203,34 +290,83 @@ class TestA2APerAgentCardRoute:
 
         assert response.status_code == 404
 
+    @pytest.mark.asyncio
+    async def test_per_agent_card_uses_configured_public_interface_url(self):
+        from server.app.protocols.a2a.routes import mount_a2a_routes
+        from server.app.storage.config_registry import MemoryConfigRegistry
+        from server.app.storage.config_store import DefaultConfigStore
+
+        app = FastAPI()
+        settings = MagicMock()
+        settings.scope_keys = []
+        config_store = DefaultConfigStore(MemoryConfigRegistry())
+        public_url = "https://opaque.agents.example.com/a2a"
+        await config_store.upsert_agent(
+            "ka_private_runtime_name",
+            {},
+            {
+                "name": "ka_private_runtime_name",
+                "display_name": "Customer Support Concierge",
+                "system_prompt": "test",
+                "mode": "primary",
+                "a2a": {"exposed": True, "public_interface_url": public_url},
+            },
+        )
+        await mount_a2a_routes(
+            app,
+            settings=settings,
+            config_store=config_store,
+            session_agent_manager=MagicMock(),
+            store=MagicMock(),
+            version="0.12.0-rc.3",
+        )
+
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(
+            transport=transport,
+            base_url="http://private:8000",
+        ) as client:
+            response = await client.get("/a2a/ka_private_runtime_name/.well-known/agent-card.json")
+
+        assert response.status_code == 200
+        card = response.json()
+        assert card["name"] == "Customer Support Concierge"
+        assert card["supportedInterfaces"][0]["url"] == public_url
+
 
 class TestA2AExposureFiltering:
     """Test the filtering logic that determines which agents are A2A-exposed."""
 
     def test_subagent_not_exposed(self):
         agent = AgentDefinition(
-            name="sub", system_prompt="test", mode="subagent", a2a_exposed=True
+            name="sub", system_prompt="test", mode="subagent", a2a=A2AConfig(exposed=True)
         )
         # The filtering logic in routes.py checks mode != "subagent"
         assert agent.mode == "subagent"  # would be filtered out
 
     def test_hidden_agent_not_exposed(self):
         agent = AgentDefinition(
-            name="hidden", system_prompt="test", mode="primary", hidden=True,
-            a2a_exposed=True,
+            name="hidden",
+            system_prompt="test",
+            mode="primary",
+            hidden=True,
+            a2a=A2AConfig(exposed=True),
         )
         assert agent.hidden is True  # would be filtered out
 
     def test_primary_non_hidden_exposed(self):
         agent = AgentDefinition(
-            name="visible", system_prompt="test", mode="primary", hidden=False,
-            a2a_exposed=True,
+            name="visible",
+            system_prompt="test",
+            mode="primary",
+            hidden=False,
+            a2a=A2AConfig(exposed=True),
         )
-        assert agent.mode != "subagent" and not agent.hidden and agent.a2a_exposed
+        assert agent.mode != "subagent" and not agent.hidden and agent.a2a.exposed
 
     def test_default_not_exposed(self):
         agent = AgentDefinition(name="default", system_prompt="test")
-        assert agent.a2a_exposed is False
+        assert agent.a2a.exposed is False
 
 
 class TestExtractScope:
@@ -261,146 +397,16 @@ class TestExtractScope:
 
 
 class TestExecutorAgentName:
-    def test_default_agent_name(self):
-        from server.app.protocols.a2a.executor import CognitionA2AExecutor
-
-        executor = CognitionA2AExecutor(
-            settings=MagicMock(),
-            session_agent_manager=MagicMock(),
-            store=MagicMock(),
-        )
-        assert executor._agent_name == "default"
-
     def test_custom_agent_name(self):
         from server.app.protocols.a2a.executor import CognitionA2AExecutor
 
         executor = CognitionA2AExecutor(
-            settings=MagicMock(),
+            runtime=MagicMock(),
+            task_store=MagicMock(),
             session_agent_manager=MagicMock(),
-            store=MagicMock(),
             agent_name="my-agent",
         )
         assert executor._agent_name == "my-agent"
-
-
-class TestExtractTextFromParts:
-    def test_single_text_part(self):
-        from a2a.types import Part
-        parts = [Part(text="hello world", media_type="text/plain")]
-        assert extract_text_from_parts(parts) == "hello world"
-
-    def test_multiple_text_parts(self):
-        from a2a.types import Part
-        parts = [
-            Part(text="line one", media_type="text/plain"),
-            Part(text="line two", media_type="text/plain"),
-        ]
-        assert extract_text_from_parts(parts) == "line one\nline two"
-
-    def test_empty_parts(self):
-        assert extract_text_from_parts([]) == ""
-
-    def test_current_text_part_shape(self):
-        parts = [{"kind": "text", "text": "hello world"}]
-        assert extract_text_from_parts(parts) == "hello world"
-
-
-class TestA2AWireShape:
-    def test_message_send_request_normalizes_to_sdk_shape(self):
-        payload = {
-            "jsonrpc": "2.0",
-            "id": "1",
-            "method": "message/send",
-            "params": {
-                "message": {
-                    "role": "user",
-                    "parts": [{"kind": "text", "text": "hello"}],
-                }
-            },
-        }
-
-        normalized = normalize_request_for_sdk(payload)
-
-        assert normalized["method"] == "SendMessage"
-        message = normalized["params"]["message"]
-        assert message["role"] == "ROLE_USER"
-        assert message["parts"] == [{"text": "hello", "mediaType": "text/plain"}]
-
-    def test_message_stream_request_normalizes_to_sdk_shape(self):
-        payload = {
-            "jsonrpc": "2.0",
-            "id": "1",
-            "method": "message/stream",
-            "params": {"message": {"role": "agent", "parts": [{"text": "hello"}]}},
-        }
-
-        normalized = normalize_request_for_sdk(payload)
-
-        assert normalized["method"] == "SendStreamingMessage"
-        assert normalized["params"]["message"]["role"] == "ROLE_AGENT"
-
-    def test_task_response_normalizes_to_current_shape(self):
-        payload = {
-            "jsonrpc": "2.0",
-            "id": "1",
-            "result": {
-                "task": {
-                    "id": "task-1",
-                    "contextId": "ctx-1",
-                    "status": {
-                        "state": "TASK_STATE_COMPLETED",
-                        "message": {
-                            "role": "ROLE_AGENT",
-                            "parts": [{"text": "Done"}],
-                        },
-                    },
-                }
-            },
-        }
-
-        normalized = normalize_response_to_public(payload)
-
-        task = normalized["result"]
-        assert task["kind"] == "task"
-        assert task["status"]["state"] == "completed"
-        assert task["status"]["message"]["kind"] == "message"
-        assert task["status"]["message"]["role"] == "agent"
-        assert task["status"]["message"]["parts"][0]["kind"] == "text"
-
-    def test_stream_status_event_normalizes_to_current_shape(self):
-        payload = {
-            "jsonrpc": "2.0",
-            "id": "1",
-            "result": {
-                "taskId": "task-1",
-                "contextId": "ctx-1",
-                "status": {"state": 3},
-            },
-        }
-
-        normalized = normalize_stream_item_to_public(payload)
-
-        event = normalized["result"]
-        assert event["kind"] == "status-update"
-        assert event["status"]["state"] == "completed"
-
-    def test_stream_artifact_event_normalizes_to_current_shape(self):
-        payload = {
-            "jsonrpc": "2.0",
-            "id": "1",
-            "result": {
-                "taskId": "task-1",
-                "contextId": "ctx-1",
-                "artifact": {"parts": [{"text": "hello"}]},
-            },
-        }
-
-        normalized = normalize_stream_item_to_public(payload)
-
-        event = normalized["result"]
-        assert event["kind"] == "artifact-update"
-        assert event["artifact"]["kind"] == "artifact"
-        assert event["artifact"]["parts"][0]["kind"] == "text"
 
 
 class TestEventToA2AState:
@@ -458,9 +464,19 @@ class TestIsHitlPause:
 class TestRunStatusMapping:
     def test_all_expected_statuses_mapped(self):
         expected = {
-            "queued", "starting", "active", "idle",
-            "waiting_for_approval", "stalled",
-            "done", "failed", "aborted", "aborting", "expired",
+            "queued",
+            "starting",
+            "active",
+            "idle",
+            "waiting_for_approval",
+            "interrupted",
+            "stalled",
+            "done",
+            "failed",
+            "rejected",
+            "aborted",
+            "aborting",
+            "expired",
         }
         assert set(_RUN_STATUS_TO_A2A.keys()) == expected
 
@@ -469,3 +485,26 @@ class TestRunStatusMapping:
         assert _RUN_STATUS_TO_A2A["done"] == TaskState.TASK_STATE_COMPLETED
         assert _RUN_STATUS_TO_A2A["failed"] == TaskState.TASK_STATE_FAILED
         assert _RUN_STATUS_TO_A2A["aborted"] == TaskState.TASK_STATE_CANCELED
+
+
+def test_task_subscription_signature_detects_artifact_content_changes():
+    from a2a.types import Task, TaskStatus
+
+    task = Task(
+        id="task-1",
+        context_id="context-1",
+        status=TaskStatus(state=TaskState.TASK_STATE_WORKING),
+    )
+    before = _task_signature(task)
+    task.artifacts.append(
+        new_text_artifact(
+            name="response",
+            text="chunk one",
+            artifact_id="artifact-1",
+        )
+    )
+    after_first_chunk = _task_signature(task)
+    task.artifacts[0].parts[0].text = "chunk one and two"
+
+    assert after_first_chunk != before
+    assert _task_signature(task) != after_first_chunk

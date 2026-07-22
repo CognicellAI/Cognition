@@ -14,14 +14,15 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
+from urllib.parse import urlsplit
 
 import structlog
 
 logger = structlog.get_logger(__name__)
 
 from langchain_core.tools import BaseTool
-from pydantic import BaseModel, Field, field_validator
+from pydantic import AfterValidator, BaseModel, ConfigDict, Field, field_validator
 
 try:
     import yaml
@@ -29,6 +30,118 @@ try:
     HAS_YAML = True
 except ImportError:
     HAS_YAML = False
+
+
+def _validate_a2a_public_interface_url(value: str) -> str:
+    """Validate an absolute public HTTP(S) A2A interface URL without rewriting it."""
+    if not value or any(character.isspace() for character in value):
+        raise ValueError("A2A public interface URL must not be empty or contain whitespace")
+
+    try:
+        parsed = urlsplit(value)
+        hostname = parsed.hostname
+        _ = parsed.port
+    except ValueError as exc:
+        raise ValueError("A2A public interface URL is malformed") from exc
+
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc or not hostname:
+        raise ValueError("A2A public interface URL must be an absolute HTTP(S) URL")
+    if parsed.username is not None or parsed.password is not None:
+        raise ValueError("A2A public interface URL must not contain credentials")
+    if parsed.fragment:
+        raise ValueError("A2A public interface URL must not contain a fragment")
+    return value
+
+
+A2APublicInterfaceUrl = Annotated[
+    str,
+    AfterValidator(_validate_a2a_public_interface_url),
+]
+
+
+def _validate_media_types(values: list[str]) -> list[str]:
+    """Validate and de-duplicate Agent Card MIME media types."""
+    normalized: list[str] = []
+    for value in values:
+        if (
+            not value
+            or value != value.strip()
+            or any(character.isspace() for character in value)
+            or value.count("/") != 1
+        ):
+            raise ValueError(f"Invalid A2A media type: {value!r}")
+        media_type, subtype = value.split("/", 1)
+        if not media_type or not subtype:
+            raise ValueError(f"Invalid A2A media type: {value!r}")
+        if value not in normalized:
+            normalized.append(value)
+    return normalized
+
+
+class A2APublicSkill(BaseModel):
+    """Builder-published capability descriptor for an A2A Agent Card."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: str = Field(
+        ...,
+        min_length=1,
+        max_length=100,
+        pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]*$",
+    )
+    name: str = Field(..., min_length=1, max_length=200)
+    description: str = Field(..., min_length=1, max_length=2000)
+    tags: list[str] = Field(..., min_length=1)
+    examples: list[str] = Field(default_factory=list)
+    input_modes: list[str] = Field(default_factory=list)
+    output_modes: list[str] = Field(default_factory=list)
+
+    @field_validator("tags")
+    @classmethod
+    def validate_tags(cls, values: list[str]) -> list[str]:
+        """Require non-empty, unique discovery tags."""
+        if any(not value.strip() for value in values):
+            raise ValueError("A2A skill tags must not be empty")
+        return list(dict.fromkeys(values))
+
+    @field_validator("input_modes", "output_modes")
+    @classmethod
+    def validate_modes(cls, values: list[str]) -> list[str]:
+        """Validate optional per-skill MIME mode overrides."""
+        return _validate_media_types(values)
+
+
+class A2AConfig(BaseModel):
+    """Builder-controlled A2A exposure and public Agent Card presentation."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    exposed: bool = Field(default=False)
+    public_interface_url: A2APublicInterfaceUrl | None = Field(default=None)
+    default_input_modes: list[str] = Field(
+        default_factory=lambda: ["text/plain", "application/json"],
+        min_length=1,
+    )
+    default_output_modes: list[str] = Field(
+        default_factory=lambda: ["text/plain", "application/json"],
+        min_length=1,
+    )
+    skills: list[A2APublicSkill] = Field(default_factory=list)
+
+    @field_validator("default_input_modes", "default_output_modes")
+    @classmethod
+    def validate_default_modes(cls, values: list[str]) -> list[str]:
+        """Validate required card-level MIME modes."""
+        return _validate_media_types(values)
+
+    @field_validator("skills")
+    @classmethod
+    def validate_unique_skill_ids(cls, values: list[A2APublicSkill]) -> list[A2APublicSkill]:
+        """Require stable, unique public skill identifiers."""
+        ids = [skill.id for skill in values]
+        if len(ids) != len(set(ids)):
+            raise ValueError("A2A public skill IDs must be unique")
+        return values
 
 
 class ContextPolicy(BaseModel):
@@ -178,6 +291,8 @@ class AgentDefinition(BaseModel):
 
     Attributes:
         name: Unique agent identifier.
+        display_name: Optional human-readable name for public presentation.
+        a2a: A2A exposure and public Agent Card presentation configuration.
         system_prompt: System prompt that defines agent behavior.
         tools: List of attached tool names.
         skills: List of attached skill names.
@@ -190,6 +305,7 @@ class AgentDefinition(BaseModel):
     """
 
     name: str = Field(..., min_length=1, max_length=100)
+    display_name: str | None = Field(default=None, min_length=1, max_length=200)
     system_prompt: str = Field(..., min_length=1)
     tools: list[str] = Field(default_factory=list)
     skills: list[str] = Field(default_factory=list)
@@ -207,7 +323,7 @@ class AgentDefinition(BaseModel):
     description: str | None = Field(default=None)
     hidden: bool = Field(default=False)
     native: bool = Field(default=False)
-    a2a_exposed: bool = Field(default=False)
+    a2a: A2AConfig = Field(default_factory=A2AConfig)
 
     @field_validator("name")
     @classmethod
@@ -549,6 +665,11 @@ def load_agent_definition_from_markdown(path: str | Path) -> AgentDefinition:
     # Build AgentDefinition from frontmatter + body
     name = path.stem  # filename without extension
 
+    legacy_a2a_fields = {"a2a_exposed", "a2a_public_interface_url"} & frontmatter.keys()
+    if legacy_a2a_fields:
+        fields = ", ".join(sorted(legacy_a2a_fields))
+        raise ValueError(f"Use nested 'a2a' configuration instead of: {fields}")
+
     # Extract config fields from frontmatter
     config_kwargs: dict[str, Any] = {}
     if "temperature" in frontmatter:
@@ -584,6 +705,8 @@ def load_agent_definition_from_markdown(path: str | Path) -> AgentDefinition:
 
     definition = AgentDefinition(
         name=name,
+        display_name=frontmatter.get("display_name"),
+        a2a=frontmatter.get("a2a", {}),
         system_prompt=body,
         description=frontmatter.get("description"),
         mode=frontmatter.get("mode", "all"),
@@ -600,6 +723,9 @@ def load_agent_definition_from_markdown(path: str | Path) -> AgentDefinition:
 
 
 __all__ = [
+    "A2AConfig",
+    "A2APublicInterfaceUrl",
+    "A2APublicSkill",
     "AgentConfig",
     "AgentDefinition",
     "AsyncSubagentConfig",

@@ -445,16 +445,28 @@ for the end-to-end setup flow and Terraform example.
 | `security.trusted_tool_namespaces` | `COGNITION_TRUSTED_TOOL_NAMESPACES` | `[]` | Allowed Python namespaces for tool imports; empty = allow all |
 | `security.blocked_tools` | `COGNITION_BLOCKED_TOOLS` | `[]` | Deployment-wide tool names no agent can invoke; merged with per-agent `blocked_tools` and enforced by `ToolSecurityMiddleware` |
 | `security.a2a_enabled` | `COGNITION_A2A_ENABLED` | `true` | Enable/disable the A2A protocol adapter (`/.well-known/agent-card.json` + `/a2a/{agent_name}`) |
+| — | `COGNITION_A2A_MAX_RAW_PART_BYTES` | `10485760` | Maximum decoded size of one inbound A2A `raw` Part; oversized Parts are rejected before a model run starts |
+| — | `COGNITION_A2A_SECURITY_SCHEMES` | `{}` | Canonical A2A ProtoJSON map of public authentication scheme names to `SecurityScheme` objects |
+| — | `COGNITION_A2A_SECURITY_REQUIREMENTS` | `[]` | Canonical A2A ProtoJSON array of `SecurityRequirement` objects applied to every generated card |
 
 > **Note:** `COGNITION_TOOL_SECURITY` (`warn`/`strict`) was removed. AST scanning has been replaced with Gateway-level authorization. See [Security concepts](../concepts/security.md) for the current trust model.
 
 `COGNITION_BLOCKED_TOOLS` is an execution-deny policy only. It does not remove tools from the model-visible schema. To hide tools for a specific agent, set `config.excluded_tools` on that agent definition or pass `excluded_tools` through the `/agents` API.
 
+The A2A security variables publish authentication discovery metadata; they do
+not make Cognition an OAuth server or enforce authentication. Enforcement
+remains the responsibility of trusted ingress. Cognition validates their
+canonical A2A protobuf JSON shape during startup and rejects requirements that
+reference undeclared schemes. These public values must never contain client
+secrets, access tokens, or other credentials.
+
 ---
 
-## Session Scoping (Multi-Tenancy)
+## Builder-Defined Runtime Scoping
 
-Scope keys are **builder-defined** — Cognition does not hardcode a vocabulary. Choose keys that match your application's tenancy model.
+Scope keys are **builder-defined** — Cognition does not hardcode a vocabulary.
+They isolate runtime data supplied by a host application; Cognition does not define
+the host's tenant, membership, role, or entitlement model.
 
 | YAML key | Environment variable | Default | Description |
 |---|---|---|---|
@@ -462,6 +474,13 @@ Scope keys are **builder-defined** — Cognition does not hardcode a vocabulary.
 | `scoping.scope_keys` | `COGNITION_SCOPE_KEYS` | `["user"]` | Required scope key names (builder-defined; each key requires a matching `X-Cognition-Scope-{key}` header) |
 
 ---
+
+## A2A Runtime Hardening
+
+The deployment-level A2A durability, streaming, retention, and resource-limit
+settings are documented in [Configure and Invoke an A2A Agent](a2a.md#durability-and-resource-controls).
+They use the `COGNITION_A2A_*` namespace and do not alter agent-level Agent Card
+configuration under `AgentDefinition.a2a`.
 
 ## SSE Streaming
 
@@ -632,9 +651,11 @@ scoping:
     - "user"
     - "project"
 
-# A2A is auto-mounted when enabled. No configuration needed.
-# Expose agents via A2A by setting a2a_exposed: true on their definition.
+# A2A is auto-mounted when enabled. Unauthenticated deployments need no extra config.
+# Expose agents via A2A by setting a2a.exposed: true on their definition.
 # Set COGNITION_A2A_ENABLED=false to disable the A2A protocol surface entirely.
+# Gateway-protected deployments can publish authentication discovery through
+# COGNITION_A2A_SECURITY_SCHEMES and COGNITION_A2A_SECURITY_REQUIREMENTS.
 
 rate_limit:
   per_minute: 120

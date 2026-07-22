@@ -45,7 +45,7 @@ async def _ensure_a2a_agent():
                 "system_prompt": "You are a helpful assistant. Reply concisely.",
                 "description": "A2A test agent",
                 "mode": "primary",
-                "a2a_exposed": True,
+                "a2a": {"exposed": True},
             },
             headers={"X-Cognition-Scope-User": "test-user"},
         )
@@ -68,13 +68,11 @@ class TestAgentCardDiscovery:
     ) -> None:
         response = await api_client.client.get(
             f"{api_client.base_url}/.well-known/agent-card.json",
+            params={"assistant_id": _A2A_AGENT_NAME},
             headers=api_client.scope_header,
         )
         assert response.status_code == 200, response.text
-        data = response.json()
-        assert "agents" in data
-        names = [a["name"] for a in data["agents"]]
-        assert _A2A_AGENT_NAME in names
+        assert response.json()["name"] == f"Cognition ({_A2A_AGENT_NAME})"
 
     async def test_agent_card_for_specific_agent(
         self, api_client: ScenarioTestClient
@@ -110,6 +108,7 @@ class TestAgentCardDiscovery:
         interfaces = card.get("supportedInterfaces", [])
         assert len(interfaces) == 1
         assert interfaces[0]["protocolBinding"] == "JSONRPC"
+        assert interfaces[0]["protocolVersion"] == "1.0"
 
 
 @pytest.mark.e2e
@@ -120,14 +119,14 @@ class TestA2AMessageSend:
         self, api_client: ScenarioTestClient
     ) -> None:
         message = {
-            "role": "user",
-            "parts": [{"kind": "text", "text": "Say hello in exactly 3 words."}],
+            "role": "ROLE_USER",
+            "parts": [{"text": "Say hello in exactly 3 words."}],
             "messageId": str(uuid.uuid4()),
         }
         payload = {
             "jsonrpc": "2.0",
             "id": str(uuid.uuid4()),
-            "method": "message/send",
+            "method": "SendMessage",
             "params": {"message": message},
         }
         response = await api_client.client.post(
@@ -136,6 +135,7 @@ class TestA2AMessageSend:
             headers={
                 "Accept": "application/json",
                 "Content-Type": "application/json",
+                "A2A-Version": "1.0",
                 **api_client.scope_header,
             },
             timeout=60.0,
@@ -143,24 +143,23 @@ class TestA2AMessageSend:
         assert response.status_code == 200, response.text
         result = response.json()
         assert "result" in result, f"No result in response: {result}"
-        task = result["result"]
-        assert task["kind"] == "task"
+        task = result["result"]["task"]
         assert "id" in task
         assert "contextId" in task
-        assert task["status"]["state"] == "completed"
+        assert task["status"]["state"] == "TASK_STATE_COMPLETED"
 
     async def test_send_message_returns_artifact(
         self, api_client: ScenarioTestClient
     ) -> None:
         message = {
-            "role": "user",
-            "parts": [{"kind": "text", "text": "Reply with exactly: A2A_WORKS"}],
+            "role": "ROLE_USER",
+            "parts": [{"text": "Reply with exactly: A2A_WORKS"}],
             "messageId": str(uuid.uuid4()),
         }
         payload = {
             "jsonrpc": "2.0",
             "id": str(uuid.uuid4()),
-            "method": "message/send",
+            "method": "SendMessage",
             "params": {"message": message},
         }
         response = await api_client.client.post(
@@ -169,13 +168,14 @@ class TestA2AMessageSend:
             headers={
                 "Accept": "application/json",
                 "Content-Type": "application/json",
+                "A2A-Version": "1.0",
                 **api_client.scope_header,
             },
             timeout=60.0,
         )
         assert response.status_code == 200, response.text
         result = response.json()
-        task = result["result"]
+        task = result["result"]["task"]
         artifacts = task.get("artifacts", [])
         assert len(artifacts) >= 1, f"No artifacts in task: {task}"
         artifact = artifacts[0]
@@ -192,14 +192,14 @@ class TestA2AStreaming:
         self, api_client: ScenarioTestClient
     ) -> None:
         message = {
-            "role": "user",
-            "parts": [{"kind": "text", "text": "Count from 1 to 3."}],
+            "role": "ROLE_USER",
+            "parts": [{"text": "Count from 1 to 3."}],
             "messageId": str(uuid.uuid4()),
         }
         payload = {
             "jsonrpc": "2.0",
             "id": str(uuid.uuid4()),
-            "method": "message/stream",
+            "method": "SendStreamingMessage",
             "params": {"message": message},
         }
         events = []
@@ -211,6 +211,7 @@ class TestA2AStreaming:
             headers={
                 "Accept": "text/event-stream",
                 "Content-Type": "application/json",
+                "A2A-Version": "1.0",
                 **api_client.scope_header,
             },
             timeout=60.0,
@@ -222,19 +223,21 @@ class TestA2AStreaming:
                     events.append(data)
 
         assert len(events) >= 1, f"No events received: {events}"
+        assert all(event.get("jsonrpc") == "2.0" for event in events)
+        assert any("statusUpdate" in event.get("result", {}) for event in events)
 
     async def test_stream_includes_status_events(
         self, api_client: ScenarioTestClient
     ) -> None:
         message = {
-            "role": "user",
-            "parts": [{"kind": "text", "text": "Say OK."}],
+            "role": "ROLE_USER",
+            "parts": [{"text": "Say OK."}],
             "messageId": str(uuid.uuid4()),
         }
         payload = {
             "jsonrpc": "2.0",
             "id": str(uuid.uuid4()),
-            "method": "message/stream",
+            "method": "SendStreamingMessage",
             "params": {"message": message},
         }
         events = []
@@ -246,6 +249,7 @@ class TestA2AStreaming:
             headers={
                 "Accept": "text/event-stream",
                 "Content-Type": "application/json",
+                "A2A-Version": "1.0",
                 **api_client.scope_header,
             },
             timeout=60.0,
@@ -255,7 +259,94 @@ class TestA2AStreaming:
                     data = json.loads(line[6:])
                     events.append(data)
 
-        assert len(events) >= 1
+        assert any(
+            event.get("result", {}).get("statusUpdate", {}).get("status", {}).get(
+                "state"
+            )
+            == "TASK_STATE_COMPLETED"
+            for event in events
+        )
+
+
+@pytest.mark.e2e
+@pytest.mark.integration
+@pytest.mark.asyncio
+class TestA2ATaskOperations:
+    async def test_get_and_list_return_durable_task(
+        self, api_client: ScenarioTestClient
+    ) -> None:
+        headers = {
+            "Content-Type": "application/json",
+            "A2A-Version": "1.0",
+            **api_client.scope_header,
+        }
+        sent = await api_client.client.post(
+            f"{api_client.base_url}/a2a/{_A2A_AGENT_NAME}",
+            json={
+                "jsonrpc": "2.0",
+                "id": "send-for-task-ops",
+                "method": "SendMessage",
+                "params": {
+                    "message": {
+                        "messageId": str(uuid.uuid4()),
+                        "role": "ROLE_USER",
+                        "parts": [{"text": "Reply with OK."}],
+                    }
+                },
+            },
+            headers=headers,
+            timeout=60.0,
+        )
+        task_id = sent.json()["result"]["task"]["id"]
+
+        fetched = await api_client.client.post(
+            f"{api_client.base_url}/a2a/{_A2A_AGENT_NAME}",
+            json={
+                "jsonrpc": "2.0",
+                "id": "get-task",
+                "method": "GetTask",
+                "params": {"id": task_id},
+            },
+            headers=headers,
+        )
+        listed = await api_client.client.post(
+            f"{api_client.base_url}/a2a/{_A2A_AGENT_NAME}",
+            json={
+                "jsonrpc": "2.0",
+                "id": "list-tasks",
+                "method": "ListTasks",
+                "params": {"pageSize": 100, "includeArtifacts": True},
+            },
+            headers=headers,
+        )
+
+        assert fetched.json()["result"]["id"] == task_id
+        assert task_id in {
+            task["id"] for task in listed.json()["result"]["tasks"]
+        }
+
+    @pytest.mark.parametrize("method", ["CancelTask", "SubscribeToTask"])
+    async def test_task_operation_conceals_unknown_ids(
+        self,
+        api_client: ScenarioTestClient,
+        method: str,
+    ) -> None:
+        response = await api_client.client.post(
+            f"{api_client.base_url}/a2a/{_A2A_AGENT_NAME}",
+            json={
+                "jsonrpc": "2.0",
+                "id": f"{method}-missing",
+                "method": method,
+                "params": {"id": str(uuid.uuid4())},
+            },
+            headers={
+                "Content-Type": "application/json",
+                "A2A-Version": "1.0",
+                **api_client.scope_header,
+            },
+        )
+
+        assert response.json()["error"]["code"] == -32001
 
 
 @pytest.mark.e2e

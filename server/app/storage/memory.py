@@ -18,15 +18,18 @@ from langgraph.store.memory import InMemoryStore
 from server.app.models import (
     Message,
     RunStatus,
+    RuntimeTask,
     Session,
     SessionConfig,
     SessionEvent,
     SessionRun,
     SessionStatus,
+    TaskStatus,
 )
 from server.app.storage.common import (
     filter_sessions,
     make_message,
+    make_runtime_task,
     make_session,
     make_session_event,
     make_session_run,
@@ -54,6 +57,7 @@ class MemoryStorageBackend:
         self.workspace_path = Path(workspace_path).resolve()
         self._sessions: dict[str, Session] = {}
         self._messages: dict[str, Message] = {}
+        self._tasks: dict[str, RuntimeTask] = {}
         self._runs: dict[str, SessionRun] = {}
         self._events: dict[str, SessionEvent] = {}
         self._event_sequences: dict[str, int] = {}
@@ -76,6 +80,7 @@ class MemoryStorageBackend:
         """Close all connections (no-op for memory)."""
         self._sessions.clear()
         self._messages.clear()
+        self._tasks.clear()
         self._runs.clear()
         self._events.clear()
         self._event_sequences.clear()
@@ -176,6 +181,7 @@ class MemoryStorageBackend:
             del self._sessions[session_id]
             # Also delete associated messages
             self._messages = {k: v for k, v in self._messages.items() if v.session_id != session_id}
+            self._tasks = {k: v for k, v in self._tasks.items() if v.session_id != session_id}
             self._runs = {k: v for k, v in self._runs.items() if v.session_id != session_id}
             self._events = {k: v for k, v in self._events.items() if v.session_id != session_id}
             self._event_sequences.pop(session_id, None)
@@ -285,6 +291,152 @@ class MemoryStorageBackend:
         return len(projected_messages)
 
     # Runtime operations
+    async def create_task(
+        self,
+        task_id: str,
+        context_id: str,
+        session_id: str,
+        agent_name: str,
+        effective_scope: dict[str, str],
+        status: TaskStatus = TaskStatus.SUBMITTED,
+        idempotency_key: str | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> RuntimeTask:
+        """Create a durable task with exact scope ownership."""
+        if task_id in self._tasks:
+            raise ValueError(f"Task already exists: {task_id}")
+        if idempotency_key:
+            existing = await self.get_task_by_idempotency_key(
+                agent_name,
+                effective_scope,
+                idempotency_key,
+            )
+            if existing is not None:
+                raise ValueError(f"Task idempotency key already exists: {idempotency_key}")
+        task = make_runtime_task(
+            task_id=task_id,
+            context_id=context_id,
+            session_id=session_id,
+            agent_name=agent_name,
+            status=status,
+            effective_scope=effective_scope,
+            idempotency_key=idempotency_key,
+            metadata=metadata,
+        )
+        self._tasks[task_id] = task
+        return task
+
+    async def get_task(
+        self,
+        task_id: str,
+        effective_scope: dict[str, str],
+        agent_name: str | None = None,
+    ) -> RuntimeTask | None:
+        """Get a task only for its exact scope and optional agent."""
+        task = self._tasks.get(task_id)
+        if task is None or task.effective_scope != effective_scope:
+            return None
+        if agent_name is not None and task.agent_name != agent_name:
+            return None
+        return task
+
+    async def get_task_by_idempotency_key(
+        self,
+        agent_name: str,
+        effective_scope: dict[str, str],
+        idempotency_key: str,
+    ) -> RuntimeTask | None:
+        """Get a task by its exact agent/scope idempotency namespace."""
+        for task in self._tasks.values():
+            if (
+                task.agent_name == agent_name
+                and task.effective_scope == effective_scope
+                and task.idempotency_key == idempotency_key
+            ):
+                return task
+        return None
+
+    async def list_tasks(
+        self,
+        agent_name: str,
+        effective_scope: dict[str, str],
+        context_id: str | None = None,
+        statuses: set[TaskStatus] | None = None,
+        limit: int = 100,
+        cursor: str | None = None,
+    ) -> tuple[list[RuntimeTask], str | None]:
+        """List tasks for an exact agent/scope with stable cursor pagination."""
+        tasks = [
+            task
+            for task in self._tasks.values()
+            if task.agent_name == agent_name and task.effective_scope == effective_scope
+        ]
+        if context_id is not None:
+            tasks = [task for task in tasks if task.context_id == context_id]
+        if statuses:
+            tasks = [task for task in tasks if task.status in statuses]
+        tasks.sort(key=lambda task: (task.created_at, task.id), reverse=True)
+        start = 0
+        if cursor is not None:
+            start = next(
+                (index + 1 for index, task in enumerate(tasks) if task.id == cursor),
+                len(tasks),
+            )
+        page = tasks[start : start + max(1, limit)]
+        has_more = start + len(page) < len(tasks)
+        return page, page[-1].id if page and has_more else None
+
+    async def update_task(
+        self,
+        task_id: str,
+        effective_scope: dict[str, str],
+        expected_statuses: set[TaskStatus] | None = None,
+        status: TaskStatus | None = None,
+        current_run_id: str | None = None,
+        last_run_id: str | None = None,
+        status_reason: str | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> RuntimeTask | None:
+        """Conditionally update a task while preserving terminal immutability."""
+        task = await self.get_task(task_id, effective_scope)
+        if task is None or (expected_statuses is not None and task.status not in expected_statuses):
+            return None
+        if status is not None and not TaskStatus.can_transition(task.status, status):
+            return None
+        if status is not None:
+            task.status = status
+        if current_run_id is not None:
+            task.current_run_id = current_run_id
+        if last_run_id is not None:
+            task.last_run_id = last_run_id
+        if status_reason is not None:
+            task.status_reason = status_reason
+        if metadata is not None:
+            task.metadata = dict(metadata)
+        task.updated_at = now_utc_iso()
+        return task
+
+    async def delete_task_data(
+        self, task_id: str, effective_scope: dict[str, str]
+    ) -> bool:
+        """Delete only terminal, exact-scope data owned by one task."""
+        task = await self.get_task(task_id, effective_scope)
+        if task is None or not TaskStatus.is_terminal(task.status):
+            return False
+        run_ids = {run.id for run in self._runs.values() if run.task_id == task_id}
+        for event_id in [key for key, event in self._events.items() if event.task_id == task_id]:
+            del self._events[event_id]
+        for message_id in [
+            key
+            for key, message in self._messages.items()
+            if (message.metadata or {}).get("task_id") == task_id
+        ]:
+            del self._messages[message_id]
+        for run_id in run_ids:
+            self._runs.pop(run_id, None)
+        del self._tasks[task_id]
+        return True
+
     async def create_run(
         self,
         run_id: str,
@@ -296,6 +448,7 @@ class MemoryStorageBackend:
         parent_run_id: str | None = None,
         trace_id: str | None = None,
         metadata: dict[str, Any] | None = None,
+        task_id: str | None = None,
     ) -> SessionRun:
         """Create a durable run for a session."""
         attempt = len([run for run in self._runs.values() if run.session_id == session_id]) + 1
@@ -314,6 +467,7 @@ class MemoryStorageBackend:
             metadata=metadata,
             started_at=started_at,
             last_activity_at=now,
+            task_id=task_id,
         )
         self._runs[run_id] = run
         return run
@@ -400,8 +554,12 @@ class MemoryStorageBackend:
         effective_scope: dict[str, str] | None = None,
         trace_id: str | None = None,
         span_id: str | None = None,
+        task_id: str | None = None,
     ) -> SessionEvent:
         """Append a durable runtime event."""
+        if task_id is None:
+            run = self._runs.get(run_id)
+            task_id = run.task_id if run is not None else None
         sequence = self._event_sequences.get(session_id, 0) + 1
         self._event_sequences[session_id] = sequence
         event = make_session_event(
@@ -415,6 +573,7 @@ class MemoryStorageBackend:
             effective_scope=effective_scope,
             trace_id=trace_id,
             span_id=span_id,
+            task_id=task_id,
         )
         self._events[event_id] = event
         now = event.created_at
@@ -441,6 +600,7 @@ class MemoryStorageBackend:
         limit: int = 100,
         visibility: Literal["internal", "builder", "end_user"] | None = None,
         event_type: str | None = None,
+        task_id: str | None = None,
     ) -> list[SessionEvent]:
         """List runtime events for a session using cursor-style filters."""
         events = [event for event in self._events.values() if event.session_id == session_id]
@@ -452,6 +612,8 @@ class MemoryStorageBackend:
             events = [event for event in events if event.visibility == visibility]
         if event_type is not None:
             events = [event for event in events if event.event_type == event_type]
+        if task_id is not None:
+            events = [event for event in events if event.task_id == task_id]
         events.sort(key=lambda event: event.sequence)
         return events[:limit]
 

@@ -85,6 +85,117 @@ class TestGetAgent:
 
 
 class TestCreateAgent:
+    def test_create_agent_persists_public_a2a_interface_url(self):
+        public_url = "https://opaque.agents.example.com/a2a"
+        response = client.post(
+            "/agents",
+            json={
+                "name": "ka_create_public_a2a_url",
+                "system_prompt": "Help customers.",
+                "a2a": {"exposed": True, "public_interface_url": public_url},
+            },
+        )
+
+        assert response.status_code == 201
+        assert response.json()["a2a"]["public_interface_url"] == public_url
+
+        get_response = client.get("/agents/ka_create_public_a2a_url")
+        assert get_response.status_code == 200
+        assert get_response.json()["a2a"]["public_interface_url"] == public_url
+
+        raw = asyncio.run(get_config_store().get_agent_raw("ka_create_public_a2a_url"))
+        assert raw is not None
+        assert raw["a2a"]["public_interface_url"] == public_url
+
+    def test_create_agent_persists_public_a2a_modes_and_skills(self):
+        a2a = {
+            "exposed": True,
+            "public_interface_url": None,
+            "default_input_modes": ["text/plain", "application/pdf"],
+            "default_output_modes": ["application/json"],
+            "skills": [
+                {
+                    "id": "document-analysis",
+                    "name": "Document Analysis",
+                    "description": "Extracts and summarizes PDF documents.",
+                    "tags": ["documents", "pdf"],
+                    "examples": ["Summarize the attached contract."],
+                    "input_modes": ["application/pdf"],
+                    "output_modes": ["text/plain", "application/json"],
+                }
+            ],
+        }
+        response = client.post(
+            "/agents",
+            json={
+                "name": "document-agent",
+                "system_prompt": "Analyze documents.",
+                "a2a": a2a,
+            },
+        )
+
+        assert response.status_code == 201
+        assert response.json()["a2a"] == a2a
+
+        raw = asyncio.run(get_config_store().get_agent_raw("document-agent"))
+        assert raw is not None
+        assert raw["a2a"] == a2a
+
+    @pytest.mark.parametrize(
+        "public_url",
+        [
+            "opaque.agents.example.com/a2a",
+            "ftp://opaque.agents.example.com/a2a",
+            "https://user:secret@opaque.agents.example.com/a2a",
+            "https://opaque.agents.example.com/a2a#fragment",
+        ],
+    )
+    def test_create_agent_rejects_invalid_public_a2a_interface_url(self, public_url: str) -> None:
+        response = client.post(
+            "/agents",
+            json={
+                "name": "ka_invalid_public_a2a_url",
+                "system_prompt": "Help customers.",
+                "a2a": {"public_interface_url": public_url},
+            },
+        )
+
+        assert response.status_code == 422
+
+    def test_create_agent_rejects_removed_flat_a2a_fields(self) -> None:
+        response = client.post(
+            "/agents",
+            json={
+                "name": "legacy-a2a-agent",
+                "system_prompt": "Help customers.",
+                "a2a_exposed": True,
+            },
+        )
+
+        assert response.status_code == 422
+
+    def test_create_agent_persists_display_name(self):
+        response = client.post(
+            "/agents",
+            json={
+                "name": "ka_create_display_name",
+                "display_name": "Customer Support Concierge",
+                "system_prompt": "Help customers.",
+            },
+        )
+
+        assert response.status_code == 201
+        assert response.json()["name"] == "ka_create_display_name"
+        assert response.json()["display_name"] == "Customer Support Concierge"
+
+        get_response = client.get("/agents/ka_create_display_name")
+        assert get_response.status_code == 200
+        assert get_response.json()["display_name"] == "Customer Support Concierge"
+
+        raw = asyncio.run(get_config_store().get_agent_raw("ka_create_display_name"))
+        assert raw is not None
+        assert raw["display_name"] == "Customer Support Concierge"
+
     def test_create_new_agent(self):
         payload = {
             "name": "test-create-agent",
@@ -227,6 +338,64 @@ class TestCreateAgent:
 
 
 class TestUpdateAgent:
+    def test_patch_agent_updates_and_clears_public_a2a_interface_url(self):
+        original_url = "https://original.agents.example.com/a2a"
+        updated_url = "https://updated.agents.example.com/a2a"
+        client.post(
+            "/agents",
+            json={
+                "name": "ka_patch_public_a2a_url",
+                "system_prompt": "Help customers.",
+                "a2a": {"public_interface_url": original_url},
+            },
+        )
+
+        update_response = client.patch(
+            "/agents/ka_patch_public_a2a_url",
+            json={"a2a": {"public_interface_url": updated_url}},
+        )
+        assert update_response.status_code == 200
+        assert update_response.json()["a2a"]["public_interface_url"] == updated_url
+
+        clear_response = client.patch(
+            "/agents/ka_patch_public_a2a_url",
+            json={"a2a": None},
+        )
+        assert clear_response.status_code == 200
+        assert clear_response.json()["a2a"]["public_interface_url"] is None
+
+        raw = asyncio.run(get_config_store().get_agent_raw("ka_patch_public_a2a_url"))
+        assert raw is not None
+        assert raw["a2a"]["public_interface_url"] is None
+
+    def test_patch_agent_updates_and_clears_display_name(self):
+        client.post(
+            "/agents",
+            json={
+                "name": "ka_patch_display_name",
+                "display_name": "Original Name",
+                "system_prompt": "Help customers.",
+            },
+        )
+
+        update_response = client.patch(
+            "/agents/ka_patch_display_name",
+            json={"display_name": "Updated Name"},
+        )
+        assert update_response.status_code == 200
+        assert update_response.json()["display_name"] == "Updated Name"
+
+        clear_response = client.patch(
+            "/agents/ka_patch_display_name",
+            json={"display_name": None},
+        )
+        assert clear_response.status_code == 200
+        assert clear_response.json()["display_name"] is None
+
+        raw = asyncio.run(get_config_store().get_agent_raw("ka_patch_display_name"))
+        assert raw is not None
+        assert raw["display_name"] is None
+
     def test_put_agent_updates_definition(self):
         """PUT should fully replace the agent definition."""
         # Create

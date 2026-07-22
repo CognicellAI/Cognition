@@ -23,7 +23,16 @@ from typing import Any, Literal, Protocol, runtime_checkable
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.store.base import BaseStore
 
-from server.app.models import Message, RunStatus, Session, SessionConfig, SessionEvent, SessionRun
+from server.app.models import (
+    Message,
+    RunStatus,
+    RuntimeTask,
+    Session,
+    SessionConfig,
+    SessionEvent,
+    SessionRun,
+    TaskStatus,
+)
 
 
 @runtime_checkable
@@ -254,6 +263,70 @@ class CheckpointerStore(Protocol):
 class RuntimeStore(Protocol):
     """Protocol for durable run and runtime event storage."""
 
+    async def create_task(
+        self,
+        task_id: str,
+        context_id: str,
+        session_id: str,
+        agent_name: str,
+        effective_scope: dict[str, str],
+        status: TaskStatus = TaskStatus.SUBMITTED,
+        idempotency_key: str | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> RuntimeTask:
+        """Create a durable protocol-neutral task."""
+        ...
+
+    async def get_task(
+        self,
+        task_id: str,
+        effective_scope: dict[str, str],
+        agent_name: str | None = None,
+    ) -> RuntimeTask | None:
+        """Get a task only when exact scope and optional agent match."""
+        ...
+
+    async def get_task_by_idempotency_key(
+        self,
+        agent_name: str,
+        effective_scope: dict[str, str],
+        idempotency_key: str,
+    ) -> RuntimeTask | None:
+        """Get a task by its agent/scope-namespaced idempotency key."""
+        ...
+
+    async def list_tasks(
+        self,
+        agent_name: str,
+        effective_scope: dict[str, str],
+        context_id: str | None = None,
+        statuses: set[TaskStatus] | None = None,
+        limit: int = 100,
+        cursor: str | None = None,
+    ) -> tuple[list[RuntimeTask], str | None]:
+        """List exact-scope tasks using an opaque continuation cursor."""
+        ...
+
+    async def update_task(
+        self,
+        task_id: str,
+        effective_scope: dict[str, str],
+        expected_statuses: set[TaskStatus] | None = None,
+        status: TaskStatus | None = None,
+        current_run_id: str | None = None,
+        last_run_id: str | None = None,
+        status_reason: str | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> RuntimeTask | None:
+        """Conditionally update a task, returning None on mismatch/not-found."""
+        ...
+
+    async def delete_task_data(
+        self, task_id: str, effective_scope: dict[str, str]
+    ) -> bool:
+        """Delete a terminal task and its task-owned runtime projections."""
+        ...
+
     async def create_run(
         self,
         run_id: str,
@@ -265,6 +338,7 @@ class RuntimeStore(Protocol):
         parent_run_id: str | None = None,
         trace_id: str | None = None,
         metadata: dict[str, Any] | None = None,
+        task_id: str | None = None,
     ) -> SessionRun:
         """Create a durable run for a session."""
         ...
@@ -313,6 +387,7 @@ class RuntimeStore(Protocol):
         effective_scope: dict[str, str] | None = None,
         trace_id: str | None = None,
         span_id: str | None = None,
+        task_id: str | None = None,
     ) -> SessionEvent:
         """Append a durable runtime event."""
         ...
@@ -325,6 +400,7 @@ class RuntimeStore(Protocol):
         limit: int = 100,
         visibility: Literal["internal", "builder", "end_user"] | None = None,
         event_type: str | None = None,
+        task_id: str | None = None,
     ) -> list[SessionEvent]:
         """List runtime events for a session using cursor-style filters."""
         ...
@@ -441,6 +517,70 @@ class StorageBackend(Protocol):
         ...
 
     # Runtime operations
+    async def create_task(
+        self,
+        task_id: str,
+        context_id: str,
+        session_id: str,
+        agent_name: str,
+        effective_scope: dict[str, str],
+        status: TaskStatus = TaskStatus.SUBMITTED,
+        idempotency_key: str | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> RuntimeTask:
+        """Create a durable protocol-neutral task."""
+        ...
+
+    async def get_task(
+        self,
+        task_id: str,
+        effective_scope: dict[str, str],
+        agent_name: str | None = None,
+    ) -> RuntimeTask | None:
+        """Get a task only when exact scope and optional agent match."""
+        ...
+
+    async def get_task_by_idempotency_key(
+        self,
+        agent_name: str,
+        effective_scope: dict[str, str],
+        idempotency_key: str,
+    ) -> RuntimeTask | None:
+        """Get a task by agent/scope-namespaced idempotency key."""
+        ...
+
+    async def list_tasks(
+        self,
+        agent_name: str,
+        effective_scope: dict[str, str],
+        context_id: str | None = None,
+        statuses: set[TaskStatus] | None = None,
+        limit: int = 100,
+        cursor: str | None = None,
+    ) -> tuple[list[RuntimeTask], str | None]:
+        """List exact-scope tasks using an opaque continuation cursor."""
+        ...
+
+    async def update_task(
+        self,
+        task_id: str,
+        effective_scope: dict[str, str],
+        expected_statuses: set[TaskStatus] | None = None,
+        status: TaskStatus | None = None,
+        current_run_id: str | None = None,
+        last_run_id: str | None = None,
+        status_reason: str | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> RuntimeTask | None:
+        """Conditionally update a task, returning None on mismatch/not-found."""
+        ...
+
+    async def delete_task_data(
+        self, task_id: str, effective_scope: dict[str, str]
+    ) -> bool:
+        """Delete a terminal task and its task-owned runtime projections."""
+        ...
+
     async def create_run(
         self,
         run_id: str,
@@ -452,6 +592,7 @@ class StorageBackend(Protocol):
         parent_run_id: str | None = None,
         trace_id: str | None = None,
         metadata: dict[str, Any] | None = None,
+        task_id: str | None = None,
     ) -> SessionRun:
         """Create a durable run for a session."""
         ...
@@ -500,6 +641,7 @@ class StorageBackend(Protocol):
         effective_scope: dict[str, str] | None = None,
         trace_id: str | None = None,
         span_id: str | None = None,
+        task_id: str | None = None,
     ) -> SessionEvent:
         """Append a durable runtime event."""
         ...
@@ -512,6 +654,7 @@ class StorageBackend(Protocol):
         limit: int = 100,
         visibility: Literal["internal", "builder", "end_user"] | None = None,
         event_type: str | None = None,
+        task_id: str | None = None,
     ) -> list[SessionEvent]:
         """List runtime events for a session using cursor-style filters."""
         ...

@@ -91,6 +91,44 @@ class SessionLimitExceededError(SessionError):
         )
 
 
+class RuntimeTaskError(CognitionError):
+    """Base error for protocol-neutral runtime task operations."""
+
+
+class RuntimeTaskNotFoundError(RuntimeTaskError):
+    """A task is not visible in the requested agent and effective scope."""
+
+    def __init__(self, task_id: str):
+        super().__init__(
+            message=f"Runtime task not found: {task_id}",
+            code=ErrorCode.NOT_FOUND,
+            details={"task_id": task_id},
+        )
+
+
+class RuntimeTaskConflictError(RuntimeTaskError):
+    """A task operation conflicts with durable lifecycle state."""
+
+    def __init__(self, message: str, *, task_id: str | None = None):
+        details = {"task_id": task_id} if task_id is not None else None
+        super().__init__(
+            message=message,
+            code=ErrorCode.VALIDATION_ERROR,
+            details=details,
+        )
+
+
+class RuntimeTaskNotCancelableError(RuntimeTaskError):
+    """A task is already terminal and cannot be canceled."""
+
+    def __init__(self, task_id: str):
+        super().__init__(
+            message=f"Runtime task cannot be canceled: {task_id}",
+            code=ErrorCode.VALIDATION_ERROR,
+            details={"task_id": task_id},
+        )
+
+
 class LLMError(CognitionError):
     """Errors related to LLM operations."""
 

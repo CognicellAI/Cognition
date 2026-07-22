@@ -150,6 +150,12 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
     # Mount A2A protocol adapter (requires COGNITION_A2A_ENABLED=true)
     if settings.a2a_enabled:
+        from server.app.protocols.a2a.security import parse_a2a_card_security
+
+        card_security = parse_a2a_card_security(
+            settings.a2a_security_schemes,
+            settings.a2a_security_requirements,
+        )
         try:
             from server.app.protocols.a2a.routes import mount_a2a_routes
 
@@ -160,6 +166,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
                 session_agent_manager=session_agent_manager,
                 store=storage_backend,
                 version=VERSION,
+                artifact_store=artifact_store,
+                card_security=card_security,
             )
             logger.info("A2A protocol adapter mounted")
         except Exception as e:

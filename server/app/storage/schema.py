@@ -132,6 +132,49 @@ messages_table = Table(
 Index("idx_messages_session", messages_table.c.session_id, messages_table.c.created_at)
 
 
+# Protocol-neutral durable task. A task may own multiple execution attempts.
+runtime_tasks_table = Table(
+    "runtime_tasks",
+    metadata,
+    Column("id", String(36), primary_key=True),
+    Column("context_id", String(100), nullable=False),
+    Column("session_id", String(36), nullable=False),
+    Column("agent_name", String(200), nullable=False),
+    Column("status", String(30), nullable=False),
+    Column("effective_scope", _JsonbOrJson(), nullable=False, default=dict),
+    Column("scope_key", String(64), nullable=False),
+    Column("current_run_id", String(36)),
+    Column("last_run_id", String(36)),
+    Column("idempotency_key", String(200)),
+    Column("status_reason", Text),
+    Column("metadata", _JsonbOrJson(), nullable=False, default=dict),
+    Column(
+        "created_at",
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    ),
+    Column(
+        "updated_at",
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    ),
+)
+
+Index("idx_runtime_tasks_scope", runtime_tasks_table.c.agent_name, runtime_tasks_table.c.scope_key)
+Index("idx_runtime_tasks_context", runtime_tasks_table.c.context_id, runtime_tasks_table.c.created_at)
+Index("idx_runtime_tasks_status", runtime_tasks_table.c.status, runtime_tasks_table.c.updated_at)
+Index(
+    "uq_runtime_tasks_idempotency",
+    runtime_tasks_table.c.agent_name,
+    runtime_tasks_table.c.scope_key,
+    runtime_tasks_table.c.idempotency_key,
+    unique=True,
+)
+
+
 # Durable run table - one execution attempt inside a session.
 session_runs_table = Table(
     "session_runs",
@@ -139,6 +182,7 @@ session_runs_table = Table(
     Column("id", String(36), primary_key=True),
     Column("session_id", String(36), nullable=False),
     Column("thread_id", String(100), nullable=False),
+    Column("task_id", String(36)),
     Column("status", String(30), nullable=False),
     Column("effective_scope", _JsonbOrJson(), nullable=False, default=dict),
     Column("idempotency_key", String(200)),
@@ -168,6 +212,7 @@ session_runs_table = Table(
 
 Index("idx_session_runs_session", session_runs_table.c.session_id, session_runs_table.c.created_at)
 Index("idx_session_runs_status", session_runs_table.c.session_id, session_runs_table.c.status)
+Index("idx_session_runs_task", session_runs_table.c.task_id, session_runs_table.c.created_at)
 Index(
     "idx_session_runs_idempotency",
     session_runs_table.c.session_id,
@@ -182,6 +227,7 @@ session_events_table = Table(
     Column("id", String(36), primary_key=True),
     Column("session_id", String(36), nullable=False),
     Column("run_id", String(36), nullable=False),
+    Column("task_id", String(36)),
     Column("sequence", Integer, nullable=False),
     Column("event_type", String(100), nullable=False),
     Column("visibility", String(30), nullable=False),
@@ -200,6 +246,7 @@ session_events_table = Table(
 
 Index("idx_session_events_session_sequence", session_events_table.c.session_id, session_events_table.c.sequence)
 Index("idx_session_events_run_sequence", session_events_table.c.run_id, session_events_table.c.sequence)
+Index("idx_session_events_task_sequence", session_events_table.c.task_id, session_events_table.c.sequence)
 Index(
     "idx_session_events_session_run_sequence",
     session_events_table.c.session_id,
@@ -386,6 +433,9 @@ __all__ = [
     "metadata",
     "sessions_table",
     "messages_table",
+    "runtime_tasks_table",
+    "session_runs_table",
+    "session_events_table",
     "config_entities_table",
     "config_changes_table",
     "artifacts_table",

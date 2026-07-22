@@ -4,7 +4,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
 
-from server.app.agent.definition import AgentDefinition
+from server.app.agent.definition import A2AConfig, AgentDefinition
 from server.app.api.dependencies import get_config_store, get_scope_dep
 from server.app.api.models import (
     AgentConfigResponse,
@@ -22,11 +22,12 @@ router = APIRouter(prefix="/agents", tags=["agents"])
 def _agent_to_response(agent: AgentDefinition) -> AgentResponse:
     return AgentResponse(
         name=agent.name,
+        display_name=agent.display_name,
         description=agent.description,
         mode=agent.mode,
         hidden=agent.hidden,
         native=agent.native,
-        a2a_exposed=agent.a2a_exposed,
+        a2a=agent.a2a,
         provider=agent.config.provider,
         model=agent.config.model,
         temperature=agent.config.temperature,
@@ -121,11 +122,12 @@ async def create_agent(
     try:
         definition_data: dict[str, Any] = {
             "name": body.name,
+            "display_name": body.display_name,
             "system_prompt": body.system_prompt,
             "description": body.description,
             "mode": body.mode,
             "hidden": body.hidden,
-            "a2a_exposed": body.a2a_exposed,
+            "a2a": body.a2a.model_dump(mode="json"),
             "native": False,
             "tools": body.tools,
             "skills": body.skills,
@@ -216,6 +218,10 @@ async def update_agent(
         data, agent_scope = result
 
         updates = body.model_dump(exclude_none=True)
+        if "display_name" in body.model_fields_set:
+            updates["display_name"] = body.display_name
+        if "a2a" in body.model_fields_set:
+            updates["a2a"] = (body.a2a or A2AConfig()).model_dump(mode="json")
         config_fields = {
             "model",
             "temperature",

@@ -109,7 +109,8 @@ Every consumer of the runtime (streaming endpoint, tests, evaluators) deals only
 
 ```python
 class AgentDefinition(BaseModel):
-    name: str
+    name: str                       # Stable runtime lookup identifier
+    display_name: str | None = None # Optional public presentation name
     system_prompt: str | PromptConfig | None = None
     tools: list[str] = []           # registry tool names
     skills: list[str] = []          # registry skill names
@@ -122,7 +123,7 @@ class AgentDefinition(BaseModel):
     description: str | None = None
     hidden: bool = False
     native: bool = False            # True for built-in agents
-    a2a_exposed: bool = False       # Expose via A2A protocol (default: off)
+    a2a: A2AConfig = A2AConfig()    # Exposure and public Agent Card contract
 ```
 
 ### Agent Modes
@@ -135,20 +136,35 @@ class AgentDefinition(BaseModel):
 
 ### A2A Exposure
 
-The `a2a_exposed` field controls whether an agent is exposed via the [A2A (Agent-to-Agent)](https://a2a-protocol.org/latest/) protocol. When `True`:
+The nested `a2a.exposed` field controls whether an agent is exposed via strict [A2A 1.0](https://a2a-protocol.org/latest/) JSON-RPC. When `True`:
 
 - The agent has an Agent Card at `GET /a2a/{agent_name}/.well-known/agent-card.json`
-- The agent appears in `GET /.well-known/agent-card.json` (scope-filtered list)
+- The agent is discoverable from `GET /.well-known/agent-card.json?assistant_id={agent_name}`
 - The agent gets a dedicated JSON-RPC endpoint at `POST /a2a/{agent_name}`
 - External A2A clients can discover and invoke the agent
 
-Built-in agents (`default`, `readonly`, etc.) have `a2a_exposed=False` by default. Set it to `True` explicitly for agents you want to expose:
+Incoming A2A messages support text, structured data, inline raw bytes, and URL
+reference Parts. Text and data become model context; raw and URL Parts become
+scoped, task-linked artifact references and are never implicitly executed or
+fetched. See [A2A Message Parts](a2a/message-parts.md) for the complete contract.
+
+Set `a2a.public_interface_url` when a gateway or builder platform exposes the
+agent at a different public endpoint. Cognition advertises that absolute HTTP(S)
+URL exactly in `supportedInterfaces`. If it is omitted, Cognition derives the
+interface URL from the incoming request and its private
+`/a2a/{agent_name}` route for backward compatibility. The configured URL must
+not contain credentials or a fragment.
+
+Built-in agents (`default`, `readonly`, etc.) have `a2a.exposed=false` by default. Set it to `true` explicitly for agents you want to expose:
 
 ```yaml
 # .cognition/agents/deploy-agent.yaml
 name: deploy-agent
+display_name: Deployment Assistant
 mode: primary
-a2a_exposed: true
+a2a:
+  exposed: true
+  public_interface_url: https://agents.example.com/deployment/a2a
 system_prompt: |
   You are a deployment agent...
 ```
@@ -158,36 +174,13 @@ Or via the API:
 ```bash
 curl -X POST http://localhost:8000/agents \
   -H "Content-Type: application/json" \
-  -d '{"name": "deploy-agent", "system_prompt": "...", "a2a_exposed": true}'
+  -d '{"name": "deploy-agent", "display_name": "Deployment Assistant", "system_prompt": "...", "a2a": {"exposed": true, "public_interface_url": "https://agents.example.com/deployment/a2a"}}'
 ```
 
-### A2A Exposure
-
-The `a2a_exposed` field controls whether an agent is exposed via the [A2A (Agent-to-Agent)](https://a2a-protocol.org/latest/) protocol. When `True`:
-
-- The agent has an Agent Card at `GET /a2a/{agent_name}/.well-known/agent-card.json`
-- The agent appears in `GET /.well-known/agent-card.json` (scope-filtered list)
-- The agent gets a dedicated JSON-RPC endpoint at `POST /a2a/{agent_name}`
-- External A2A clients can discover and invoke the agent
-
-Built-in agents (`default`, `readonly`, etc.) have `a2a_exposed=False` by default. Set it to `True` explicitly for agents you want to expose:
-
-```yaml
-# .cognition/agents/deploy-agent.yaml
-name: deploy-agent
-mode: primary
-a2a_exposed: true
-system_prompt: |
-  You are a deployment agent...
-```
-
-Or via the API:
-
-```bash
-curl -X POST http://localhost:8000/agents \
-  -H "Content-Type: application/json" \
-  -d '{"name": "deploy-agent", "system_prompt": "...", "a2a_exposed": true}'
-```
+Builders can also configure default MIME modes and public Agent Card skills
+under `a2a`. See [Agent Cards and Public Skills](a2a/agent-cards.md) for the
+discovery model and the [A2A Builder Guide](../guides/a2a.md) for setup. Public
+A2A skills remain separate from root-level runtime `skills`.
 
 ### System Prompt Sources
 
@@ -319,7 +312,7 @@ curl http://localhost:8000/agents
 curl http://localhost:8000/agents/readonly
 ```
 
-Response fields include `name`, `description`, `mode`, `hidden`, `native`, `a2a_exposed`, `model`, `temperature`, `response_format`, `interrupt_on`, `tools`, `skills`, and a truncated `system_prompt` (max 500 characters).
+Response fields include `name`, `description`, `mode`, `hidden`, `native`, `a2a`, `model`, `temperature`, `response_format`, `interrupt_on`, `tools`, `skills`, and `system_prompt`.
 
 ### Capability Discovery
 
@@ -387,7 +380,7 @@ class CognitionContext:
 
 This context serves two purposes:
 
-1. **Store namespace scoping** — `runtime.store` (a LangGraph `BaseStore`) is available inside agent nodes and middleware. `effective_scope` is the natural key for building per-tenant memory namespaces, ensuring one tenant cannot read another's stored memories.
+1. **Store namespace scoping** — `runtime.store` (a LangGraph `BaseStore`) is available inside agent nodes and middleware. `effective_scope` is the natural key for building exact application-scope memory namespaces, preventing one builder-authorized scope from reading another's stored memories.
 
 2. **Middleware access** — any custom middleware can read `runtime.context` to branch on builder-defined scope dimensions without coupling to the HTTP layer.
 
