@@ -25,6 +25,7 @@ import structlog
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from server.app.agent.cognition_agent import CognitionAgentParams, create_cognition_agent
+from server.app.agent.definition import AgentDefinition
 from server.app.agent.resolver import ResolvedRuntimeModel, RuntimeResolver
 from server.app.agent.runtime import (
     ArtifactEvent,  # noqa: F401 — re-exported for custom runtimes
@@ -56,9 +57,15 @@ from server.app.agent.runtime import (
 )
 from server.app.agent.token_counter import count_text_tokens
 from server.app.exceptions import LLMProviderConfigError
-from server.app.observability import CONTEXT_EVENT_COUNT
+from server.app.observability import (
+    CONTEXT_EVENT_COUNT,
+    RUNTIME_CACHE_EVICTIONS_TOTAL,
+    RUNTIME_CACHE_SIZE,
+)
 from server.app.observability import span as trace_span
 from server.app.settings import Settings
+from server.app.storage.common import canonical_json_digest
+from server.app.storage.config_models import SandboxProfile, SkillDefinition
 from server.app.storage.config_store import ConfigStore
 from server.app.storage.factory import create_storage_backend
 
@@ -100,6 +107,67 @@ def _effective_context_policy(
     if tool_token_limit_before_evict is not None:
         effective.setdefault("tool_token_limit_before_evict", tool_token_limit_before_evict)
     return effective
+
+
+def _pinned_skills(
+    runtime_manifest: Mapping[str, Any] | None,
+) -> dict[str, SkillDefinition] | None:
+    """Return validated immutable skill snapshots from a run manifest."""
+    if not isinstance(runtime_manifest, Mapping):
+        return None
+    dependencies = runtime_manifest.get("dependencies")
+    skills = dependencies.get("skills") if isinstance(dependencies, Mapping) else None
+    if not isinstance(skills, Mapping):
+        return None
+    snapshots: dict[str, SkillDefinition] = {}
+    for name, identity in skills.items():
+        definition = (
+            identity.get("definition")
+            if isinstance(identity, Mapping)
+            else None
+        )
+        expected_digest = (
+            identity.get("digest")
+            if isinstance(identity, Mapping)
+            else None
+        )
+        if not isinstance(name, str) or not isinstance(definition, Mapping):
+            continue
+        skill = SkillDefinition.model_validate(dict(definition))
+        if canonical_json_digest(skill.model_dump(mode="json")) != expected_digest:
+            raise RuntimeError(f"Pinned skill manifest is invalid: {name}")
+        snapshots[name] = skill
+    return snapshots
+
+
+def _pinned_sandbox_profile(
+    runtime_manifest: Mapping[str, Any] | None,
+) -> SandboxProfile | None:
+    """Return a validated immutable SandboxProfile snapshot from a run manifest."""
+    if not isinstance(runtime_manifest, Mapping):
+        return None
+    dependencies = runtime_manifest.get("dependencies")
+    profile = (
+        dependencies.get("sandbox_profile")
+        if isinstance(dependencies, Mapping)
+        else None
+    )
+    definition = (
+        profile.get("definition")
+        if isinstance(profile, Mapping)
+        else None
+    )
+    expected_digest = (
+        profile.get("digest")
+        if isinstance(profile, Mapping)
+        else None
+    )
+    if not isinstance(definition, Mapping):
+        return None
+    sandbox_profile = SandboxProfile.model_validate(dict(definition))
+    if canonical_json_digest(sandbox_profile.model_dump(mode="json")) != expected_digest:
+        raise RuntimeError("Pinned SandboxProfile manifest is invalid")
+    return sandbox_profile
 
 
 def _audit_context_event(event: ContextEvent) -> None:
@@ -318,6 +386,7 @@ class DeepAgentStreamingService:
         project_path: str,
         system_prompt: str | None = None,
         scope: Mapping[str, str] | None = None,
+        runtime_manifest: Mapping[str, Any] | None = None,
     ) -> tuple[ResolvedAgentConfig, list[Any]]:
         """Resolve agent definition fields and custom tools from ConfigStore.
 
@@ -335,7 +404,41 @@ class DeepAgentStreamingService:
             return resolved, custom_tools
 
         effective_scope = _effective_session_scope(session, scope)
-        agent_def = await cs.get_agent_definition(session.agent_name, effective_scope)
+        pinned_agent = (
+            runtime_manifest.get("agent")
+            if isinstance(runtime_manifest, Mapping)
+            else None
+        )
+        pinned_definition = (
+            pinned_agent.get("definition")
+            if isinstance(pinned_agent, Mapping)
+            else None
+        )
+        agent_def: AgentDefinition | None
+        if isinstance(pinned_definition, Mapping):
+            agent_def = AgentDefinition.model_validate(dict(pinned_definition))
+            expected_digest = (
+                pinned_agent.get("definition_digest")
+                if isinstance(pinned_agent, Mapping)
+                else None
+            )
+            actual_digest = canonical_json_digest(
+                agent_def.model_dump(mode="json")
+            )
+            if (
+                agent_def.name != session.agent_name
+                or expected_digest != actual_digest
+            ):
+                raise AgentDefinitionUnavailableError(
+                    session.agent_name,
+                    "pinned manifest Agent identity is invalid",
+                    effective_scope,
+                )
+        else:
+            agent_def = await cs.get_agent_definition(
+                session.agent_name,
+                effective_scope,
+            )
         if agent_def is None:
             logger.warning(
                 "Agent definition not found for session execution",
@@ -368,15 +471,26 @@ class DeepAgentStreamingService:
         if agent_def.skills:
             resolved.skills = list(agent_def.skills)
 
-        all_defs = await cs.list_agent_definitions(
-            include_hidden=True,
-            scope=effective_scope,
-        )
-        workspace_base = str(self.settings.workspace_path)
+        # Only explicitly declared inline subagents are attached. Enumerating
+        # every Agent in a tenant scope would silently widen capabilities.
         resolved.subagents = [
-            s.to_subagent(base_path=workspace_base)
-            for s in all_defs
-            if s.name != agent_def.name
+            {
+                "name": subagent.name,
+                "description": subagent.description or "",
+                "system_prompt": subagent.system_prompt,
+                "_declared_tool_names": list(subagent.tools),
+                **(
+                    {
+                        "permissions": [
+                            permission.model_dump()
+                            for permission in subagent.permissions
+                        ]
+                    }
+                    if subagent.permissions
+                    else {}
+                ),
+            }
+            for subagent in agent_def.subagents
         ]
 
         if agent_def.async_subagents:
@@ -443,18 +557,33 @@ class DeepAgentStreamingService:
         runtime: DeepAgentRuntime | None = None
         try:
             # Get session for config / agent_name resolution
-            session = await self.storage_backend.get_session(session_id)
+            session = await self.storage_backend.get_session(session_id, scope)
             effective_scope = _effective_session_scope(session, scope)
+            manifest_digest = ""
+            pinned_manifest: Mapping[str, Any] | None = None
+            if run_id is not None:
+                pinned_run = await self.storage_backend.get_run(
+                    run_id,
+                    effective_scope,
+                )
+                if pinned_run is None:
+                    raise RuntimeError("Pinned run manifest was not found at exact scope")
+                manifest_digest = pinned_run.manifest_digest
+                pinned_manifest = pinned_run.runtime_manifest
 
             agent_cfg, custom_tools = await self._resolve_agent_config(
                 session=session,
                 project_path=project_path,
                 system_prompt=system_prompt,
                 scope=effective_scope,
+                runtime_manifest=pinned_manifest,
             )
 
             resolved_model = await self._resolve_model(
-                session=session, scope=effective_scope, agent_def=agent_cfg.agent_def
+                session=session,
+                scope=effective_scope,
+                agent_def=agent_cfg.agent_def,
+                runtime_manifest=pinned_manifest,
             )
             model, provider, model_id, recursion_limit = resolved_model
             model_cache_key = _model_cache_key_from_resolved(
@@ -508,6 +637,8 @@ class DeepAgentStreamingService:
                 project_path=project_path,
                 model=model,
                 model_cache_key=model_cache_key,
+                manifest_digest=manifest_digest,
+                pinned_skills=_pinned_skills(pinned_manifest),
                 store=store,
                 checkpointer=checkpointer,
                 settings=self.settings,
@@ -533,8 +664,10 @@ class DeepAgentStreamingService:
                 config_store=self._get_config_store(),
                 sandbox_profile=agent_cfg.sandbox_profile,
                 sandbox_execution_role_arn=agent_cfg.sandbox_execution_role_arn,
+                pinned_sandbox_profile_config=_pinned_sandbox_profile(pinned_manifest),
             )
             agent = await create_cognition_agent(agent_params)
+            invocation_context.sandbox_backend = agent.sandbox_backend
 
             if manager and agent.sandbox_backend is not None:
                 manager.register_sandbox_backend(
@@ -717,20 +850,30 @@ class DeepAgentStreamingService:
     ) -> AsyncGenerator[StreamEvent, None]:
         """Resume an interrupted Deep Agents run from persisted checkpoint state."""
         try:
-            session = await self.storage_backend.get_session(session_id)
+            session = await self.storage_backend.get_session(session_id, scope)
             if session is None:
                 yield ErrorEvent(message=f"Session not found: {session_id}", code="NOT_FOUND")
                 return
             effective_scope = _effective_session_scope(session, scope)
+            active_run = await self.storage_backend.get_active_run(
+                session.id,
+                effective_scope,
+            )
+            if active_run is None:
+                raise RuntimeError("Pinned active run manifest was not found at exact scope")
 
             agent_cfg, custom_tools = await self._resolve_agent_config(
                 session=session,
                 project_path=project_path,
                 scope=effective_scope,
+                runtime_manifest=active_run.runtime_manifest,
             )
 
             resolved_model = await self._resolve_model(
-                session=session, scope=effective_scope, agent_def=agent_cfg.agent_def
+                session=session,
+                scope=effective_scope,
+                agent_def=agent_cfg.agent_def,
+                runtime_manifest=active_run.runtime_manifest,
             )
             model, provider, model_id, recursion_limit = resolved_model
             model_cache_key = _model_cache_key_from_resolved(
@@ -778,6 +921,8 @@ class DeepAgentStreamingService:
                 project_path=project_path,
                 model=model,
                 model_cache_key=model_cache_key,
+                manifest_digest=active_run.manifest_digest,
+                pinned_skills=_pinned_skills(active_run.runtime_manifest),
                 store=store,
                 checkpointer=checkpointer,
                 settings=self.settings,
@@ -801,8 +946,12 @@ class DeepAgentStreamingService:
                 config_store=self._get_config_store(),
                 sandbox_profile=agent_cfg.sandbox_profile,
                 sandbox_execution_role_arn=agent_cfg.sandbox_execution_role_arn,
+                pinned_sandbox_profile_config=_pinned_sandbox_profile(
+                    active_run.runtime_manifest
+                ),
             )
             agent = await create_cognition_agent(agent_params)
+            invocation_context.sandbox_backend = agent.sandbox_backend
 
             resume_decision: dict[str, Any] = {"type": decision}
             if decision == "edit":
@@ -888,6 +1037,7 @@ class DeepAgentStreamingService:
         self,
         session_id: str,
         thread_id: str,
+        scope: dict[str, str] | None = None,
     ) -> int:
         """Rebuild the API message projection from authoritative checkpoint state."""
         checkpointer = await self.storage_backend.get_checkpointer()
@@ -900,7 +1050,8 @@ class DeepAgentStreamingService:
             return 0
         if not checkpoint_messages:
             existing_messages = await self.storage_backend.list_messages_for_session(
-                session_id
+                session_id,
+                scope,
             )
             return len(existing_messages)
 
@@ -908,6 +1059,7 @@ class DeepAgentStreamingService:
             session_id=session_id,
             thread_id=thread_id,
             checkpoint_messages=checkpoint_messages,
+            effective_scope=scope,
         )
         return int(rebuilt_count)
 
@@ -916,11 +1068,18 @@ class DeepAgentStreamingService:
         session: Any,
         scope: dict[str, str] | None,
         agent_def: Any | None = None,
+        runtime_manifest: Mapping[str, Any] | None = None,
     ) -> ResolvedRuntimeModel:
         """Resolve provider config and build a LangChain BaseChatModel.
 
         Delegates to RuntimeResolver.resolve_runtime_model_for_session().
         """
+        if runtime_manifest is not None:
+            return await self._get_runtime_resolver().resolve_runtime_model_from_manifest(
+                runtime_manifest,
+                session=session,
+                agent_def=agent_def,
+            )
         return await self._get_runtime_resolver().resolve_runtime_model_for_session(
             session=session, scope=scope, agent_def=agent_def
         )
@@ -1001,6 +1160,8 @@ class SessionAgentManager:
         self._config_store = config_store
         self._services: dict[str, DeepAgentStreamingService] = {}
         self._project_paths: dict[str, str] = {}
+        self._service_access: dict[str, float] = {}
+        self._service_cache_evictions = 0
         self._active_runtimes: dict[str, list[Any]] = {}
         self._sandbox_backends: dict[str, Any] = {}
         self._sandbox_events: dict[str, asyncio.Queue[SandboxLifecycleEvent]] = {}
@@ -1023,6 +1184,11 @@ class SessionAgentManager:
         Returns:
             Configured DeepAgentStreamingService for the session.
         """
+        self._evict_session_services()
+        existing = self._services.get(session_id)
+        if existing is not None:
+            self._service_access[session_id] = time.monotonic()
+            return existing
         service = DeepAgentStreamingService(
             settings=self.settings,
             runtime_resolver=self._runtime_resolver,
@@ -1032,6 +1198,9 @@ class SessionAgentManager:
             service.storage_backend = self._storage_backend
         self._services[session_id] = service
         self._project_paths[session_id] = project_path
+        self._service_access[session_id] = time.monotonic()
+        self._evict_session_services()
+        RUNTIME_CACHE_SIZE.labels(cache="session_service").set(len(self._services))
         logger.info(
             "Session registered with DeepAgents",
             session_id=session_id,
@@ -1041,11 +1210,63 @@ class SessionAgentManager:
 
     def get_service(self, session_id: str) -> DeepAgentStreamingService | None:
         """Get the agent service for a session."""
-        return self._services.get(session_id)
+        self._evict_session_services()
+        service = self._services.get(session_id)
+        if service is not None:
+            self._service_access[session_id] = time.monotonic()
+        return service
 
     def get_project_path(self, session_id: str) -> str | None:
         """Get the project path for a session."""
+        if session_id in self._services:
+            self._service_access[session_id] = time.monotonic()
         return self._project_paths.get(session_id)
+
+    def _evict_session_services(self) -> None:
+        """Evict expired/oldest idle services and their sandbox resources."""
+        now = time.monotonic()
+        ttl = self.settings.session_service_cache_ttl_seconds
+        candidates = sorted(
+            (
+                (last_access, session_id)
+                for session_id, last_access in self._service_access.items()
+                if not self._active_runtimes.get(session_id)
+            ),
+        )
+        expired = [
+            session_id
+            for last_access, session_id in candidates
+            if now - last_access > ttl
+        ]
+        for session_id in expired:
+            self.unregister_session(session_id)
+            self._service_cache_evictions += 1
+            RUNTIME_CACHE_EVICTIONS_TOTAL.labels(
+                cache="session_service", reason="ttl"
+            ).inc()
+
+        while len(self._services) > self.settings.session_service_cache_max_entries:
+            idle = sorted(
+                (
+                    (last_access, session_id)
+                    for session_id, last_access in self._service_access.items()
+                    if not self._active_runtimes.get(session_id)
+                ),
+            )
+            if not idle:
+                break
+            self.unregister_session(idle[0][1])
+            self._service_cache_evictions += 1
+            RUNTIME_CACHE_EVICTIONS_TOTAL.labels(
+                cache="session_service", reason="capacity"
+            ).inc()
+
+    def get_service_cache_stats(self) -> dict[str, int]:
+        """Return safe cache cardinality/eviction metrics."""
+        return {
+            "size": len(self._services),
+            "evictions": self._service_cache_evictions,
+        }
 
     def get_runtime(self, session_id: str) -> Any | None:
         """Get the active runtime for a session, if any."""
@@ -1409,11 +1630,13 @@ class SessionAgentManager:
         """Unregister a session and clean up resources."""
         self._services.pop(session_id, None)
         self._project_paths.pop(session_id, None)
+        self._service_access.pop(session_id, None)
         self._active_runtimes.pop(session_id, None)
 
         self.release_sandbox_backend(session_id)
         self._sandbox_events.pop(session_id, None)
         self._sandbox_emitted_lifecycle_phases.pop(session_id, None)
+        RUNTIME_CACHE_SIZE.labels(cache="session_service").set(len(self._services))
         logger.info("Session unregistered", session_id=session_id)
 
     def _emit_sandbox_event(self, session_id: str, event: SandboxLifecycleEvent) -> None:

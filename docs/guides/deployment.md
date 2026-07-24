@@ -126,6 +126,14 @@ curl -s http://localhost:3000/api/health
 
 Cognition uses Alembic for schema management. Migrations run automatically at startup — the `SqliteStorageBackend` and `PostgresStorageBackend` both call `metadata.create_all()` during `initialize()`.
 
+For the v0.13 multi-tenancy migration, drain active writes before upgrading.
+The migration backfills canonical `scope_key` values and Agent revision
+metadata for sessions, runs, events, artifacts, and config entities. Mixed
+v0.12 and v0.13 writers are unsupported because v0.13 runtime isolation depends
+on exact-scope columns and pinned run manifests. Existing sessions that
+referenced removed built-in default Agents need compatible builder-provisioned
+Agent definitions before cutover.
+
 For explicit migration management:
 
 ```bash

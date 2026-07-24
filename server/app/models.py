@@ -243,8 +243,8 @@ class Session:
     config: SessionConfig
     created_at: str
     updated_at: str
+    agent_name: str
     message_count: int = 0
-    agent_name: str = "default"
     scopes: dict[str, str] = field(default_factory=dict)
     metadata: dict[str, str] = field(default_factory=dict)
 
@@ -296,8 +296,8 @@ class Session:
             ),
             created_at=data["created_at"],
             updated_at=data["updated_at"],
+            agent_name=data["agent_name"],
             message_count=data.get("message_count", 0),
-            agent_name=data.get("agent_name", "default"),
             scopes=data.get("scopes", {}),
             metadata=data.get("metadata", {}),
         )
@@ -360,6 +360,9 @@ class SessionRun:
     attempt: int
     created_at: str
     updated_at: str
+    agent_revision: int = 1
+    runtime_manifest: dict[str, Any] = field(default_factory=dict)
+    manifest_digest: str = ""
     idempotency_key: str | None = None
     parent_run_id: str | None = None
     started_at: str | None = None

@@ -35,6 +35,17 @@ def effective_scope_key(scope: dict[str, str] | None) -> str:
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
+def canonical_json_digest(value: Any) -> str:
+    """Return a stable SHA-256 digest for a JSON-compatible value."""
+    canonical = json.dumps(
+        value,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+    )
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
 def merge_session_config(existing: SessionConfig, incoming: SessionConfig) -> SessionConfig:
     return SessionConfig(
         provider=incoming.provider or existing.provider,
@@ -67,9 +78,9 @@ def make_session(
     workspace_path: str,
     thread_id: str,
     config: SessionConfig,
+    agent_name: str,
     title: str | None = None,
     scopes: dict[str, str] | None = None,
-    agent_name: str = "default",
     metadata: dict[str, str] | None = None,
     created_at: str | None = None,
     updated_at: str | None = None,
@@ -130,6 +141,9 @@ def make_session_run(
     thread_id: str,
     status: RunStatus = RunStatus.QUEUED,
     effective_scope: dict[str, str] | None = None,
+    agent_revision: int = 1,
+    runtime_manifest: dict[str, Any] | None = None,
+    manifest_digest: str | None = None,
     attempt: int = 1,
     idempotency_key: str | None = None,
     parent_run_id: str | None = None,
@@ -153,6 +167,9 @@ def make_session_run(
         thread_id=thread_id,
         status=status,
         effective_scope=effective_scope or {},
+        agent_revision=agent_revision,
+        runtime_manifest=dict(runtime_manifest or {}),
+        manifest_digest=manifest_digest or canonical_json_digest(runtime_manifest or {}),
         attempt=attempt,
         idempotency_key=idempotency_key,
         parent_run_id=parent_run_id,

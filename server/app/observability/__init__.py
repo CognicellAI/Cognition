@@ -8,7 +8,7 @@ from __future__ import annotations
 import functools
 import inspect
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from contextlib import contextmanager
 from typing import Any, TypeVar
 
@@ -28,9 +28,14 @@ except ImportError:
 
 try:
     from opentelemetry import trace
+    from opentelemetry.exporter.otlp.proto.common.trace_encoder import encode_spans
     from opentelemetry.sdk.resources import Resource
-    from opentelemetry.sdk.trace import TracerProvider
-    from opentelemetry.sdk.trace.export import BatchSpanProcessor
+    from opentelemetry.sdk.trace import ReadableSpan, TracerProvider
+    from opentelemetry.sdk.trace.export import (
+        BatchSpanProcessor,
+        SpanExporter,
+        SpanExportResult,
+    )
 
     # Try different OTLP exporters
     try:
@@ -60,6 +65,10 @@ except ImportError:
     Resource = None  # type: ignore[assignment,misc]
     TracerProvider = None  # type: ignore[assignment,misc]
     BatchSpanProcessor = None  # type: ignore[assignment,misc]
+    SpanExporter = object  # type: ignore[assignment,misc]
+    SpanExportResult = None  # type: ignore[assignment,misc]
+    ReadableSpan = Any  # type: ignore[misc,assignment]
+    encode_spans = None  # type: ignore[assignment]
     FastAPIInstrumentor = None  # type: ignore[assignment,misc]
     LangchainInstrumentor = None  # type: ignore[assignment,misc]
 
@@ -181,6 +190,24 @@ if PROMETHEUS_AVAILABLE:
         "Durable task retention cleanup duration",
         ["transport"],
     )
+    OTLP_EXPORT_REQUEST_BYTES = Histogram(
+        "cognition_otlp_export_request_bytes",
+        "Encoded bytes per bounded OTLP trace export request",
+    )
+    OTLP_OVERSIZE_SPANS_TOTAL = Counter(
+        "cognition_otlp_oversize_spans_total",
+        "Spans dropped because one encoded span exceeded the OTLP request limit",
+    )
+    RUNTIME_CACHE_SIZE = Gauge(
+        "cognition_runtime_cache_size",
+        "Current entries in bounded in-process runtime caches",
+        ["cache"],
+    )
+    RUNTIME_CACHE_EVICTIONS_TOTAL = Counter(
+        "cognition_runtime_cache_evictions_total",
+        "Entries evicted from bounded in-process runtime caches",
+        ["cache", "reason"],
+    )
 else:
     # Dummy metrics that do nothing
     class DummyMetric:
@@ -195,6 +222,9 @@ else:
             """No-op."""
 
         def observe(self, *args: Any, **kwargs: Any) -> None:
+            """No-op."""
+
+        def set(self, *args: Any, **kwargs: Any) -> None:
             """No-op."""
 
     REQUEST_COUNT = DummyMetric()  # type: ignore[assignment]
@@ -220,6 +250,81 @@ else:
     A2A_LIMIT_REJECTIONS_TOTAL = DummyMetric()  # type: ignore[assignment]
     RUNTIME_TASK_CLEANUP_TOTAL = DummyMetric()  # type: ignore[assignment]
     RUNTIME_TASK_CLEANUP_DURATION = DummyMetric()  # type: ignore[assignment]
+    OTLP_EXPORT_REQUEST_BYTES = DummyMetric()  # type: ignore[assignment]
+    OTLP_OVERSIZE_SPANS_TOTAL = DummyMetric()  # type: ignore[assignment]
+    RUNTIME_CACHE_SIZE = DummyMetric()  # type: ignore[assignment]
+    RUNTIME_CACHE_EVICTIONS_TOTAL = DummyMetric()  # type: ignore[assignment]
+
+
+def _encoded_span_batch_size(spans: Sequence[ReadableSpan]) -> int:
+    """Return conservative encoded gRPC request bytes for a span batch."""
+    if encode_spans is None:
+        raise RuntimeError("OpenTelemetry OTLP protobuf encoder is unavailable")
+    request = encode_spans(spans)
+    # Include the five-byte gRPC message frame. HTTP/protobuf has no larger
+    # framing overhead, so this remains a safe bound for both transports.
+    return len(request.SerializeToString()) + 5
+
+
+class ByteBoundedSpanExporter(SpanExporter):  # type: ignore[misc]
+    """Split exporter batches by their actual encoded protobuf request size."""
+
+    def __init__(self, exporter: Any, max_export_bytes: int) -> None:
+        if max_export_bytes <= 0:
+            raise ValueError("max_export_bytes must be positive")
+        self._exporter = exporter
+        self._max_export_bytes = max_export_bytes
+
+    def export(self, spans: Sequence[ReadableSpan]) -> Any:
+        if SpanExportResult is None:
+            return None
+        chunks: list[list[ReadableSpan]] = []
+        current: list[ReadableSpan] = []
+        for span in spans:
+            candidate = [*current, span]
+            try:
+                encoded_bytes = _encoded_span_batch_size(candidate)
+            except Exception:
+                structlog.get_logger().exception("Failed to encode OTLP trace batch")
+                return SpanExportResult.FAILURE
+            if encoded_bytes <= self._max_export_bytes:
+                current = candidate
+                continue
+
+            if current:
+                chunks.append(current)
+                current = []
+            single_bytes = _encoded_span_batch_size([span])
+            if single_bytes > self._max_export_bytes:
+                OTLP_OVERSIZE_SPANS_TOTAL.inc()
+                structlog.get_logger().warning(
+                    "Dropping oversize OTLP span",
+                    encoded_bytes=single_bytes,
+                    max_export_bytes=self._max_export_bytes,
+                )
+                continue
+            current = [span]
+        if current:
+            chunks.append(current)
+
+        for chunk in chunks:
+            encoded_bytes = _encoded_span_batch_size(chunk)
+            if encoded_bytes > self._max_export_bytes:
+                return SpanExportResult.FAILURE
+            OTLP_EXPORT_REQUEST_BYTES.observe(encoded_bytes)
+            result = self._exporter.export(tuple(chunk))
+            if result is not SpanExportResult.SUCCESS:
+                return result
+        return SpanExportResult.SUCCESS
+
+    def shutdown(self) -> None:
+        self._exporter.shutdown()
+
+    def force_flush(self, timeout_millis: int = 30_000) -> bool:
+        force_flush = getattr(self._exporter, "force_flush", None)
+        if force_flush is None:
+            return True
+        return bool(force_flush(timeout_millis=timeout_millis))
 
 
 def setup_tracing(
@@ -227,6 +332,7 @@ def setup_tracing(
     endpoint: str | None = None,
     app: Any | None = None,
     enabled: bool = True,
+    max_export_bytes: int = 3_670_016,
 ) -> None:
     """Initialize OpenTelemetry tracing.
 
@@ -256,7 +362,10 @@ def setup_tracing(
             if ":4318" in endpoint:
                 endpoint = f"{endpoint}/v1/traces"
 
-        exporter = OTLPSpanExporter(endpoint=endpoint)
+        exporter = ByteBoundedSpanExporter(
+            OTLPSpanExporter(endpoint=endpoint),
+            max_export_bytes=max_export_bytes,
+        )
         processor = BatchSpanProcessor(exporter)
         provider.add_span_processor(processor)
 

@@ -80,9 +80,10 @@ sessions_table = Table(
         default=dict,
     ),
     Column("scopes", JSON, default=dict),
+    Column("scope_key", String(64), nullable=False),
     Column("metadata", JSON, default=dict),
     Column("message_count", Integer, default=0),
-    Column("agent_name", String(100), nullable=False, default="default"),
+    Column("agent_name", String(100), nullable=False),
     Column(
         "created_at",
         DateTime(timezone=True),
@@ -100,6 +101,12 @@ sessions_table = Table(
 
 # Index on workspace_path for session listing by workspace
 Index("idx_sessions_workspace", sessions_table.c.workspace_path)
+Index(
+    "idx_sessions_scope_page",
+    sessions_table.c.scope_key,
+    sessions_table.c.updated_at,
+    sessions_table.c.id,
+)
 
 # Messages table - stores all conversation messages
 messages_table = Table(
@@ -185,6 +192,10 @@ session_runs_table = Table(
     Column("task_id", String(36)),
     Column("status", String(30), nullable=False),
     Column("effective_scope", _JsonbOrJson(), nullable=False, default=dict),
+    Column("scope_key", String(64), nullable=False),
+    Column("agent_revision", Integer, nullable=False),
+    Column("runtime_manifest", _JsonbOrJson(), nullable=False, default=dict),
+    Column("manifest_digest", String(64), nullable=False),
     Column("idempotency_key", String(200)),
     Column("attempt", Integer, nullable=False, default=1),
     Column("parent_run_id", String(36)),
@@ -211,6 +222,12 @@ session_runs_table = Table(
 )
 
 Index("idx_session_runs_session", session_runs_table.c.session_id, session_runs_table.c.created_at)
+Index(
+    "idx_session_runs_scope_session",
+    session_runs_table.c.scope_key,
+    session_runs_table.c.session_id,
+    session_runs_table.c.created_at,
+)
 Index("idx_session_runs_status", session_runs_table.c.session_id, session_runs_table.c.status)
 Index("idx_session_runs_task", session_runs_table.c.task_id, session_runs_table.c.created_at)
 Index(
@@ -233,6 +250,7 @@ session_events_table = Table(
     Column("visibility", String(30), nullable=False),
     Column("payload", _JsonbOrJson(), nullable=False, default=dict),
     Column("effective_scope", _JsonbOrJson(), nullable=False, default=dict),
+    Column("scope_key", String(64), nullable=False),
     Column("trace_id", String(100)),
     Column("span_id", String(100)),
     Column(
@@ -245,6 +263,12 @@ session_events_table = Table(
 )
 
 Index("idx_session_events_session_sequence", session_events_table.c.session_id, session_events_table.c.sequence)
+Index(
+    "idx_session_events_scope_session_sequence",
+    session_events_table.c.scope_key,
+    session_events_table.c.session_id,
+    session_events_table.c.sequence,
+)
 Index("idx_session_events_run_sequence", session_events_table.c.run_id, session_events_table.c.sequence)
 Index("idx_session_events_task_sequence", session_events_table.c.task_id, session_events_table.c.sequence)
 Index(
@@ -278,7 +302,10 @@ config_entities_table = Table(
     Column("entity_type", String(50), nullable=False),
     Column("name", String(200), nullable=False),
     Column("scope", _JsonbOrJson(), nullable=False, default=dict),
+    Column("scope_key", String(64), nullable=False),
     Column("definition", JSON, nullable=False),
+    Column("revision", Integer, nullable=False, default=1),
+    Column("definition_digest", String(64), nullable=False),
     Column("source", String(10), nullable=False, default="file"),
     Column(
         "created_at",
@@ -295,15 +322,21 @@ config_entities_table = Table(
     ),
 )
 
-# Unique constraint: (entity_type, name, scope) — one row per scoped entity
+# One row per canonical exact scope. The stored JSON remains the collision
+# verification source of truth.
 Index(
     "idx_config_entities_lookup",
     config_entities_table.c.entity_type,
     config_entities_table.c.name,
-    config_entities_table.c.scope,
+    config_entities_table.c.scope_key,
     unique=True,
 )
-Index("idx_config_entities_type", config_entities_table.c.entity_type)
+Index(
+    "idx_config_entities_scope_list",
+    config_entities_table.c.entity_type,
+    config_entities_table.c.scope_key,
+    config_entities_table.c.name,
+)
 
 # config_changes — append-only changelog used for cache invalidation.
 # SQLite: polled by InProcessDispatcher (no-op; changes happen in same process).
@@ -315,6 +348,7 @@ config_changes_table = Table(
     Column("entity_type", String(50), nullable=False),
     Column("name", String(200), nullable=False),
     Column("scope", _JsonbOrJson(), nullable=False, default=dict),
+    Column("scope_key", String(64), nullable=False),
     Column("operation", String(10), nullable=False),  # "upsert" | "delete"
     Column(
         "changed_at",
@@ -349,6 +383,7 @@ artifacts_table = Table(
     Column("checkpoint_id", String(100)),
     Column("visibility", String(20), default="private"),
     Column("scope", _JsonbOrJson(), nullable=False, default=dict),
+    Column("scope_key", String(64), nullable=False),
     Column("source", String(10), nullable=False, default="api"),
     Column(
         "created_at",
@@ -367,9 +402,15 @@ artifacts_table = Table(
 Index(
     "idx_artifacts_lookup",
     artifacts_table.c.id,
-    artifacts_table.c.scope,
+    artifacts_table.c.scope_key,
     artifacts_table.c.version,
     unique=True,
+)
+Index(
+    "idx_artifacts_scope_page",
+    artifacts_table.c.scope_key,
+    artifacts_table.c.updated_at,
+    artifacts_table.c.id,
 )
 Index("idx_artifacts_type", artifacts_table.c.artifact_type)
 Index("idx_artifacts_run_id", artifacts_table.c.run_id)

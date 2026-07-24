@@ -59,7 +59,7 @@ class TestSessionWorkflow:
         async with httpx.AsyncClient() as client:
             response = await client.post(
                 f"{server}/sessions",
-                json={"title": "E2E Test Session"},
+                json={"title": "E2E Test Session", "agent_name": "default"},
                 headers=scope_headers,
             )
             assert response.status_code == 201
@@ -73,14 +73,12 @@ class TestSessionWorkflow:
         async with httpx.AsyncClient() as client:
             create_resp = await client.post(
                 f"{server}/sessions",
-                json={"title": "List Test"},
+                json={"title": "List Test", "agent_name": "default"},
                 headers=scope_headers,
             )
             assert create_resp.status_code == 201
 
-            list_resp = await client.get(
-                f"{server}/sessions", headers=scope_headers
-            )
+            list_resp = await client.get(f"{server}/sessions", headers=scope_headers)
             assert list_resp.status_code == 200
             data = list_resp.json()
             assert data["total"] >= 1
@@ -91,14 +89,14 @@ class TestSessionWorkflow:
         async with httpx.AsyncClient() as client:
             create_resp = await client.post(
                 f"{server}/sessions",
-                json={"title": "Original"},
+                json={"title": "Original", "agent_name": "default"},
                 headers=scope_headers,
             )
             session_id = create_resp.json()["id"]
 
             update_resp = await client.patch(
                 f"{server}/sessions/{session_id}",
-                json={"title": "Updated"},
+                json={"title": "Updated", "agent_name": "default"},
                 headers=scope_headers,
             )
             assert update_resp.status_code == 200
@@ -109,7 +107,7 @@ class TestSessionWorkflow:
         async with httpx.AsyncClient() as client:
             create_resp = await client.post(
                 f"{server}/sessions",
-                json={"title": "Delete Test"},
+                json={"title": "Delete Test", "agent_name": "default"},
                 headers=scope_headers,
             )
             session_id = create_resp.json()["id"]
@@ -119,9 +117,7 @@ class TestSessionWorkflow:
             )
             assert delete_resp.status_code == 204
 
-            get_resp = await client.get(
-                f"{server}/sessions/{session_id}", headers=scope_headers
-            )
+            get_resp = await client.get(f"{server}/sessions/{session_id}", headers=scope_headers)
             assert get_resp.status_code == 404
 
 
@@ -134,7 +130,7 @@ class TestMessageWorkflow:
         async with httpx.AsyncClient() as client:
             session_resp = await client.post(
                 f"{server}/sessions",
-                json={"title": "Message Test"},
+                json={"title": "Message Test", "agent_name": "default"},
                 headers=scope_headers,
             )
             return session_resp.json()["id"]
@@ -233,6 +229,7 @@ class TestFullWorkflow:
                 f"{server}/sessions",
                 json={
                     "title": "Complete Test",
+                    "agent_name": "default",
                     "config": {"provider": "mock", "temperature": 0.7},
                 },
                 headers=scope_headers,
@@ -240,9 +237,7 @@ class TestFullWorkflow:
             assert session_resp.status_code == 201
             session_id = session_resp.json()["id"]
 
-            list_resp = await client.get(
-                f"{server}/sessions", headers=scope_headers
-            )
+            list_resp = await client.get(f"{server}/sessions", headers=scope_headers)
             assert list_resp.status_code == 200
 
             async with client.stream(
@@ -285,7 +280,5 @@ class TestFullWorkflow:
             )
             assert delete_resp.status_code == 204
 
-            get_resp = await client.get(
-                f"{server}/sessions/{session_id}", headers=scope_headers
-            )
+            get_resp = await client.get(f"{server}/sessions/{session_id}", headers=scope_headers)
             assert get_resp.status_code == 404

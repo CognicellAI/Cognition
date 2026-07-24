@@ -147,7 +147,10 @@ async def test_excluded_and_blocked_tools_attach_separate_middleware():
                 model="mock:model",
                 excluded_tools=["grep"],
                 blocked_tools=["grep"],
-                settings=Settings(blocked_tools=["execute"]),
+                settings=Settings(
+                    blocked_tools=["execute"],
+                    unsafe_local_execution=True,
+                ),
             )
         )
 

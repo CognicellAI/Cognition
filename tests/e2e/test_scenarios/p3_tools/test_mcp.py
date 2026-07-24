@@ -22,6 +22,14 @@ from server.app.agent.mcp_client import (
     create_mcp_client,
     mcp_config_to_connection,
 )
+from server.app.settings import Settings
+
+
+def _unsafe_dev_settings() -> Settings:
+    settings = Settings()
+    settings.unsafe_local_execution = True
+    settings.allow_host_tools = True
+    return settings
 
 
 @pytest.mark.asyncio
@@ -133,18 +141,14 @@ class TestMcpToolIntegration:
 
         mcp_configs = [McpServerConfig(name="github", url="https://api.glama.ai/mcp/github")]
 
-        with patch(
-            "server.app.agent.cognition_agent.create_mcp_client"
-        ) as mock_create_client:
+        with patch("server.app.agent.cognition_agent.create_mcp_client") as mock_create_client:
             mock_mcp_client = MagicMock()
             mock_tool = MagicMock()
             mock_tool.name = "github_get_repo"
             mock_mcp_client.get_tools = AsyncMock(return_value=[mock_tool])
             mock_create_client.return_value = mock_mcp_client
 
-            with patch(
-                "server.app.agent.cognition_agent.create_deep_agent"
-            ) as mock_create:
+            with patch("server.app.agent.cognition_agent.create_deep_agent") as mock_create:
                 mock_agent = MagicMock()
                 mock_create.return_value = mock_agent
 
@@ -152,6 +156,7 @@ class TestMcpToolIntegration:
                     CognitionAgentParams(
                         project_path="/tmp/test",
                         mcp_configs=mcp_configs,
+                        settings=_unsafe_dev_settings(),
                     )
                 )
 
@@ -171,18 +176,12 @@ class TestMcpErrorHandling:
 
         mcp_configs = [McpServerConfig(name="failing-server", url="https://invalid.test/mcp")]
 
-        with patch(
-            "server.app.agent.cognition_agent.create_mcp_client"
-        ) as mock_create_client:
+        with patch("server.app.agent.cognition_agent.create_mcp_client") as mock_create_client:
             mock_mcp_client = MagicMock()
-            mock_mcp_client.get_tools = AsyncMock(
-                side_effect=ConnectionError("Connection refused")
-            )
+            mock_mcp_client.get_tools = AsyncMock(side_effect=ConnectionError("Connection refused"))
             mock_create_client.return_value = mock_mcp_client
 
-            with patch(
-                "server.app.agent.cognition_agent.create_deep_agent"
-            ) as mock_create:
+            with patch("server.app.agent.cognition_agent.create_deep_agent") as mock_create:
                 mock_agent = MagicMock()
                 mock_create.return_value = mock_agent
 
@@ -190,6 +189,7 @@ class TestMcpErrorHandling:
                     CognitionAgentParams(
                         project_path="/tmp/test",
                         mcp_configs=mcp_configs,
+                        settings=_unsafe_dev_settings(),
                     )
                 )
                 assert agent is not None
@@ -198,14 +198,10 @@ class TestMcpErrorHandling:
         """Verify all-disabled configs don't trigger MCP initialization."""
         from server.app.agent.cognition_agent import CognitionAgentParams, create_cognition_agent
 
-        mcp_configs = [
-            McpServerConfig(name="disabled", url="https://test/mcp", enabled=False)
-        ]
+        mcp_configs = [McpServerConfig(name="disabled", url="https://test/mcp", enabled=False)]
 
         with patch("server.app.agent.cognition_agent.create_mcp_client") as mock_create_client:
-            with patch(
-                "server.app.agent.cognition_agent.create_deep_agent"
-            ) as mock_create:
+            with patch("server.app.agent.cognition_agent.create_deep_agent") as mock_create:
                 mock_agent = MagicMock()
                 mock_create.return_value = mock_agent
 
@@ -213,6 +209,7 @@ class TestMcpErrorHandling:
                     CognitionAgentParams(
                         project_path="/tmp/test",
                         mcp_configs=mcp_configs,
+                        settings=_unsafe_dev_settings(),
                     )
                 )
                 mock_create_client.assert_not_called()

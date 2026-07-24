@@ -18,6 +18,7 @@ from __future__ import annotations
 import uuid
 from collections.abc import AsyncGenerator, Mapping
 from typing import Any, cast
+from urllib.parse import urlsplit
 
 import httpx
 import structlog
@@ -27,6 +28,7 @@ from fastapi.responses import StreamingResponse
 from server.app.agent.task_runtime import AgentTaskRuntime, SubmitTask
 from server.app.api.dependencies import (
     get_artifact_store,
+    get_config_store,
     get_rate_limiter_dep,
     get_scope_dep,
     get_session_agent_manager_dep,
@@ -73,6 +75,7 @@ from server.app.runtime_projection import (
 from server.app.settings import Settings
 from server.app.storage.artifact_store import ArtifactStore
 from server.app.storage.backend import StorageBackend
+from server.app.storage.config_store import ConfigStore
 
 router = APIRouter(prefix="/sessions/{session_id}/messages", tags=["messages"])
 logger = structlog.get_logger(__name__)
@@ -88,11 +91,18 @@ _SENSITIVE_SANDBOX_METADATA_KEY_PARTS = (
 )
 
 
-async def _refresh_session_message_count(store: StorageBackend, session_id: str) -> int:
+async def _refresh_session_message_count(
+    store: StorageBackend,
+    session_id: str,
+    effective_scope: dict[str, str] | None = None,
+) -> int:
     """Synchronize the durable session message_count projection."""
-    messages_for_session = await store.list_messages_for_session(session_id)
+    messages_for_session = await store.list_messages_for_session(
+        session_id,
+        effective_scope,
+    )
     count = len(messages_for_session)
-    await store.update_message_count(session_id, count)
+    await store.update_message_count(session_id, count, effective_scope)
     return count
 
 
@@ -169,6 +179,7 @@ async def _touch_session_activity(
     session_id: str,
     *,
     status_value: str | None = None,
+    effective_scope: dict[str, str] | None = None,
 ) -> None:
     """Advance updated_at for durable runtime activity.
 
@@ -177,12 +188,20 @@ async def _touch_session_activity(
     does not create a chat message.
     """
     if status_value is not None:
-        await store.update_session(session_id=session_id, status=status_value)
+        await store.update_session(
+            session_id=session_id,
+            status=status_value,
+            effective_scope=effective_scope,
+        )
         return
 
-    session = await store.get_session(session_id)
+    session = await store.get_session(session_id, effective_scope)
     if session is not None:
-        await store.update_session(session_id=session_id, status=session.status.value)
+        await store.update_session(
+            session_id=session_id,
+            status=session.status.value,
+            effective_scope=effective_scope,
+        )
 
 
 async def agent_event_stream(
@@ -233,7 +252,7 @@ async def agent_event_stream(
         if not service:
             service = agent_manager.register_session(session_id, workspace_path)
 
-        session = await store.get_session(session_id)
+        session = await store.get_session(session_id, scope)
 
         if not session:
             yield EventBuilder.error("Session not found", code="SESSION_NOT_FOUND")
@@ -309,8 +328,9 @@ async def agent_event_stream(
                             else {}
                         ),
                     },
+                    effective_scope=scope,
                 )
-                await _refresh_session_message_count(store, session_id)
+                await _refresh_session_message_count(store, session_id, scope)
                 sse = EventBuilder.tool_call(
                     name=event.name,
                     args=event.args,
@@ -346,8 +366,9 @@ async def agent_event_stream(
                             else {}
                         ),
                     },
+                    effective_scope=scope,
                 )
-                await _refresh_session_message_count(store, session_id)
+                await _refresh_session_message_count(store, session_id, scope)
                 sse = EventBuilder.tool_result(
                     tool_call_id=event.tool_call_id,
                     output=event.output,
@@ -369,7 +390,11 @@ async def agent_event_stream(
                 yield sse
 
             elif isinstance(event, ToolSafetyEvent):
-                await _touch_session_activity(store, session_id)
+                await _touch_session_activity(
+                    store,
+                    session_id,
+                    effective_scope=scope,
+                )
                 sse = EventBuilder.tool_safety(
                     action=event.action,
                     tool_name=event.tool_name,
@@ -400,7 +425,11 @@ async def agent_event_stream(
                 yield sse
 
             elif isinstance(event, ContextEvent):
-                await _touch_session_activity(store, session_id)
+                await _touch_session_activity(
+                    store,
+                    session_id,
+                    effective_scope=scope,
+                )
                 sse = EventBuilder.context(
                     action=event.action,
                     session_id=event.session_id,
@@ -437,7 +466,11 @@ async def agent_event_stream(
                 yield sse
 
             elif isinstance(event, PlanningEvent):
-                await _touch_session_activity(store, session_id)
+                await _touch_session_activity(
+                    store,
+                    session_id,
+                    effective_scope=scope,
+                )
                 sse = EventBuilder.planning(event.todos)
                 if projection is not None and run is not None:
                     durable = await projection.append_event(
@@ -449,7 +482,11 @@ async def agent_event_stream(
                 yield sse
 
             elif isinstance(event, StepCompleteEvent):
-                await _touch_session_activity(store, session_id)
+                await _touch_session_activity(
+                    store,
+                    session_id,
+                    effective_scope=scope,
+                )
                 sse = EventBuilder.step_complete(
                     step_number=event.step_number,
                     total_steps=event.total_steps,
@@ -489,6 +526,7 @@ async def agent_event_stream(
                     await store.update_session(
                         session_id=session_id,
                         status=SessionStatus.WAITING_FOR_APPROVAL.value,
+                        effective_scope=scope,
                     )
                     run_state_event = EventBuilder.run_state(
                         from_status="active",
@@ -519,7 +557,11 @@ async def agent_event_stream(
 
             elif isinstance(event, DelegationEvent):
                 # ISSUE-010: Emit delegation event for UI visibility
-                await _touch_session_activity(store, session_id)
+                await _touch_session_activity(
+                    store,
+                    session_id,
+                    effective_scope=scope,
+                )
                 sse = EventBuilder.delegation(
                     from_agent=event.from_agent,
                     to_agent=event.to_agent,
@@ -539,11 +581,19 @@ async def agent_event_stream(
                 yield sse
 
             elif isinstance(event, SandboxLifecycleEvent):
-                await _touch_session_activity(store, session_id)
+                await _touch_session_activity(
+                    store,
+                    session_id,
+                    effective_scope=scope,
+                )
                 yield await _sandbox_lifecycle_sse(event, projection=projection, run=run)
 
             elif isinstance(event, StatusEvent):
-                await _touch_session_activity(store, session_id)
+                await _touch_session_activity(
+                    store,
+                    session_id,
+                    effective_scope=scope,
+                )
                 sse = EventBuilder.status(event.status)
                 if projection is not None and run is not None:
                     durable = await projection.append_event(
@@ -625,7 +675,11 @@ async def agent_event_stream(
                             durable_status,
                         )
                 else:
-                    await store.update_session(session_id=session_id, status=completion_status)
+                    await store.update_session(
+                        session_id=session_id,
+                        status=completion_status,
+                        effective_scope=scope,
+                    )
                     state_sse = EventBuilder.run_state(
                         from_status="active",
                         to_status=completion_status,
@@ -681,7 +735,9 @@ async def agent_event_stream(
                         await projection.rebuild_messages_from_checkpoint(service, run)
                     else:
                         await store.update_session(
-                            session_id=session_id, status=SessionStatus.ABORTED.value
+                            session_id=session_id,
+                            status=SessionStatus.ABORTED.value,
+                            effective_scope=scope,
                         )
                         error_state_sse = EventBuilder.run_state(
                             from_status="active",
@@ -711,7 +767,9 @@ async def agent_event_stream(
                         await projection.rebuild_messages_from_checkpoint(service, run)
                     else:
                         await store.update_session(
-                            session_id=session_id, status=SessionStatus.FAILED.value
+                            session_id=session_id,
+                            status=SessionStatus.FAILED.value,
+                            effective_scope=scope,
                         )
                         error_state_sse = EventBuilder.run_state(
                             from_status="active",
@@ -732,7 +790,11 @@ async def agent_event_stream(
                 return
 
             elif isinstance(event, HeartbeatEvent):
-                await _touch_session_activity(store, session_id)
+                await _touch_session_activity(
+                    store,
+                    session_id,
+                    effective_scope=scope,
+                )
                 sse = EventBuilder.heartbeat(
                     step_label=event.step_label,
                     last_model_call=event.last_model_call,
@@ -757,9 +819,17 @@ async def agent_event_stream(
 
             elif isinstance(event, RunStateEvent):
                 if event.to_status:
-                    await store.update_session(session_id=session_id, status=event.to_status)
+                    await store.update_session(
+                        session_id=session_id,
+                        status=event.to_status,
+                        effective_scope=scope,
+                    )
                 else:
-                    await _touch_session_activity(store, session_id)
+                    await _touch_session_activity(
+                        store,
+                        session_id,
+                        effective_scope=scope,
+                    )
                 sse = EventBuilder.run_state(
                     from_status=event.from_status,
                     to_status=event.to_status,
@@ -822,6 +892,7 @@ async def agent_event_stream(
 
 async def _post_completion_callback(
     callback_url: str,
+    callback_origin: str,
     payload: dict[str, Any],
     session_id: str,
     projection: RuntimeProjectionService | None = None,
@@ -832,22 +903,29 @@ async def _post_completion_callback(
         await projection.append_event(
             run,
             "callback.delivery.started",
-            payload={"url": callback_url},
+            payload={"origin": callback_origin},
         )
     try:
-        async with httpx.AsyncClient(timeout=15.0) as client:
+        async with httpx.AsyncClient(
+            timeout=15.0,
+            follow_redirects=False,
+            trust_env=False,
+        ) as client:
             response = await client.post(callback_url, json=payload)
             response.raise_for_status()
         if projection is not None and run is not None:
             await projection.append_event(
                 run,
                 "callback.delivery.completed",
-                payload={"url": callback_url, "response_status": response.status_code},
+                payload={
+                    "origin": callback_origin,
+                    "response_status": response.status_code,
+                },
             )
         logger.info(
             "message_completion_callback_sent",
             session_id=session_id,
-            callback_url=callback_url,
+            callback_origin=callback_origin,
             status_code=response.status_code,
         )
     except Exception as exc:
@@ -855,14 +933,53 @@ async def _post_completion_callback(
             await projection.append_event(
                 run,
                 "callback.delivery.failed",
-                payload={"url": callback_url, "error": str(exc)},
+                payload={
+                    "origin": callback_origin,
+                    "error_type": type(exc).__name__,
+                },
             )
         logger.warning(
             "message_completion_callback_failed",
             session_id=session_id,
-            callback_url=callback_url,
-            error=str(exc),
+            callback_origin=callback_origin,
+            error_type=type(exc).__name__,
         )
+
+
+def _approved_callback_origin(callback_url: str, settings: Settings) -> str:
+    """Return an approved HTTPS origin or fail closed."""
+    try:
+        parsed = urlsplit(callback_url)
+        port = parsed.port
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Completion callback URL is invalid",
+        ) from exc
+    if (
+        parsed.scheme.lower() != "https"
+        or not parsed.hostname
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.fragment
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Completion callbacks require an operator-approved HTTPS origin",
+        )
+    origin = f"https://{parsed.hostname.lower()}"
+    if port is not None and port != 443:
+        origin = f"{origin}:{port}"
+    approved = {
+        candidate.rstrip("/").lower()
+        for candidate in settings.callback_allowed_origins
+    }
+    if origin.lower() not in approved:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Completion callback origin is not approved by the operator",
+        )
+    return origin
 
 
 @router.post(
@@ -882,6 +999,7 @@ async def send_message(
     agent_manager: SessionAgentManager = Depends(get_session_agent_manager_dep),  # noqa: B008
     store: StorageBackend = Depends(get_storage_backend_dep),  # noqa: B008
     artifact_store: ArtifactStore = Depends(get_artifact_store),  # noqa: B008
+    config_store: ConfigStore = Depends(get_config_store),  # noqa: B008
     rate_limiter: RateLimiter = Depends(get_rate_limiter_dep),  # noqa: B008
     scope: SessionScope = Depends(get_scope_dep),  # noqa: B008
 ) -> StreamingResponse:
@@ -909,7 +1027,13 @@ async def send_message(
 
     await rate_limiter.check_rate_limit(rate_limit_key)
 
-    session = await store.get_session(session_id)
+    callback_origin = (
+        _approved_callback_origin(str(request.callback_url), settings)
+        if request.callback_url
+        else None
+    )
+
+    session = await store.get_session(session_id, scope.get_all())
 
     if session is None:
         raise HTTPException(
@@ -918,17 +1042,6 @@ async def send_message(
         )
 
     workspace_path = session.workspace_path
-
-    # Enforce scoping - check if session scope matches current scope
-    if not scope.is_empty() and not scope.matches(session.scopes):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail=(
-                f"Scope mismatch: session '{session_id}' was created with scope "
-                f"{session.scopes}, but request has scope {scope.get_all()}. "
-                "Session scope is immutable after creation."
-            ),
-        )
 
     session_status = SessionStatus(session.status)
     if SessionStatus.is_terminal(session_status):
@@ -941,6 +1054,7 @@ async def send_message(
         existing_run = await store.get_run_by_idempotency_key(
             session_id,
             request.idempotency_key,
+            session.scopes,
         )
         if existing_run is not None:
             raise HTTPException(
@@ -967,6 +1081,7 @@ async def send_message(
         store,
         default_workspace_path=workspace_path,
         artifact_store=artifact_store,
+        config_store=config_store,
     )
     try:
         execution = await task_runtime.submit(
@@ -1111,6 +1226,7 @@ async def send_message(
                 callback_payload["error"] = callback_error
             await _post_completion_callback(
                 str(request.callback_url),
+                callback_origin or "",
                 callback_payload,
                 session_id,
                 projection=projection,
@@ -1143,25 +1259,19 @@ async def list_messages(
     """
     _ = str(settings.workspace_path)
 
-    session = await store.get_session(session_id)
+    session = await store.get_session(session_id, scope.get_all())
     if session is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Session not found: {session_id}",
         )
 
-    # Enforce scoping - check if session scope matches current scope
-    if not scope.is_empty() and not scope.matches(session.scopes):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail=(
-                f"Scope mismatch: session '{session_id}' was created with scope "
-                f"{session.scopes}, but request has scope {scope.get_all()}. "
-                "Session scope is immutable after creation."
-            ),
-        )
-
-    messages, total = await store.get_messages_by_session(session_id, limit, offset)
+    messages, total = await store.get_messages_by_session(
+        session_id,
+        limit,
+        offset,
+        session.scopes,
+    )
 
     # Convert domain models to API models
     paginated = [
@@ -1214,25 +1324,14 @@ async def get_message(
     """
     _ = str(settings.workspace_path)
 
-    session = await store.get_session(session_id)
+    session = await store.get_session(session_id, scope.get_all())
     if session is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Session not found: {session_id}",
         )
 
-    # Enforce scoping - check if session scope matches current scope
-    if not scope.is_empty() and not scope.matches(session.scopes):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail=(
-                f"Scope mismatch: session '{session_id}' was created with scope "
-                f"{session.scopes}, but request has scope {scope.get_all()}. "
-                "Session scope is immutable after creation."
-            ),
-        )
-
-    message = await store.get_message(message_id)
+    message = await store.get_message(message_id, session.scopes)
 
     if message and message.session_id == session_id:
         return MessageResponse(

@@ -40,7 +40,11 @@ class SessionCreate(BaseModel):
     """
 
     title: str | None = Field(None, max_length=200, description="Optional session title")
-    agent_name: str = Field("default", description="Agent to use for this session")
+    agent_name: str = Field(
+        ...,
+        min_length=1,
+        description="Builder-provisioned Agent to bind to this session",
+    )
     metadata: dict[str, str] | None = Field(
         default=None,
         description="Arbitrary key-value metadata attached to the session",
@@ -69,7 +73,7 @@ class SessionResponse(BaseModel):
     created_at: str = Field(..., description="Session creation timestamp (ISO format)")
     updated_at: str = Field(..., description="Last activity timestamp (ISO format)")
     message_count: int = Field(0, description="Number of messages in session")
-    agent_name: str = Field("default", description="Agent bound to this session")
+    agent_name: str = Field(..., description="Agent bound to this session")
     idempotency_key: str | None = Field(
         default=None, description="Idempotency key used during creation, if any"
     )
@@ -118,6 +122,8 @@ class SessionList(BaseModel):
 
     sessions: list[SessionResponse] = Field(default_factory=list)
     total: int = Field(..., description="Total number of sessions")
+    has_more: bool = False
+    next_offset: int | None = None
 
 
 class SessionUpdate(BaseModel):
@@ -858,6 +864,13 @@ class AgentResponse(BaseModel):
     """Agent information for API responses."""
 
     name: str = Field(..., description="Stable agent runtime identifier")
+    revision: int = Field(..., ge=1, description="Exact-scoped Agent revision")
+    definition_digest: str = Field(
+        ...,
+        min_length=64,
+        max_length=64,
+        description="SHA-256 digest of the validated Agent definition",
+    )
     display_name: str | None = Field(
         None,
         description="Optional human-readable name used for public Agent presentation",
@@ -865,7 +878,12 @@ class AgentResponse(BaseModel):
     description: str | None = Field(None, description="Agent description")
     mode: Literal["primary", "subagent", "all"] = Field(..., description="Agent mode")
     hidden: bool = Field(..., description="Whether agent is hidden from listings")
-    native: bool = Field(..., description="Whether agent is built-in")
+    native: bool = Field(
+        ...,
+        description=(
+            "Legacy compatibility flag; Cognition does not create native Agents"
+        ),
+    )
     a2a: A2AConfig = Field(
         default_factory=A2AConfig,
         description="A2A exposure and public Agent Card presentation",
@@ -938,6 +956,8 @@ class AgentList(BaseModel):
     agents: list[AgentResponse] = Field(
         default_factory=list, description="List of available agents"
     )
+    has_more: bool = False
+    next_offset: int | None = None
 
 
 # ============================================================================

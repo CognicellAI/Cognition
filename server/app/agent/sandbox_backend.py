@@ -12,15 +12,17 @@ provides K8s-native isolation for production deployments on Kubernetes.
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import os
 import shlex
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, cast
 
 import structlog
 from deepagents.backends import FilesystemBackend, LocalShellBackend
 from deepagents.backends.protocol import (
+    EditResult,
     ExecuteResponse,
     FileDownloadResponse,
     FileUploadResponse,
@@ -126,12 +128,12 @@ class CognitionLocalSandboxBackend(LocalShellBackend, SandboxBackendProtocol):
 class CognitionDockerSandboxBackend(FilesystemBackend, SandboxBackendProtocol):
     """Docker sandbox backend with filesystem file ops and containerized execution.
 
-    Uses FilesystemBackend for file operations (workspace is volume-mounted,
-    so files are shared between host and container). Routes command execution
-    through DockerExecutionBackend for kernel-level isolation.
+    All model-directed filesystem and command operations are routed through the
+    per-session container. The inherited FilesystemBackend supplies the protocol
+    shape only; its host filesystem methods are fully overridden here.
 
     This provides:
-    - Fast file I/O via direct filesystem access (no docker cp overhead)
+    - File I/O through Docker archive and exec APIs
     - Isolated command execution inside a per-session container
     - Resource limits (CPU, memory) on executed commands
     - Optional network isolation
@@ -171,6 +173,7 @@ class CognitionDockerSandboxBackend(FilesystemBackend, SandboxBackendProtocol):
 
         # Lazy-init the Docker execution backend
         self._docker_backend: Any | None = None
+        self._protected_paths = {".cognition"}
 
     @property
     def id(self) -> str:
@@ -225,6 +228,235 @@ class CognitionDockerSandboxBackend(FilesystemBackend, SandboxBackendProtocol):
             exit_code=result.exit_code,
             truncated=result.truncated,
         )
+
+    @staticmethod
+    def _relative_path(path: str | None) -> str:
+        """Normalize a virtual sandbox path and reject traversal."""
+        raw = path or "."
+        if "\x00" in raw or "\\" in raw:
+            raise ValueError("Invalid sandbox path")
+        if raw == "/workspace":
+            raw = "."
+        elif raw.startswith("/workspace/"):
+            raw = raw.removeprefix("/workspace/")
+        else:
+            raw = raw.lstrip("/")
+        candidate = PurePosixPath(raw or ".")
+        if ".." in candidate.parts:
+            raise ValueError("Path traversal is not allowed")
+        normalized = candidate.as_posix()
+        return "." if normalized in {"", "/"} else normalized
+
+    def _is_protected_path(self, path: str) -> bool:
+        relative = self._relative_path(path)
+        return any(
+            relative == protected or relative.startswith(f"{protected}/")
+            for protected in self._protected_paths
+        )
+
+    def read(
+        self,
+        file_path: str,
+        offset: int = 0,
+        limit: int = 2000,
+    ) -> ReadResult:
+        """Read a file only through the assigned Docker sandbox."""
+        try:
+            relative = self._relative_path(file_path)
+            content = self._get_docker_backend().read_file_bytes(relative)
+            try:
+                text = content.decode("utf-8")
+                lines = text.splitlines(keepends=True)
+                if lines and offset >= len(lines):
+                    return ReadResult(
+                        error=(
+                            f"Line offset {offset} exceeds file length "
+                            f"({len(lines)} lines)"
+                        )
+                    )
+                selected = "".join(lines[offset : offset + limit])
+                return ReadResult(
+                    file_data={"content": selected, "encoding": "utf-8"}
+                )
+            except UnicodeDecodeError:
+                return ReadResult(
+                    file_data={
+                        "content": base64.standard_b64encode(content).decode("ascii"),
+                        "encoding": "base64",
+                    }
+                )
+        except Exception as exc:
+            return ReadResult(error=f"Error reading file '{file_path}': {exc}")
+
+    def write(self, file_path: str, content: str) -> WriteResult:
+        """Create a file only through the assigned Docker sandbox."""
+        try:
+            relative = self._relative_path(file_path)
+            if self._is_protected_path(relative):
+                raise PermissionError(
+                    f"Writing to protected path is not allowed: {file_path}"
+                )
+            docker_backend = self._get_docker_backend()
+            if docker_backend.path_exists(relative):
+                return WriteResult(
+                    error=(
+                        f"Cannot write to {file_path} because it already exists. "
+                        "Read and then make an edit, or write to a new path."
+                    )
+                )
+            docker_backend.write_file(relative, content)
+            return WriteResult(path=file_path)
+        except Exception as exc:
+            return WriteResult(error=f"Error writing file '{file_path}': {exc}")
+
+    def edit(
+        self,
+        file_path: str,
+        old_string: str,
+        new_string: str,
+        replace_all: bool = False,
+    ) -> EditResult:
+        """Edit a UTF-8 file only through the assigned Docker sandbox."""
+        try:
+            relative = self._relative_path(file_path)
+            if self._is_protected_path(relative):
+                raise PermissionError(
+                    f"Editing protected path is not allowed: {file_path}"
+                )
+            docker_backend = self._get_docker_backend()
+            content = docker_backend.read_file(relative)
+            occurrences = content.count(old_string)
+            if occurrences == 0:
+                return EditResult(error=f"String not found in {file_path}")
+            if occurrences > 1 and not replace_all:
+                return EditResult(
+                    error=(
+                        f"String occurs {occurrences} times in {file_path}; "
+                        "set replace_all=true or provide a unique string"
+                    )
+                )
+            updated = (
+                content.replace(old_string, new_string)
+                if replace_all
+                else content.replace(old_string, new_string, 1)
+            )
+            docker_backend.write_file(relative, updated)
+            return EditResult(
+                path=file_path,
+                occurrences=occurrences if replace_all else 1,
+            )
+        except Exception as exc:
+            return EditResult(error=f"Error editing file '{file_path}': {exc}")
+
+    def ls(self, path: str) -> LsResult:
+        """List a directory only through the assigned Docker sandbox."""
+        try:
+            entries = self._get_docker_backend().list_files(
+                self._relative_path(path)
+            )
+            return LsResult(entries=cast(list[Any], entries))
+        except Exception as exc:
+            return LsResult(error=f"Cannot list '{path}': {exc}")
+
+    def grep(
+        self,
+        pattern: str,
+        path: str | None = None,
+        glob: str | None = None,
+    ) -> GrepResult:
+        """Search text only through the assigned Docker sandbox."""
+        try:
+            matches = self._get_docker_backend().grep_files(
+                pattern,
+                self._relative_path(path),
+                glob,
+            )
+            return GrepResult(matches=cast(list[Any], matches))
+        except Exception as exc:
+            return GrepResult(error=f"Error searching sandbox: {exc}", matches=[])
+
+    def glob(self, pattern: str, path: str | None = "/") -> GlobResult:
+        """Discover files only through the assigned Docker sandbox."""
+        try:
+            if pattern.startswith("/") or ".." in PurePosixPath(pattern).parts:
+                raise ValueError("Invalid glob pattern")
+            matches = self._get_docker_backend().glob_files(
+                pattern,
+                self._relative_path(path),
+            )
+            return GlobResult(matches=cast(list[Any], matches))
+        except Exception as exc:
+            return GlobResult(error=f"Error globbing sandbox: {exc}", matches=[])
+
+    def download_files(self, paths: list[str]) -> list[FileDownloadResponse]:
+        """Download files through the assigned Docker sandbox."""
+        responses: list[FileDownloadResponse] = []
+        for path in paths:
+            try:
+                content = self._get_docker_backend().read_file_bytes(
+                    self._relative_path(path)
+                )
+                responses.append(
+                    FileDownloadResponse(path=path, content=content, error=None)
+                )
+            except FileNotFoundError:
+                responses.append(
+                    FileDownloadResponse(
+                        path=path,
+                        content=None,
+                        error="file_not_found",
+                    )
+                )
+            except IsADirectoryError:
+                responses.append(
+                    FileDownloadResponse(
+                        path=path,
+                        content=None,
+                        error="is_directory",
+                    )
+                )
+            except (PermissionError, ValueError):
+                responses.append(
+                    FileDownloadResponse(
+                        path=path,
+                        content=None,
+                        error="invalid_path",
+                    )
+                )
+        return responses
+
+    def upload_files(
+        self,
+        files: list[tuple[str, bytes]],
+    ) -> list[FileUploadResponse]:
+        """Upload files through the assigned Docker sandbox."""
+        responses: list[FileUploadResponse] = []
+        for path, content in files:
+            try:
+                relative = self._relative_path(path)
+                if self._is_protected_path(relative):
+                    raise PermissionError(path)
+                self._get_docker_backend().write_file_bytes(relative, content)
+                responses.append(FileUploadResponse(path=path, error=None))
+            except PermissionError:
+                responses.append(
+                    FileUploadResponse(path=path, error="permission_denied")
+                )
+            except ValueError:
+                responses.append(
+                    FileUploadResponse(path=path, error="invalid_path")
+                )
+            except IsADirectoryError:
+                responses.append(
+                    FileUploadResponse(path=path, error="is_directory")
+                )
+        return responses
+
+    def terminate(self) -> None:
+        """Destroy the assigned Docker sandbox."""
+        if self._docker_backend is not None:
+            self._docker_backend.terminate()
+            self._docker_backend = None
 
 
 def _arn_region(arn: str) -> str | None:

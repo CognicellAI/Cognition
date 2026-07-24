@@ -33,6 +33,7 @@ class TestStorageBackendMessages:
                 session_id="session-1",
                 thread_id="thread-1",
                 config=SessionConfig(),
+                agent_name="test-agent",
             )
 
             yield storage
@@ -93,6 +94,7 @@ class TestStorageBackendMessages:
             session_id="session-2",
             thread_id="thread-2",
             config=SessionConfig(),
+            agent_name="test-agent",
         )
         await temp_storage.create_message("msg-3", "session-2", "user", "Different session")
 
@@ -131,6 +133,7 @@ class TestStorageBackendMessages:
             session_id="session-2",
             thread_id="thread-2",
             config=SessionConfig(),
+            agent_name="test-agent",
         )
         await temp_storage.create_message("msg-2", "session-2", "user", "Other")
 
@@ -166,6 +169,7 @@ class TestMessagePersistenceAcrossRestarts:
                 session_id="session-1",
                 thread_id="thread-1",
                 config=SessionConfig(),
+                agent_name="test-agent",
             )
             await storage1.create_message("msg-1", "session-1", "user", "Persistent")
             await storage1.close()
@@ -198,6 +202,7 @@ class TestMessageProjectionRebuild:
                 session_id="session-1",
                 thread_id="thread-1",
                 config=SessionConfig(),
+                agent_name="test-agent",
             )
 
             await storage.create_message("msg-user", "session-1", "user", "hello")
@@ -245,6 +250,7 @@ class TestMessageProjectionRebuild:
             session_id="session-1",
             thread_id="thread-1",
             config=SessionConfig(),
+            agent_name="test-agent",
         )
 
         rebuilt = await storage.rebuild_message_projection(
@@ -271,6 +277,8 @@ class TestRuntimeDurabilityStorage:
                 session_id="session-runs",
                 thread_id="thread-runs",
                 config=SessionConfig(),
+                agent_name="test-agent",
+                scopes={"tenant": "acme"},
             )
 
             run = await storage.create_run(
@@ -294,24 +302,43 @@ class TestRuntimeDurabilityStorage:
             )
             assert event.sequence == 1
 
-            active = await storage.get_active_run("session-runs")
+            active = await storage.get_active_run(
+                "session-runs",
+                {"tenant": "acme"},
+            )
             assert active is not None
             assert active.id == "run-1"
 
             existing = await storage.get_run_by_idempotency_key(
-                "session-runs", "assignment-1"
+                "session-runs",
+                "assignment-1",
+                {"tenant": "acme"},
             )
             assert existing is not None
             assert existing.id == "run-1"
 
-            events = await storage.list_events("session-runs", after_sequence=0)
+            events = await storage.list_events(
+                "session-runs",
+                after_sequence=0,
+                effective_scope={"tenant": "acme"},
+            )
             assert [item.event_type for item in events] == ["tool.call.started"]
             assert events[0].payload == {"tool_name": "execute"}
 
-            updated = await storage.update_run("run-1", status=RunStatus.DONE)
+            updated = await storage.update_run(
+                "run-1",
+                status=RunStatus.DONE,
+                effective_scope={"tenant": "acme"},
+            )
             assert updated is not None
             assert updated.status == RunStatus.DONE
-            assert await storage.get_active_run("session-runs") is None
+            assert (
+                await storage.get_active_run(
+                    "session-runs",
+                    {"tenant": "acme"},
+                )
+                is None
+            )
 
             await storage.close()
 
@@ -323,6 +350,7 @@ class TestRuntimeDurabilityStorage:
             session_id="session-events",
             thread_id="thread-events",
             config=SessionConfig(),
+            agent_name="test-agent",
         )
         run = await storage.create_run(
             run_id="run-1",

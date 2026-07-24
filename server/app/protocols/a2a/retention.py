@@ -124,7 +124,10 @@ class A2ARetentionManager:
         for task in candidates:
             runs = [
                 run
-                for run in await self._store.list_runs(task.session_id)
+                for run in await self._store.list_runs(
+                    task.session_id,
+                    task.effective_scope,
+                )
                 if run.task_id == task.id
             ]
             if self._artifact_store is not None:

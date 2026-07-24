@@ -59,9 +59,10 @@ def _make_session(
     model: str | None = None,
     provider_id: str | None = None,
 ) -> Session:
-    return Session(
-        id="sess-test",
-        workspace_path="/tmp/ws",
+        return Session(
+            id="sess-test",
+            agent_name="default",
+            workspace_path="/tmp/ws",
         title="Test",
         thread_id="thread-test",
         status=SessionStatus.ACTIVE,

@@ -263,6 +263,11 @@ module = ["langchain_k8s_sandbox", "langchain_k8s_sandbox.*"]
 ignore_missing_imports = true
 disallow_untyped_defs = false
 
+# langchain-aws-lambda-microvms is a workspace package without a py.typed marker.
+[[tool.mypy.overrides]]
+module = ["langchain_aws_lambda_microvms", "langchain_aws_lambda_microvms.*"]
+ignore_missing_imports = true
+
 # boto3 has no bundled stubs (boto3-stubs is optional)
 [[tool.mypy.overrides]]
 module = "boto3"
@@ -283,6 +288,7 @@ markers = [
     "e2e: End-to-end tests (full workflow)",
     "slow: Slow tests (skip with -m 'not slow')",
     "mlflow: MLflow integration tests (require MLflow server)",
+    "postgres: PostgreSQL integration tests (require COGNITION_TEST_POSTGRES_DSN)",
 ]
 
 [tool.coverage.run]

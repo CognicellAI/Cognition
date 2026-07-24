@@ -22,15 +22,39 @@ from server.app.exceptions import (
 )
 from server.app.models import RunStatus, TaskStatus
 from server.app.storage.backend import StorageBackend
+from server.app.storage.config_registry import MemoryConfigRegistry
+from server.app.storage.config_store import DefaultConfigStore
 from server.app.storage.sqlite import SqliteStorageBackend
 
 
 @pytest.fixture
-def task_runtime(setup_storage_backend: StorageBackend, tmp_path) -> AgentTaskRuntime:
+async def task_runtime(
+    setup_storage_backend: StorageBackend,
+    tmp_path: Path,
+) -> AgentTaskRuntime:
     """Build the lifecycle service over the test's durable SQLite backend."""
+    config_store = DefaultConfigStore(MemoryConfigRegistry(), workspace_path=tmp_path)
+    for scope in (
+        {},
+        {"account": "acme"},
+        {"account": "other"},
+        {"project": "alpha"},
+        {"project": "race"},
+    ):
+        await config_store.upsert_agent(
+            "researcher",
+            scope,
+            {
+                "name": "researcher",
+                "system_prompt": "Research.",
+                "mode": "primary",
+            },
+            "api",
+        )
     return AgentTaskRuntime(
         setup_storage_backend,
         default_workspace_path=str(tmp_path),
+        config_store=config_store,
     )
 
 
@@ -234,9 +258,21 @@ async def test_task_survives_restart_and_replays_from_a_new_runtime_replica(
     scope = {"project": "kennel", "end_user": "alice"}
     first_store = SqliteStorageBackend(str(database), str(tmp_path))
     await first_store.initialize()
+    config_store = DefaultConfigStore(MemoryConfigRegistry(), workspace_path=tmp_path)
+    await config_store.upsert_agent(
+        "analyst",
+        scope,
+        {
+            "name": "analyst",
+            "system_prompt": "Analyze.",
+            "mode": "primary",
+        },
+        "api",
+    )
     first_runtime = AgentTaskRuntime(
         first_store,
         default_workspace_path=str(tmp_path),
+        config_store=config_store,
     )
     execution = await first_runtime.submit(
         SubmitTask(
@@ -259,6 +295,7 @@ async def test_task_survives_restart_and_replays_from_a_new_runtime_replica(
         second_runtime = AgentTaskRuntime(
             second_store,
             default_workspace_path=str(tmp_path),
+            config_store=config_store,
         )
         restored = await second_runtime.get(GetTask(execution.task.id, "analyst", scope))
         assert restored is not None

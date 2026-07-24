@@ -21,6 +21,7 @@ from langgraph.store.base import BaseStore
 from langgraph.store.postgres.aio import AsyncPostgresStore
 from psycopg_pool import AsyncConnectionPool
 
+from server.app.exceptions import SessionAlreadyExistsError
 from server.app.models import (
     Message,
     RunStatus,
@@ -239,9 +240,9 @@ class PostgresStorageBackend:
         session_id: str,
         thread_id: str,
         config: SessionConfig,
+        agent_name: str,
         title: str | None = None,
         scopes: dict[str, str] | None = None,
-        agent_name: str = "default",
         metadata: dict[str, str] | None = None,
         workspace_path: str | None = None,
     ) -> Session:
@@ -271,27 +272,32 @@ class PostgresStorageBackend:
             "system_prompt": config.system_prompt,
         }
 
-        async with self._pool.acquire() as conn:
-            await conn.execute(
-                """
-                INSERT INTO sessions (
-                    id, workspace_path, title, thread_id, status,
-                    scopes, metadata, config, message_count, agent_name, created_at, updated_at
-                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
-                """,
-                session.id,
-                session.workspace_path,
-                session.title,
-                session.thread_id,
-                session.status.value,
-                json.dumps(session.scopes),
-                json.dumps(session.metadata),
-                json.dumps(config_json),
-                session.message_count,
-                session.agent_name,
-                now,
-                now,
-            )
+        try:
+            async with self._pool.acquire() as conn:
+                await conn.execute(
+                    """
+                    INSERT INTO sessions (
+                        id, workspace_path, title, thread_id, status,
+                        scopes, scope_key, metadata, config, message_count, agent_name,
+                        created_at, updated_at
+                    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+                    """,
+                    session.id,
+                    session.workspace_path,
+                    session.title,
+                    session.thread_id,
+                    session.status.value,
+                    json.dumps(session.scopes),
+                    effective_scope_key(session.scopes),
+                    json.dumps(session.metadata),
+                    json.dumps(config_json),
+                    session.message_count,
+                    session.agent_name,
+                    now,
+                    now,
+                )
+        except asyncpg.UniqueViolationError as exc:
+            raise SessionAlreadyExistsError(session_id) from exc
 
         logger.info(
             "Session created",
@@ -301,14 +307,19 @@ class PostgresStorageBackend:
 
         return session
 
-    async def get_session(self, session_id: str) -> Session | None:
-        """Get a session by ID."""
+    async def get_session(
+        self,
+        session_id: str,
+        effective_scope: dict[str, str] | None = None,
+    ) -> Session | None:
+        """Get a session only at the exact effective scope."""
         async with self._pool.acquire() as conn:
             row = await conn.fetchrow(
-                "SELECT * FROM sessions WHERE id = $1",
+                "SELECT * FROM sessions WHERE id = $1 AND scope_key = $2",
                 session_id,
+                effective_scope_key(effective_scope),
             )
-            if row:
+            if row and _json_dict(row["scopes"]) == (effective_scope or {}):
                 return self._row_to_session(row)
         return None
 
@@ -316,30 +327,34 @@ class PostgresStorageBackend:
         self,
         filter_scopes: dict[str, str] | None = None,
         metadata_filters: dict[str, str] | None = None,
+        limit: int | None = None,
+        offset: int = 0,
     ) -> list[Session]:
         """List all sessions."""
         sessions = []
         async with self._pool.acquire() as conn:
-            query = "SELECT * FROM sessions"
-            params: list[str] = []
+            exact_scope = filter_scopes or {}
+            query = "SELECT * FROM sessions WHERE scope_key = $1"
+            params: list[Any] = [effective_scope_key(exact_scope)]
+            parameter_index = 2
             if metadata_filters:
                 predicates = []
-                for index, (key, value) in enumerate(metadata_filters.items(), start=1):
-                    predicates.append(f"metadata->>$${index * 2 - 1} = $${index * 2}")
+                for key, value in metadata_filters.items():
+                    predicates.append(
+                        f"metadata->>${parameter_index} = ${parameter_index + 1}"
+                    )
                     params.extend([key, value])
-                query += " WHERE " + " AND ".join(
-                    predicate.replace("$$", "$") for predicate in predicates
-                )
-            query += " ORDER BY updated_at DESC"
+                    parameter_index += 2
+                query += " AND " + " AND ".join(predicates)
+            query += " ORDER BY updated_at DESC, id DESC"
+            if limit is not None:
+                query += f" LIMIT ${parameter_index} OFFSET ${parameter_index + 1}"
+                params.extend([limit, offset])
 
             rows = await conn.fetch(query, *params)
             for row in rows:
                 session = self._row_to_session(row)
-                # Filter by scopes if specified
-                if filter_scopes:
-                    if all(session.scopes.get(k) == v for k, v in filter_scopes.items()):
-                        sessions.append(session)
-                else:
+                if session.scopes == exact_scope:
                     sessions.append(session)
         return sessions
 
@@ -351,9 +366,10 @@ class PostgresStorageBackend:
         config: SessionConfig | None = None,
         agent_name: str | None = None,
         metadata: dict[str, str] | None = None,
+        effective_scope: dict[str, str] | None = None,
     ) -> Session | None:
         """Update a session."""
-        session = await self.get_session(session_id)
+        session = await self.get_session(session_id, effective_scope)
         if not session:
             return None
 
@@ -411,17 +427,25 @@ class PostgresStorageBackend:
         param_idx += 1
 
         params.append(session_id)
+        param_idx += 1
+        params.append(effective_scope_key(effective_scope))
 
         async with self._pool.acquire() as conn:
             await conn.execute(
-                f"UPDATE sessions SET {', '.join(updates)} WHERE id = ${param_idx}",
+                f"UPDATE sessions SET {', '.join(updates)} "
+                f"WHERE id = ${param_idx - 1} AND scope_key = ${param_idx}",
                 *params,
             )
 
         session.updated_at = now.isoformat()
         return session
 
-    async def update_message_count(self, session_id: str, count: int) -> None:
+    async def update_message_count(
+        self,
+        session_id: str,
+        count: int,
+        effective_scope: dict[str, str] | None = None,
+    ) -> None:
         """Update the message count for a session."""
         now = now_utc()
         async with self._pool.acquire() as conn:
@@ -429,19 +453,25 @@ class PostgresStorageBackend:
                 """
                 UPDATE sessions 
                 SET message_count = $1, updated_at = $2 
-                WHERE id = $3
+                WHERE id = $3 AND scope_key = $4
                 """,
                 count,
                 now,
                 session_id,
+                effective_scope_key(effective_scope),
             )
 
-    async def delete_session(self, session_id: str) -> bool:
+    async def delete_session(
+        self,
+        session_id: str,
+        effective_scope: dict[str, str] | None = None,
+    ) -> bool:
         """Delete a session."""
         async with self._pool.acquire() as conn:
             result = await conn.execute(
-                "DELETE FROM sessions WHERE id = $1",
+                "DELETE FROM sessions WHERE id = $1 AND scope_key = $2",
                 session_id,
+                effective_scope_key(effective_scope),
             )
             # asyncpg returns "DELETE <count>" for DELETE operations
             deleted_count = int(result.split()[-1])
@@ -467,8 +497,11 @@ class PostgresStorageBackend:
         token_count: int | None = None,
         model_used: str | None = None,
         metadata: dict[str, Any] | None = None,
+        effective_scope: dict[str, str] | None = None,
     ) -> Message:
         """Create a new message."""
+        if await self.get_session(session_id, effective_scope) is None:
+            raise ValueError("Session not found at exact message scope")
         now = now_utc()
 
         message = make_message(
@@ -519,9 +552,12 @@ class PostgresStorageBackend:
         session_id: str,
         thread_id: str,
         checkpoint_messages: list[Any],
+        effective_scope: dict[str, str] | None = None,
     ) -> int:
         """Rebuild API message projection from authoritative checkpoint messages."""
         del thread_id
+        if await self.get_session(session_id, effective_scope) is None:
+            return 0
 
         projected_messages = project_checkpoint_messages(session_id, checkpoint_messages)
 
@@ -555,29 +591,48 @@ class PostgresStorageBackend:
                     )
 
                 await conn.execute(
-                    "UPDATE sessions SET message_count = $1, updated_at = $2 WHERE id = $3",
+                    """
+                    UPDATE sessions SET message_count = $1, updated_at = $2
+                    WHERE id = $3 AND scope_key = $4
+                    """,
                     len(projected_messages),
                     now_utc(),
                     session_id,
+                    effective_scope_key(effective_scope),
                 )
 
         return len(projected_messages)
 
-    async def get_message(self, message_id: str) -> Message | None:
-        """Get a message by ID."""
+    async def get_message(
+        self,
+        message_id: str,
+        effective_scope: dict[str, str] | None = None,
+    ) -> Message | None:
+        """Get a message after an exact-scoped session join."""
         async with self._pool.acquire() as conn:
             row = await conn.fetchrow(
-                "SELECT * FROM messages WHERE id = $1",
+                """
+                SELECT messages.* FROM messages
+                JOIN sessions ON sessions.id = messages.session_id
+                WHERE messages.id = $1 AND sessions.scope_key = $2
+                """,
                 message_id,
+                effective_scope_key(effective_scope),
             )
             if row:
                 return self._row_to_message(row)
         return None
 
     async def get_messages_by_session(
-        self, session_id: str, limit: int = 50, offset: int = 0
+        self,
+        session_id: str,
+        limit: int = 50,
+        offset: int = 0,
+        effective_scope: dict[str, str] | None = None,
     ) -> tuple[list[Message], int]:
         """Get messages for a session with pagination."""
+        if await self.get_session(session_id, effective_scope) is None:
+            return [], 0
         async with self._pool.acquire() as conn:
             # Get total count
             total_row = await conn.fetchrow(
@@ -605,8 +660,14 @@ class PostgresStorageBackend:
 
         return messages, total
 
-    async def list_messages_for_session(self, session_id: str) -> list[Message]:
+    async def list_messages_for_session(
+        self,
+        session_id: str,
+        effective_scope: dict[str, str] | None = None,
+    ) -> list[Message]:
         """List all messages for a session."""
+        if await self.get_session(session_id, effective_scope) is None:
+            return []
         async with self._pool.acquire() as conn:
             rows = await conn.fetch(
                 """
@@ -618,8 +679,14 @@ class PostgresStorageBackend:
             )
             return [self._row_to_message(row) for row in rows]
 
-    async def delete_messages_for_session(self, session_id: str) -> int:
+    async def delete_messages_for_session(
+        self,
+        session_id: str,
+        effective_scope: dict[str, str] | None = None,
+    ) -> int:
         """Delete all messages for a session."""
+        if await self.get_session(session_id, effective_scope) is None:
+            return 0
         async with self._pool.acquire() as conn:
             result = await conn.execute(
                 "DELETE FROM messages WHERE session_id = $1",
@@ -835,17 +902,26 @@ class PostgresStorageBackend:
         current = await self.get_task(task_id, effective_scope)
         if current is None or not TaskStatus.is_terminal(current.status):
             return False
+        scope_key = effective_scope_key(effective_scope)
         async with self._pool.acquire() as conn, conn.transaction():
-            await conn.execute("DELETE FROM session_events WHERE task_id = $1", task_id)
+            await conn.execute(
+                "DELETE FROM session_events WHERE task_id = $1 AND scope_key = $2",
+                task_id,
+                scope_key,
+            )
             await conn.execute(
                 "DELETE FROM messages WHERE metadata->>'task_id' = $1",
                 task_id,
             )
-            await conn.execute("DELETE FROM session_runs WHERE task_id = $1", task_id)
+            await conn.execute(
+                "DELETE FROM session_runs WHERE task_id = $1 AND scope_key = $2",
+                task_id,
+                scope_key,
+            )
             result = await conn.execute(
                 "DELETE FROM runtime_tasks WHERE id = $1 AND scope_key = $2",
                 task_id,
-                effective_scope_key(effective_scope),
+                scope_key,
             )
         return result == "DELETE 1"
 
@@ -861,9 +937,15 @@ class PostgresStorageBackend:
         trace_id: str | None = None,
         metadata: dict[str, Any] | None = None,
         task_id: str | None = None,
+        agent_revision: int = 1,
+        runtime_manifest: dict[str, Any] | None = None,
+        manifest_digest: str | None = None,
     ) -> SessionRun:
         """Create a durable run for a session."""
-        runs = await self.list_runs(session_id)
+        exact_scope = effective_scope or {}
+        if await self.get_session(session_id, exact_scope) is None:
+            raise ValueError("Session not found at exact run scope")
+        runs = await self.list_runs(session_id, exact_scope)
         now = now_utc()
         run = make_session_run(
             run_id=run_id,
@@ -871,6 +953,9 @@ class PostgresStorageBackend:
             thread_id=thread_id,
             status=status,
             effective_scope=effective_scope,
+            agent_revision=agent_revision,
+            runtime_manifest=runtime_manifest,
+            manifest_digest=manifest_digest,
             attempt=len(runs) + 1,
             idempotency_key=idempotency_key,
             parent_run_id=parent_run_id,
@@ -889,11 +974,13 @@ class PostgresStorageBackend:
                 """
                 INSERT INTO session_runs (
                     id, session_id, thread_id, task_id, status, effective_scope,
+                    scope_key, agent_revision, runtime_manifest, manifest_digest,
                     idempotency_key, attempt, parent_run_id, started_at,
                     last_activity_at, completed_at, error_code, status_reason,
                     trace_id, metadata, created_at, updated_at
                 ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
-                          $11, $12, $13, $14, $15, $16, $17, $18)
+                          $11, $12, $13, $14, $15, $16, $17, $18,
+                          $19, $20, $21, $22)
                 """,
                 run.id,
                 run.session_id,
@@ -901,6 +988,10 @@ class PostgresStorageBackend:
                 run.task_id,
                 run.status.value,
                 json.dumps(run.effective_scope),
+                effective_scope_key(run.effective_scope),
+                run.agent_revision,
+                json.dumps(run.runtime_manifest),
+                run.manifest_digest,
                 run.idempotency_key,
                 run.attempt,
                 run.parent_run_id,
@@ -916,11 +1007,19 @@ class PostgresStorageBackend:
             )
         return run
 
-    async def get_run(self, run_id: str) -> SessionRun | None:
-        """Get a run by ID."""
+    async def get_run(
+        self,
+        run_id: str,
+        effective_scope: dict[str, str] | None = None,
+    ) -> SessionRun | None:
+        """Get a run by ID only at the exact scope."""
         async with self._pool.acquire() as conn:
-            row = await conn.fetchrow("SELECT * FROM session_runs WHERE id = $1", run_id)
-            if row:
+            row = await conn.fetchrow(
+                "SELECT * FROM session_runs WHERE id = $1 AND scope_key = $2",
+                run_id,
+                effective_scope_key(effective_scope),
+            )
+            if row and _json_dict(row["effective_scope"]) == (effective_scope or {}):
                 return self._row_to_run(row)
         return None
 
@@ -928,37 +1027,48 @@ class PostgresStorageBackend:
         self,
         session_id: str,
         idempotency_key: str,
+        effective_scope: dict[str, str] | None = None,
     ) -> SessionRun | None:
         """Get an existing run by session and idempotency key."""
         async with self._pool.acquire() as conn:
             row = await conn.fetchrow(
                 """
                 SELECT * FROM session_runs
-                WHERE session_id = $1 AND idempotency_key = $2
+                WHERE session_id = $1 AND idempotency_key = $2 AND scope_key = $3
                 ORDER BY created_at DESC
                 LIMIT 1
                 """,
                 session_id,
                 idempotency_key,
+                effective_scope_key(effective_scope),
             )
             if row:
                 return self._row_to_run(row)
         return None
 
-    async def list_runs(self, session_id: str) -> list[SessionRun]:
+    async def list_runs(
+        self,
+        session_id: str,
+        effective_scope: dict[str, str] | None = None,
+    ) -> list[SessionRun]:
         """List runs for a session, newest first."""
         async with self._pool.acquire() as conn:
             rows = await conn.fetch(
                 """
                 SELECT * FROM session_runs
-                WHERE session_id = $1
+                WHERE session_id = $1 AND scope_key = $2
                 ORDER BY created_at DESC
                 """,
                 session_id,
+                effective_scope_key(effective_scope),
             )
             return [self._row_to_run(row) for row in rows]
 
-    async def get_active_run(self, session_id: str) -> SessionRun | None:
+    async def get_active_run(
+        self,
+        session_id: str,
+        effective_scope: dict[str, str] | None = None,
+    ) -> SessionRun | None:
         """Get the active foreground run for a session."""
         active_statuses = [
             RunStatus.QUEUED.value,
@@ -972,11 +1082,12 @@ class PostgresStorageBackend:
             row = await conn.fetchrow(
                 """
                 SELECT * FROM session_runs
-                WHERE session_id = $1 AND status = ANY($2::text[])
+                WHERE session_id = $1 AND scope_key = $2 AND status = ANY($3::text[])
                 ORDER BY created_at DESC
                 LIMIT 1
                 """,
                 session_id,
+                effective_scope_key(effective_scope),
                 active_statuses,
             )
             if row:
@@ -992,9 +1103,10 @@ class PostgresStorageBackend:
         error_code: str | None = None,
         status_reason: str | None = None,
         metadata: dict[str, Any] | None = None,
+        effective_scope: dict[str, str] | None = None,
     ) -> SessionRun | None:
         """Update durable run state."""
-        run = await self.get_run(run_id)
+        run = await self.get_run(run_id, effective_scope)
         if run is None:
             return None
 
@@ -1039,12 +1151,15 @@ class PostgresStorageBackend:
         params.append(now)
         param_idx += 1
         params.append(run_id)
+        param_idx += 1
+        params.append(effective_scope_key(effective_scope))
         async with self._pool.acquire() as conn:
             await conn.execute(
-                f"UPDATE session_runs SET {', '.join(updates)} WHERE id = ${param_idx}",
+                f"UPDATE session_runs SET {', '.join(updates)} "
+                f"WHERE id = ${param_idx - 1} AND scope_key = ${param_idx}",
                 *params,
             )
-        return await self.get_run(run_id)
+        return await self.get_run(run_id, effective_scope)
 
     async def append_event(
         self,
@@ -1061,18 +1176,22 @@ class PostgresStorageBackend:
     ) -> SessionEvent:
         """Append a durable runtime event."""
         if task_id is None:
-            run = await self.get_run(run_id)
+            run = await self.get_run(run_id, effective_scope)
             task_id = run.task_id if run is not None else None
+        if await self.get_run(run_id, effective_scope) is None:
+            raise ValueError("Run not found at exact event scope")
         async with self._pool.acquire() as conn:
             async with conn.transaction():
-                await conn.execute("SELECT pg_advisory_xact_lock(hashtext($1))", session_id)
+                scope_lock = f"{effective_scope_key(effective_scope)}:{session_id}"
+                await conn.execute("SELECT pg_advisory_xact_lock(hashtext($1))", scope_lock)
                 sequence = await conn.fetchval(
                     """
                     SELECT COALESCE(MAX(sequence), 0) + 1
                     FROM session_events
-                    WHERE session_id = $1
+                    WHERE session_id = $1 AND scope_key = $2
                     """,
                     session_id,
+                    effective_scope_key(effective_scope),
                 )
                 event = make_session_event(
                     event_id=event_id,
@@ -1092,8 +1211,8 @@ class PostgresStorageBackend:
                     """
                     INSERT INTO session_events (
                         id, session_id, run_id, task_id, sequence, event_type, visibility,
-                        payload, effective_scope, trace_id, span_id, created_at
-                    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+                        payload, effective_scope, scope_key, trace_id, span_id, created_at
+                    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
                     """,
                     event.id,
                     event.session_id,
@@ -1104,6 +1223,7 @@ class PostgresStorageBackend:
                     event.visibility,
                     json.dumps(event.payload),
                     json.dumps(event.effective_scope),
+                    effective_scope_key(event.effective_scope),
                     event.trace_id,
                     event.span_id,
                     created_at,
@@ -1113,27 +1233,29 @@ class PostgresStorageBackend:
                     "latest_event_type": event_type,
                     "last_activity_at": event.created_at,
                 }
-                session = await self.get_session(session_id)
+                session = await self.get_session(session_id, effective_scope)
                 if session is not None:
                     metadata = {**session.metadata, **metadata_patch}
                     await conn.execute(
                         """
                         UPDATE sessions
                         SET metadata = $1, updated_at = $2
-                        WHERE id = $3
+                        WHERE id = $3 AND scope_key = $4
                         """,
                         json.dumps(metadata),
                         created_at,
                         session_id,
+                        effective_scope_key(effective_scope),
                     )
                 await conn.execute(
                     """
                     UPDATE session_runs
                     SET last_activity_at = $1, updated_at = $1
-                    WHERE id = $2
+                    WHERE id = $2 AND scope_key = $3
                     """,
                     created_at,
                     run_id,
+                    effective_scope_key(effective_scope),
                 )
         return event
 
@@ -1146,11 +1268,12 @@ class PostgresStorageBackend:
         visibility: Literal["internal", "builder", "end_user"] | None = None,
         event_type: str | None = None,
         task_id: str | None = None,
+        effective_scope: dict[str, str] | None = None,
     ) -> list[SessionEvent]:
         """List runtime events for a session using cursor-style filters."""
-        query = "SELECT * FROM session_events WHERE session_id = $1"
-        params: list[Any] = [session_id]
-        param_idx = 2
+        query = "SELECT * FROM session_events WHERE session_id = $1 AND scope_key = $2"
+        params: list[Any] = [session_id, effective_scope_key(effective_scope)]
+        param_idx = 3
         if run_id is not None:
             query += f" AND run_id = ${param_idx}"
             params.append(run_id)
@@ -1296,7 +1419,7 @@ class PostgresStorageBackend:
             created_at=row["created_at"].isoformat(),
             updated_at=row["updated_at"].isoformat(),
             message_count=row["message_count"],
-            agent_name=row.get("agent_name", "default"),
+            agent_name=row["agent_name"],
             metadata=metadata,
             status=SessionStatus(row["status"]),
         )
@@ -1352,6 +1475,9 @@ class PostgresStorageBackend:
             thread_id=row["thread_id"],
             status=RunStatus(row["status"]),
             effective_scope=_json_dict(row.get("effective_scope")),
+            agent_revision=int(row["agent_revision"]),
+            runtime_manifest=_json_dict(row.get("runtime_manifest")),
+            manifest_digest=str(row["manifest_digest"]),
             attempt=row["attempt"],
             idempotency_key=row.get("idempotency_key"),
             parent_run_id=row.get("parent_run_id"),

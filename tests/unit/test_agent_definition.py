@@ -20,7 +20,6 @@ from server.app.agent.definition import (
     AgentConfig,
     AgentDefinition,
     SubagentDefinition,
-    create_default_agent_definition,
     load_agent_definition,
 )
 
@@ -493,23 +492,6 @@ subagents:
                 load_agent_definition(temp_path)
         finally:
             os.unlink(temp_path)
-
-
-class TestCreateDefaultAgentDefinition:
-    """Tests for create_default_agent_definition function."""
-
-    def test_default_creation(self):
-        """Test creating a default agent definition."""
-        agent = create_default_agent_definition()
-        assert agent.name == "default-agent"
-        assert "coding assistant" in agent.system_prompt.lower()
-        assert agent.skills == []
-        assert "AGENTS.md" in agent.memory
-
-    def test_custom_name(self):
-        """Test creating with custom name."""
-        agent = create_default_agent_definition("my-custom-agent")
-        assert agent.name == "my-custom-agent"
 
 
 class TestAgentDefinitionPathValidation:

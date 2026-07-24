@@ -8,7 +8,7 @@ Business Value:
 - Custom agents tailored to specific workflows (e.g. "security-reviewer")
 - Live updates to agent prompts and tooling
 - Clean decommissioning of agents no longer needed
-- Native built-in agents remain protected from accidental modification
+- Formerly reserved names are ordinary builder-owned Agents
 """
 
 from __future__ import annotations
@@ -36,8 +36,8 @@ class TestAgentLifecycle:
         assert "agents" in data
         assert isinstance(data["agents"], list)
 
-    async def test_list_agents_includes_built_in_default(self, api_client) -> None:
-        """The built-in 'default' agent always appears in the list."""
+    async def test_list_agents_includes_explicitly_provisioned_default(self, api_client) -> None:
+        """The fixture-provisioned 'default' Agent appears in the list."""
         response = await api_client.get("/agents")
         assert response.status_code == 200
 
@@ -45,7 +45,7 @@ class TestAgentLifecycle:
         assert "default" in names
 
     async def test_get_default_agent_structure(self, api_client) -> None:
-        """GET /agents/default returns the expected fields."""
+        """GET /agents/default returns ordinary builder-owned Agent fields."""
         response = await api_client.get("/agents/default")
 
         assert response.status_code == 200
@@ -55,7 +55,7 @@ class TestAgentLifecycle:
         assert "mode" in data
         assert "hidden" in data
         assert "native" in data
-        assert data["native"] is True
+        assert data["native"] is False
 
     async def test_get_missing_agent_returns_404(self, api_client) -> None:
         """GET /agents/{name} for an unknown agent returns 404."""
@@ -162,26 +162,38 @@ class TestAgentLifecycle:
         get_resp = await api_client.get(f"/agents/{name}")
         assert get_resp.status_code == 404
 
-    async def test_cannot_delete_native_agent(self, api_client) -> None:
-        """DELETE on a built-in native agent returns 409."""
-        response = await api_client.delete("/agents/default")
-        assert response.status_code == 409
+    async def test_former_default_name_can_be_deleted_when_api_owned(self, api_client) -> None:
+        """Former default names are not protected when builders create them."""
+        name = _unique("default")
+        create_resp = await api_client.post(
+            "/agents",
+            json={
+                "name": name,
+                "description": "Builder-owned default-like Agent",
+                "system_prompt": "Test.",
+            },
+        )
+        assert create_resp.status_code == 201, create_resp.text
 
-    async def test_cannot_overwrite_native_agent_via_post(self, api_client) -> None:
-        """POST /agents with a native agent name returns 409."""
+        response = await api_client.delete(f"/agents/{name}")
+        assert response.status_code == 204
+
+    async def test_default_name_can_be_replaced_via_post(self, api_client) -> None:
+        """POST /agents with a fixture Agent name replaces the builder-owned row."""
         response = await api_client.post(
             "/agents",
             json={"name": "default", "description": "Override attempt", "system_prompt": "Test."},
         )
-        assert response.status_code == 409
+        assert response.status_code == 201
 
-    async def test_cannot_patch_native_agent(self, api_client) -> None:
-        """PATCH on a built-in native agent returns 409."""
+    async def test_default_name_can_be_patched(self, api_client) -> None:
+        """PATCH on the fixture default Agent updates it like any other Agent."""
         response = await api_client.patch(
             "/agents/default",
             json={"description": "Override attempt"},
         )
-        assert response.status_code == 409
+        assert response.status_code == 200
+        assert response.json()["description"] == "Override attempt"
 
     async def test_custom_agent_usable_for_session(self, api_client) -> None:
         """A custom agent created via API can be used to create a session."""

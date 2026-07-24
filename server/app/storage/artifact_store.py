@@ -19,6 +19,7 @@ from typing import Any, Protocol, runtime_checkable
 
 import structlog
 
+from server.app.storage.common import effective_scope_key
 from server.app.storage.config_models import ArtifactDefinition
 
 logger = structlog.get_logger(__name__)
@@ -131,15 +132,16 @@ class SqliteArtifactStore:
     async def get_artifact(
         self, artifact_id: str, scope: dict[str, str] | None = None
     ) -> ArtifactDefinition | None:
-        scope_json = _scope_to_json(scope)
+        exact_scope = scope or {}
         async with self._db.execute(
             """SELECT * FROM artifacts
-               WHERE id = ? AND scope = ?
+               WHERE id = ? AND scope_key = ?
                ORDER BY version DESC LIMIT 1""",
-            (artifact_id, scope_json),
+            (artifact_id, effective_scope_key(exact_scope)),
         ) as cursor:
             row = await cursor.fetchone()
-        return _row_to_artifact(dict(row)) if row else None
+        artifact = _row_to_artifact(dict(row)) if row else None
+        return artifact if artifact is not None and artifact.scope == exact_scope else None
 
     async def list_artifacts(
         self,
@@ -147,9 +149,9 @@ class SqliteArtifactStore:
         artifact_type: str | None = None,
         run_id: str | None = None,
     ) -> list[ArtifactDefinition]:
-        scope_json = _scope_to_json(scope)
-        query = "SELECT * FROM artifacts WHERE scope = ?"
-        params: list[Any] = [scope_json]
+        exact_scope = scope or {}
+        query = "SELECT * FROM artifacts WHERE scope_key = ?"
+        params: list[Any] = [effective_scope_key(exact_scope)]
 
         if artifact_type is not None:
             query += " AND artifact_type = ?"
@@ -167,6 +169,8 @@ class SqliteArtifactStore:
         results: list[ArtifactDefinition] = []
         for row in rows:
             r = dict(row)
+            if _scope_from_json(r.get("scope")) != exact_scope:
+                continue
             key = (r["id"], r["version"])
             if key in seen:
                 continue
@@ -180,8 +184,8 @@ class SqliteArtifactStore:
             """INSERT OR REPLACE INTO artifacts
                (id, version, name, artifact_type, content, content_type,
                 parent_version, run_id, checkpoint_id, visibility, scope,
-                source, created_at, updated_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                scope_key, source, created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 artifact.id,
                 artifact.version,
@@ -194,6 +198,7 @@ class SqliteArtifactStore:
                 artifact.checkpoint_id,
                 artifact.visibility,
                 _scope_to_json(artifact.scope),
+                effective_scope_key(artifact.scope),
                 artifact.source,
                 artifact.created_at or now,
                 artifact.updated_at or now,
@@ -204,10 +209,14 @@ class SqliteArtifactStore:
     async def delete_artifact(
         self, artifact_id: str, scope: dict[str, str] | None = None
     ) -> bool:
-        scope_json = _scope_to_json(scope)
+        exact_scope = scope or {}
         cursor = await self._db.execute(
-            "DELETE FROM artifacts WHERE id = ? AND scope = ?",
-            (artifact_id, scope_json),
+            "DELETE FROM artifacts WHERE id = ? AND scope_key = ? AND scope = ?",
+            (
+                artifact_id,
+                effective_scope_key(exact_scope),
+                _scope_to_json(exact_scope),
+            ),
         )
         await self._db.commit()
         return bool(cursor.rowcount and cursor.rowcount > 0)
@@ -215,10 +224,18 @@ class SqliteArtifactStore:
     async def get_artifact_version(
         self, artifact_id: str, version: int, scope: dict[str, str] | None = None
     ) -> ArtifactDefinition | None:
-        scope_json = _scope_to_json(scope)
+        exact_scope = scope or {}
         async with self._db.execute(
-            "SELECT * FROM artifacts WHERE id = ? AND scope = ? AND version = ?",
-            (artifact_id, scope_json, version),
+            """
+            SELECT * FROM artifacts
+            WHERE id = ? AND scope_key = ? AND scope = ? AND version = ?
+            """,
+            (
+                artifact_id,
+                effective_scope_key(exact_scope),
+                _scope_to_json(exact_scope),
+                version,
+            ),
         ) as cursor:
             row = await cursor.fetchone()
         return _row_to_artifact(dict(row)) if row else None
@@ -226,10 +243,18 @@ class SqliteArtifactStore:
     async def list_artifact_versions(
         self, artifact_id: str, scope: dict[str, str] | None = None
     ) -> list[ArtifactDefinition]:
-        scope_json = _scope_to_json(scope)
+        exact_scope = scope or {}
         async with self._db.execute(
-            "SELECT * FROM artifacts WHERE id = ? AND scope = ? ORDER BY version DESC",
-            (artifact_id, scope_json),
+            """
+            SELECT * FROM artifacts
+            WHERE id = ? AND scope_key = ? AND scope = ?
+            ORDER BY version DESC
+            """,
+            (
+                artifact_id,
+                effective_scope_key(exact_scope),
+                _scope_to_json(exact_scope),
+            ),
         ) as cursor:
             rows = await cursor.fetchall()
         return [_row_to_artifact(dict(r)) for r in rows]
@@ -261,14 +286,18 @@ class PostgresArtifactStore:
     async def get_artifact(
         self, artifact_id: str, scope: dict[str, str] | None = None
     ) -> ArtifactDefinition | None:
-        scope_json = _scope_to_json(scope)
+        exact_scope = scope or {}
         async with self._pool.connection() as conn:
             async with conn.cursor() as cur:
                 await cur.execute(
                     """SELECT * FROM artifacts
-                       WHERE id = %s AND scope = %s
+                       WHERE id = %s AND scope_key = %s AND scope = %s
                        ORDER BY version DESC LIMIT 1""",
-                    (artifact_id, scope_json),
+                    (
+                        artifact_id,
+                        effective_scope_key(exact_scope),
+                        _scope_to_json(exact_scope),
+                    ),
                 )
                 row = await cur.fetchone()
         return _row_to_artifact(dict(row)) if row else None
@@ -279,9 +308,12 @@ class PostgresArtifactStore:
         artifact_type: str | None = None,
         run_id: str | None = None,
     ) -> list[ArtifactDefinition]:
-        scope_json = _scope_to_json(scope)
-        query = "SELECT * FROM artifacts WHERE scope = %s"
-        params: list[Any] = [scope_json]
+        exact_scope = scope or {}
+        query = "SELECT * FROM artifacts WHERE scope_key = %s AND scope = %s"
+        params: list[Any] = [
+            effective_scope_key(exact_scope),
+            _scope_to_json(exact_scope),
+        ]
 
         if artifact_type is not None:
             query += " AND artifact_type = %s"
@@ -316,9 +348,9 @@ class PostgresArtifactStore:
                     """INSERT INTO artifacts
                        (id, version, name, artifact_type, content, content_type,
                         parent_version, run_id, checkpoint_id, visibility, scope,
-                        source, created_at, updated_at)
-                       VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                       ON CONFLICT (id, scope, version) DO UPDATE SET
+                        scope_key, source, created_at, updated_at)
+                       VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                       ON CONFLICT (id, scope_key, version) DO UPDATE SET
                         name = EXCLUDED.name,
                         artifact_type = EXCLUDED.artifact_type,
                         content = EXCLUDED.content,
@@ -341,6 +373,7 @@ class PostgresArtifactStore:
                         artifact.checkpoint_id,
                         artifact.visibility,
                         _scope_to_json(artifact.scope),
+                        effective_scope_key(artifact.scope),
                         artifact.source,
                         artifact.created_at or now,
                         artifact.updated_at or now,
@@ -350,24 +383,39 @@ class PostgresArtifactStore:
     async def delete_artifact(
         self, artifact_id: str, scope: dict[str, str] | None = None
     ) -> bool:
-        scope_json = _scope_to_json(scope)
+        exact_scope = scope or {}
         async with self._pool.connection() as conn:
             async with conn.cursor() as cur:
                 await cur.execute(
-                    "DELETE FROM artifacts WHERE id = %s AND scope = %s",
-                    (artifact_id, scope_json),
+                    """
+                    DELETE FROM artifacts
+                    WHERE id = %s AND scope_key = %s AND scope = %s
+                    """,
+                    (
+                        artifact_id,
+                        effective_scope_key(exact_scope),
+                        _scope_to_json(exact_scope),
+                    ),
                 )
                 return cur.rowcount is not None and cur.rowcount > 0
 
     async def get_artifact_version(
         self, artifact_id: str, version: int, scope: dict[str, str] | None = None
     ) -> ArtifactDefinition | None:
-        scope_json = _scope_to_json(scope)
+        exact_scope = scope or {}
         async with self._pool.connection() as conn:
             async with conn.cursor() as cur:
                 await cur.execute(
-                    "SELECT * FROM artifacts WHERE id = %s AND scope = %s AND version = %s",
-                    (artifact_id, scope_json, version),
+                    """
+                    SELECT * FROM artifacts
+                    WHERE id = %s AND scope_key = %s AND scope = %s AND version = %s
+                    """,
+                    (
+                        artifact_id,
+                        effective_scope_key(exact_scope),
+                        _scope_to_json(exact_scope),
+                        version,
+                    ),
                 )
                 row = await cur.fetchone()
         return _row_to_artifact(dict(row)) if row else None
@@ -375,12 +423,20 @@ class PostgresArtifactStore:
     async def list_artifact_versions(
         self, artifact_id: str, scope: dict[str, str] | None = None
     ) -> list[ArtifactDefinition]:
-        scope_json = _scope_to_json(scope)
+        exact_scope = scope or {}
         async with self._pool.connection() as conn:
             async with conn.cursor() as cur:
                 await cur.execute(
-                    "SELECT * FROM artifacts WHERE id = %s AND scope = %s ORDER BY version DESC",
-                    (artifact_id, scope_json),
+                    """
+                    SELECT * FROM artifacts
+                    WHERE id = %s AND scope_key = %s AND scope = %s
+                    ORDER BY version DESC
+                    """,
+                    (
+                        artifact_id,
+                        effective_scope_key(exact_scope),
+                        _scope_to_json(exact_scope),
+                    ),
                 )
                 rows = await cur.fetchall()
         return [_row_to_artifact(dict(r)) for r in rows]
@@ -404,15 +460,21 @@ class MemoryArtifactStore:
         pass
 
     def _key(self, artifact_id: str, scope: dict[str, str] | None) -> str:
-        return json.dumps(_scope_to_json(scope), sort_keys=True)
+        del artifact_id
+        return effective_scope_key(scope)
 
     async def get_artifact(
         self, artifact_id: str, scope: dict[str, str] | None = None
     ) -> ArtifactDefinition | None:
+        exact_scope = scope or {}
         scope_key = self._key(artifact_id, scope)
         best: tuple[int, dict[str, Any]] | None = None
         for (aid, sk, v), row in self._store.items():
-            if aid == artifact_id and sk == scope_key:
+            if (
+                aid == artifact_id
+                and sk == scope_key
+                and _scope_from_json(row.get("scope")) == exact_scope
+            ):
                 if best is None or v > best[0]:
                     best = (v, row)
         return _row_to_artifact(best[1]) if best else None
@@ -423,11 +485,15 @@ class MemoryArtifactStore:
         artifact_type: str | None = None,
         run_id: str | None = None,
     ) -> list[ArtifactDefinition]:
+        exact_scope = scope or {}
         scope_key = self._key("", scope)
         results: list[ArtifactDefinition] = []
         seen: set[tuple[str, int]] = set()
         for (aid, sk, v), row in self._store.items():
-            if sk != scope_key:
+            if (
+                sk != scope_key
+                or _scope_from_json(row.get("scope")) != exact_scope
+            ):
                 continue
             key = (aid, v)
             if key in seen:
@@ -463,11 +529,17 @@ class MemoryArtifactStore:
     async def delete_artifact(
         self, artifact_id: str, scope: dict[str, str] | None = None
     ) -> bool:
+        exact_scope = scope or {}
         scope_key = self._key(artifact_id, scope)
         to_delete = [
             (aid, sk, v)
             for (aid, sk, v) in self._store
-            if aid == artifact_id and sk == scope_key
+            if (
+                aid == artifact_id
+                and sk == scope_key
+                and _scope_from_json(self._store[(aid, sk, v)].get("scope"))
+                == exact_scope
+            )
         ]
         for key in to_delete:
             del self._store[key]
@@ -476,18 +548,26 @@ class MemoryArtifactStore:
     async def get_artifact_version(
         self, artifact_id: str, version: int, scope: dict[str, str] | None = None
     ) -> ArtifactDefinition | None:
+        exact_scope = scope or {}
         scope_key = self._key(artifact_id, scope)
         row = self._store.get((artifact_id, scope_key, version))
-        return _row_to_artifact(row) if row else None
+        if row is None or _scope_from_json(row.get("scope")) != exact_scope:
+            return None
+        return _row_to_artifact(row)
 
     async def list_artifact_versions(
         self, artifact_id: str, scope: dict[str, str] | None = None
     ) -> list[ArtifactDefinition]:
+        exact_scope = scope or {}
         scope_key = self._key(artifact_id, scope)
         versions = [
             _row_to_artifact(row)
             for (aid, sk, _v), row in self._store.items()
-            if aid == artifact_id and sk == scope_key
+            if (
+                aid == artifact_id
+                and sk == scope_key
+                and _scope_from_json(row.get("scope")) == exact_scope
+            )
         ]
         versions.sort(key=lambda a: a.version, reverse=True)
         return versions

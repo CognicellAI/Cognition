@@ -10,10 +10,12 @@ from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
+from server.app.agent.runtime_manifest import resolve_runtime_manifest
 from server.app.exceptions import (
     RuntimeTaskConflictError,
     RuntimeTaskNotCancelableError,
     RuntimeTaskNotFoundError,
+    SessionAlreadyExistsError,
 )
 from server.app.models import (
     Message,
@@ -27,7 +29,9 @@ from server.app.models import (
     ToolCall,
 )
 from server.app.runtime_projection import ActiveRunConflictError, RuntimeProjectionService
+from server.app.settings import get_settings
 from server.app.storage.backend import StorageBackend
+from server.app.storage.config_store import ConfigStore, get_default_config_store
 
 if TYPE_CHECKING:
     from server.app.storage.artifact_store import ArtifactStore
@@ -155,10 +159,12 @@ class AgentTaskRuntime:
         *,
         default_workspace_path: str,
         artifact_store: ArtifactStore | None = None,
+        config_store: ConfigStore | None = None,
     ) -> None:
         self._store = store
         self._default_workspace_path = default_workspace_path
         self._artifact_store = artifact_store
+        self._config_store = config_store or get_default_config_store()
         self.projection = RuntimeProjectionService(store)
 
     async def submit(self, command: SubmitTask) -> TaskExecution:
@@ -174,22 +180,26 @@ class AgentTaskRuntime:
                 return await self._execution_for_existing(existing)
 
         context_id = command.context_id or str(uuid.uuid4())
-        session = await self._store.get_session(context_id)
+        session = await self._store.get_session(context_id, scope)
         if session is None:
-            session = await self._store.create_session(
-                session_id=context_id,
-                thread_id=str(uuid.uuid4()),
-                config=command.session_config,
-                title=f"Agent context {context_id[:8]}",
-                scopes=scope,
-                agent_name=command.agent_name,
-                metadata={"runtime_context_id": context_id},
-                workspace_path=command.workspace_path or self._default_workspace_path,
-            )
+            try:
+                session = await self._store.create_session(
+                    session_id=context_id,
+                    thread_id=str(uuid.uuid4()),
+                    config=command.session_config,
+                    title=f"Agent context {context_id[:8]}",
+                    scopes=scope,
+                    agent_name=command.agent_name,
+                    metadata={"runtime_context_id": context_id},
+                    workspace_path=command.workspace_path or self._default_workspace_path,
+                )
+            except SessionAlreadyExistsError as exc:
+                # Do not disclose that the identifier exists in another scope.
+                raise RuntimeTaskNotFoundError(context_id) from exc
         else:
             self._assert_context_owner(session, command.agent_name, scope)
 
-        active = await self._store.get_active_run(session.id)
+        active = await self._store.get_active_run(session.id, scope)
         if active is not None:
             raise RuntimeTaskConflictError(
                 f"Context '{context_id}' already has active run '{active.id}'"
@@ -225,6 +235,7 @@ class AgentTaskRuntime:
             existing_run = await self._store.get_run_by_idempotency_key(
                 task.session_id,
                 command.idempotency_key,
+                task.effective_scope,
             )
             if existing_run is not None:
                 user_message = await self._message_for_run(task, existing_run)
@@ -236,7 +247,10 @@ class AgentTaskRuntime:
                 task_id=task.id,
             )
         session = await self._require_context(task)
-        if await self._store.get_active_run(session.id) is not None:
+        if await self._store.get_active_run(
+            session.id,
+            task.effective_scope,
+        ) is not None:
             raise RuntimeTaskConflictError(
                 f"Context '{session.id}' already has an active run",
                 task_id=task.id,
@@ -343,6 +357,7 @@ class AgentTaskRuntime:
                 limit=100,
                 visibility="builder",
                 task_id=task.id,
+                effective_scope=task.effective_scope,
             )
             for event in events:
                 sequence = event.sequence
@@ -406,6 +421,7 @@ class AgentTaskRuntime:
                 "task_id": execution.task.id,
                 "run_id": execution.run.id,
             },
+            effective_scope=execution.task.effective_scope,
         )
         await self.projection.refresh_message_count(execution.session.id)
         await self.projection.append_event(
@@ -670,6 +686,15 @@ class AgentTaskRuntime:
         parent_run_id: str | None = None,
     ) -> TaskExecution:
         try:
+            if self._config_store is None:
+                raise RuntimeError("ConfigStore is required to pin a runtime manifest")
+            manifest = await resolve_runtime_manifest(
+                config_store=self._config_store,
+                settings=get_settings(),
+                agent_name=task.agent_name,
+                effective_scope=task.effective_scope,
+                session=session,
+            )
             run = await self.projection.begin_run(
                 session=session,
                 effective_scope=task.effective_scope,
@@ -677,6 +702,9 @@ class AgentTaskRuntime:
                 metadata={**metadata, "task_id": task.id},
                 task_id=task.id,
                 parent_run_id=parent_run_id,
+                agent_revision=manifest.agent_revision,
+                runtime_manifest=manifest.manifest,
+                manifest_digest=manifest.digest,
             )
         except ActiveRunConflictError as exc:
             await self._store.update_task(
@@ -698,13 +726,17 @@ class AgentTaskRuntime:
                 "task_id": task.id,
                 "run_id": run.id,
             },
+            effective_scope=task.effective_scope,
         )
         await self.projection.append_event(
             run,
             "message.user.accepted",
             payload={"message_id": user_message.id, "content_length": len(content)},
         )
-        await self.projection.refresh_message_count(session.id)
+        await self.projection.refresh_message_count(
+            session.id,
+            task.effective_scope,
+        )
         current = await self._require_task(task.id, task.agent_name, task.effective_scope)
         return TaskExecution(current, session, run, user_message)
 
@@ -720,7 +752,10 @@ class AgentTaskRuntime:
         return TaskExecution(task, session, run, user_message, reused=True)
 
     async def _message_for_run(self, task: RuntimeTask, run: SessionRun) -> Message:
-        messages = await self._store.list_messages_for_session(task.session_id)
+        messages = await self._store.list_messages_for_session(
+            task.session_id,
+            task.effective_scope,
+        )
         for message in messages:
             metadata = message.metadata or {}
             if message.role == "user" and metadata.get("run_id") == run.id:
@@ -732,10 +767,14 @@ class AgentTaskRuntime:
 
     async def _current_run(self, task: RuntimeTask) -> SessionRun | None:
         run_id = task.current_run_id or task.last_run_id
-        return await self._store.get_run(run_id) if run_id is not None else None
+        return (
+            await self._store.get_run(run_id, task.effective_scope)
+            if run_id is not None
+            else None
+        )
 
     async def _require_context(self, task: RuntimeTask) -> Session:
-        session = await self._store.get_session(task.session_id)
+        session = await self._store.get_session(task.session_id, task.effective_scope)
         if session is None:
             raise RuntimeTaskConflictError(
                 f"Task '{task.id}' context is unavailable",

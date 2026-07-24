@@ -213,7 +213,7 @@ class AgentDefinition(BaseModel):
     mode: Literal["primary", "subagent", "all"]
     description: str | None
     hidden: bool
-    native: bool                      # True for built-in agents (default, readonly)
+    native: bool                      # Reserved for non-API runtime-owned definitions
     a2a: A2AConfig                    # Exposure and public Agent Card contract
 ```
 

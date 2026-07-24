@@ -13,7 +13,7 @@ from fastapi.testclient import TestClient
 
 from server.app.api.dependencies import get_config_store, get_settings_dep, set_config_store
 from server.app.main import app
-from server.app.settings import Settings
+from server.app.settings import Settings, get_settings
 from server.app.storage.config_store import DefaultConfigStore
 
 client = TestClient(app)
@@ -30,6 +30,31 @@ def setup_registry(tmp_path_factory):
         config_registry=config_registry,
         workspace_path=tmpdir,
     )
+    asyncio.run(
+        config_store.upsert_agent(
+            "fixture-agent",
+            {},
+            {
+                "name": "fixture-agent",
+                "system_prompt": "Explicitly provisioned fixture Agent.",
+                "mode": "primary",
+            },
+            "api",
+        )
+    )
+    asyncio.run(
+        config_store.upsert_agent(
+            "hidden-agent",
+            {},
+            {
+                "name": "hidden-agent",
+                "system_prompt": "Hidden fixture Agent.",
+                "mode": "primary",
+                "hidden": True,
+            },
+            "api",
+        )
+    )
     set_config_store(config_store)
     yield
 
@@ -41,7 +66,7 @@ class TestListAgents:
         data = response.json()
         assert "agents" in data
 
-    def test_list_includes_default_agent(self):
+    def test_list_includes_explicitly_provisioned_agent(self):
         response = client.get("/agents")
         agents = response.json()["agents"]
         names = [a["name"] for a in agents]
@@ -50,14 +75,13 @@ class TestListAgents:
     def test_list_excludes_hidden_agents(self):
         """Only agents that are not hidden appear in the listing.
 
-        Neither 'default' nor 'readonly' are hidden, so both appear.
+        The explicitly hidden fixture Agent must not appear.
         """
         response = client.get("/agents")
         agents = response.json()["agents"]
         names = [a["name"] for a in agents]
-        # Both built-ins are visible (hidden=False)
         assert "default" in names
-        assert "readonly" in names
+        assert "hidden-agent" not in names
 
 
 class TestGetAgent:
@@ -75,13 +99,9 @@ class TestGetAgent:
         assert response.status_code == 404
 
     def test_get_hidden_agent_returns_404(self):
-        """Hidden agents cannot be retrieved via GET /agents/{name}.
-
-        'readonly' is not hidden (hidden=False), so it returns 200.
-        """
-        response = client.get("/agents/readonly")
-        assert response.status_code == 200
-        assert response.json()["name"] == "readonly"
+        """Hidden Agents cannot be retrieved via GET /agents/{name}."""
+        response = client.get("/agents/hidden-agent")
+        assert response.status_code == 404
 
 
 class TestCreateAgent:
@@ -323,18 +343,167 @@ class TestCreateAgent:
         r2 = client.post("/agents", json=payload)
         assert r2.status_code == 201
 
-    def test_create_overwriting_native_agent_returns_409(self):
-        """Trying to overwrite a built-in agent should return 409."""
+    def test_former_default_name_is_builder_owned(self):
+        """Formerly reserved Agent names are ordinary builder-owned names."""
         payload = {
             "name": "default",
             "system_prompt": "override attempt",
         }
         response = client.post("/agents", json=payload)
-        assert response.status_code == 409
+        assert response.status_code == 201
+        assert response.json()["name"] == "default"
+        assert response.json()["native"] is False
 
     def test_create_agent_missing_name_returns_422(self):
         response = client.post("/agents", json={"system_prompt": "no name"})
         assert response.status_code == 422
+
+
+class TestExactScopeAndRevisions:
+    """v0.13 Agent identity is the name plus the complete trusted scope."""
+
+    @staticmethod
+    def _scope_headers(**scope: str) -> dict[str, str]:
+        return {
+            f"x-cognition-scope-{key.replace('_', '-')}": value
+            for key, value in scope.items()
+        }
+
+    @pytest.fixture(autouse=True)
+    def configure_two_dimensional_scope(self):
+        settings = get_settings()
+        previous = (list(settings.scope_keys), settings.scoping_enabled)
+        settings.scope_keys = ["tenant", "project"]
+        # Keep optional headers in these tests so empty and partial scopes can
+        # be exercised deliberately.
+        settings.scoping_enabled = False
+        yield
+        settings.scope_keys, settings.scoping_enabled = previous
+
+    def test_same_name_isolated_across_empty_partial_sibling_and_exact_scopes(self):
+        name = "scope-isolation-agent"
+        exact_red = self._scope_headers(tenant="acme", project="red")
+        exact_blue = self._scope_headers(tenant="acme", project="blue")
+        partial = self._scope_headers(tenant="acme")
+
+        for headers, prompt in (
+            ({}, "global"),
+            (partial, "partial"),
+            (exact_red, "red"),
+            (exact_blue, "blue"),
+        ):
+            response = client.post(
+                "/agents",
+                headers=headers,
+                json={"name": name, "system_prompt": prompt},
+            )
+            assert response.status_code == 201
+
+        assert client.get(f"/agents/{name}").json()["system_prompt"] == "global"
+        assert (
+            client.get(f"/agents/{name}", headers=partial).json()["system_prompt"]
+            == "partial"
+        )
+        assert (
+            client.get(f"/agents/{name}", headers=exact_red).json()["system_prompt"]
+            == "red"
+        )
+        assert (
+            client.get(f"/agents/{name}", headers=exact_blue).json()["system_prompt"]
+            == "blue"
+        )
+
+        # A broader API Agent is never inherited into a complete runtime scope.
+        partial_only = "partial-only-agent"
+        assert (
+            client.post(
+                "/agents",
+                headers=partial,
+                json={"name": partial_only, "system_prompt": "partial only"},
+            ).status_code
+            == 201
+        )
+        assert (
+            client.get(f"/agents/{partial_only}", headers=exact_red).status_code
+            == 404
+        )
+
+    def test_etag_guards_create_replace_patch_and_delete(self):
+        headers = self._scope_headers(tenant="etag-co", project="api")
+        payload = {"name": "etag-agent", "system_prompt": "revision one"}
+        created = client.post(
+            "/agents",
+            headers={**headers, "If-None-Match": "*"},
+            json=payload,
+        )
+        assert created.status_code == 201
+        assert created.json()["revision"] == 1
+        first_digest = created.json()["definition_digest"]
+        first_etag = created.headers["etag"]
+
+        duplicate = client.post(
+            "/agents",
+            headers={**headers, "If-None-Match": "*"},
+            json=payload,
+        )
+        assert duplicate.status_code == 412
+
+        patched = client.patch(
+            "/agents/etag-agent",
+            headers={**headers, "If-Match": first_etag},
+            json={"system_prompt": "revision two"},
+        )
+        assert patched.status_code == 200
+        assert patched.json()["revision"] == 2
+        assert patched.json()["definition_digest"] != first_digest
+        second_etag = patched.headers["etag"]
+
+        stale_patch = client.patch(
+            "/agents/etag-agent",
+            headers={**headers, "If-Match": first_etag},
+            json={"system_prompt": "must not win"},
+        )
+        assert stale_patch.status_code == 412
+        assert (
+            client.delete(
+                "/agents/etag-agent",
+                headers={**headers, "If-Match": first_etag},
+            ).status_code
+            == 412
+        )
+        assert (
+            client.delete(
+                "/agents/etag-agent",
+                headers={**headers, "If-Match": second_etag},
+            ).status_code
+            == 204
+        )
+        assert client.get("/agents/etag-agent", headers=headers).status_code == 404
+
+    def test_body_scope_must_match_authoritative_headers(self):
+        headers = self._scope_headers(tenant="scope-co", project="docs")
+        matching = client.post(
+            "/agents",
+            headers=headers,
+            json={
+                "name": "matching-body-scope",
+                "system_prompt": "valid",
+                "scope": {"tenant": "scope-co", "project": "docs"},
+            },
+        )
+        assert matching.status_code == 201
+        assert "deprecated" in matching.headers["warning"].lower()
+
+        conflicting = client.post(
+            "/agents",
+            headers=headers,
+            json={
+                "name": "conflicting-body-scope",
+                "system_prompt": "invalid",
+                "scope": {"tenant": "other", "project": "docs"},
+            },
+        )
+        assert conflicting.status_code == 400
 
 
 class TestUpdateAgent:
@@ -747,10 +916,14 @@ class TestDeleteAgent:
         response = client.delete("/agents/test-delete-agent")
         assert response.status_code == 204
 
-    def test_delete_native_agent_returns_409(self):
-        """Built-in agents cannot be deleted."""
+    def test_delete_former_default_name(self):
+        """Formerly reserved names can be created and deleted normally."""
+        client.post(
+            "/agents",
+            json={"name": "default", "system_prompt": "Builder-owned Agent."},
+        )
         response = client.delete("/agents/default")
-        assert response.status_code == 409
+        assert response.status_code == 204
 
     def test_delete_missing_agent_returns_404(self):
         response = client.delete("/agents/no-such-agent-delete")

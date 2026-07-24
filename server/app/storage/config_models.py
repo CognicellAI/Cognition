@@ -33,6 +33,18 @@ PROVIDER_TYPES = {
     "google_vertexai",
 }
 
+
+class AgentConfigRecord(BaseModel):
+    """Immutable identity metadata for one exact-scoped Agent revision."""
+
+    name: str
+    scope: dict[str, str] = Field(default_factory=dict)
+    scope_key: str
+    definition: dict[str, Any]
+    revision: int = Field(ge=1)
+    definition_digest: str
+    source: Literal["file", "api"] = "api"
+
 # ---------------------------------------------------------------------------
 # Provider / LLM
 # ---------------------------------------------------------------------------

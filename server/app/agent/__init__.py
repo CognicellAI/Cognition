@@ -15,7 +15,6 @@ __all__ = [
     "SubagentDefinition",
     "load_agent_definition",
     "load_agent_definition_from_markdown",
-    "create_default_agent_definition",
     "AgentRuntime",
     "DeepAgentRuntime",
     "create_agent_runtime",
@@ -48,7 +47,6 @@ def __getattr__(name: str) -> object:
         "AgentConfig",
         "AgentDefinition",
         "SubagentDefinition",
-        "create_default_agent_definition",
         "load_agent_definition",
         "load_agent_definition_from_markdown",
     }:
@@ -56,7 +54,6 @@ def __getattr__(name: str) -> object:
             AgentConfig,
             AgentDefinition,
             SubagentDefinition,
-            create_default_agent_definition,
             load_agent_definition,
             load_agent_definition_from_markdown,
         )
@@ -65,7 +62,6 @@ def __getattr__(name: str) -> object:
             "AgentConfig": AgentConfig,
             "AgentDefinition": AgentDefinition,
             "SubagentDefinition": SubagentDefinition,
-            "create_default_agent_definition": create_default_agent_definition,
             "load_agent_definition": load_agent_definition,
             "load_agent_definition_from_markdown": load_agent_definition_from_markdown,
         }[name]

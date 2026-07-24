@@ -38,7 +38,10 @@ async def setup_storage_backend():
     from server.app.llm.deep_agent_service import SessionAgentManager
     from server.app.storage.artifact_store import MemoryArtifactStore
     from server.app.storage.config_registry import MemoryConfigRegistry
-    from server.app.storage.config_store import DefaultConfigStore
+    from server.app.storage.config_store import (
+        DefaultConfigStore,
+        set_default_config_store,
+    )
 
     with tempfile.TemporaryDirectory() as tmpdir:
         storage = SqliteStorageBackend(
@@ -51,13 +54,56 @@ async def setup_storage_backend():
         set_artifact_store(MemoryArtifactStore())
 
         settings = get_settings()
+        previous_runtime_settings = (
+            settings.unsafe_local_execution,
+            settings.allow_host_tools,
+            settings.allow_api_python_tools,
+            list(settings.callback_allowed_origins),
+        )
+        # Existing unit tests intentionally exercise the standalone local runtime.
+        # Production defaults remain strict; this fixture opts the test deployment in.
+        settings.unsafe_local_execution = True
+        settings.allow_host_tools = True
+        settings.allow_api_python_tools = True
+        settings.callback_allowed_origins = ["https://example.com"]
         set_session_agent_manager_dep(SessionAgentManager(settings))
 
         config_reg = MemoryConfigRegistry()
-        set_config_store(DefaultConfigStore(config_reg))
+        agents_dir = Path(tmpdir) / ".cognition" / "agents"
+        agents_dir.mkdir(parents=True)
+        for name, prompt in (
+            ("default", "Explicitly provisioned shared test Agent."),
+            ("readonly", "Explicitly provisioned shared read-only test Agent."),
+        ):
+            (agents_dir / f"{name}.yaml").write_text(
+                f"name: {name}\nsystem_prompt: {prompt}\nmode: primary\n"
+            )
+        config_store = DefaultConfigStore(
+            config_reg,
+            workspace_path=Path(tmpdir),
+        )
+        await config_store.upsert_agent(
+            "hidden-agent",
+            {},
+            {
+                "name": "hidden-agent",
+                "system_prompt": "Explicitly provisioned hidden test Agent.",
+                "mode": "primary",
+                "hidden": True,
+            },
+            "api",
+        )
+        set_config_store(config_store)
+        set_default_config_store(config_store)
 
         yield storage
 
+        (
+            settings.unsafe_local_execution,
+            settings.allow_host_tools,
+            settings.allow_api_python_tools,
+            settings.callback_allowed_origins,
+        ) = previous_runtime_settings
         await storage.close()
 
 

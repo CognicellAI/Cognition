@@ -85,6 +85,12 @@ class Settings(BaseSettings):
     # Observability settings
     otel_enabled: bool = Field(default=False, alias="COGNITION_OTEL_ENABLED")
     otel_endpoint: str | None = Field(default=None, alias="COGNITION_OTEL_ENDPOINT")
+    otel_max_export_bytes: int = Field(
+        default=3_670_016,
+        ge=65_536,
+        alias="COGNITION_OTEL_MAX_EXPORT_BYTES",
+        description="Maximum encoded OTLP trace request size (default 3.5 MiB).",
+    )
     metrics_port: int = Field(default=9090, alias="COGNITION_METRICS_PORT")
 
     # CORS settings
@@ -98,7 +104,12 @@ class Settings(BaseSettings):
         alias="COGNITION_CORS_CREDENTIALS",
     )
 
-    @field_validator("cors_origins", "scope_keys", mode="before")
+    @field_validator(
+        "cors_origins",
+        "scope_keys",
+        "callback_allowed_origins",
+        mode="before",
+    )
     @classmethod
     def parse_comma_separated_list(cls, v: Any) -> list[str] | Any:
         """Parse comma-separated string or JSON array into list.
@@ -137,6 +148,46 @@ class Settings(BaseSettings):
     sandbox_backend: Literal["local", "docker", "kubernetes", "aws_lambda_microvm"] = Field(
         default="local",
         alias="COGNITION_SANDBOX_BACKEND",
+    )
+    unsafe_local_execution: bool = Field(
+        default=False,
+        alias="COGNITION_ALLOW_UNSAFE_LOCAL_EXECUTION",
+        description="Explicitly permit host-local execution for standalone development.",
+    )
+    allow_host_tools: bool = Field(
+        default=False,
+        alias="COGNITION_ALLOW_HOST_TOOLS",
+        description="Explicitly inject Browser/Search/package host tools in development.",
+    )
+    allow_api_python_tools: bool = Field(
+        default=False,
+        alias="COGNITION_ALLOW_API_PYTHON_TOOLS",
+        description="Explicitly permit host loading of API Python tool code in development.",
+    )
+    callback_allowed_origins: list[str] = Field(
+        default_factory=list,
+        alias="COGNITION_CALLBACK_ALLOWED_ORIGINS",
+        description="Operator-approved HTTPS origins for per-message callbacks.",
+    )
+    agent_cache_max_entries: int = Field(
+        default=128,
+        ge=1,
+        alias="COGNITION_AGENT_CACHE_MAX_ENTRIES",
+    )
+    agent_cache_ttl_seconds: float = Field(
+        default=900.0,
+        gt=0,
+        alias="COGNITION_AGENT_CACHE_TTL_SECONDS",
+    )
+    session_service_cache_max_entries: int = Field(
+        default=256,
+        ge=1,
+        alias="COGNITION_SESSION_SERVICE_CACHE_MAX_ENTRIES",
+    )
+    session_service_cache_ttl_seconds: float = Field(
+        default=1800.0,
+        gt=0,
+        alias="COGNITION_SESSION_SERVICE_CACHE_TTL_SECONDS",
     )
     docker_image: str = Field(
         default="cognition-sandbox:latest",

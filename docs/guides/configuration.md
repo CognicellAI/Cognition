@@ -293,6 +293,15 @@ Cognition ships four sandbox backends:
 | YAML key | Environment variable | Default | Description |
 |---|---|---|---|
 | `sandbox.backend` | `COGNITION_SANDBOX_BACKEND` | `local` | `local`, `docker`, `kubernetes`, or `aws_lambda_microvm` |
+| (environment only) | `COGNITION_ALLOW_UNSAFE_LOCAL_EXECUTION` | `false` | Explicitly allow the `local` backend to run commands as the Cognition host process. Use only for standalone development. |
+| (environment only) | `COGNITION_ALLOW_HOST_TOOLS` | `false` | Explicitly inject host-backed Browser, Search, and package-inspection tools. Use only for development deployments that accept host access. |
+| (environment only) | `COGNITION_ALLOW_API_PYTHON_TOOLS` | `false` | Explicitly allow API-registered Python tool code to be loaded by the runtime. Use only for trusted development or admin-only deployments. |
+
+Production deployments should select `docker`, `kubernetes`, or
+`aws_lambda_microvm`. The `local` backend is intentionally unsafe because model
+directed file and process operations run where the Cognition server runs.
+Strict defaults fail closed unless an operator opts into unsafe host-local
+behavior.
 
 ### Docker settings (when `sandbox.backend = docker`)
 
@@ -410,9 +419,32 @@ for the end-to-end setup flow and Terraform example.
 
 | YAML key | Environment variable | Default | Description |
 |---|---|---|---|
-| `observability.otel_enabled` | `COGNITION_OTEL_ENABLED` | `true` | Enable OpenTelemetry tracing |
+| `observability.otel_enabled` | `COGNITION_OTEL_ENABLED` | `false` | Enable OpenTelemetry tracing |
 | `observability.otel_endpoint` | `COGNITION_OTEL_ENDPOINT` | `null` | OTLP collector URL |
+| `observability.otel_max_export_bytes` | `COGNITION_OTEL_MAX_EXPORT_BYTES` | `3670016` | Maximum encoded OTLP trace export request size. Default is 3.5 MiB, below the common 4 MiB collector gRPC limit. |
 | `observability.metrics_port` | `COGNITION_METRICS_PORT` | `9090` | Prometheus metrics scrape port |
+
+---
+
+## Runtime Safety and Cache Bounds
+
+| YAML key | Environment variable | Default | Description |
+|---|---|---|---|
+| (environment only) | `COGNITION_CALLBACK_ALLOWED_ORIGINS` | `[]` | Comma-separated or JSON list of exact HTTPS origins allowed for per-message completion callbacks. Empty means callbacks are denied. |
+| (environment only) | `COGNITION_AGENT_CACHE_MAX_ENTRIES` | `128` | Maximum compiled Agent graph cache entries. |
+| (environment only) | `COGNITION_AGENT_CACHE_TTL_SECONDS` | `900` | Time-to-live for compiled Agent graph cache entries. |
+| (environment only) | `COGNITION_SESSION_SERVICE_CACHE_MAX_ENTRIES` | `256` | Maximum cached per-session service entries. |
+| (environment only) | `COGNITION_SESSION_SERVICE_CACHE_TTL_SECONDS` | `1800` | Time-to-live for cached per-session service entries. |
+
+Per-message callbacks are runtime egress from a shared Cognition deployment.
+They are denied unless the callback URL has an exact approved HTTPS origin such
+as `https://builder.example.com`. URL paths, query strings, userinfo, fragments,
+and non-HTTPS origins are not approval boundaries.
+
+Agent graph cache keys include the effective scope fingerprint, Agent revision,
+runtime manifest digest, sandbox backend identity, model identity, and relevant
+runtime settings. A cached graph never owns a sandbox backend; each run supplies
+its sandbox dynamically.
 
 ---
 

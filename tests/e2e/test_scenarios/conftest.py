@@ -14,6 +14,13 @@ import httpx
 import pytest
 import pytest_asyncio
 
+from tests.e2e.conftest import (
+    E2E_DEFAULT_AGENT_NAME,
+    E2E_READONLY_AGENT_NAME,
+    ensure_e2e_agent,
+    ensure_e2e_provider,
+)
+
 
 @pytest.fixture(autouse=True)
 async def setup_storage_backend():
@@ -64,6 +71,7 @@ class ScenarioTestClient:
         self.base_url = base_url
         self.client = httpx.AsyncClient(timeout=TEST_TIMEOUT)
         self.scope_header: dict[str, str] = {}
+        self.default_agent_name = E2E_DEFAULT_AGENT_NAME
 
     async def check_scoping(self) -> bool:
         """Check if session scoping is enabled."""
@@ -76,10 +84,38 @@ class ScenarioTestClient:
             pass
         return False
 
+    async def check_available(self) -> bool:
+        """Return whether the external scenario server is reachable."""
+        try:
+            response = await self.client.get(f"{self.base_url}/ready")
+            return response.status_code in {200, 503}
+        except httpx.HTTPError:
+            return False
+
     async def setup_scoping(self) -> None:
         """Setup scoping header if enabled."""
         if await self.check_scoping():
             self.scope_header = {"X-Cognition-Scope-User": "test-user"}
+
+    async def ensure_test_agents(self) -> None:
+        """Provision shared builder-owned Agents used by the scenario suite."""
+        await ensure_e2e_provider(
+            self.client,
+            self.base_url,
+            headers=self.scope_header,
+        )
+        await ensure_e2e_agent(
+            self.client,
+            self.base_url,
+            E2E_DEFAULT_AGENT_NAME,
+            headers=self.scope_header,
+        )
+        await ensure_e2e_agent(
+            self.client,
+            self.base_url,
+            E2E_READONLY_AGENT_NAME,
+            headers=self.scope_header,
+        )
 
     async def get(self, path: str, **kwargs) -> httpx.Response:
         """Make GET request with optional scoping."""
@@ -91,6 +127,10 @@ class ScenarioTestClient:
         headers = {**self.scope_header, **kwargs.pop("headers", {})}
         if "json" in kwargs:
             headers["Content-Type"] = "application/json"
+        if path == "/sessions" and isinstance(kwargs.get("json"), dict):
+            payload = dict(kwargs["json"])
+            payload.setdefault("agent_name", self.default_agent_name)
+            kwargs["json"] = payload
         return await self.client.post(f"{self.base_url}{path}", headers=headers, **kwargs)
 
     async def patch(self, path: str, **kwargs) -> httpx.Response:
@@ -148,8 +188,7 @@ class ScenarioTestClient:
     ) -> str:
         """Create a new session and return its ID."""
         payload: dict[str, Any] = {"title": title}
-        if agent_name is not None:
-            payload["agent_name"] = agent_name
+        payload["agent_name"] = agent_name or self.default_agent_name
         if metadata is not None:
             payload["metadata"] = metadata
         response = await self.post("/sessions", json=payload)
@@ -184,7 +223,14 @@ class ScenarioTestClient:
 async def api_client() -> AsyncGenerator[ScenarioTestClient, None]:
     """Fixture providing a configured API test client."""
     client = ScenarioTestClient()
+    if not await client.check_available():
+        await client.close()
+        pytest.skip(
+            "Scenario E2E server is not reachable; set COGNITION_E2E_URL or "
+            "start the docker-compose E2E environment."
+        )
     await client.setup_scoping()
+    await client.ensure_test_agents()
     yield client
     await client.close()
 

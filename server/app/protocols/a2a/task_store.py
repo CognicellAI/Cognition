@@ -157,7 +157,10 @@ class CognitionTaskStore(TaskStore):
 
     async def project(self, task: RuntimeTask) -> Task:
         """Project one already-authorized neutral task to its A2A representation."""
-        messages = await self._store.list_messages_for_session(task.session_id)
+        messages = await self._store.list_messages_for_session(
+            task.session_id,
+            task.effective_scope,
+        )
         history = []
         assistant_text = ""
         for message in messages:
@@ -258,7 +261,10 @@ class CognitionTaskStore(TaskStore):
         message_id = task.metadata.get("direct_message_id")
         if not isinstance(message_id, str):
             return None
-        messages = await self._store.list_messages_for_session(task.session_id)
+        messages = await self._store.list_messages_for_session(
+            task.session_id,
+            task.effective_scope,
+        )
         message = next((item for item in messages if item.id == message_id), None)
         if message is None:
             return None

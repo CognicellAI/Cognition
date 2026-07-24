@@ -322,7 +322,12 @@ class AgentDefinition(BaseModel):
     mode: Literal["primary", "subagent", "all"] = Field(default="all")
     description: str | None = Field(default=None)
     hidden: bool = Field(default=False)
-    native: bool = Field(default=False)
+    native: bool = Field(
+        default=False,
+        description=(
+            "Legacy compatibility flag; Cognition does not create native Agents"
+        ),
+    )
     a2a: A2AConfig = Field(default_factory=A2AConfig)
 
     @field_validator("name")
@@ -578,28 +583,6 @@ def load_agent_definition(path: str | Path) -> AgentDefinition:
         raise ValueError(f"Failed to validate agent definition from {path}: {e}") from e
 
 
-def create_default_agent_definition(name: str = "default-agent") -> AgentDefinition:
-    """Create a default agent definition.
-
-    Args:
-        name: Name for the agent.
-
-    Returns:
-        AgentDefinition with sensible defaults.
-    """
-    return AgentDefinition(
-        name=name,
-        system_prompt="You are a helpful AI coding assistant.",
-        tools=[],
-        skills=[],
-        memory=["AGENTS.md"],
-        subagents=[],
-        interrupt_on={},
-        middleware=[],
-        config=AgentConfig(),
-    )
-
-
 def load_agent_definition_from_markdown(path: str | Path) -> AgentDefinition:
     """Load agent definition from Markdown file with YAML frontmatter.
 
@@ -730,7 +713,6 @@ __all__ = [
     "AgentDefinition",
     "AsyncSubagentConfig",
     "SubagentDefinition",
-    "create_default_agent_definition",
     "load_agent_definition",
     "load_agent_definition_from_markdown",
 ]

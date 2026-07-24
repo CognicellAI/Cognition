@@ -221,6 +221,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         endpoint=settings.otel_endpoint,
         app=app,
         enabled=settings.otel_enabled,
+        max_export_bytes=settings.otel_max_export_bytes,
     )
     setup_metrics(
         port=settings.metrics_port,

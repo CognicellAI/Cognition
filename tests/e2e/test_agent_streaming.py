@@ -71,22 +71,22 @@ class TestStreamingEventTypes:
         async with httpx.AsyncClient(timeout=SSE_TIMEOUT) as client:
             resp = await client.post(
                 f"{server}/sessions",
-                json={"title": "streaming-test"},
+                json={"title": "streaming-test", "agent_name": "default"},
                 headers=scope_headers,
             )
             assert resp.status_code == 201
             return resp.json()["id"]
 
-    @pytest.mark.skip(reason="Upstream deepagents limitation: FilesystemMiddleware not yet supported with sandbox backends")
+    @pytest.mark.skip(
+        reason="Upstream deepagents limitation: FilesystemMiddleware not yet supported with sandbox backends"
+    )
     async def test_stream_produces_done_event(
         self, server: str, session: str, scope_headers: dict[str, str]
     ) -> None:
         """Every completed message stream ends with a done event."""
         async with httpx.AsyncClient(timeout=SSE_TIMEOUT) as client:
             stream_url = f"{server}/sessions/{session}/messages"
-            events = await _collect_sse_events(
-                client, stream_url, {"content": "Hi"}, scope_headers
-            )
+            events = await _collect_sse_events(client, stream_url, {"content": "Hi"}, scope_headers)
 
         assert _stream_completed(events), f"Expected done event, got: {sorted(events.keys())}"
 
@@ -139,7 +139,7 @@ class TestStreamingEventTypes:
         async with httpx.AsyncClient(timeout=SSE_TIMEOUT) as client:
             resp = await client.post(
                 f"{server}/sessions",
-                json={"title": "multi-stream"},
+                json={"title": "multi-stream", "agent_name": "default"},
                 headers=scope_headers,
             )
             session_id = resp.json()["id"]
@@ -190,9 +190,7 @@ class TestStreamingEventTypes:
             )
 
         assert _stream_completed(events)
-        assert "run_state" in events, (
-            f"Expected run_state event, got: {sorted(events.keys())}"
-        )
+        assert "run_state" in events, f"Expected run_state event, got: {sorted(events.keys())}"
 
     async def test_sandbox_lifecycle_event_present(
         self, server: str, session: str, scope_headers: dict[str, str]

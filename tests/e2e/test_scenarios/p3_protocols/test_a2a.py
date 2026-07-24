@@ -38,17 +38,23 @@ async def _ensure_a2a_agent():
 
     base_url = os.environ.get("COGNITION_E2E_URL", "http://localhost:8000").rstrip("/")
     async with httpx.AsyncClient(base_url=base_url) as client:
-        resp = await client.post(
-            "/agents",
-            json={
-                "name": _A2A_AGENT_NAME,
-                "system_prompt": "You are a helpful assistant. Reply concisely.",
-                "description": "A2A test agent",
-                "mode": "primary",
-                "a2a": {"exposed": True},
-            },
-            headers={"X-Cognition-Scope-User": "test-user"},
-        )
+        try:
+            resp = await client.post(
+                "/agents",
+                json={
+                    "name": _A2A_AGENT_NAME,
+                    "system_prompt": "You are a helpful assistant. Reply concisely.",
+                    "description": "A2A test agent",
+                    "mode": "primary",
+                    "a2a": {"exposed": True},
+                },
+                headers={"X-Cognition-Scope-User": "test-user"},
+            )
+        except httpx.HTTPError:
+            pytest.skip(
+                "A2A scenario server is not reachable; set COGNITION_E2E_URL "
+                "or start the docker-compose E2E environment."
+            )
         assert resp.status_code in (200, 201), f"Failed to create agent: {resp.text}"
 
         yield
@@ -63,9 +69,7 @@ async def _ensure_a2a_agent():
 @pytest.mark.integration
 @pytest.mark.asyncio
 class TestAgentCardDiscovery:
-    async def test_agent_card_returns_exposed_agents(
-        self, api_client: ScenarioTestClient
-    ) -> None:
+    async def test_agent_card_returns_exposed_agents(self, api_client: ScenarioTestClient) -> None:
         response = await api_client.client.get(
             f"{api_client.base_url}/.well-known/agent-card.json",
             params={"assistant_id": _A2A_AGENT_NAME},
@@ -74,9 +78,7 @@ class TestAgentCardDiscovery:
         assert response.status_code == 200, response.text
         assert response.json()["name"] == f"Cognition ({_A2A_AGENT_NAME})"
 
-    async def test_agent_card_for_specific_agent(
-        self, api_client: ScenarioTestClient
-    ) -> None:
+    async def test_agent_card_for_specific_agent(self, api_client: ScenarioTestClient) -> None:
         response = await api_client.client.get(
             f"{api_client.base_url}/a2a/{_A2A_AGENT_NAME}/.well-known/agent-card.json",
             headers=api_client.scope_header,
@@ -88,18 +90,14 @@ class TestAgentCardDiscovery:
         assert card["skills"][0]["id"] == _A2A_AGENT_NAME
         assert f"/a2a/{_A2A_AGENT_NAME}" in card["supportedInterfaces"][0]["url"]
 
-    async def test_agent_card_404_for_unknown_agent(
-        self, api_client: ScenarioTestClient
-    ) -> None:
+    async def test_agent_card_404_for_unknown_agent(self, api_client: ScenarioTestClient) -> None:
         response = await api_client.client.get(
             f"{api_client.base_url}/a2a/nonexistent-agent-xyz/.well-known/agent-card.json",
             headers=api_client.scope_header,
         )
         assert response.status_code == 404
 
-    async def test_agent_card_has_jsonrpc_interface(
-        self, api_client: ScenarioTestClient
-    ) -> None:
+    async def test_agent_card_has_jsonrpc_interface(self, api_client: ScenarioTestClient) -> None:
         response = await api_client.client.get(
             f"{api_client.base_url}/a2a/{_A2A_AGENT_NAME}/.well-known/agent-card.json",
             headers=api_client.scope_header,
@@ -148,9 +146,7 @@ class TestA2AMessageSend:
         assert "contextId" in task
         assert task["status"]["state"] == "TASK_STATE_COMPLETED"
 
-    async def test_send_message_returns_artifact(
-        self, api_client: ScenarioTestClient
-    ) -> None:
+    async def test_send_message_returns_artifact(self, api_client: ScenarioTestClient) -> None:
         message = {
             "role": "ROLE_USER",
             "parts": [{"text": "Reply with exactly: A2A_WORKS"}],
@@ -188,9 +184,7 @@ class TestA2AMessageSend:
 @pytest.mark.integration
 @pytest.mark.asyncio
 class TestA2AStreaming:
-    async def test_stream_message_returns_events(
-        self, api_client: ScenarioTestClient
-    ) -> None:
+    async def test_stream_message_returns_events(self, api_client: ScenarioTestClient) -> None:
         message = {
             "role": "ROLE_USER",
             "parts": [{"text": "Count from 1 to 3."}],
@@ -226,9 +220,7 @@ class TestA2AStreaming:
         assert all(event.get("jsonrpc") == "2.0" for event in events)
         assert any("statusUpdate" in event.get("result", {}) for event in events)
 
-    async def test_stream_includes_status_events(
-        self, api_client: ScenarioTestClient
-    ) -> None:
+    async def test_stream_includes_status_events(self, api_client: ScenarioTestClient) -> None:
         message = {
             "role": "ROLE_USER",
             "parts": [{"text": "Say OK."}],
@@ -260,9 +252,7 @@ class TestA2AStreaming:
                     events.append(data)
 
         assert any(
-            event.get("result", {}).get("statusUpdate", {}).get("status", {}).get(
-                "state"
-            )
+            event.get("result", {}).get("statusUpdate", {}).get("status", {}).get("state")
             == "TASK_STATE_COMPLETED"
             for event in events
         )
@@ -272,9 +262,7 @@ class TestA2AStreaming:
 @pytest.mark.integration
 @pytest.mark.asyncio
 class TestA2ATaskOperations:
-    async def test_get_and_list_return_durable_task(
-        self, api_client: ScenarioTestClient
-    ) -> None:
+    async def test_get_and_list_return_durable_task(self, api_client: ScenarioTestClient) -> None:
         headers = {
             "Content-Type": "application/json",
             "A2A-Version": "1.0",
@@ -321,9 +309,7 @@ class TestA2ATaskOperations:
         )
 
         assert fetched.json()["result"]["id"] == task_id
-        assert task_id in {
-            task["id"] for task in listed.json()["result"]["tasks"]
-        }
+        assert task_id in {task["id"] for task in listed.json()["result"]["tasks"]}
 
     @pytest.mark.parametrize("method", ["CancelTask", "SubscribeToTask"])
     async def test_task_operation_conceals_unknown_ids(
@@ -353,9 +339,7 @@ class TestA2ATaskOperations:
 @pytest.mark.integration
 @pytest.mark.asyncio
 class TestA2ACapabilities:
-    async def test_capabilities_reports_a2a(
-        self, api_client: ScenarioTestClient
-    ) -> None:
+    async def test_capabilities_reports_a2a(self, api_client: ScenarioTestClient) -> None:
         response = await api_client.client.get(
             f"{api_client.base_url}/capabilities",
             headers=api_client.scope_header,

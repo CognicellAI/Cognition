@@ -42,6 +42,7 @@ def _make_session(
     """Build a Session with configurable config overrides."""
     return Session(
         id="sess-001",
+        agent_name="test-agent",
         workspace_path="/tmp/workspace",
         title="Test Session",
         thread_id="thread-001",
@@ -180,6 +181,7 @@ class TestSessionConfigRoundTrip:
         """Older stored sessions without recursion_limit must deserialise cleanly."""
         data = {
             "id": "sess-001",
+            "agent_name": "test-agent",
             "workspace_path": "/tmp/workspace",
             "title": "Old Session",
             "thread_id": "thread-001",
@@ -222,6 +224,7 @@ class TestMemoryStorageBackendMerge:
             session_id="sess-merge",
             thread_id="thread-merge",
             config=SessionConfig(provider="mock", model="mock"),
+            agent_name="test-agent",
         )
 
         updated = await backend.update_session(
@@ -242,6 +245,7 @@ class TestMemoryStorageBackendMerge:
             session_id="sess-preserve",
             thread_id="thread-preserve",
             config=SessionConfig(provider="mock", model="mock", recursion_limit=500),
+            agent_name="test-agent",
         )
 
         # Update with an unrelated field — recursion_limit must remain 500
@@ -263,6 +267,7 @@ class TestMemoryStorageBackendMerge:
             session_id="sess-mt",
             thread_id="thread-mt",
             config=SessionConfig(provider="mock", model="mock"),
+            agent_name="test-agent",
         )
 
         updated = await backend.update_session(
