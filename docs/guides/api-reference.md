@@ -337,7 +337,7 @@ Send a user message and receive the agent's streaming response via Server-Sent E
 | `content` | string (min 1) | Yes | The user's message |
 | `model` | string | No | Override model for this message only |
 | `parent_id` | string | No | Parent message ID for threaded context |
-| `callback_url` | URL | No | Best-effort completion callback URL for a final POST after the run finishes |
+| `callback_url` | URL | No | Best-effort completion callback URL for a final POST after the run finishes. Denied unless the URL has an operator-approved HTTPS origin. |
 
 **Headers:**
 ```
