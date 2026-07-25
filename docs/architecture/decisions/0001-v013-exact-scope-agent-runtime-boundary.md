@@ -155,7 +155,7 @@ Release gates still pending by operator choice:
 
 - `ROADMAP.md`
 - `docs/concepts/agent-runtime.md`
-- `docs/concepts/architecture.md`
+- `docs/architecture/`
 - `docs/concepts/sessions-and-messages.md`
 - `docs/guides/api-reference.md`
 - `docs/guides/configuration.md`

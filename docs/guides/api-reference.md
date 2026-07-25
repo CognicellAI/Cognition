@@ -798,9 +798,9 @@ For scoped agents, use the same `X-Cognition-Scope-*` headers used to create or 
 
 Delete an agent definition from the ConfigRegistry.
 
-**Response `204 No Content`**  
-**Response `404 Not Found`:** Agent not found  
-**Response `400 Bad Request`:** Attempt to delete a built-in (native) agent
+- **Response `204 No Content`**
+- **Response `404 Not Found`:** Agent not found in the exact request scope
+- **Response `412 Precondition Failed`:** Stale `If-Match` revision
 
 ---
 

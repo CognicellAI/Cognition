@@ -172,7 +172,7 @@ Before adding a feature, check the boundary:
 
 ## Related Documents
 
-- [Architecture](../concepts/architecture.md) for the 7-layer model inside Cognition
+- [Architecture](../architecture/index.md) for the code-derived C4 model inside Cognition
 - [Getting Started](./getting-started.md) for the basic HTTP integration flow
 - [API Reference](./api-reference.md) for routes, SSE events, and scoping headers
 - [Extending Agents](./extending-agents.md) for tools, skills, middleware, and agent definitions

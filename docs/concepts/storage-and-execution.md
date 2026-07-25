@@ -326,7 +326,9 @@ The storage and execution backends never call each other. Composition happens on
 
 ## Built-in Tools
 
-Beyond the sandbox backends, the agent has three built-in tools provided by `server/app/agent/tools.py`:
+Beyond the sandbox backends, deployments may explicitly enable host-provided
+tools from `server/app/agent/tools.py`. Production multi-tenant deployments
+should keep host tools disabled unless the operator accepts the trust boundary:
 
 | Tool | Class | Description |
 |---|---|---|

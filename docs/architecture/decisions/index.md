@@ -38,7 +38,6 @@ Superseded records remain in the index so architectural history is not rewritten
 
 ## Related governance
 
-- `ROADMAP.md`
-- [Architecture overview](../../concepts/architecture.md)
-- [Agent runtime](../../concepts/agent-runtime.md)
-- [Configuration guide](../../guides/configuration.md)
+- [Architecture governance](../09-governance-and-evolution.md)
+- [Code-derived risks](../10-code-derived-risks.md)
+- [Architecture overview](../index.md)

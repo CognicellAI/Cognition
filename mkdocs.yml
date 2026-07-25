@@ -62,12 +62,26 @@ plugins:
 
 nav:
   - Home: index.md
-  - Concepts:
-      - Architecture: concepts/architecture.md
-      - Architecture Decisions:
+  - Architecture:
+      - Overview: architecture/index.md
+      - System Context: architecture/01-system-context.md
+      - Container View: architecture/02-container-view.md
+      - Server Composition: architecture/03-server-components.md
+      - Agent Runtime: architecture/04-agent-runtime-components.md
+      - State & Configuration: architecture/05-state-and-configuration.md
+      - Execution & Sandboxes: architecture/06-execution-and-sandboxes.md
+      - Runtime Flows: architecture/07-runtime-flows.md
+      - Deployment & Operations: architecture/08-deployment-and-operations.md
+      - Governance & Evolution: architecture/09-governance-and-evolution.md
+      - Code-Derived Risks: architecture/10-code-derived-risks.md
+      - Decisions:
           - Index: architecture/decisions/index.md
           - ADR Template: architecture/decisions/0000-template.md
           - ADR-0001 Exact-Scope Agent Runtime Boundary: architecture/decisions/0001-v013-exact-scope-agent-runtime-boundary.md
+  - Proposals:
+      - Overview: proposals/index.md
+      - Sandboxed Skill Package Registry: proposals/sandboxed-skill-registry.md
+  - Concepts:
       - Sessions & Messages: concepts/sessions-and-messages.md
       - Agent Runtime: concepts/agent-runtime.md
       - A2A:

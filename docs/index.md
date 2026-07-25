@@ -4,9 +4,11 @@ Cognition is a **headless agent orchestration backend**. Define your agent and
 get REST API, streaming, persistence, sandboxing, multi-user scoping, and
 observability automatically.
 
-This site is organized around three documentation surfaces:
+This site is organized around four documentation surfaces:
 
-- **Concepts** explain how Cognition works internally.
+- **Architecture** records code-derived C4 views, runtime flows, operational
+  constraints, and durable decisions.
+- **Concepts** explain individual subsystems.
 - **Guides** show how to perform concrete tasks.
 - **Blueprints** describe reference architectures for products built on
   Cognition.
@@ -20,8 +22,8 @@ If you want a course sequence rather than reference material, use
   your first message.
 - [Core vs App Layer](guides/core-vs-app-layer.md): understand what Cognition
   owns versus what your product owns.
-- [Architecture](concepts/architecture.md): learn the 7-layer architecture and
-  dependency rules.
+- [Architecture](architecture/index.md): explore code-derived C4 diagrams,
+  component boundaries, runtime flows, deployment topology, and decisions.
 - [Extending Agents](guides/extending-agents.md): add memory, skills, tools,
   subagents, middleware, MCP servers, and custom providers.
 - [A2A Builder Guide](guides/a2a.md): publish, describe, and securely expose
@@ -33,7 +35,7 @@ If you want a course sequence rather than reference material, use
 
 | Document | Description |
 |---|---|
-| [Architecture](concepts/architecture.md) | The 7-layer architecture, dependency rules, and batteries-included design |
+| [Architecture](architecture/index.md) | Code-derived C4 views, runtime flows, deployment topology, risks, and decisions |
 | [Sessions & Messages](concepts/sessions-and-messages.md) | Session lifecycle, message persistence, SSE streaming, and reconnection |
 | [Agent Runtime](concepts/agent-runtime.md) | Agent runtime protocol, definitions, A2A exposure, and multi-agent registry |
 | [A2A in Cognition](concepts/a2a/index.md) | Agent Cards, message Parts, tasks, streaming, artifacts, security, and scoping |
