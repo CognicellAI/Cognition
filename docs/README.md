@@ -11,6 +11,7 @@ The documentation is organized into two sections: **Concepts** explain how Cogni
 | Document | Description |
 |---|---|
 | [Architecture](./concepts/architecture.md) | The 7-layer architecture, dependency rules, and the batteries-included design |
+| [Architecture Decisions](./architecture/decisions/index.md) | ADRs for decisions that constrain future architecture and release work |
 | [Sessions & Messages](./concepts/sessions-and-messages.md) | Session lifecycle, message persistence, SSE streaming, and reconnection |
 | [Agent Runtime](./concepts/agent-runtime.md) | AgentRuntime protocol, AgentDefinition model, A2A exposure, and the multi-agent registry |
 | [Storage & Execution](./concepts/storage-and-execution.md) | StorageBackend and ExecutionBackend protocols and their implementations |

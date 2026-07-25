@@ -64,6 +64,10 @@ nav:
   - Home: index.md
   - Concepts:
       - Architecture: concepts/architecture.md
+      - Architecture Decisions:
+          - Index: architecture/decisions/index.md
+          - ADR Template: architecture/decisions/0000-template.md
+          - ADR-0001 Exact-Scope Agent Runtime Boundary: architecture/decisions/0001-v013-exact-scope-agent-runtime-boundary.md
       - Sessions & Messages: concepts/sessions-and-messages.md
       - Agent Runtime: concepts/agent-runtime.md
       - A2A:
