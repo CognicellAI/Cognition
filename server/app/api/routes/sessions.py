@@ -14,6 +14,7 @@ Git-Style Workspace Model:
 
 from __future__ import annotations
 
+import time
 import uuid
 from collections.abc import AsyncGenerator
 from typing import Annotated, Any, Literal, cast
@@ -60,6 +61,11 @@ from server.app.llm.deep_agent_service import (
     ErrorEvent as ResumeErrorEvent,
 )
 from server.app.models import RunStatus, SessionConfig, SessionStatus
+from server.app.observability import (
+    STORAGE_OPERATION_DURATION,
+    STORAGE_OPERATIONS_TOTAL,
+    storage_backend_label,
+)
 from server.app.runtime_projection import RuntimeProjectionService
 from server.app.session_manager import build_session_workspace_path, ensure_session_workspace_path
 from server.app.settings import Settings
@@ -187,7 +193,19 @@ async def _get_scoped_session(
     store: StorageBackend,
     scope: SessionScope,
 ) -> Any:
+    started_at = time.monotonic()
+    backend = storage_backend_label(store)
     session = await store.get_session(session_id, scope.get_all())
+    result = "success" if session is not None else "not_found"
+    STORAGE_OPERATIONS_TOTAL.labels(
+        backend=backend,
+        operation="get_session",
+        result=result,
+    ).inc()
+    STORAGE_OPERATION_DURATION.labels(
+        backend=backend,
+        operation="get_session",
+    ).observe(time.monotonic() - started_at)
     if session is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -818,7 +836,10 @@ async def resume_session(
     status_code=status.HTTP_200_OK,
     responses={
         404: {"model": ErrorResponse, "description": "Session not found"},
-        409: {"model": ErrorResponse, "description": "Session cannot be cancelled in current state"},
+        409: {
+            "model": ErrorResponse,
+            "description": "Session cannot be cancelled in current state",
+        },
     },
 )
 async def cancel_session(

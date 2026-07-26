@@ -2,11 +2,16 @@
 
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass
 from typing import Any
 
 from server.app.agent.resolver import RuntimeResolver
 from server.app.exceptions import LLMProviderConfigError
+from server.app.observability import (
+    RUNTIME_MANIFEST_RESOLUTION_DURATION,
+    RUNTIME_MANIFEST_RESOLUTIONS_TOTAL,
+)
 from server.app.settings import Settings
 from server.app.storage.common import canonical_json_digest, effective_scope_key
 from server.app.storage.config_store import ConfigStore
@@ -30,9 +35,14 @@ async def resolve_runtime_manifest(
     session: Any | None = None,
 ) -> ResolvedRuntimeManifest:
     """Resolve safe runtime identities without persisting credentials or URLs."""
+    started_at = time.monotonic()
     record = await config_store.get_agent_record(agent_name, effective_scope)
     definition = await config_store.get_agent_definition(agent_name, effective_scope)
     if definition is None:
+        RUNTIME_MANIFEST_RESOLUTIONS_TOTAL.labels(outcome="not_found").inc()
+        RUNTIME_MANIFEST_RESOLUTION_DURATION.labels(outcome="not_found").observe(
+            time.monotonic() - started_at
+        )
         raise ValueError(f"Agent '{agent_name}' is not provisioned at this scope")
 
     validated_definition = definition.model_dump(mode="json")
@@ -47,9 +57,7 @@ async def resolve_runtime_manifest(
     for name in sorted(set(definition.tools or [])):
         tool = await config_store.get_tool(name, effective_scope)
         tools[name] = (
-            canonical_json_digest(tool.model_dump(mode="json"))
-            if tool is not None
-            else None
+            canonical_json_digest(tool.model_dump(mode="json")) if tool is not None else None
         )
 
     skills: dict[str, dict[str, Any] | None] = {}
@@ -109,8 +117,7 @@ async def resolve_runtime_manifest(
 
     sandbox_profile_identity: dict[str, Any] | None = None
     selected_sandbox_profile = (
-        definition.config.sandbox_profile
-        or settings.aws_lambda_microvm_default_profile
+        definition.config.sandbox_profile or settings.aws_lambda_microvm_default_profile
     )
     if selected_sandbox_profile:
         profile = await config_store.get_sandbox_profile(
@@ -147,11 +154,16 @@ async def resolve_runtime_manifest(
             "sandbox_backend": settings.sandbox_backend,
         },
     }
-    return ResolvedRuntimeManifest(
+    result = ResolvedRuntimeManifest(
         agent_revision=agent_revision,
         manifest=manifest,
         digest=canonical_json_digest(manifest),
     )
+    RUNTIME_MANIFEST_RESOLUTIONS_TOTAL.labels(outcome="success").inc()
+    RUNTIME_MANIFEST_RESOLUTION_DURATION.labels(outcome="success").observe(
+        time.monotonic() - started_at
+    )
+    return result
 
 
 __all__ = ["ResolvedRuntimeManifest", "resolve_runtime_manifest"]

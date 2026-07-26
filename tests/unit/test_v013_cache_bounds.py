@@ -17,6 +17,22 @@ from server.app.llm.deep_agent_service import SessionAgentManager
 from server.app.settings import Settings
 
 
+class _Metric:
+    def __init__(self) -> None:
+        self.labels_seen: list[dict[str, str]] = []
+        self.incremented = 0
+
+    def labels(self, **labels: str) -> _Metric:
+        self.labels_seen.append(labels)
+        return self
+
+    def inc(self, amount: float = 1) -> None:
+        self.incremented += int(amount)
+
+    def set(self, value: int) -> None:
+        del value
+
+
 def _runtime_context(
     tmp_path: Path,
     *,
@@ -69,6 +85,27 @@ def test_agent_graph_cache_evicts_lru_by_capacity(tmp_path: Path) -> None:
     assert get_cached_agent(second) is None
     assert get_cached_agent(third) == "third-agent"
     assert get_agent_cache_stats()["size"] == 2
+    clear_agent_cache()
+
+
+def test_agent_graph_cache_lookup_metrics_are_bounded(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    clear_agent_cache()
+    lookups = _Metric()
+    monkeypatch.setattr("server.app.agent.cognition_agent.RUNTIME_CACHE_LOOKUPS_TOTAL", lookups)
+    context = _runtime_context(tmp_path, manifest_digest="tenant-specific-digest")
+
+    assert get_cached_agent(context) is None
+    cache_agent(context, "agent")
+    assert get_cached_agent(context) == "agent"
+
+    assert lookups.labels_seen == [
+        {"cache": "agent_graph", "outcome": "miss", "reason": "absent"},
+        {"cache": "agent_graph", "outcome": "hit", "reason": "fresh"},
+    ]
+    assert "tenant-specific-digest" not in str(lookups.labels_seen)
     clear_agent_cache()
 
 

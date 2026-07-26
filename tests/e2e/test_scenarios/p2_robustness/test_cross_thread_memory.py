@@ -29,6 +29,7 @@ Run against: docker-compose environment at http://localhost:8000
 
 from __future__ import annotations
 
+import asyncio
 import json
 import uuid
 
@@ -49,6 +50,13 @@ def _scoped_client(base_url: str, user_id: str) -> ScenarioTestClient:
     """Return a ScenarioTestClient pre-configured with a specific user scope."""
     client = ScenarioTestClient(base_url)
     client.scope_header = {"X-Cognition-Scope-User": user_id}
+    return client
+
+
+async def _prepared_scoped_client(base_url: str, user_id: str) -> ScenarioTestClient:
+    """Return a scoped client with builder-owned fixture Agents provisioned."""
+    client = _scoped_client(base_url, user_id)
+    await client.ensure_test_agents()
     return client
 
 
@@ -95,6 +103,25 @@ async def _collect_events(
     return events
 
 
+async def _wait_for_session_idle(
+    api_client: ScenarioTestClient,
+    session_id: str,
+    timeout: float = 10.0,
+) -> None:
+    """Wait until the session is ready to accept another turn."""
+    deadline = asyncio.get_running_loop().time() + timeout
+    observed_idle = False
+    while True:
+        response = await api_client.get(f"/sessions/{session_id}")
+        is_idle = response.status_code == 200 and response.json().get("status") == "idle"
+        if is_idle and observed_idle:
+            return
+        observed_idle = is_idle
+        if asyncio.get_running_loop().time() >= deadline:
+            return
+        await asyncio.sleep(0.1)
+
+
 @pytest.mark.asyncio
 @pytest.mark.e2e
 class TestStorePlumbingDoesNotBreakStreaming:
@@ -133,6 +160,7 @@ class TestStorePlumbingDoesNotBreakStreaming:
 
         try:
             for prompt in ["Say: one", "Say: two", "Say: three"]:
+                await _wait_for_session_idle(api_client, session_id)
                 events = await _collect_events(api_client, session_id, prompt)
                 assert stream_completed(events), (
                     f"Message '{prompt}' stream did not terminate with Store wired"
@@ -250,8 +278,8 @@ class TestUserScopeIsolation:
         user_a = f"alice-{uuid.uuid4().hex[:6]}"
         user_b = f"bob-{uuid.uuid4().hex[:6]}"
 
-        client_a = _scoped_client(api_client.base_url, user_a)
-        client_b = _scoped_client(api_client.base_url, user_b)
+        client_a = await _prepared_scoped_client(api_client.base_url, user_a)
+        client_b = await _prepared_scoped_client(api_client.base_url, user_b)
 
         try:
             # User A creates a session
@@ -282,8 +310,8 @@ class TestUserScopeIsolation:
         user_a = f"alice-{uuid.uuid4().hex[:6]}"
         user_b = f"bob-{uuid.uuid4().hex[:6]}"
 
-        client_a = _scoped_client(api_client.base_url, user_a)
-        client_b = _scoped_client(api_client.base_url, user_b)
+        client_a = await _prepared_scoped_client(api_client.base_url, user_a)
+        client_b = await _prepared_scoped_client(api_client.base_url, user_b)
 
         try:
             session_a = await client_a.create_session(_unique("alice"))

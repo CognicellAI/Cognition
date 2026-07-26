@@ -67,11 +67,16 @@ class TestStreamingEventTypes:
     """Verifies the SSE stream emits expected event types."""
 
     @pytest.fixture
-    async def session(self, server: str, scope_headers: dict[str, str]) -> str:
+    async def session(
+        self,
+        server: str,
+        scope_headers: dict[str, str],
+        e2e_agent_name: str,
+    ) -> str:
         async with httpx.AsyncClient(timeout=SSE_TIMEOUT) as client:
             resp = await client.post(
                 f"{server}/sessions",
-                json={"title": "streaming-test", "agent_name": "default"},
+                json={"title": "streaming-test", "agent_name": e2e_agent_name},
                 headers=scope_headers,
             )
             assert resp.status_code == 201
@@ -133,13 +138,13 @@ class TestStreamingEventTypes:
         assert _stream_completed(events)
 
     async def test_stream_handles_multiple_messages(
-        self, server: str, scope_headers: dict[str, str]
+        self, server: str, scope_headers: dict[str, str], e2e_agent_name: str
     ) -> None:
         """Session can handle multiple consecutive message streams."""
         async with httpx.AsyncClient(timeout=SSE_TIMEOUT) as client:
             resp = await client.post(
                 f"{server}/sessions",
-                json={"title": "multi-stream", "agent_name": "default"},
+                json={"title": "multi-stream", "agent_name": e2e_agent_name},
                 headers=scope_headers,
             )
             session_id = resp.json()["id"]

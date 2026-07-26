@@ -48,8 +48,15 @@ ALLOWED_CONFIG_PATHS = {
     "rate_limit.burst",
     # Observability
     "observability.otel_enabled",
+    "observability.otel_max_export_bytes",
+    "observability.otlp_queue_size",
+    "observability.otlp_export_timeout_ms",
+    "observability.trace_sample_ratio",
+    "observability.metrics_enabled",
     "observability.metrics_port",
     "observability.otel_endpoint",
+    "observability.log_format",
+    "observability.native_agent_tracing",
 }
 
 

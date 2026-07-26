@@ -12,8 +12,18 @@ import contextlib
 import httpx
 import pytest
 
+from tests.e2e.conftest import E2E_DEFAULT_AGENT_NAME, ensure_e2e_agent, ensure_e2e_provider
+
 # Generous timeout for SSE streams through mock LLM
 SSE_TIMEOUT = httpx.Timeout(30.0, connect=10.0)
+
+
+async def _ensure_builder_agent(
+    client: httpx.AsyncClient, server: str, headers: dict[str, str]
+) -> None:
+    """Provision the default E2E Agent in an exact builder-authorized scope."""
+    await ensure_e2e_provider(client, server, headers=headers)
+    await ensure_e2e_agent(client, server, E2E_DEFAULT_AGENT_NAME, headers=headers)
 
 
 @pytest.mark.asyncio
@@ -58,10 +68,15 @@ class TestP0EndToEnd:
     async def test_scoping_isolation(self, server: str) -> None:
         """Test that scoped sessions are isolated."""
         async with httpx.AsyncClient(timeout=SSE_TIMEOUT) as client:
+            alice_headers = {"X-Cognition-Scope-User": "alice"}
+            bob_headers = {"X-Cognition-Scope-User": "bob"}
+            await _ensure_builder_agent(client, server, alice_headers)
+            await _ensure_builder_agent(client, server, bob_headers)
+
             alice_resp = await client.post(
                 f"{server}/sessions",
                 json={"title": "alice-session", "agent_name": "default"},
-                headers={"X-Cognition-Scope-User": "alice"},
+                headers=alice_headers,
             )
 
             if alice_resp.status_code == 403:
@@ -73,14 +88,14 @@ class TestP0EndToEnd:
             bob_resp = await client.post(
                 f"{server}/sessions",
                 json={"title": "bob-session", "agent_name": "default"},
-                headers={"X-Cognition-Scope-User": "bob"},
+                headers=bob_headers,
             )
             assert bob_resp.status_code == 201
             bob_session_id = bob_resp.json()["id"]
 
             alice_list = await client.get(
                 f"{server}/sessions",
-                headers={"X-Cognition-Scope-User": "alice"},
+                headers=alice_headers,
             )
             alice_sessions = alice_list.json()["sessions"]
             assert any(s["id"] == alice_session_id for s in alice_sessions)
@@ -192,14 +207,6 @@ class TestP0EndToEnd:
         The server must not crash and must return valid SSE responses.
         """
         async with httpx.AsyncClient(timeout=SSE_TIMEOUT) as client:
-            session_resp = await client.post(
-                f"{server}/sessions",
-                json={"title": "security-test", "agent_name": "default"},
-                headers=scope_headers,
-            )
-            assert session_resp.status_code == 201
-            session_id = session_resp.json()["id"]
-
             injection_attempts = [
                 "Hello; rm -rf /",
                 "World && cat /etc/passwd",
@@ -207,7 +214,14 @@ class TestP0EndToEnd:
                 "Content $(id)",
             ]
 
-            for attempt in injection_attempts:
+            for index, attempt in enumerate(injection_attempts):
+                session_resp = await client.post(
+                    f"{server}/sessions",
+                    json={"title": f"security-test-{index}", "agent_name": "default"},
+                    headers=scope_headers,
+                )
+                assert session_resp.status_code == 201
+                session_id = session_resp.json()["id"]
                 async with client.stream(
                     "POST",
                     f"{server}/sessions/{session_id}/messages",

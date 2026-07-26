@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import AsyncGenerator, Sequence
+from collections.abc import AsyncGenerator, AsyncIterator, Sequence
 from typing import Any
 
 from langchain_core.language_models import BaseChatModel
@@ -13,6 +13,24 @@ from langchain_core.messages import (
     HumanMessage,
     SystemMessage,
 )
+from langchain_core.outputs import ChatGeneration, ChatGenerationChunk, ChatResult
+
+
+def _forced_prefix(messages: list[BaseMessage]) -> str:
+    """Extract a simple deterministic prefix instruction from system prompts."""
+    system_text = "\n".join(m.text for m in messages if isinstance(m, SystemMessage))
+    lower = system_text.lower()
+    markers = [
+        "always start every reply with the exact string:",
+        "always start every reply with:",
+    ]
+    for marker in markers:
+        index = lower.find(marker)
+        if index == -1:
+            continue
+        value = system_text[index + len(marker) :].strip().splitlines()[0].strip()
+        return value.strip("\"'` ")
+    return ""
 
 
 class MockLLM(BaseChatModel):
@@ -26,8 +44,33 @@ class MockLLM(BaseChatModel):
     def _llm_type(self) -> str:
         return "mock"
 
-    def _generate(self, *args: Any, **kwargs: Any) -> Any:
-        raise NotImplementedError("Use ainvoke instead")
+    def _generate(
+        self,
+        messages: list[BaseMessage],
+        stop: list[str] | None = None,
+        **kwargs: Any,
+    ) -> ChatResult:
+        """Synchronously generate a deterministic mock chat result."""
+        return ChatResult(generations=[ChatGeneration(message=self._message_for(messages))])
+
+    async def _agenerate(
+        self,
+        messages: list[BaseMessage],
+        stop: list[str] | None = None,
+        **kwargs: Any,
+    ) -> ChatResult:
+        """Asynchronously generate through LangChain's standard model hook."""
+        return ChatResult(generations=[ChatGeneration(message=self._message_for(messages))])
+
+    async def _astream(
+        self,
+        messages: list[BaseMessage],
+        stop: list[str] | None = None,
+        **kwargs: Any,
+    ) -> AsyncIterator[ChatGenerationChunk]:
+        """Stream through LangChain's standard model hook."""
+        async for chunk in self._chunk_stream_for(messages):
+            yield ChatGenerationChunk(message=chunk)
 
     def bind_tools(self, tools: Sequence[Any], **kwargs: Any) -> Any:
         """Bind tools to this mock LLM.
@@ -55,6 +98,10 @@ class MockLLM(BaseChatModel):
         messages: list[BaseMessage] = (
             input if isinstance(input, list) else [HumanMessage(content=input)]
         )
+        return self._message_for(messages)
+
+    def _message_for(self, messages: list[BaseMessage]) -> AIMessage:
+        """Return the deterministic response for a list of chat messages."""
         last_message = messages[-1].text.lower()
 
         # Generic tool trigger for testing
@@ -122,8 +169,10 @@ class MockLLM(BaseChatModel):
                 ],
             )
 
-        # Simulate running tests
-        if "test" in last_message or "pytest" in last_message:
+        # Simulate running tests only when explicitly requested. A broad
+        # substring check for "test" turns harmless prompts such as
+        # "Usage test" into tool-call loops under Deep Agents.
+        if "run tests" in last_message or "run pytest" in last_message or "pytest" in last_message:
             return AIMessage(
                 content="",
                 tool_calls=[
@@ -136,6 +185,10 @@ class MockLLM(BaseChatModel):
             )
 
         # Default response
+        prefix = _forced_prefix(messages)
+        if prefix:
+            return AIMessage(content=f"{prefix} I understand.", tool_calls=[])
+
         return AIMessage(
             content="I understand. Let me help you with that.",
             tool_calls=[],
@@ -154,8 +207,18 @@ class MockLLM(BaseChatModel):
         messages: list[BaseMessage] = (
             input if isinstance(input, list) else [HumanMessage(content=input)]
         )
+        async for chunk in self._chunk_stream_for(messages, config=config):
+            yield chunk
+
+    async def _chunk_stream_for(
+        self,
+        messages: list[BaseMessage],
+        config: Any | None = None,
+    ) -> AsyncGenerator[AIMessageChunk, None]:
+        """Yield deterministic mock chunks for a list of chat messages."""
         last_message = messages[-1].text.lower()
         response_text = "I understand. Let me help you with that."
+        prefix = _forced_prefix(messages)
 
         # Get callback manager from config
         callback_manager: Any = None
@@ -207,6 +270,9 @@ class MockLLM(BaseChatModel):
             response_text = "Hello! How can I assist you today?"
         elif "help" in last_message:
             response_text = "I'd be happy to help! What would you like to work on?"
+
+        if prefix:
+            response_text = f"{prefix} {response_text}"
 
         # Yield tokens word by word to simulate streaming with callbacks
         words = response_text.split()

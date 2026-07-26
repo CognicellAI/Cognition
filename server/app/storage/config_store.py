@@ -340,7 +340,8 @@ class DefaultConfigStore:
         )
 
     async def list_providers(self, scope: dict[str, str] | None = None) -> list[ProviderConfig]:
-        return cast(list[ProviderConfig], await self._config_registry.list_providers(scope))
+        providers = cast(list[ProviderConfig], await self._config_registry.list_providers(scope))
+        return sorted(providers, key=lambda provider: (provider.priority, provider.id))
 
     async def upsert_provider(self, config: ProviderConfig) -> None:
         await self._config_registry.upsert_provider(config)

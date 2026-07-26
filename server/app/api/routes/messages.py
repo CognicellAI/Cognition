@@ -15,6 +15,7 @@ Persistence contract:
 
 from __future__ import annotations
 
+import time
 import uuid
 from collections.abc import AsyncGenerator, Mapping
 from typing import Any, cast
@@ -66,6 +67,12 @@ from server.app.llm.deep_agent_service import (
     UsageEvent,
 )
 from server.app.models import RunStatus, SessionRun, SessionStatus, ToolCall
+from server.app.observability import (
+    STORAGE_OPERATION_DURATION,
+    STORAGE_OPERATIONS_TOTAL,
+    STRICT_EXECUTION_REJECTIONS_TOTAL,
+    storage_backend_label,
+)
 from server.app.rate_limiter import RateLimiter
 from server.app.runtime_projection import (
     ActiveRunConflictError,
@@ -89,6 +96,40 @@ _SENSITIVE_SANDBOX_METADATA_KEY_PARTS = (
     "token",
     "x-aws-proxy-auth",
 )
+
+
+async def _get_scoped_session_for_messages(
+    store: StorageBackend,
+    session_id: str,
+    effective_scope: dict[str, str] | None,
+) -> Any | None:
+    """Get a scoped session and record bounded storage outcome metrics."""
+    started_at = time.monotonic()
+    backend = storage_backend_label(store)
+    try:
+        session = await store.get_session(session_id, effective_scope)
+    except Exception:
+        STORAGE_OPERATIONS_TOTAL.labels(
+            backend=backend,
+            operation="get_session",
+            result="failure",
+        ).inc()
+        STORAGE_OPERATION_DURATION.labels(
+            backend=backend,
+            operation="get_session",
+        ).observe(time.monotonic() - started_at)
+        raise
+    result = "success" if session is not None else "not_found"
+    STORAGE_OPERATIONS_TOTAL.labels(
+        backend=backend,
+        operation="get_session",
+        result=result,
+    ).inc()
+    STORAGE_OPERATION_DURATION.labels(
+        backend=backend,
+        operation="get_session",
+    ).observe(time.monotonic() - started_at)
+    return session
 
 
 async def _refresh_session_message_count(
@@ -195,7 +236,7 @@ async def _touch_session_activity(
         )
         return
 
-    session = await store.get_session(session_id, effective_scope)
+    session = await _get_scoped_session_for_messages(store, session_id, effective_scope)
     if session is not None:
         await store.update_session(
             session_id=session_id,
@@ -252,7 +293,7 @@ async def agent_event_stream(
         if not service:
             service = agent_manager.register_session(session_id, workspace_path)
 
-        session = await store.get_session(session_id, scope)
+        session = await _get_scoped_session_for_messages(store, session_id, scope)
 
         if not session:
             yield EventBuilder.error("Session not found", code="SESSION_NOT_FOUND")
@@ -377,9 +418,7 @@ async def agent_event_stream(
                 if projection is not None and run is not None:
                     durable = await projection.append_event(
                         run,
-                        "tool.call.completed"
-                        if event.exit_code == 0
-                        else "tool.call.failed",
+                        "tool.call.completed" if event.exit_code == 0 else "tool.call.failed",
                         payload={
                             "tool_call_id": event.tool_call_id,
                             "exit_code": event.exit_code,
@@ -633,9 +672,7 @@ async def agent_event_stream(
                 yield sse
 
             elif isinstance(event, DoneEvent):
-                for sandbox_snapshot in agent_manager.snapshot_sandbox_backend_events(
-                    session_id
-                ):
+                for sandbox_snapshot in agent_manager.snapshot_sandbox_backend_events(session_id):
                     yield await _sandbox_lifecycle_sse(
                         sandbox_snapshot,
                         projection=projection,
@@ -874,7 +911,12 @@ async def agent_event_stream(
                 yield sse
 
     except Exception as e:
-        logger.error("Agent streaming error", error=str(e), session_id=session_id, exc_info=True)
+        logger.error(
+            "Agent streaming error",
+            error_type=type(e).__name__,
+            session_id=session_id,
+            exc_info=True,
+        )
         error_sse = EventBuilder.error(str(e), code="AGENT_ERROR")
         if projection is not None and run is not None:
             run, durable_state = await projection.transition_run_with_event(
@@ -952,6 +994,7 @@ def _approved_callback_origin(callback_url: str, settings: Settings) -> str:
         parsed = urlsplit(callback_url)
         port = parsed.port
     except ValueError as exc:
+        STRICT_EXECUTION_REJECTIONS_TOTAL.labels(reason="callback_origin").inc()
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Completion callback URL is invalid",
@@ -963,6 +1006,7 @@ def _approved_callback_origin(callback_url: str, settings: Settings) -> str:
         or parsed.password is not None
         or parsed.fragment
     ):
+        STRICT_EXECUTION_REJECTIONS_TOTAL.labels(reason="callback_origin").inc()
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Completion callbacks require an operator-approved HTTPS origin",
@@ -970,11 +1014,9 @@ def _approved_callback_origin(callback_url: str, settings: Settings) -> str:
     origin = f"https://{parsed.hostname.lower()}"
     if port is not None and port != 443:
         origin = f"{origin}:{port}"
-    approved = {
-        candidate.rstrip("/").lower()
-        for candidate in settings.callback_allowed_origins
-    }
+    approved = {candidate.rstrip("/").lower() for candidate in settings.callback_allowed_origins}
     if origin.lower() not in approved:
+        STRICT_EXECUTION_REJECTIONS_TOTAL.labels(reason="callback_origin").inc()
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Completion callback origin is not approved by the operator",
@@ -1033,7 +1075,7 @@ async def send_message(
         else None
     )
 
-    session = await store.get_session(session_id, scope.get_all())
+    session = await _get_scoped_session_for_messages(store, session_id, scope.get_all())
 
     if session is None:
         raise HTTPException(
@@ -1196,9 +1238,7 @@ async def send_message(
                 callback_error = event.get("data")
                 terminal_error_seen = True
                 error_code = (
-                    callback_error.get("code")
-                    if isinstance(callback_error, dict)
-                    else None
+                    callback_error.get("code") if isinstance(callback_error, dict) else None
                 )
                 completion_status = "aborted" if error_code == "ABORTED" else "failed"
             yield event
@@ -1259,7 +1299,7 @@ async def list_messages(
     """
     _ = str(settings.workspace_path)
 
-    session = await store.get_session(session_id, scope.get_all())
+    session = await _get_scoped_session_for_messages(store, session_id, scope.get_all())
     if session is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -1324,7 +1364,7 @@ async def get_message(
     """
     _ = str(settings.workspace_path)
 
-    session = await store.get_session(session_id, scope.get_all())
+    session = await _get_scoped_session_for_messages(store, session_id, scope.get_all())
     if session is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,

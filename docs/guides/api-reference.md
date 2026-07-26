@@ -1278,7 +1278,7 @@ Get the current server configuration (infrastructure only). Secrets are redacted
 
 Update infrastructure configuration at runtime. Changes are persisted to `.cognition/config.yaml`.
 
-**Allowed paths:** `rate_limit.per_minute`, `rate_limit.burst`, `observability.otel_enabled`, `observability.metrics_port`, `observability.otel_endpoint`, `mlflow.enabled`, `mlflow.experiment_name`.
+**Allowed paths:** `rate_limit.per_minute`, `rate_limit.burst`, `observability.otel_enabled`, `observability.otel_max_export_bytes`, `observability.otlp_queue_size`, `observability.otlp_export_timeout_ms`, `observability.trace_sample_ratio`, `observability.metrics_enabled`, `observability.metrics_port`, `observability.otel_endpoint`, `observability.log_format`, `observability.native_agent_tracing`, `mlflow.enabled`, `mlflow.experiment_name`.
 
 **Request body:**
 ```json

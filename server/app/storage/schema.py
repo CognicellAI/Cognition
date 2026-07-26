@@ -171,6 +171,13 @@ runtime_tasks_table = Table(
 )
 
 Index("idx_runtime_tasks_scope", runtime_tasks_table.c.agent_name, runtime_tasks_table.c.scope_key)
+Index(
+    "idx_runtime_tasks_scope_page",
+    runtime_tasks_table.c.agent_name,
+    runtime_tasks_table.c.scope_key,
+    runtime_tasks_table.c.created_at,
+    runtime_tasks_table.c.id,
+)
 Index("idx_runtime_tasks_context", runtime_tasks_table.c.context_id, runtime_tasks_table.c.created_at)
 Index("idx_runtime_tasks_status", runtime_tasks_table.c.status, runtime_tasks_table.c.updated_at)
 Index(

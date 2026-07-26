@@ -175,7 +175,7 @@ class TestRuntimeResume:
         assert event.edited_arg_keys == ["content", "path"]
         assert "secret" not in str(event)
         assert "acme" not in str(event)
-        assert labels_seen == [{"decision": "edit", "tool_name": "write_file"}]
+        assert labels_seen == [{"decision": "edit"}]
         assert incremented is True
 
     @pytest.mark.asyncio

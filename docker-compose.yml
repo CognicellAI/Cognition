@@ -63,6 +63,7 @@ services:
       - COGNITION_LOG_LEVEL=info
       - COGNITION_LOG_FORMAT=json
       - COGNITION_WORKSPACE_ROOT=/workspace
+      - COGNITION_METRICS_ENABLED=true
       - COGNITION_METRICS_PORT=9090
 
       # LLM Provider
@@ -80,6 +81,7 @@ services:
       - COGNITION_MLFLOW_ENABLED=true
       - COGNITION_MLFLOW_TRACKING_URI=http://mlflow:5000
       - COGNITION_MLFLOW_EXPERIMENT_NAME=cognition
+      - COGNITION_NATIVE_AGENT_TRACING=otlp_to_mlflow
 
       # Sandbox — Local backend (commands execute inside this container)
       # For isolated Docker sandbox execution, run Cognition on the host
@@ -91,8 +93,12 @@ services:
       - COGNITION_SCOPE_KEYS=["user"]
 
       # OpenTelemetry — OTel Collector
-      - COGNITION_OTEL_ENABLED=true
+      - COGNITION_TRACING_ENABLED=true
       - COGNITION_OTEL_ENDPOINT=http://otel-collector:4317
+      - COGNITION_OTLP_MAX_EXPORT_BYTES=3670016
+      - COGNITION_OTLP_QUEUE_SIZE=2048
+      - COGNITION_OTLP_EXPORT_TIMEOUT_MS=30000
+      - COGNITION_TRACE_SAMPLE_RATIO=0.10
       - LANGSMITH_TRACING=false
       - OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317
       - OTEL_EXPORTER_OTLP_PROTOCOL=grpc

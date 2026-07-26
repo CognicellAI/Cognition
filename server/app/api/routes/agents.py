@@ -14,6 +14,7 @@ from server.app.api.models import (
     AgentUpdate,
 )
 from server.app.api.scoping import SessionScope
+from server.app.observability import SCOPE_ACCESS_DENIED_TOTAL
 from server.app.storage.common import canonical_json_digest
 from server.app.storage.config_models import AgentConfigRecord
 from server.app.storage.config_registry import ConfigRevisionConflictError
@@ -31,9 +32,7 @@ def _agent_to_response(
         name=agent.name,
         revision=record.revision if record else 1,
         definition_digest=(
-            record.definition_digest
-            if record
-            else canonical_json_digest(definition)
+            record.definition_digest if record else canonical_json_digest(definition)
         ),
         display_name=agent.display_name,
         description=agent.description,
@@ -113,6 +112,10 @@ def _trusted_agent_scope(
 ) -> dict[str, str]:
     trusted_scope = scope.get_all()
     if body_scope and body_scope != trusted_scope:
+        SCOPE_ACCESS_DENIED_TOTAL.labels(
+            resource_type="agent",
+            operation="scope_conflict",
+        ).inc()
         raise HTTPException(
             status_code=400,
             detail="Request-body scope conflicts with authoritative scope headers",

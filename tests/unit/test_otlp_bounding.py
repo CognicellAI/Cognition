@@ -21,6 +21,27 @@ from server.app.observability import (
 )
 
 
+class _Metric:
+    def __init__(self) -> None:
+        self.labels_seen: list[dict[str, str]] = []
+        self.incremented = 0
+        self.observed: list[float] = []
+        self.set_values: list[float] = []
+
+    def labels(self, **labels: str) -> _Metric:
+        self.labels_seen.append(labels)
+        return self
+
+    def inc(self) -> None:
+        self.incremented += 1
+
+    def observe(self, value: float) -> None:
+        self.observed.append(value)
+
+    def set(self, value: float) -> None:
+        self.set_values.append(value)
+
+
 class _RecordingExporter:
     def __init__(
         self,
@@ -135,6 +156,47 @@ def test_no_outgoing_request_exceeds_configured_limit_for_mixed_batch() -> None:
         _encoded_span_batch_size(batch) <= limit
         for batch in delegate.batches
     )
+
+
+def test_export_records_bounded_health_metrics(monkeypatch: pytest.MonkeyPatch) -> None:
+    spans = _finished_spans(
+        [
+            {"payload": "a" * 100},
+            {"payload": "b" * 20_000},
+            {"payload": "c" * 500_000},
+        ]
+    )
+    limit = max(_encoded_span_batch_size([span]) for span in spans[:-1]) + 500
+    delegate = _RecordingExporter()
+    exporter = ByteBoundedSpanExporter(delegate, max_export_bytes=limit)
+
+    batches = _Metric()
+    dropped = _Metric()
+    splits = _Metric()
+    last_success = _Metric()
+    bytes_histogram = _Metric()
+    monkeypatch.setattr("server.app.observability.TELEMETRY_EXPORT_BATCHES_TOTAL", batches)
+    monkeypatch.setattr("server.app.observability.TELEMETRY_DROPPED_ITEMS_TOTAL", dropped)
+    monkeypatch.setattr("server.app.observability.TELEMETRY_BATCH_SPLITS_TOTAL", splits)
+    monkeypatch.setattr("server.app.observability.TELEMETRY_LAST_SUCCESS_UNIXTIME", last_success)
+    monkeypatch.setattr("server.app.observability.OTLP_EXPORT_REQUEST_BYTES", bytes_histogram)
+
+    assert exporter.export(spans) is SpanExportResult.SUCCESS
+
+    assert batches.labels_seen
+    assert all(
+        label == {"signal": "traces", "transport": "otlp", "outcome": "success"}
+        for label in batches.labels_seen
+    )
+    assert splits.labels_seen
+    assert all(label == {"signal": "traces", "reason": "max_bytes"} for label in splits.labels_seen)
+    assert dropped.labels_seen == [{"signal": "traces", "reason": "oversize_span"}]
+    assert last_success.labels_seen
+    assert all(
+        label == {"signal": "traces", "transport": "otlp"}
+        for label in last_success.labels_seen
+    )
+    assert len(bytes_histogram.observed) == len(delegate.batches)
 
 
 def test_delegate_failure_and_lifecycle_are_propagated() -> None:

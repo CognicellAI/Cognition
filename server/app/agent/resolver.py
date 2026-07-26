@@ -20,6 +20,7 @@ from langchain_core.tools import BaseTool
 
 from server.app.agent.definition import AgentDefinition
 from server.app.exceptions import LLMProviderConfigError
+from server.app.observability import STRICT_EXECUTION_REJECTIONS_TOTAL
 from server.app.settings import Settings
 from server.app.storage.config_store import ConfigStore
 
@@ -189,6 +190,7 @@ class RuntimeResolver:
             if allowed is not None and reg_tool.name not in allowed:
                 continue
             if not self._settings.allow_api_python_tools:
+                STRICT_EXECUTION_REJECTIONS_TOTAL.labels(reason="api_python_tools").inc()
                 raise RuntimeError(
                     f"Python tool '{reg_tool.name}' cannot be loaded in strict mode. "
                     "Set COGNITION_ALLOW_API_PYTHON_TOOLS=true only for development."

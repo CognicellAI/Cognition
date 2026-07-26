@@ -76,7 +76,7 @@ class TestAgentCardDiscovery:
             headers=api_client.scope_header,
         )
         assert response.status_code == 200, response.text
-        assert response.json()["name"] == f"Cognition ({_A2A_AGENT_NAME})"
+        assert response.json()["name"] == _A2A_AGENT_NAME
 
     async def test_agent_card_for_specific_agent(self, api_client: ScenarioTestClient) -> None:
         response = await api_client.client.get(
@@ -85,7 +85,7 @@ class TestAgentCardDiscovery:
         )
         assert response.status_code == 200, response.text
         card = response.json()
-        assert card["name"] == f"Cognition ({_A2A_AGENT_NAME})"
+        assert card["name"] == _A2A_AGENT_NAME
         assert len(card["skills"]) == 1
         assert card["skills"][0]["id"] == _A2A_AGENT_NAME
         assert f"/a2a/{_A2A_AGENT_NAME}" in card["supportedInterfaces"][0]["url"]

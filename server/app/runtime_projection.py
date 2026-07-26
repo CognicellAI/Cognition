@@ -17,6 +17,7 @@ from server.app.observability import (
     RUN_TRANSITION_COUNT,
     RUNTIME_EVENT_COUNT,
     current_trace_context,
+    observability_context,
 )
 from server.app.observability import (
     span as trace_span,
@@ -54,13 +55,23 @@ class RuntimeProjectionService:
     ) -> SessionRun:
         """Create or reuse a durable active run for a session."""
         scope = session.scopes if effective_scope is None else effective_scope
-        with trace_span(
-            "cognition.run.begin",
-            {
-                "cognition.session_id": session.id,
-                "cognition.thread_id": session.thread_id,
-                "cognition.scope_keys": ",".join(sorted(scope)),
-            },
+        with (
+            observability_context(
+                session_id=session.id,
+                thread_id=session.thread_id,
+                task_id=task_id,
+                scope_keys=sorted(scope),
+                agent_revision=agent_revision,
+                manifest_digest=manifest_digest,
+            ),
+            trace_span(
+                "cognition.run.begin",
+                {
+                    "cognition.session_id": session.id,
+                    "cognition.thread_id": session.thread_id,
+                    "cognition.scope_keys": ",".join(sorted(scope)),
+                },
+            ),
         ):
             span_trace_id, _span_id = current_trace_context()
             if idempotency_key:
@@ -146,7 +157,10 @@ class RuntimeProjectionService:
                 "cognition.visibility": visibility,
             },
         )
-        with trace_span("cognition.runtime_event", attributes):
+        with (
+            observability_context(**_runtime_context_fields(run)),
+            trace_span("cognition.runtime_event", attributes),
+        ):
             current_trace_id, current_span_id = current_trace_context()
             event = await self.store.append_event(
                 event_id=str(uuid.uuid4()),
@@ -192,14 +206,23 @@ class RuntimeProjectionService:
         session_status: SessionStatus | None = None,
     ) -> tuple[SessionRun, SessionEvent]:
         """Transition a run and return the durable transition event."""
-        with trace_span(
-            "cognition.run.transition",
-            _runtime_attributes(
-                run,
-                {
-                    "cognition.run_status": status.value,
-                    "cognition.error_code": error_code or "",
-                },
+        with (
+            observability_context(
+                **_runtime_context_fields(
+                    run,
+                    run_status=status.value,
+                    error_code=error_code,
+                )
+            ),
+            trace_span(
+                "cognition.run.transition",
+                _runtime_attributes(
+                    run,
+                    {
+                        "cognition.run_status": status.value,
+                        "cognition.error_code": error_code or "",
+                    },
+                ),
             ),
         ):
             effective_status = status
@@ -295,9 +318,12 @@ class RuntimeProjectionService:
         rebuild = getattr(service, "rebuild_message_projection", None)
         if rebuild is None:
             return None
-        with trace_span(
-            "cognition.message_projection.rebuild",
-            _runtime_attributes(run, {"cognition.projection_source": "checkpoint"}),
+        with (
+            observability_context(**_runtime_context_fields(run)),
+            trace_span(
+                "cognition.message_projection.rebuild",
+                _runtime_attributes(run, {"cognition.projection_source": "checkpoint"}),
+            ),
         ):
             rebuilt_count = int(
                 await rebuild(
@@ -368,6 +394,20 @@ def _runtime_attributes(
     if extra:
         attributes.update(extra)
     return attributes
+
+
+def _runtime_context_fields(run: SessionRun, **extra: Any) -> dict[str, Any]:
+    fields: dict[str, Any] = {
+        "session_id": run.session_id,
+        "run_id": run.id,
+        "thread_id": run.thread_id,
+        "task_id": run.task_id,
+        "scope_keys": sorted(run.effective_scope),
+        "agent_revision": run.agent_revision,
+        "manifest_digest": run.manifest_digest,
+    }
+    fields.update(extra)
+    return fields
 
 
 def _task_status_for_run(status: RunStatus) -> TaskStatus | None:

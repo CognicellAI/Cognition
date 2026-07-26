@@ -7,12 +7,21 @@ from __future__ import annotations
 
 import functools
 import inspect
+import logging
+import re
 import time
 from collections.abc import Callable, Sequence
 from contextlib import contextmanager
 from typing import Any, TypeVar
+from uuid import uuid4
 
 import structlog
+from structlog.contextvars import (
+    bind_contextvars,
+    bound_contextvars,
+    clear_contextvars,
+    merge_contextvars,
+)
 
 # Optional imports with fallbacks
 try:
@@ -36,6 +45,7 @@ try:
         SpanExporter,
         SpanExportResult,
     )
+    from opentelemetry.sdk.trace.sampling import ParentBased, TraceIdRatioBased
 
     # Try different OTLP exporters
     try:
@@ -69,11 +79,28 @@ except ImportError:
     SpanExportResult = None  # type: ignore[assignment,misc]
     ReadableSpan = Any  # type: ignore[misc,assignment]
     encode_spans = None  # type: ignore[assignment]
+    ParentBased = None  # type: ignore[assignment,misc]
+    TraceIdRatioBased = None  # type: ignore[assignment,misc]
     FastAPIInstrumentor = None  # type: ignore[assignment,misc]
     LangchainInstrumentor = None  # type: ignore[assignment,misc]
 
 # Type variable for generic function decorator
 F = TypeVar("F", bound=Callable[..., Any])
+_REQUEST_ID_RE = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")
+_SENSITIVE_KEY_PARTS = (
+    "authorization",
+    "api_key",
+    "apikey",
+    "access_key",
+    "secret",
+    "password",
+    "credential",
+    "cookie",
+    "token",
+)
+_RAW_SCOPE_KEYS = {"scope", "scopes", "effective_scope", "scope_key"}
+_SAFE_SCOPE_KEYS = {"scope_keys", "cognition.scope_keys"}
+_REDACTED = "[REDACTED]"
 
 # Metrics (with fallback if prometheus not available)
 if PROMETHEUS_AVAILABLE:
@@ -86,17 +113,16 @@ if PROMETHEUS_AVAILABLE:
     )
 
     LLM_CALL_DURATION = Histogram(
-        "cognition_llm_call_duration_seconds", "LLM API call duration", ["provider", "model"]
+        "cognition_llm_call_duration_seconds",
+        "LLM API call duration",
     )
 
-    TOOL_CALL_COUNT = Counter(
-        "cognition_tool_calls_total", "Total tool calls", ["tool_name", "status"]
-    )
+    TOOL_CALL_COUNT = Counter("cognition_tool_calls_total", "Total tool calls", ["status"])
 
     TOOL_SAFETY_EVENT_COUNT = Counter(
         "cognition_tool_safety_events_total",
         "Total tool safety events",
-        ["action", "tool_name"],
+        ["action"],
     )
 
     CONTEXT_EVENT_COUNT = Counter(
@@ -108,7 +134,7 @@ if PROMETHEUS_AVAILABLE:
     HITL_DECISION_COUNT = Counter(
         "cognition_hitl_decisions_total",
         "Total human-in-the-loop decisions",
-        ["decision", "tool_name"],
+        ["decision"],
     )
 
     RUNTIME_EVENT_COUNT = Counter(
@@ -198,6 +224,26 @@ if PROMETHEUS_AVAILABLE:
         "cognition_otlp_oversize_spans_total",
         "Spans dropped because one encoded span exceeded the OTLP request limit",
     )
+    TELEMETRY_EXPORT_BATCHES_TOTAL = Counter(
+        "cognition_telemetry_export_batches_total",
+        "Telemetry export batches by signal, transport, and outcome",
+        ["signal", "transport", "outcome"],
+    )
+    TELEMETRY_DROPPED_ITEMS_TOTAL = Counter(
+        "cognition_telemetry_dropped_items_total",
+        "Telemetry items dropped by signal and reason",
+        ["signal", "reason"],
+    )
+    TELEMETRY_BATCH_SPLITS_TOTAL = Counter(
+        "cognition_telemetry_batch_splits_total",
+        "Telemetry batches split before export by signal and reason",
+        ["signal", "reason"],
+    )
+    TELEMETRY_LAST_SUCCESS_UNIXTIME = Gauge(
+        "cognition_telemetry_last_success_unixtime",
+        "Last successful telemetry export time as a Unix timestamp",
+        ["signal", "transport"],
+    )
     RUNTIME_CACHE_SIZE = Gauge(
         "cognition_runtime_cache_size",
         "Current entries in bounded in-process runtime caches",
@@ -207,6 +253,51 @@ if PROMETHEUS_AVAILABLE:
         "cognition_runtime_cache_evictions_total",
         "Entries evicted from bounded in-process runtime caches",
         ["cache", "reason"],
+    )
+    RUNTIME_CACHE_LOOKUPS_TOTAL = Counter(
+        "cognition_runtime_cache_lookups_total",
+        "Bounded in-process runtime cache lookups by outcome and reason",
+        ["cache", "outcome", "reason"],
+    )
+    RUNTIME_MANIFEST_RESOLUTIONS_TOTAL = Counter(
+        "cognition_runtime_manifest_resolutions_total",
+        "Runtime manifest resolution attempts by outcome",
+        ["outcome"],
+    )
+    RUNTIME_MANIFEST_RESOLUTION_DURATION = Histogram(
+        "cognition_runtime_manifest_resolution_seconds",
+        "Runtime manifest resolution duration by outcome",
+        ["outcome"],
+    )
+    STORAGE_OPERATIONS_TOTAL = Counter(
+        "cognition_storage_operations_total",
+        "Scoped storage operations by backend, operation, and result",
+        ["backend", "operation", "result"],
+    )
+    STORAGE_OPERATION_DURATION = Histogram(
+        "cognition_storage_operation_duration_seconds",
+        "Scoped storage operation duration by backend and operation",
+        ["backend", "operation"],
+    )
+    SCOPE_ACCESS_DENIED_TOTAL = Counter(
+        "cognition_scope_access_denied_total",
+        "Scope access rejections by resource type and operation",
+        ["resource_type", "operation"],
+    )
+    SANDBOX_LIFECYCLE_TOTAL = Counter(
+        "cognition_sandbox_lifecycle_total",
+        "Sandbox lifecycle operations by backend, stage, and outcome",
+        ["backend", "stage", "outcome"],
+    )
+    SANDBOX_LIFECYCLE_DURATION = Histogram(
+        "cognition_sandbox_lifecycle_duration_seconds",
+        "Sandbox lifecycle operation duration by backend and stage",
+        ["backend", "stage"],
+    )
+    STRICT_EXECUTION_REJECTIONS_TOTAL = Counter(
+        "cognition_strict_execution_rejections_total",
+        "Strict execution rejections by bounded reason",
+        ["reason"],
     )
 else:
     # Dummy metrics that do nothing
@@ -252,8 +343,116 @@ else:
     RUNTIME_TASK_CLEANUP_DURATION = DummyMetric()  # type: ignore[assignment]
     OTLP_EXPORT_REQUEST_BYTES = DummyMetric()  # type: ignore[assignment]
     OTLP_OVERSIZE_SPANS_TOTAL = DummyMetric()  # type: ignore[assignment]
+    TELEMETRY_EXPORT_BATCHES_TOTAL = DummyMetric()  # type: ignore[assignment]
+    TELEMETRY_DROPPED_ITEMS_TOTAL = DummyMetric()  # type: ignore[assignment]
+    TELEMETRY_BATCH_SPLITS_TOTAL = DummyMetric()  # type: ignore[assignment]
+    TELEMETRY_LAST_SUCCESS_UNIXTIME = DummyMetric()  # type: ignore[assignment]
     RUNTIME_CACHE_SIZE = DummyMetric()  # type: ignore[assignment]
     RUNTIME_CACHE_EVICTIONS_TOTAL = DummyMetric()  # type: ignore[assignment]
+    RUNTIME_CACHE_LOOKUPS_TOTAL = DummyMetric()  # type: ignore[assignment]
+    RUNTIME_MANIFEST_RESOLUTIONS_TOTAL = DummyMetric()  # type: ignore[assignment]
+    RUNTIME_MANIFEST_RESOLUTION_DURATION = DummyMetric()  # type: ignore[assignment]
+    STORAGE_OPERATIONS_TOTAL = DummyMetric()  # type: ignore[assignment]
+    STORAGE_OPERATION_DURATION = DummyMetric()  # type: ignore[assignment]
+    SCOPE_ACCESS_DENIED_TOTAL = DummyMetric()  # type: ignore[assignment]
+    SANDBOX_LIFECYCLE_TOTAL = DummyMetric()  # type: ignore[assignment]
+    SANDBOX_LIFECYCLE_DURATION = DummyMetric()  # type: ignore[assignment]
+    STRICT_EXECUTION_REJECTIONS_TOTAL = DummyMetric()  # type: ignore[assignment]
+
+
+def request_id_from_header(value: str | None) -> str:
+    """Return a safe request id from a trusted header or generate a new one."""
+    if value:
+        candidate = value.strip()
+        if _REQUEST_ID_RE.fullmatch(candidate):
+            return candidate
+    return uuid4().hex
+
+
+def scope_key_names_from_headers(headers: Any) -> list[str]:
+    """Return sorted Cognition scope key names from request headers."""
+    prefix = "x-cognition-scope-"
+    keys: set[str] = set()
+    for header_name in headers.keys():
+        normalized = str(header_name).lower()
+        if normalized.startswith(prefix):
+            key = normalized.removeprefix(prefix).replace("-", "_")
+            if key:
+                keys.add(key)
+    return sorted(keys)
+
+
+def bind_observability_context(**fields: Any) -> None:
+    """Bind redacted correlation fields to the current async context."""
+    safe_fields = {key: _redact_value(key, value) for key, value in fields.items()}
+    bind_contextvars(**safe_fields)
+
+
+@contextmanager
+def observability_context(**fields: Any) -> Any:
+    """Temporarily bind redacted correlation fields without clearing outer context."""
+    safe_fields = {key: _redact_value(key, value) for key, value in fields.items()}
+    with bound_contextvars(**safe_fields):
+        yield
+
+
+def clear_observability_context() -> None:
+    """Clear request-scoped observability context variables."""
+    clear_contextvars()
+
+
+def storage_backend_label(store: Any) -> str:
+    """Return a bounded backend label for storage metrics."""
+    name = type(store).__name__.lower()
+    if "postgres" in name:
+        return "postgres"
+    if "sqlite" in name:
+        return "sqlite"
+    if "memory" in name:
+        return "memory"
+    return "other"
+
+
+def _redact_value(key: str, value: Any) -> Any:
+    """Redact known sensitive/raw-scope fields before rendering telemetry."""
+    normalized = key.lower()
+    if normalized in _SAFE_SCOPE_KEYS:
+        return value
+    if normalized in _RAW_SCOPE_KEYS or any(part in normalized for part in _SENSITIVE_KEY_PARTS):
+        return _REDACTED
+    if isinstance(value, dict):
+        return {
+            item_key: _redact_value(str(item_key), item_value)
+            for item_key, item_value in value.items()
+        }
+    if isinstance(value, list):
+        return [_redact_value(key, item) for item in value]
+    if isinstance(value, tuple):
+        return tuple(_redact_value(key, item) for item in value)
+    return value
+
+
+def redact_event_fields(
+    logger: Any,
+    method_name: str,
+    event_dict: dict[str, Any],
+) -> dict[str, Any]:
+    """Structlog processor that removes secrets and raw scopes from log fields."""
+    return {key: _redact_value(str(key), value) for key, value in event_dict.items()}
+
+
+def add_trace_context(
+    logger: Any,
+    method_name: str,
+    event_dict: dict[str, Any],
+) -> dict[str, Any]:
+    """Structlog processor that adds active trace/span ids when available."""
+    trace_id, span_id = current_trace_context()
+    if trace_id and "trace_id" not in event_dict:
+        event_dict["trace_id"] = trace_id
+    if span_id and "span_id" not in event_dict:
+        event_dict["span_id"] = span_id
+    return event_dict
 
 
 def _encoded_span_batch_size(spans: Sequence[ReadableSpan]) -> int:
@@ -285,6 +484,11 @@ class ByteBoundedSpanExporter(SpanExporter):  # type: ignore[misc]
             try:
                 encoded_bytes = _encoded_span_batch_size(candidate)
             except Exception:
+                TELEMETRY_EXPORT_BATCHES_TOTAL.labels(
+                    signal="traces",
+                    transport="otlp",
+                    outcome="encode_failure",
+                ).inc()
                 structlog.get_logger().exception("Failed to encode OTLP trace batch")
                 return SpanExportResult.FAILURE
             if encoded_bytes <= self._max_export_bytes:
@@ -293,10 +497,18 @@ class ByteBoundedSpanExporter(SpanExporter):  # type: ignore[misc]
 
             if current:
                 chunks.append(current)
+                TELEMETRY_BATCH_SPLITS_TOTAL.labels(
+                    signal="traces",
+                    reason="max_bytes",
+                ).inc()
                 current = []
             single_bytes = _encoded_span_batch_size([span])
             if single_bytes > self._max_export_bytes:
                 OTLP_OVERSIZE_SPANS_TOTAL.inc()
+                TELEMETRY_DROPPED_ITEMS_TOTAL.labels(
+                    signal="traces",
+                    reason="oversize_span",
+                ).inc()
                 structlog.get_logger().warning(
                     "Dropping oversize OTLP span",
                     encoded_bytes=single_bytes,
@@ -314,7 +526,21 @@ class ByteBoundedSpanExporter(SpanExporter):  # type: ignore[misc]
             OTLP_EXPORT_REQUEST_BYTES.observe(encoded_bytes)
             result = self._exporter.export(tuple(chunk))
             if result is not SpanExportResult.SUCCESS:
+                TELEMETRY_EXPORT_BATCHES_TOTAL.labels(
+                    signal="traces",
+                    transport="otlp",
+                    outcome="failure",
+                ).inc()
                 return result
+            TELEMETRY_EXPORT_BATCHES_TOTAL.labels(
+                signal="traces",
+                transport="otlp",
+                outcome="success",
+            ).inc()
+            TELEMETRY_LAST_SUCCESS_UNIXTIME.labels(
+                signal="traces",
+                transport="otlp",
+            ).set(time.time())
         return SpanExportResult.SUCCESS
 
     def shutdown(self) -> None:
@@ -333,6 +559,9 @@ def setup_tracing(
     app: Any | None = None,
     enabled: bool = True,
     max_export_bytes: int = 3_670_016,
+    queue_size: int = 2048,
+    export_timeout_millis: int = 30_000,
+    trace_sample_ratio: float = 1.0,
 ) -> None:
     """Initialize OpenTelemetry tracing.
 
@@ -353,7 +582,16 @@ def setup_tracing(
         return
 
     resource = Resource.create({"service.name": service_name})
-    provider = TracerProvider(resource=resource)
+    clamped_sample_ratio = max(0.0, min(1.0, trace_sample_ratio))
+    sampler = (
+        ParentBased(TraceIdRatioBased(clamped_sample_ratio))
+        if ParentBased is not None and TraceIdRatioBased is not None
+        else None
+    )
+    provider = TracerProvider(
+        resource=resource,
+        **({"sampler": sampler} if sampler is not None else {}),
+    )
 
     if endpoint and OTLPSpanExporter and BatchSpanProcessor:
         # Check if using HTTP or gRPC based on endpoint schema
@@ -366,7 +604,12 @@ def setup_tracing(
             OTLPSpanExporter(endpoint=endpoint),
             max_export_bytes=max_export_bytes,
         )
-        processor = BatchSpanProcessor(exporter)
+        processor = BatchSpanProcessor(
+            exporter,
+            max_queue_size=queue_size,
+            max_export_batch_size=min(512, queue_size),
+            export_timeout_millis=export_timeout_millis,
+        )
         provider.add_span_processor(processor)
 
     if trace:
@@ -405,13 +648,20 @@ def setup_logging(log_level: str = "info", json_format: bool = False) -> None:
         log_level: Logging level (debug, info, warning, error)
         json_format: Whether to output JSON formatted logs
     """
+    logging.basicConfig(
+        level=getattr(logging, log_level.upper(), logging.INFO),
+        format="%(message)s",
+    )
     structlog.configure(
         processors=[
+            merge_contextvars,
             structlog.stdlib.filter_by_level,
             structlog.stdlib.add_logger_name,
             structlog.stdlib.add_log_level,
             structlog.stdlib.PositionalArgumentsFormatter(),
             structlog.processors.TimeStamper(fmt="iso"),
+            add_trace_context,
+            redact_event_fields,
             structlog.processors.StackInfoRenderer(),
             structlog.processors.format_exc_info,
             structlog.processors.UnicodeDecoder(),

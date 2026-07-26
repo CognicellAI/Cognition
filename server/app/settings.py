@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Literal
 
-from pydantic import Field, SecretStr, field_validator
+from pydantic import AliasChoices, Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -32,6 +32,11 @@ class Settings(BaseSettings):
     host: str = Field(default="127.0.0.1", alias="COGNITION_HOST")
     port: int = Field(default=8000, alias="COGNITION_PORT")
     log_level: str = Field(default="info", alias="COGNITION_LOG_LEVEL")
+    log_format: Literal["json", "console"] = Field(
+        default="json",
+        alias="COGNITION_LOG_FORMAT",
+        description="Structured log renderer. Use 'console' for local development.",
+    )
 
     # Workspace settings
     workspace_root: Path = Field(
@@ -83,15 +88,57 @@ class Settings(BaseSettings):
     rate_limit_burst: int = Field(default=10, alias="COGNITION_RATE_LIMIT_BURST")
 
     # Observability settings
-    otel_enabled: bool = Field(default=False, alias="COGNITION_OTEL_ENABLED")
+    otel_enabled: bool = Field(
+        default=False,
+        validation_alias=AliasChoices(
+            "COGNITION_TRACING_ENABLED",
+            "COGNITION_OTEL_ENABLED",
+        ),
+        description=(
+            "Enable OpenTelemetry tracing. COGNITION_OTEL_ENABLED remains a compatibility alias."
+        ),
+    )
     otel_endpoint: str | None = Field(default=None, alias="COGNITION_OTEL_ENDPOINT")
     otel_max_export_bytes: int = Field(
         default=3_670_016,
         ge=65_536,
-        alias="COGNITION_OTEL_MAX_EXPORT_BYTES",
+        validation_alias=AliasChoices(
+            "COGNITION_OTLP_MAX_EXPORT_BYTES",
+            "COGNITION_OTEL_MAX_EXPORT_BYTES",
+        ),
         description="Maximum encoded OTLP trace request size (default 3.5 MiB).",
     )
+    otlp_queue_size: int = Field(
+        default=2048,
+        ge=1,
+        alias="COGNITION_OTLP_QUEUE_SIZE",
+        description="Maximum queued trace spans for the bounded OTLP exporter.",
+    )
+    otlp_export_timeout_ms: int = Field(
+        default=30_000,
+        ge=1,
+        alias="COGNITION_OTLP_EXPORT_TIMEOUT_MS",
+        description="Per-attempt OTLP trace export timeout in milliseconds.",
+    )
+    trace_sample_ratio: float = Field(
+        default=0.10,
+        ge=0.0,
+        le=1.0,
+        alias="COGNITION_TRACE_SAMPLE_RATIO",
+        description="Parent-based root trace sample ratio for normal runs.",
+    )
+    metrics_enabled: bool = Field(default=True, alias="COGNITION_METRICS_ENABLED")
     metrics_port: int = Field(default=9090, alias="COGNITION_METRICS_PORT")
+    native_agent_tracing: Literal[
+        "disabled",
+        "langsmith_otel",
+        "mlflow_autolog",
+        "otlp_to_mlflow",
+    ] = Field(
+        default="disabled",
+        alias="COGNITION_NATIVE_AGENT_TRACING",
+        description="Optional native semantic agent tracing mode selected by the operator.",
+    )
 
     # CORS settings
     cors_origins: list[str] = Field(

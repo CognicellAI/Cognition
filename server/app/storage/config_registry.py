@@ -37,7 +37,11 @@ from psycopg.types.json import Json
 from psycopg_pool import AsyncConnectionPool
 
 from server.app.agent.definition import AgentDefinition
-from server.app.storage.common import canonical_json_digest, effective_scope_key
+from server.app.storage.common import (
+    canonical_json_digest,
+    effective_scope_key,
+    inherited_scope_keys,
+)
 from server.app.storage.config_models import (
     AgentConfigRecord,
     ConfigChange,
@@ -609,10 +613,16 @@ class SqliteConfigRegistry:
         Scope resolution: rows with more scope keys win over fewer.
         """
         target_scope = scope or {}
+        candidate_keys = inherited_scope_keys(target_scope)
+        placeholders = ",".join("?" for _ in candidate_keys)
         conn = await self._get_conn()
         async with conn.execute(
-            "SELECT scope, definition FROM config_entities WHERE entity_type=? AND name=?",
-            (entity_type, name),
+            f"""
+            SELECT scope, definition
+            FROM config_entities
+            WHERE entity_type=? AND name=? AND scope_key IN ({placeholders})
+            """,
+            (entity_type, name, *candidate_keys),
         ) as cursor:
             rows = await cursor.fetchall()
 
@@ -639,10 +649,16 @@ class SqliteConfigRegistry:
     ) -> tuple[dict[str, Any], dict[str, str]] | None:
         """Return (definition_dict, matched_scope) for the best-matching row."""
         target_scope = scope or {}
+        candidate_keys = inherited_scope_keys(target_scope)
+        placeholders = ",".join("?" for _ in candidate_keys)
         conn = await self._get_conn()
         async with conn.execute(
-            "SELECT scope, definition FROM config_entities WHERE entity_type=? AND name=?",
-            (entity_type, name),
+            f"""
+            SELECT scope, definition
+            FROM config_entities
+            WHERE entity_type=? AND name=? AND scope_key IN ({placeholders})
+            """,
+            (entity_type, name, *candidate_keys),
         ) as cursor:
             rows = await cursor.fetchall()
 
@@ -670,10 +686,16 @@ class SqliteConfigRegistry:
         For each (name), only the most-specific row is returned.
         """
         target_scope = scope or {}
+        candidate_keys = inherited_scope_keys(target_scope)
+        placeholders = ",".join("?" for _ in candidate_keys)
         conn = await self._get_conn()
         async with conn.execute(
-            "SELECT name, scope, definition FROM config_entities WHERE entity_type=?",
-            (entity_type,),
+            f"""
+            SELECT name, scope, definition
+            FROM config_entities
+            WHERE entity_type=? AND scope_key IN ({placeholders})
+            """,
+            (entity_type, *candidate_keys),
         ) as cursor:
             rows = await cursor.fetchall()
 
@@ -1272,12 +1294,17 @@ class PostgresConfigRegistry:
         scope: dict[str, str] | None,
     ) -> dict[str, Any] | None:
         target_scope = scope or {}
+        candidate_keys = inherited_scope_keys(target_scope)
         pool = await self._get_pool()
         async with pool.connection() as conn:
             rows = await self._fetch_all(
                 conn,
-                "SELECT scope, definition FROM config_entities WHERE entity_type=%s AND name=%s",
-                (entity_type, name),
+                """
+                SELECT scope, definition
+                FROM config_entities
+                WHERE entity_type=%s AND name=%s AND scope_key = ANY(%s::text[])
+                """,
+                (entity_type, name, candidate_keys),
             )
         if not rows:
             return None
@@ -1300,12 +1327,17 @@ class PostgresConfigRegistry:
     ) -> tuple[dict[str, Any], dict[str, str]] | None:
         """Return (definition_dict, matched_scope) for the best-matching row."""
         target_scope = scope or {}
+        candidate_keys = inherited_scope_keys(target_scope)
         pool = await self._get_pool()
         async with pool.connection() as conn:
             rows = await self._fetch_all(
                 conn,
-                "SELECT scope, definition FROM config_entities WHERE entity_type=%s AND name=%s",
-                (entity_type, name),
+                """
+                SELECT scope, definition
+                FROM config_entities
+                WHERE entity_type=%s AND name=%s AND scope_key = ANY(%s::text[])
+                """,
+                (entity_type, name, candidate_keys),
             )
         if not rows:
             return None
@@ -1326,12 +1358,17 @@ class PostgresConfigRegistry:
         scope: dict[str, str] | None,
     ) -> list[dict[str, Any]]:
         target_scope = scope or {}
+        candidate_keys = inherited_scope_keys(target_scope)
         pool = await self._get_pool()
         async with pool.connection() as conn:
             rows = await self._fetch_all(
                 conn,
-                "SELECT name, scope, definition FROM config_entities WHERE entity_type=%s",
-                (entity_type,),
+                """
+                SELECT name, scope, definition
+                FROM config_entities
+                WHERE entity_type=%s AND scope_key = ANY(%s::text[])
+                """,
+                (entity_type, candidate_keys),
             )
         best_by_name: dict[str, tuple[int, dict[str, Any]]] = {}
         for row in rows:

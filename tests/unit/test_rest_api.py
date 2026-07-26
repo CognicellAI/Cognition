@@ -90,6 +90,24 @@ class TestHealthEndpoints:
         data = response.json()
         assert data["ready"] is True
 
+    def test_general_exception_response_redacts_internal_error(self):
+        """Unhandled 500 responses must not expose raw exception text."""
+
+        class FailingStorage:
+            async def list_sessions(self):
+                raise RuntimeError("secret database path /private/tenant/acme")
+
+        app.dependency_overrides[get_storage_backend_dep] = lambda: FailingStorage()
+        redacting_client = TestClient(app, raise_server_exceptions=False)
+        try:
+            response = redacting_client.get("/health")
+        finally:
+            app.dependency_overrides.pop(get_storage_backend_dep, None)
+
+        assert response.status_code == 500
+        assert response.json() == {"detail": "Internal server error"}
+        assert "secret database path" not in response.text
+
 
 class TestSessionEndpoints:
     """Test session API endpoints."""

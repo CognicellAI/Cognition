@@ -38,6 +38,19 @@ class _DefaultsOnlyStore:
         return GlobalAgentDefaults()
 
 
+class _Metric:
+    def __init__(self) -> None:
+        self.labels_seen: list[dict[str, str]] = []
+        self.incremented = 0
+
+    def labels(self, **labels: str) -> _Metric:
+        self.labels_seen.append(labels)
+        return self
+
+    def inc(self, amount: float = 1) -> None:
+        self.incremented += int(amount)
+
+
 def _settings(tmp_path: Any | None = None, **overrides: Any) -> Settings:
     settings = Settings()
     if tmp_path is not None:
@@ -79,17 +92,18 @@ async def test_local_execution_fails_closed_by_default(tmp_path) -> None:
         unsafe_local_execution=False,
     )
     with pytest.raises(RuntimeError, match="Local execution is disabled"):
-        await create_cognition_agent(
-            _strict_agent_params(tmp_path, settings=settings)
-        )
+        await create_cognition_agent(_strict_agent_params(tmp_path, settings=settings))
 
 
 @pytest.mark.asyncio
 async def test_attached_python_tools_are_rejected_in_strict_mode(tmp_path) -> None:
-    with pytest.raises(RuntimeError, match="Attached Python tools are disabled"):
-        await create_cognition_agent(
-            _strict_agent_params(tmp_path, tools=[lambda: None])
-        )
+    metric = _Metric()
+    with (
+        patch("server.app.agent.cognition_agent.STRICT_EXECUTION_REJECTIONS_TOTAL", metric),
+        pytest.raises(RuntimeError, match="Attached Python tools are disabled"),
+    ):
+        await create_cognition_agent(_strict_agent_params(tmp_path, tools=[lambda: None]))
+    assert metric.labels_seen == [{"reason": "api_python_tools"}]
 
 
 @pytest.mark.asyncio
@@ -98,10 +112,13 @@ async def test_host_side_mcp_is_rejected_in_strict_mode(tmp_path) -> None:
         name="host-mcp",
         url="https://mcp.example.test/sse",
     )
-    with pytest.raises(RuntimeError, match="Host-side MCP tools are disabled"):
-        await create_cognition_agent(
-            _strict_agent_params(tmp_path, mcp_configs=[config])
-        )
+    metric = _Metric()
+    with (
+        patch("server.app.agent.cognition_agent.STRICT_EXECUTION_REJECTIONS_TOTAL", metric),
+        pytest.raises(RuntimeError, match="Host-side MCP tools are disabled"),
+    ):
+        await create_cognition_agent(_strict_agent_params(tmp_path, mcp_configs=[config]))
+    assert metric.labels_seen == [{"reason": "host_mcp_tools"}]
 
 
 @pytest.mark.asyncio
@@ -254,15 +271,11 @@ class _FakeDockerExecution:
         glob: str | None,
     ) -> list[dict[str, Any]]:
         del path, glob
-        return [
-            {"path": "/source.txt", "line": 1, "text": "first"}
-        ] if pattern == "first" else []
+        return [{"path": "/source.txt", "line": 1, "text": "first"}] if pattern == "first" else []
 
     def glob_files(self, pattern: str, path: str) -> list[dict[str, Any]]:
         del path
-        return [
-            {"path": "/source.txt", "is_dir": False, "size": 13}
-        ] if pattern == "*.txt" else []
+        return [{"path": "/source.txt", "is_dir": False, "size": 13}] if pattern == "*.txt" else []
 
     def terminate(self) -> None:
         self.terminated = True
@@ -316,10 +329,7 @@ def test_callback_requires_exact_operator_approved_https_origin(url: str) -> Non
     settings = _settings(
         callback_allowed_origins=["https://callbacks.example.test"],
     )
-    assert (
-        _approved_callback_origin(url, settings)
-        == "https://callbacks.example.test"
-    )
+    assert _approved_callback_origin(url, settings) == "https://callbacks.example.test"
 
 
 @pytest.mark.parametrize(
@@ -334,6 +344,11 @@ def test_callback_requires_exact_operator_approved_https_origin(url: str) -> Non
     ],
 )
 def test_callback_defaults_to_denied_and_rejects_unsafe_urls(url: str) -> None:
-    with pytest.raises(HTTPException) as exc_info:
+    metric = _Metric()
+    with (
+        patch("server.app.api.routes.messages.STRICT_EXECUTION_REJECTIONS_TOTAL", metric),
+        pytest.raises(HTTPException) as exc_info,
+    ):
         _approved_callback_origin(url, _settings(callback_allowed_origins=[]))
     assert exc_info.value.status_code == 403
+    assert metric.labels_seen == [{"reason": "callback_origin"}]

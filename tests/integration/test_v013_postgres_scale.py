@@ -226,6 +226,24 @@ async def test_ci_sized_postgres_scope_indexes_are_used(
             max_scan_rows=10,
         )
 
+        config_list_plan = await conn.fetchval(
+            """
+            EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON)
+            SELECT name, scope, definition
+            FROM config_entities
+            WHERE entity_type='agent'
+              AND scope_key = ANY($1::text[])
+            ORDER BY name
+            LIMIT 100
+            """,
+            [effective_scope_key({}), exact_scope_key],
+        )
+        _assert_indexed_plan(
+            config_list_plan,
+            expected_index="idx_config_entities_scope_list",
+            max_scan_rows=250,
+        )
+
         list_plan = await conn.fetchval(
             """
             EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON)
@@ -244,6 +262,7 @@ async def test_ci_sized_postgres_scope_indexes_are_used(
         )
 
         exact_timings: list[float] = []
+        config_list_timings: list[float] = []
         list_timings: list[float] = []
         for _ in range(15):
             started = time.perf_counter()
@@ -264,6 +283,19 @@ async def test_ci_sized_postgres_scope_indexes_are_used(
             started = time.perf_counter()
             await conn.fetch(
                 """
+                SELECT name, scope, definition
+                FROM config_entities
+                WHERE entity_type='agent'
+                  AND scope_key = ANY($1::text[])
+                ORDER BY name
+                LIMIT 100
+                """,
+                [effective_scope_key({}), exact_scope_key],
+            )
+            config_list_timings.append((time.perf_counter() - started) * 1000)
+            started = time.perf_counter()
+            await conn.fetch(
+                """
                 SELECT *
                 FROM sessions
                 WHERE scope_key=$1
@@ -276,6 +308,11 @@ async def test_ci_sized_postgres_scope_indexes_are_used(
 
         record_property("postgres_exact_lookup_median_ms", statistics.median(exact_timings))
         record_property("postgres_exact_lookup_p95_ms", sorted(exact_timings)[-1])
+        record_property(
+            "postgres_config_list_median_ms",
+            statistics.median(config_list_timings),
+        )
+        record_property("postgres_config_list_p95_ms", sorted(config_list_timings)[-1])
         record_property("postgres_session_page_median_ms", statistics.median(list_timings))
         record_property("postgres_session_page_p95_ms", sorted(list_timings)[-1])
     finally:

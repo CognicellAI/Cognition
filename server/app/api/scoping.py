@@ -11,6 +11,7 @@ from typing import Any
 
 from fastapi import Header, HTTPException, status
 
+from server.app.observability import SCOPE_ACCESS_DENIED_TOTAL
 from server.app.settings import Settings
 
 
@@ -102,6 +103,10 @@ def create_scope_dependency(settings: Settings) -> Callable[..., SessionScope]:
         if settings.scoping_enabled:
             missing_keys = [key for key in settings.scope_keys if not scope.get(key)]
             if missing_keys:
+                SCOPE_ACCESS_DENIED_TOTAL.labels(
+                    resource_type="request",
+                    operation="require_scope",
+                ).inc()
                 header_names = [
                     f"X-Cognition-Scope-{k.replace('_', '-').title()}" for k in missing_keys
                 ]

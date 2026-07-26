@@ -570,7 +570,7 @@ def _audit_hitl_decision(event: HitlDecisionEvent) -> None:
         edited_arg_keys=event.edited_arg_keys,
         has_rejection_message=event.has_rejection_message,
     )
-    HITL_DECISION_COUNT.labels(decision=event.decision, tool_name=event.tool_name).inc()
+    HITL_DECISION_COUNT.labels(decision=event.decision).inc()
     with trace_span(
         "cognition.hitl_decision",
         {
@@ -1008,9 +1008,7 @@ class DeepAgentRuntime:
                                     else None
                                 ),
                                 run_id=(
-                                    str(data["run_id"])
-                                    if data.get("run_id") is not None
-                                    else None
+                                    str(data["run_id"]) if data.get("run_id") is not None else None
                                 ),
                                 scope_keys=[
                                     str(key)
@@ -1021,9 +1019,7 @@ class DeepAgentRuntime:
                         elif event_name == "tool_argument_validation_failed":
                             raw_errors = data.get("errors", [])
                             errors = [
-                                dict(error)
-                                for error in raw_errors
-                                if isinstance(error, Mapping)
+                                dict(error) for error in raw_errors if isinstance(error, Mapping)
                             ]
                             yield ToolSafetyEvent(
                                 action="argument_validation_failed",
@@ -1041,9 +1037,7 @@ class DeepAgentRuntime:
                                     else None
                                 ),
                                 run_id=(
-                                    str(data["run_id"])
-                                    if data.get("run_id") is not None
-                                    else None
+                                    str(data["run_id"]) if data.get("run_id") is not None else None
                                 ),
                                 scope_keys=[
                                     str(key)
@@ -1067,9 +1061,7 @@ class DeepAgentRuntime:
                                     else None
                                 ),
                                 run_id=(
-                                    str(data["run_id"])
-                                    if data.get("run_id") is not None
-                                    else None
+                                    str(data["run_id"]) if data.get("run_id") is not None else None
                                 ),
                                 scope_keys=[
                                     str(key)

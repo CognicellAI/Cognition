@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 from datetime import UTC, datetime
+from itertools import combinations
 from typing import Any, Literal
 
 from server.app.models import (
@@ -33,6 +34,29 @@ def effective_scope_key(scope: dict[str, str] | None) -> str:
     """Return a stable non-secret hash for exact-scope database indexes."""
     canonical = json.dumps(scope or {}, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def inherited_scope_candidates(scope: dict[str, str] | None) -> list[dict[str, str]]:
+    """Return all scope subsets that may be inherited by ``scope``.
+
+    Exact runtime resources use only the complete effective scope. Generic
+    configuration such as providers, tools, skills, MCP servers, sandbox
+    profiles, and global defaults may inherit from broader scopes. SQL backends
+    use these candidates to constrain reads by indexed ``scope_key`` values
+    before verifying the stored scope JSON.
+    """
+    target = scope or {}
+    keys = sorted(target)
+    candidates: list[dict[str, str]] = [{}]
+    for size in range(1, len(keys) + 1):
+        for names in combinations(keys, size):
+            candidates.append({name: target[name] for name in names})
+    return candidates
+
+
+def inherited_scope_keys(scope: dict[str, str] | None) -> list[str]:
+    """Return indexed lookup keys for all inherited scope candidates."""
+    return [effective_scope_key(candidate) for candidate in inherited_scope_candidates(scope)]
 
 
 def canonical_json_digest(value: Any) -> str:

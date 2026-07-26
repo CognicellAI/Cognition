@@ -74,10 +74,10 @@ inputs to future roadmap work.
 | ID | Status | Observation | Consequence | Primary evidence |
 | --- | --- | --- | --- | --- |
 | AR-028 | Open | `/ready` always reports true; `/health` lists every session | Readiness does not prove dependencies and health cost grows with data | `main.py::ready_check`, `health_check` |
-| AR-029 | Open | HTTP metric endpoint label uses concrete URL paths | Resource IDs create unbounded Prometheus cardinality | `api/middleware.py::ObservabilityMiddleware` |
-| AR-030 | Open | Metrics startup is coupled to the OpenTelemetry enabled flag | Metrics cannot be independently enabled through the current composition | `main.py::lifespan`; `observability.setup_metrics` call |
-| AR-031 | Open | MLflow code reads `MLFLOW_*` while deployment manifests primarily set `COGNITION_MLFLOW_*` | Manifests may not activate the intended integration | `observability/mlflow_config.py`; Compose and Helm environment |
-| AR-032 | Open | General 500 responses include `str(exc)` | Internal error details can cross the API boundary | `main.py::general_exception_handler` |
+| AR-029 | Resolved — v0.13 | HTTP metric endpoint label used concrete URL paths | Metrics now use the matched route template or `unmatched` and status class labels, avoiding resource-ID cardinality | `api/middleware.py::ObservabilityMiddleware`; `tests/unit/test_observability_cardinality.py` |
+| AR-030 | Resolved — v0.13 | Metrics startup was coupled to the OpenTelemetry enabled flag | `COGNITION_METRICS_ENABLED` controls Prometheus startup independently from trace export | `main.py::lifespan`; `settings.py`; `tests/unit/test_observability_config.py` |
+| AR-031 | Resolved — v0.13 | MLflow code read `MLFLOW_*` while deployment manifests primarily set `COGNITION_MLFLOW_*` | Cognition-prefixed MLflow settings now activate the integration; upstream `MLFLOW_*` names remain compatibility aliases | `observability/mlflow_config.py`; `tests/unit/test_observability_config.py` |
+| AR-032 | Resolved — v0.13 | General 500 responses included `str(exc)` | Unhandled 500 responses now return a generic error body and log only redacted error classification with route-template context | `main.py::general_exception_handler`; `tests/unit/test_rest_api.py` |
 | AR-033 | Open | FastAPI startup uses `create_all`/manual checks rather than Alembic upgrade | A new image can start against a partially upgraded schema unless operators migrate first | `main.py`; backend `initialize`; `storage/migrations.py` |
 | AR-034 | Open | CI omits full E2E, migration-upgrade, Helm lint, and image vulnerability gates | Release automation does not prove every documented deployment path | `.github/workflows/ci.yml`; `pre-release-images.yml` |
 | AR-035 | Open | `cognition-client` entry point references a TUI module absent from the inspected client tree | A published console entry point may be unusable | `pyproject.toml`; `client/` |

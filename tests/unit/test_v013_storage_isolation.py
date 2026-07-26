@@ -329,3 +329,125 @@ async def test_sqlite_scoped_session_page_uses_composite_index(tmp_path) -> None
         assert "SCAN sessions" not in plan_text
     finally:
         await backend.close()
+
+
+@pytest.mark.asyncio
+async def test_sqlite_scoped_runtime_pages_use_composite_indexes(tmp_path) -> None:
+    backend = SqliteStorageBackend(
+        str(tmp_path / "runtime-indexes.db"),
+        str(tmp_path),
+    )
+    await backend.initialize()
+    scope = {"tenant": "index-tenant", "project": "runtime"}
+    scope_key = effective_scope_key(scope)
+    try:
+        await backend.create_session(
+            session_id="runtime-index-session",
+            thread_id="runtime-index-thread",
+            config=SessionConfig(),
+            agent_name="runtime-index-agent",
+            scopes=scope,
+        )
+        task = await backend.create_task(
+            task_id="runtime-index-task",
+            context_id="runtime-index-session",
+            session_id="runtime-index-session",
+            agent_name="runtime-index-agent",
+            effective_scope=scope,
+        )
+        run = await backend.create_run(
+            run_id="runtime-index-run",
+            session_id="runtime-index-session",
+            thread_id="runtime-index-thread",
+            effective_scope=scope,
+            task_id=task.id,
+        )
+        await backend.append_event(
+            event_id="runtime-index-event",
+            session_id="runtime-index-session",
+            run_id=run.id,
+            event_type="status",
+            effective_scope=scope,
+            task_id=task.id,
+        )
+
+        artifact_store = SqliteArtifactStore(str(tmp_path / "runtime-indexes.db"))
+        await artifact_store.initialize()
+        try:
+            await artifact_store.upsert_artifact(
+                ArtifactDefinition(
+                    id="runtime-index-artifact",
+                    name="runtime-index-artifact",
+                    content="indexed",
+                    scope=scope,
+                )
+            )
+        finally:
+            await artifact_store.close()
+
+        with sqlite3.connect(backend.db_path) as connection:
+            plan_rows = {
+                "tasks": connection.execute(
+                    """
+                    EXPLAIN QUERY PLAN
+                    SELECT * FROM runtime_tasks
+                    WHERE agent_name = ? AND scope_key = ?
+                    ORDER BY created_at DESC, id DESC
+                    LIMIT 100
+                    """,
+                    ("runtime-index-agent", scope_key),
+                ).fetchall(),
+                "runs": connection.execute(
+                    """
+                    EXPLAIN QUERY PLAN
+                    SELECT * FROM session_runs
+                    WHERE session_id = ? AND scope_key = ?
+                    ORDER BY created_at DESC
+                    """,
+                    ("runtime-index-session", scope_key),
+                ).fetchall(),
+                "events": connection.execute(
+                    """
+                    EXPLAIN QUERY PLAN
+                    SELECT * FROM session_events
+                    WHERE session_id = ? AND scope_key = ?
+                    ORDER BY sequence ASC
+                    LIMIT 100
+                    """,
+                    ("runtime-index-session", scope_key),
+                ).fetchall(),
+                "artifact_lookup": connection.execute(
+                    """
+                    EXPLAIN QUERY PLAN
+                    SELECT * FROM artifacts
+                    WHERE id = ? AND scope_key = ?
+                    ORDER BY version DESC
+                    LIMIT 1
+                    """,
+                    ("runtime-index-artifact", scope_key),
+                ).fetchall(),
+                "artifact_page": connection.execute(
+                    """
+                    EXPLAIN QUERY PLAN
+                    SELECT * FROM artifacts
+                    WHERE scope_key = ?
+                    ORDER BY updated_at DESC, id DESC
+                    LIMIT 100
+                    """,
+                    (scope_key,),
+                ).fetchall(),
+            }
+
+        plans = {name: " ".join(str(row) for row in rows) for name, rows in plan_rows.items()}
+        assert "idx_runtime_tasks_scope_page" in plans["tasks"]
+        assert "idx_session_runs_scope_session" in plans["runs"]
+        assert "idx_session_events_scope_session_sequence" in plans["events"]
+        assert "idx_artifacts_lookup" in plans["artifact_lookup"]
+        assert "idx_artifacts_scope_page" in plans["artifact_page"]
+        assert "SCAN runtime_tasks" not in plans["tasks"]
+        assert "SCAN session_runs" not in plans["runs"]
+        assert "SCAN session_events" not in plans["events"]
+        assert "SCAN artifacts" not in plans["artifact_lookup"]
+        assert "SCAN artifacts" not in plans["artifact_page"]
+    finally:
+        await backend.close()

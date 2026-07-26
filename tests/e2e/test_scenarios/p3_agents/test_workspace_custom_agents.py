@@ -15,6 +15,21 @@ from __future__ import annotations
 import pytest
 
 
+@pytest.fixture(autouse=True)
+async def _ensure_researcher_agent(api_client) -> None:
+    """Provision the custom Agent explicitly for v0.13 builder-owned runtimes."""
+    response = await api_client.post(
+        "/agents",
+        json={
+            "name": "researcher",
+            "description": "Research specialist for workspace custom Agent scenarios.",
+            "system_prompt": "You are a careful research subagent.",
+            "mode": "subagent",
+        },
+    )
+    assert response.status_code in {200, 201, 409}, response.text
+
+
 @pytest.mark.asyncio
 class TestWorkspaceCustomAgents:
     """Test workspace author experience with custom agents."""

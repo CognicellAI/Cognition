@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+import time
 import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
@@ -27,6 +28,12 @@ from server.app.models import (
     SessionRun,
     TaskStatus,
     ToolCall,
+)
+from server.app.observability import (
+    SCOPE_ACCESS_DENIED_TOTAL,
+    STORAGE_OPERATION_DURATION,
+    STORAGE_OPERATIONS_TOTAL,
+    storage_backend_label,
 )
 from server.app.runtime_projection import ActiveRunConflictError, RuntimeProjectionService
 from server.app.settings import get_settings
@@ -247,10 +254,13 @@ class AgentTaskRuntime:
                 task_id=task.id,
             )
         session = await self._require_context(task)
-        if await self._store.get_active_run(
-            session.id,
-            task.effective_scope,
-        ) is not None:
+        if (
+            await self._store.get_active_run(
+                session.id,
+                task.effective_scope,
+            )
+            is not None
+        ):
             raise RuntimeTaskConflictError(
                 f"Context '{session.id}' already has an active run",
                 task_id=task.id,
@@ -768,13 +778,22 @@ class AgentTaskRuntime:
     async def _current_run(self, task: RuntimeTask) -> SessionRun | None:
         run_id = task.current_run_id or task.last_run_id
         return (
-            await self._store.get_run(run_id, task.effective_scope)
-            if run_id is not None
-            else None
+            await self._store.get_run(run_id, task.effective_scope) if run_id is not None else None
         )
 
     async def _require_context(self, task: RuntimeTask) -> Session:
+        started_at = time.monotonic()
+        backend = storage_backend_label(self._store)
         session = await self._store.get_session(task.session_id, task.effective_scope)
+        STORAGE_OPERATIONS_TOTAL.labels(
+            backend=backend,
+            operation="get_session",
+            result="success" if session is not None else "not_found",
+        ).inc()
+        STORAGE_OPERATION_DURATION.labels(
+            backend=backend,
+            operation="get_session",
+        ).observe(time.monotonic() - started_at)
         if session is None:
             raise RuntimeTaskConflictError(
                 f"Task '{task.id}' context is unavailable",
@@ -789,7 +808,18 @@ class AgentTaskRuntime:
         agent_name: str,
         effective_scope: dict[str, str],
     ) -> RuntimeTask:
+        started_at = time.monotonic()
+        backend = storage_backend_label(self._store)
         task = await self._store.get_task(task_id, dict(effective_scope), agent_name)
+        STORAGE_OPERATIONS_TOTAL.labels(
+            backend=backend,
+            operation="get_task",
+            result="success" if task is not None else "not_found",
+        ).inc()
+        STORAGE_OPERATION_DURATION.labels(
+            backend=backend,
+            operation="get_task",
+        ).observe(time.monotonic() - started_at)
         if task is None:
             raise RuntimeTaskNotFoundError(task_id)
         return task
@@ -802,6 +832,10 @@ class AgentTaskRuntime:
     ) -> None:
         if session.agent_name != agent_name or (session.scopes or {}) != effective_scope:
             # Deliberately conceal cross-agent and cross-scope ownership.
+            SCOPE_ACCESS_DENIED_TOTAL.labels(
+                resource_type="task_context",
+                operation="owner_mismatch",
+            ).inc()
             raise RuntimeTaskNotFoundError(session.id)
 
 

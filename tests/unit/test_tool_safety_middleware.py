@@ -122,7 +122,7 @@ def test_tool_safety_audit_increments_metric(monkeypatch: pytest.MonkeyPatch) ->
         message="blocked",
     )
 
-    assert labels_seen == [{"action": "blocked", "tool_name": "execute"}]
+    assert labels_seen == [{"action": "blocked"}]
     assert incremented is True
 
 

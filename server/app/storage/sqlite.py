@@ -137,6 +137,10 @@ class SqliteStorageBackend:
                 "CREATE INDEX IF NOT EXISTS idx_session_events_task_sequence "
                 "ON session_events(task_id, sequence)"
             )
+            await db.execute(
+                "CREATE INDEX IF NOT EXISTS idx_runtime_tasks_scope_page "
+                "ON runtime_tasks(agent_name, scope_key, created_at, id)"
+            )
             await db.commit()
 
         logger.info(
