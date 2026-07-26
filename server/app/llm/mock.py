@@ -5,6 +5,10 @@ from __future__ import annotations
 from collections.abc import AsyncGenerator, AsyncIterator, Sequence
 from typing import Any
 
+from langchain_core.callbacks.manager import (
+    AsyncCallbackManagerForLLMRun,
+    CallbackManagerForLLMRun,
+)
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import (
     AIMessage,
@@ -48,6 +52,7 @@ class MockLLM(BaseChatModel):
         self,
         messages: list[BaseMessage],
         stop: list[str] | None = None,
+        run_manager: CallbackManagerForLLMRun | None = None,
         **kwargs: Any,
     ) -> ChatResult:
         """Synchronously generate a deterministic mock chat result."""
@@ -57,6 +62,7 @@ class MockLLM(BaseChatModel):
         self,
         messages: list[BaseMessage],
         stop: list[str] | None = None,
+        run_manager: AsyncCallbackManagerForLLMRun | None = None,
         **kwargs: Any,
     ) -> ChatResult:
         """Asynchronously generate through LangChain's standard model hook."""
@@ -66,6 +72,7 @@ class MockLLM(BaseChatModel):
         self,
         messages: list[BaseMessage],
         stop: list[str] | None = None,
+        run_manager: AsyncCallbackManagerForLLMRun | None = None,
         **kwargs: Any,
     ) -> AsyncIterator[ChatGenerationChunk]:
         """Stream through LangChain's standard model hook."""
