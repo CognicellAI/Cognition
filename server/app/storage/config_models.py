@@ -33,6 +33,18 @@ PROVIDER_TYPES = {
     "google_vertexai",
 }
 
+
+class AgentConfigRecord(BaseModel):
+    """Immutable identity metadata for one exact-scoped Agent revision."""
+
+    name: str
+    scope: dict[str, str] = Field(default_factory=dict)
+    scope_key: str
+    definition: dict[str, Any]
+    revision: int = Field(ge=1)
+    definition_digest: str
+    source: Literal["file", "api"] = "api"
+
 # ---------------------------------------------------------------------------
 # Provider / LLM
 # ---------------------------------------------------------------------------
@@ -82,6 +94,32 @@ class ProviderConfig(BaseModel):
     # Registry metadata
     scope: dict[str, str] = Field(default_factory=dict)
     source: Literal["file", "api"] = Field(default="file")
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_legacy_extra_fields(cls, data: Any) -> Any:
+        """Accept legacy provider payloads that used ``extra_fields``.
+
+        The public and storage models now use ``extra`` plus first-class
+        ``base_url``. Older builder integrations and scenario tests placed
+        OpenAI-compatible ``base_url`` under ``extra_fields``; lifting it here
+        keeps that shape working without making credentials or store location
+        model-controlled input.
+        """
+        if not isinstance(data, dict):
+            return data
+
+        normalized = dict(data)
+        legacy_extra = normalized.pop("extra_fields", None)
+        if isinstance(legacy_extra, dict):
+            canonical_extra = dict(legacy_extra)
+            canonical_extra.update(normalized.get("extra") or {})
+            normalized["extra"] = canonical_extra
+            if normalized.get("base_url") is None and isinstance(
+                canonical_extra.get("base_url"), str
+            ):
+                normalized["base_url"] = canonical_extra["base_url"]
+        return normalized
 
     @field_validator("id")
     @classmethod

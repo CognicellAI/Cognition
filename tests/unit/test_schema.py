@@ -205,3 +205,16 @@ class TestSchemaIndexes:
         """Test index on messages.session_id exists."""
         indexes = [idx.name for idx in messages_table.indexes]
         assert "idx_messages_session" in indexes
+
+    def test_v013_scoped_runtime_indexes_exist(self) -> None:
+        """v0.13 scoped runtime access paths have composite indexes."""
+        session_indexes = {idx.name for idx in sessions_table.indexes}
+        task_indexes = {idx.name for idx in runtime_tasks_table.indexes}
+        run_indexes = {idx.name for idx in session_runs_table.indexes}
+        event_indexes = {idx.name for idx in session_events_table.indexes}
+
+        assert "idx_sessions_scope_page" in session_indexes
+        assert "idx_runtime_tasks_scope_page" in task_indexes
+        assert "uq_runtime_tasks_idempotency" in task_indexes
+        assert "idx_session_runs_scope_session" in run_indexes
+        assert "idx_session_events_scope_session_sequence" in event_indexes

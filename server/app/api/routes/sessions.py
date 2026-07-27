@@ -14,6 +14,7 @@ Git-Style Workspace Model:
 
 from __future__ import annotations
 
+import time
 import uuid
 from collections.abc import AsyncGenerator
 from typing import Annotated, Any, Literal, cast
@@ -60,6 +61,11 @@ from server.app.llm.deep_agent_service import (
     ErrorEvent as ResumeErrorEvent,
 )
 from server.app.models import RunStatus, SessionConfig, SessionStatus
+from server.app.observability import (
+    STORAGE_OPERATION_DURATION,
+    STORAGE_OPERATIONS_TOTAL,
+    storage_backend_label,
+)
 from server.app.runtime_projection import RuntimeProjectionService
 from server.app.session_manager import build_session_workspace_path, ensure_session_workspace_path
 from server.app.settings import Settings
@@ -187,20 +193,23 @@ async def _get_scoped_session(
     store: StorageBackend,
     scope: SessionScope,
 ) -> Any:
-    session = await store.get_session(session_id)
+    started_at = time.monotonic()
+    backend = storage_backend_label(store)
+    session = await store.get_session(session_id, scope.get_all())
+    result = "success" if session is not None else "not_found"
+    STORAGE_OPERATIONS_TOTAL.labels(
+        backend=backend,
+        operation="get_session",
+        result=result,
+    ).inc()
+    STORAGE_OPERATION_DURATION.labels(
+        backend=backend,
+        operation="get_session",
+    ).observe(time.monotonic() - started_at)
     if session is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Session not found: {session_id}",
-        )
-    if not scope.is_empty() and not scope.matches(session.scopes):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail=(
-                f"Scope mismatch: session '{session_id}' was created with scope "
-                f"{session.scopes}, but request has scope {scope.get_all()}. "
-                "Session scope is immutable after creation."
-            ),
         )
     return session
 
@@ -278,6 +287,8 @@ async def create_session(
 async def list_sessions(
     request: Request,
     metadata_filters: Annotated[list[str] | None, Query(alias="metadata")] = None,
+    limit: int = 100,
+    offset: int = 0,
     settings: Settings = Depends(get_settings_dep),  # noqa: B008
     scope: SessionScope = Depends(get_scope_dep),  # noqa: B008
     store: StorageBackend = Depends(get_storage_backend_dep),  # noqa: B008
@@ -297,14 +308,23 @@ async def list_sessions(
     }
 
     # Filter by scope if provided
-    filter_scopes = scope.get_all() if not scope.is_empty() else None
+    filter_scopes = scope.get_all()
+    safe_limit = max(1, min(limit, 500))
+    safe_offset = max(0, offset)
     sessions = await store.list_sessions(
         filter_scopes=filter_scopes,
         metadata_filters=resolved_metadata_filters or None,
+        limit=safe_limit + 1,
+        offset=safe_offset,
     )
+    has_more = len(sessions) > safe_limit
+    page = sessions[:safe_limit]
 
     return SessionList(
-        sessions=[SessionResponse.from_core(s) for s in sessions], total=len(sessions)
+        sessions=[SessionResponse.from_core(s) for s in page],
+        total=len(page),
+        has_more=has_more,
+        next_offset=safe_offset + safe_limit if has_more else None,
     )
 
 
@@ -347,7 +367,7 @@ async def get_session_context(
     """Return scoped, redacted context policy and token-accounting metadata."""
     session = await _get_scoped_session(session_id, store, scope)
     scope_dict = scope.get_all() if not scope.is_empty() else session.scopes
-    messages = await store.list_messages_for_session(session_id)
+    messages = await store.list_messages_for_session(session_id, session.scopes)
     debug_messages = [
         ContextMessageDebug(
             id=message.id,
@@ -387,7 +407,7 @@ async def list_session_runs(
 ) -> SessionRunList:
     """List durable runs for a session."""
     session = await _get_scoped_session(session_id, store, scope)
-    runs = await store.list_runs(session.id)
+    runs = await store.list_runs(session.id, session.scopes)
     return SessionRunList(
         runs=[SessionRunResponse.from_core(run) for run in runs],
         total=len(runs),
@@ -409,16 +429,11 @@ async def get_session_run(
 ) -> SessionRunResponse:
     """Get durable state for one session run."""
     session = await _get_scoped_session(session_id, store, scope)
-    run = await store.get_run(run_id)
+    run = await store.get_run(run_id, session.scopes)
     if run is None or run.session_id != session.id:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Run not found: {run_id}",
-        )
-    if not scope.is_empty() and run.effective_scope != scope.get_all():
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Scope mismatch: run scope is immutable after creation.",
         )
     return SessionRunResponse.from_core(run)
 
@@ -450,14 +465,10 @@ async def list_session_events(
         limit=safe_limit + 1,
         visibility=visibility,
         event_type=event_type,
+        effective_scope=session.scopes,
     )
-    visible_events = [
-        event
-        for event in events
-        if scope.is_empty() or event.effective_scope == scope.get_all()
-    ]
-    has_more = len(visible_events) > safe_limit
-    page = visible_events[:safe_limit]
+    has_more = len(events) > safe_limit
+    page = events[:safe_limit]
     return SessionEventList(
         events=[SessionEventResponse.from_core(event) for event in page],
         total=len(page),
@@ -504,6 +515,7 @@ async def update_session(
         config=request.config,
         agent_name=request.agent_name,
         metadata=request.metadata,
+        effective_scope=scope.get_all(),
     )
 
     if session is None:
@@ -537,7 +549,7 @@ async def delete_session(
 
     agent_manager.unregister_session(session_id)
 
-    await store.delete_session(session_id)
+    await store.delete_session(session_id, scope.get_all())
 
 
 @router.post(
@@ -559,7 +571,7 @@ async def abort_session(
     Cancels any in-progress agent operation.
     """
     session = await _get_scoped_session(session_id, store, scope)
-    active_run = await store.get_active_run(session_id)
+    active_run = await store.get_active_run(session_id, session.scopes)
     projection = RuntimeProjectionService(store)
     if active_run is not None:
         await projection.transition_run(
@@ -620,7 +632,7 @@ async def resume_session(
         artifact_store=artifact_store,
     )
     projection = task_runtime.projection
-    runs = await store.list_runs(session_id)
+    runs = await store.list_runs(session_id, session.scopes)
     interrupted_run = next(
         (
             run
@@ -652,7 +664,7 @@ async def resume_session(
         active_run = execution.run
     else:
         # Compatibility for pre-task runtime records created before v0.10.
-        legacy_run = await store.get_active_run(session_id)
+        legacy_run = await store.get_active_run(session_id, session.scopes)
         if legacy_run is not None:
             active_run = await projection.transition_run(
                 legacy_run,
@@ -709,7 +721,11 @@ async def resume_session(
 
     async def event_generator() -> AsyncGenerator[dict[str, object], None]:
         assistant_content: list[str] = []
-        await store.update_session(session_id=session_id, status=SessionStatus.ACTIVE.value)
+        await store.update_session(
+            session_id=session_id,
+            status=SessionStatus.ACTIVE.value,
+            effective_scope=session.scopes,
+        )
         yield EventBuilder.status("resuming")
 
         async for event in service.resume_response(
@@ -820,7 +836,10 @@ async def resume_session(
     status_code=status.HTTP_200_OK,
     responses={
         404: {"model": ErrorResponse, "description": "Session not found"},
-        409: {"model": ErrorResponse, "description": "Session cannot be cancelled in current state"},
+        409: {
+            "model": ErrorResponse,
+            "description": "Session cannot be cancelled in current state",
+        },
     },
 )
 async def cancel_session(
@@ -836,7 +855,7 @@ async def cancel_session(
     """
     session = await _get_scoped_session(session_id, store, scope)
     current = SessionStatus(session.status)
-    active_run = await store.get_active_run(session_id)
+    active_run = await store.get_active_run(session_id, session.scopes)
     projection = RuntimeProjectionService(store)
 
     if SessionStatus.is_terminal(current):
@@ -846,7 +865,13 @@ async def cancel_session(
         )
 
     # Transition to CANCELLING
-    await _transition_status(store, session_id, current, SessionStatus.ABORTING)
+    await _transition_status(
+        store,
+        session_id,
+        current,
+        SessionStatus.ABORTING,
+        session.scopes,
+    )
     if active_run is not None:
         await projection.transition_run(
             active_run,
@@ -867,7 +892,13 @@ async def cancel_session(
             session_status=SessionStatus.ABORTED,
         )
     else:
-        await _transition_status(store, session_id, SessionStatus.ABORTING, SessionStatus.ABORTED)
+        await _transition_status(
+            store,
+            session_id,
+            SessionStatus.ABORTING,
+            SessionStatus.ABORTED,
+            session.scopes,
+        )
     agent_manager.release_sandbox_backend(session_id)
 
     return {
@@ -910,7 +941,11 @@ async def pause_session(
             detail=f"Cannot pause session '{session_id}' from '{current.value}'",
         )
 
-    await store.update_session(session_id=session_id, status=SessionStatus.IDLE.value)
+    await store.update_session(
+        session_id=session_id,
+        status=SessionStatus.IDLE.value,
+        effective_scope=session.scopes,
+    )
     return {"success": True, "message": "Session paused", "status": SessionStatus.IDLE.value}
 
 
@@ -925,7 +960,7 @@ async def _find_session_by_idempotency_key(
     scope: dict[str, str],
 ) -> Any | None:
     """Find an existing session by idempotency key in the given scope."""
-    sessions = await store.list_sessions()
+    sessions = await store.list_sessions(filter_scopes=scope)
     for s in sessions:
         if s.metadata and s.metadata.get("idempotency_key") == idempotency_key:
             return s
@@ -937,6 +972,7 @@ async def _transition_status(
     session_id: str,
     from_status: SessionStatus,
     to_status: SessionStatus,
+    effective_scope: dict[str, str],
 ) -> None:
     """Transition a session to a new status if allowed."""
     if not SessionStatus.can_transition(from_status, to_status):
@@ -945,4 +981,8 @@ async def _transition_status(
             detail=f"Cannot transition session '{session_id}' "
             f"from '{from_status.value}' to '{to_status.value}'",
         )
-    await store.update_session(session_id=session_id, status=to_status.value)
+    await store.update_session(
+        session_id=session_id,
+        status=to_status.value,
+        effective_scope=effective_scope,
+    )

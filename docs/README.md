@@ -2,7 +2,20 @@
 
 Cognition is a **headless agent orchestration backend**. Define your agent — get REST API, streaming, persistence, sandboxing, and observability automatically.
 
-The documentation is organized into two sections: **Concepts** explain how Cognition works internally; **Guides** are task-oriented and tell you how to do specific things.
+Start with the [code-derived architecture](./architecture/index.md) for C4
+diagrams, runtime flows, deployment topology, known constraints, and decision
+tracking. **Proposals** describe release-independent designs that are not yet
+implemented. **Concepts** explain individual subsystems; **Guides** are
+task-oriented.
+
+---
+
+## Architecture
+
+| Document | Description |
+|---|---|
+| [Architecture](./architecture/index.md) | Code-derived C4 views, runtime flows, deployment topology, risks, and decisions |
+| [Architecture Decisions](./architecture/decisions/index.md) | ADRs for durable architecture choices and compatibility rules |
 
 ---
 
@@ -10,7 +23,6 @@ The documentation is organized into two sections: **Concepts** explain how Cogni
 
 | Document | Description |
 |---|---|
-| [Architecture](./concepts/architecture.md) | The 7-layer architecture, dependency rules, and the batteries-included design |
 | [Sessions & Messages](./concepts/sessions-and-messages.md) | Session lifecycle, message persistence, SSE streaming, and reconnection |
 | [Agent Runtime](./concepts/agent-runtime.md) | AgentRuntime protocol, AgentDefinition model, A2A exposure, and the multi-agent registry |
 | [Storage & Execution](./concepts/storage-and-execution.md) | StorageBackend and ExecutionBackend protocols and their implementations |
@@ -34,6 +46,14 @@ The documentation is organized into two sections: **Concepts** explain how Cogni
 | [Deployment](./guides/deployment.md) | Docker Compose stack, PostgreSQL, Alembic migrations, and production hardening |
 | [API Reference](./guides/api-reference.md) | Every REST endpoint, SSE event type, MCP servers, artifacts, A2A protocol, capabilities, and scoping headers |
 | [Release Checklist](./guides/release-checklist.md) | Standard release process for Cognition versions |
+
+---
+
+## Proposals
+
+| Document | Description |
+|---|---|
+| [Sandboxed Skill Package Registry](./proposals/sandboxed-skill-registry.md) | Release-independent design for scope-aware skill packages, configurable storage, immutable revisions, and sandbox-only execution |
 
 ---
 

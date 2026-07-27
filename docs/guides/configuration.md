@@ -293,6 +293,15 @@ Cognition ships four sandbox backends:
 | YAML key | Environment variable | Default | Description |
 |---|---|---|---|
 | `sandbox.backend` | `COGNITION_SANDBOX_BACKEND` | `local` | `local`, `docker`, `kubernetes`, or `aws_lambda_microvm` |
+| (environment only) | `COGNITION_ALLOW_UNSAFE_LOCAL_EXECUTION` | `false` | Explicitly allow the `local` backend to run commands as the Cognition host process. Use only for standalone development. |
+| (environment only) | `COGNITION_ALLOW_HOST_TOOLS` | `false` | Explicitly inject host-backed Browser, Search, and package-inspection tools. Use only for development deployments that accept host access. |
+| (environment only) | `COGNITION_ALLOW_API_PYTHON_TOOLS` | `false` | Explicitly allow API-registered Python tool code to be loaded by the runtime. Use only for trusted development or admin-only deployments. |
+
+Production deployments should select `docker`, `kubernetes`, or
+`aws_lambda_microvm`. The `local` backend is intentionally unsafe because model
+directed file and process operations run where the Cognition server runs.
+Strict defaults fail closed unless an operator opts into unsafe host-local
+behavior.
 
 ### Docker settings (when `sandbox.backend = docker`)
 
@@ -410,9 +419,38 @@ for the end-to-end setup flow and Terraform example.
 
 | YAML key | Environment variable | Default | Description |
 |---|---|---|---|
-| `observability.otel_enabled` | `COGNITION_OTEL_ENABLED` | `true` | Enable OpenTelemetry tracing |
+| `observability.otel_enabled` | `COGNITION_TRACING_ENABLED` | `false` | Enable OpenTelemetry tracing. `COGNITION_OTEL_ENABLED` remains a compatibility alias. |
 | `observability.otel_endpoint` | `COGNITION_OTEL_ENDPOINT` | `null` | OTLP collector URL |
+| `observability.otel_max_export_bytes` | `COGNITION_OTLP_MAX_EXPORT_BYTES` | `3670016` | Maximum encoded OTLP trace export request size. Default is 3.5 MiB, below the common 4 MiB collector gRPC limit. `COGNITION_OTEL_MAX_EXPORT_BYTES` remains a compatibility alias. |
+| `observability.otlp_queue_size` | `COGNITION_OTLP_QUEUE_SIZE` | `2048` | Maximum queued trace spans for bounded OTLP export |
+| `observability.otlp_export_timeout_ms` | `COGNITION_OTLP_EXPORT_TIMEOUT_MS` | `30000` | Per-attempt OTLP trace export timeout in milliseconds |
+| `observability.trace_sample_ratio` | `COGNITION_TRACE_SAMPLE_RATIO` | `0.10` | Parent-based root trace sample ratio for normal runs |
+| `observability.metrics_enabled` | `COGNITION_METRICS_ENABLED` | `true` | Enable the Prometheus metrics endpoint independently from tracing |
 | `observability.metrics_port` | `COGNITION_METRICS_PORT` | `9090` | Prometheus metrics scrape port |
+| `observability.log_format` | `COGNITION_LOG_FORMAT` | `json` | Structured log renderer: `json` or `console` |
+| `observability.native_agent_tracing` | `COGNITION_NATIVE_AGENT_TRACING` | `disabled` | Optional semantic tracing mode: `disabled`, `langsmith_otel`, `mlflow_autolog`, or `otlp_to_mlflow` |
+
+---
+
+## Runtime Safety and Cache Bounds
+
+| YAML key | Environment variable | Default | Description |
+|---|---|---|---|
+| (environment only) | `COGNITION_CALLBACK_ALLOWED_ORIGINS` | `[]` | Comma-separated or JSON list of exact HTTPS origins allowed for per-message completion callbacks. Empty means callbacks are denied. |
+| (environment only) | `COGNITION_AGENT_CACHE_MAX_ENTRIES` | `128` | Maximum compiled Agent graph cache entries. |
+| (environment only) | `COGNITION_AGENT_CACHE_TTL_SECONDS` | `900` | Time-to-live for compiled Agent graph cache entries. |
+| (environment only) | `COGNITION_SESSION_SERVICE_CACHE_MAX_ENTRIES` | `256` | Maximum cached per-session service entries. |
+| (environment only) | `COGNITION_SESSION_SERVICE_CACHE_TTL_SECONDS` | `1800` | Time-to-live for cached per-session service entries. |
+
+Per-message callbacks are runtime egress from a shared Cognition deployment.
+They are denied unless the callback URL has an exact approved HTTPS origin such
+as `https://builder.example.com`. URL paths, query strings, userinfo, fragments,
+and non-HTTPS origins are not approval boundaries.
+
+Agent graph cache keys include the effective scope fingerprint, Agent revision,
+runtime manifest digest, sandbox backend identity, model identity, and relevant
+runtime settings. A cached graph never owns a sandbox backend; each run supplies
+its sandbox dynamically.
 
 ---
 
@@ -423,6 +461,11 @@ for the end-to-end setup flow and Terraform example.
 | `mlflow.enabled` | `COGNITION_MLFLOW_ENABLED` | `false` | Enable MLflow experiment tracking |
 | `mlflow.tracking_uri` | `COGNITION_MLFLOW_TRACKING_URI` | `null` | MLflow server URL |
 | `mlflow.experiment_name` | `COGNITION_MLFLOW_EXPERIMENT_NAME` | `cognition` | MLflow experiment name |
+| `mlflow.native_agent_tracing` | `COGNITION_NATIVE_AGENT_TRACING` | `disabled` | Select `otlp_to_mlflow` for Collector-backed MLflow traces or `mlflow_autolog` for native MLflow LangChain/Deep Agents traces |
+
+The upstream `MLFLOW_ENABLED`, `MLFLOW_TRACKING_URI`, and
+`MLFLOW_EXPERIMENT_NAME` names are accepted as compatibility aliases when the
+Cognition-prefixed setting is unset.
 
 ---
 
@@ -715,6 +758,6 @@ LLM provider and agent configuration is now managed via the **ConfigRegistry API
 
 The `PATCH /config` endpoint is restricted to **infrastructure settings only**:
 
-**Allowed paths:** `rate_limit.per_minute`, `rate_limit.burst`, `observability.otel_enabled`, `observability.metrics_port`, `observability.otel_endpoint`, `mlflow.enabled`, `mlflow.experiment_name`.
+**Allowed paths:** `rate_limit.per_minute`, `rate_limit.burst`, `observability.otel_enabled`, `observability.otel_max_export_bytes`, `observability.otlp_queue_size`, `observability.otlp_export_timeout_ms`, `observability.trace_sample_ratio`, `observability.metrics_enabled`, `observability.metrics_port`, `observability.otel_endpoint`, `observability.log_format`, `observability.native_agent_tracing`, `mlflow.enabled`, `mlflow.experiment_name`.
 
 Changes are persisted to `.cognition/config.yaml` and a backup is created at `.cognition/config.yaml.backup`. Roll back with `POST /config/rollback`.

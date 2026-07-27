@@ -38,6 +38,36 @@ class TestListProviders:
         assert "count" in data
         assert isinstance(data["providers"], list)
 
+    def test_list_is_sorted_by_priority_then_id(self):
+        for provider_id, priority in [
+            ("sort-c-provider", 30),
+            ("sort-a-provider", 10),
+            ("sort-b-provider", 10),
+        ]:
+            response = client.post(
+                "/models/providers",
+                json={
+                    "id": provider_id,
+                    "provider": "openai",
+                    "model": "gpt-4o",
+                    "priority": priority,
+                },
+            )
+            assert response.status_code == 201
+
+        response = client.get("/models/providers")
+        assert response.status_code == 200
+        providers = [
+            provider
+            for provider in response.json()["providers"]
+            if provider["id"] in {"sort-a-provider", "sort-b-provider", "sort-c-provider"}
+        ]
+        assert [provider["id"] for provider in providers] == [
+            "sort-a-provider",
+            "sort-b-provider",
+            "sort-c-provider",
+        ]
+
     def test_count_matches_providers_length(self):
         response = client.get("/models/providers")
         data = response.json()
@@ -118,6 +148,21 @@ class TestCreateProvider:
         )
         assert response.status_code == 500
         assert "require base_url" in response.json()["detail"]
+
+    def test_create_openai_compatible_accepts_legacy_extra_fields_base_url(self):
+        response = client.post(
+            "/models/providers",
+            json={
+                "id": "openrouter-legacy-extra-fields",
+                "provider": "openai_compatible",
+                "model": "gpt-4o",
+                "extra_fields": {"base_url": "https://openrouter.ai/api/v1"},
+            },
+        )
+        assert response.status_code == 201
+        data = response.json()
+        assert data["base_url"] == "https://openrouter.ai/api/v1"
+        assert data["extra"]["base_url"] == "https://openrouter.ai/api/v1"
 
     def test_create_openai_rejects_base_url(self):
         response = client.post(

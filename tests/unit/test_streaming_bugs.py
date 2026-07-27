@@ -70,6 +70,7 @@ def _make_session(
 ) -> Session:
     return Session(
         id="sess-stream-test",
+        agent_name="default",
         workspace_path="/tmp/ws",
         title="Stream Test",
         thread_id="thread-stream-test",

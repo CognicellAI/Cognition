@@ -2,7 +2,7 @@
 
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, Header, HTTPException, Response
 
 from server.app.agent.definition import A2AConfig, AgentDefinition
 from server.app.api.dependencies import get_config_store, get_scope_dep
@@ -14,14 +14,26 @@ from server.app.api.models import (
     AgentUpdate,
 )
 from server.app.api.scoping import SessionScope
+from server.app.observability import SCOPE_ACCESS_DENIED_TOTAL
+from server.app.storage.common import canonical_json_digest
+from server.app.storage.config_models import AgentConfigRecord
+from server.app.storage.config_registry import ConfigRevisionConflictError
 from server.app.storage.config_store import ConfigStore
 
 router = APIRouter(prefix="/agents", tags=["agents"])
 
 
-def _agent_to_response(agent: AgentDefinition) -> AgentResponse:
+def _agent_to_response(
+    agent: AgentDefinition,
+    record: AgentConfigRecord | None = None,
+) -> AgentResponse:
+    definition = agent.model_dump(mode="json")
     return AgentResponse(
         name=agent.name,
+        revision=record.revision if record else 1,
+        definition_digest=(
+            record.definition_digest if record else canonical_json_digest(definition)
+        ),
         display_name=agent.display_name,
         description=agent.description,
         mode=agent.mode,
@@ -76,22 +88,81 @@ def _agent_to_response(agent: AgentDefinition) -> AgentResponse:
     )
 
 
+def _etag(revision: int, digest: str) -> str:
+    return f'"{revision}-{digest}"'
+
+
+def _if_match_revision(value: str | None) -> int | None:
+    if value is None:
+        return None
+    token = value.strip()
+    if token.startswith("W/"):
+        token = token[2:]
+    token = token.strip('"')
+    try:
+        return int(token.split("-", 1)[0])
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail="Invalid If-Match Agent ETag") from exc
+
+
+def _trusted_agent_scope(
+    body_scope: dict[str, str],
+    scope: SessionScope,
+    response: Response,
+) -> dict[str, str]:
+    trusted_scope = scope.get_all()
+    if body_scope and body_scope != trusted_scope:
+        SCOPE_ACCESS_DENIED_TOTAL.labels(
+            resource_type="agent",
+            operation="scope_conflict",
+        ).inc()
+        raise HTTPException(
+            status_code=400,
+            detail="Request-body scope conflicts with authoritative scope headers",
+        )
+    if body_scope:
+        response.headers["Warning"] = (
+            '299 Cognition "Agent request-body scope is deprecated; use scope headers"'
+        )
+    return trusted_scope
+
+
 @router.get("", response_model=AgentList)
 async def list_agents(
+    limit: int = 100,
+    offset: int = 0,
     scope: SessionScope = Depends(get_scope_dep),  # noqa: B008
     config_store: ConfigStore = Depends(get_config_store),  # noqa: B008
 ) -> AgentList:
     """List all available agents (excluding hidden ones)."""
+    safe_limit = max(1, min(limit, 500))
+    safe_offset = max(0, offset)
     agents = await config_store.list_agent_definitions(
         include_hidden=False,
         scope=scope.get_all() or None,
+        limit=safe_limit + 1,
+        offset=safe_offset,
     )
-    return AgentList(agents=[_agent_to_response(a) for a in agents])
+    records = {
+        agent.name: await config_store.get_agent_record(
+            agent.name,
+            scope.get_all() or None,
+        )
+        for agent in agents
+    }
+    has_more = len(agents) > safe_limit
+    page = agents[:safe_limit]
+    return AgentList(
+        agents=[_agent_to_response(agent, records[agent.name]) for agent in page],
+        has_more=has_more,
+        next_offset=safe_offset + safe_limit if has_more else None,
+    )
 
 
 @router.get("/{name}", response_model=AgentResponse)
 async def get_agent(
     name: str,
+    response: Response,
     scope: SessionScope = Depends(get_scope_dep),  # noqa: B008
     config_store: ConfigStore = Depends(get_config_store),  # noqa: B008
 ) -> AgentResponse:
@@ -99,25 +170,22 @@ async def get_agent(
     agent = await config_store.get_agent_definition(name, scope.get_all() or None)
     if agent is None or agent.hidden:
         raise HTTPException(status_code=404, detail=f"Agent '{name}' not found")
-    return _agent_to_response(agent)
+    record = await config_store.get_agent_record(name, scope.get_all() or None)
+    result = _agent_to_response(agent, record)
+    response.headers["ETag"] = _etag(result.revision, result.definition_digest)
+    return result
 
 
 @router.post("", response_model=AgentResponse, status_code=201)
 async def create_agent(
     body: AgentCreate,
+    response: Response,
+    if_match: str | None = Header(default=None, alias="If-Match"),
+    if_none_match: str | None = Header(default=None, alias="If-None-Match"),
     scope: SessionScope = Depends(get_scope_dep),  # noqa: B008
     config_store: ConfigStore = Depends(get_config_store),  # noqa: B008
 ) -> AgentResponse:
-    """Create or replace an agent definition in the ConfigStore.
-
-    Built-in (native) agents cannot be replaced.
-    """
-    existing = await config_store.get_agent_definition(body.name, scope.get_all() or None)
-    if existing and existing.native:
-        raise HTTPException(
-            status_code=409,
-            detail=f"Cannot overwrite built-in agent '{body.name}'",
-        )
+    """Create or replace an agent definition in the ConfigStore."""
 
     try:
         definition_data: dict[str, Any] = {
@@ -163,13 +231,26 @@ async def create_agent(
                 name: config.model_dump(exclude_none=True)
                 for name, config in body.interrupt_on.items()
             }
-        effective_scope = scope.get_all() or body.scope
-        await config_store.upsert_agent(body.name, effective_scope, definition_data, "api")
+        effective_scope = _trusted_agent_scope(body.scope, scope, response)
+        record = await config_store.upsert_agent(
+            body.name,
+            effective_scope,
+            definition_data,
+            "api",
+            expected_revision=_if_match_revision(if_match),
+            create_only=if_none_match == "*",
+        )
 
         agent_def = await config_store.get_agent_definition(body.name, effective_scope or None)
         if agent_def is None:
             raise HTTPException(status_code=500, detail="Agent not found after creation")
-        return _agent_to_response(agent_def)
+        result = _agent_to_response(agent_def, record)
+        response.headers["ETag"] = _etag(result.revision, result.definition_digest)
+        return result
+    except ConfigRevisionConflictError as exc:
+        raise HTTPException(status_code=412, detail=str(exc)) from exc
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e)) from e
 
@@ -178,25 +259,30 @@ async def create_agent(
 async def replace_agent(
     name: str,
     body: AgentCreate,
+    response: Response,
+    if_match: str | None = Header(default=None, alias="If-Match"),
+    if_none_match: str | None = Header(default=None, alias="If-None-Match"),
     scope: SessionScope = Depends(get_scope_dep),  # noqa: B008
     config_store: ConfigStore = Depends(get_config_store),  # noqa: B008
 ) -> AgentResponse:
     """Replace an agent definition (full update)."""
-    existing = await config_store.get_agent_definition(name, scope.get_all() or None)
-    if existing and existing.native:
-        raise HTTPException(
-            status_code=409,
-            detail=f"Cannot overwrite built-in agent '{name}'",
-        )
-
     body.name = name
-    return await create_agent(body, scope=scope, config_store=config_store)
+    return await create_agent(
+        body,
+        response=response,
+        if_match=if_match,
+        if_none_match=if_none_match,
+        scope=scope,
+        config_store=config_store,
+    )
 
 
 @router.patch("/{name}", response_model=AgentResponse)
 async def update_agent(
     name: str,
     body: AgentUpdate,
+    response: Response,
+    if_match: str | None = Header(default=None, alias="If-Match"),
     scope: SessionScope = Depends(get_scope_dep),  # noqa: B008
     config_store: ConfigStore = Depends(get_config_store),  # noqa: B008
 ) -> AgentResponse:
@@ -205,12 +291,6 @@ async def update_agent(
     existing = await config_store.get_agent_definition(name, scope_dict)
     if existing is None:
         raise HTTPException(status_code=404, detail=f"Agent '{name}' not found")
-    if existing.native:
-        raise HTTPException(
-            status_code=409,
-            detail=f"Cannot modify built-in agent '{name}'",
-        )
-
     try:
         result = await config_store.get_agent_raw_with_scope(name, scope_dict)
         if result is None:
@@ -245,12 +325,25 @@ async def update_agent(
             data["response_format"] = updates.pop("response_format")
         data.update(updates)
 
-        await config_store.upsert_agent(name, agent_scope, data, "api")
+        record = await config_store.upsert_agent(
+            name,
+            agent_scope,
+            data,
+            "api",
+            expected_revision=_if_match_revision(if_match),
+        )
 
         agent_def = await config_store.get_agent_definition(name, agent_scope or None)
         if agent_def is None:
             raise HTTPException(status_code=500, detail="Agent not found after update")
-        return _agent_to_response(agent_def)
+        result_response = _agent_to_response(agent_def, record)
+        response.headers["ETag"] = _etag(
+            result_response.revision,
+            result_response.definition_digest,
+        )
+        return result_response
+    except ConfigRevisionConflictError as exc:
+        raise HTTPException(status_code=412, detail=str(exc)) from exc
     except HTTPException:
         raise
     except Exception as e:
@@ -260,21 +353,22 @@ async def update_agent(
 @router.delete("/{name}", status_code=204)
 async def delete_agent(
     name: str,
+    if_match: str | None = Header(default=None, alias="If-Match"),
     scope: SessionScope = Depends(get_scope_dep),  # noqa: B008
     config_store: ConfigStore = Depends(get_config_store),  # noqa: B008
 ) -> None:
-    """Delete a user-defined agent definition."""
+    """Delete an agent definition."""
     scope_dict = scope.get_all() or None
-    existing = await config_store.get_agent_definition(name, scope_dict)
+    existing = await config_store.get_agent_record(name, scope_dict)
     if existing is None:
         raise HTTPException(status_code=404, detail=f"Agent '{name}' not found")
-    if existing.native:
-        raise HTTPException(
-            status_code=409,
-            detail=f"Cannot delete built-in agent '{name}'",
-        )
-
     try:
-        await config_store.delete_agent(name, scope_dict)
+        await config_store.delete_agent(
+            name,
+            scope_dict,
+            expected_revision=_if_match_revision(if_match),
+        )
+    except ConfigRevisionConflictError as exc:
+        raise HTTPException(status_code=412, detail=str(exc)) from exc
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e)) from e

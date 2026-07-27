@@ -9,7 +9,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import AnyHttpUrl, BaseModel, ConfigDict, Field
+from pydantic import AnyHttpUrl, BaseModel, ConfigDict, Field, model_validator
 
 from server.app.agent.definition import (
     A2AConfig,
@@ -40,7 +40,11 @@ class SessionCreate(BaseModel):
     """
 
     title: str | None = Field(None, max_length=200, description="Optional session title")
-    agent_name: str = Field("default", description="Agent to use for this session")
+    agent_name: str = Field(
+        ...,
+        min_length=1,
+        description="Builder-provisioned Agent to bind to this session",
+    )
     metadata: dict[str, str] | None = Field(
         default=None,
         description="Arbitrary key-value metadata attached to the session",
@@ -60,16 +64,24 @@ class SessionResponse(BaseModel):
     title: str | None = Field(None, description="Session title")
     thread_id: str = Field(..., description="LangGraph thread ID for checkpointing")
     status: Literal[
-        "queued", "starting", "active", "idle",
-        "waiting_for_approval", "stalled",
-        "aborting", "aborted",
-        "failed", "done", "expired",
-        "inactive", "error",
+        "queued",
+        "starting",
+        "active",
+        "idle",
+        "waiting_for_approval",
+        "stalled",
+        "aborting",
+        "aborted",
+        "failed",
+        "done",
+        "expired",
+        "inactive",
+        "error",
     ] = Field(..., description="Session status")
     created_at: str = Field(..., description="Session creation timestamp (ISO format)")
     updated_at: str = Field(..., description="Last activity timestamp (ISO format)")
     message_count: int = Field(0, description="Number of messages in session")
-    agent_name: str = Field("default", description="Agent bound to this session")
+    agent_name: str = Field(..., description="Agent bound to this session")
     idempotency_key: str | None = Field(
         default=None, description="Idempotency key used during creation, if any"
     )
@@ -77,9 +89,7 @@ class SessionResponse(BaseModel):
         default_factory=dict,
         description="Arbitrary key-value metadata attached to the session",
     )
-    active_run_id: str | None = Field(
-        default=None, description="Currently active run, if any"
-    )
+    active_run_id: str | None = Field(default=None, description="Currently active run, if any")
     latest_run_id: str | None = Field(
         default=None, description="Most recent run associated with the session"
     )
@@ -118,6 +128,8 @@ class SessionList(BaseModel):
 
     sessions: list[SessionResponse] = Field(default_factory=list)
     total: int = Field(..., description="Total number of sessions")
+    has_more: bool = False
+    next_offset: int | None = None
 
 
 class SessionUpdate(BaseModel):
@@ -632,7 +644,13 @@ class ConfigUpdateRequest(BaseModel):
         None, description="Rate limiting settings (per_minute, burst)"
     )
     observability: dict[str, Any] | None = Field(
-        None, description="Observability settings (otel_enabled, metrics_port, otel_endpoint)"
+        None,
+        description=(
+            "Observability settings (otel_enabled, otel_max_export_bytes, "
+            "otlp_queue_size, otlp_export_timeout_ms, trace_sample_ratio, "
+            "metrics_enabled, metrics_port, otel_endpoint, log_format, "
+            "native_agent_tracing)"
+        ),
     )
 
 
@@ -858,6 +876,13 @@ class AgentResponse(BaseModel):
     """Agent information for API responses."""
 
     name: str = Field(..., description="Stable agent runtime identifier")
+    revision: int = Field(..., ge=1, description="Exact-scoped Agent revision")
+    definition_digest: str = Field(
+        ...,
+        min_length=64,
+        max_length=64,
+        description="SHA-256 digest of the validated Agent definition",
+    )
     display_name: str | None = Field(
         None,
         description="Optional human-readable name used for public Agent presentation",
@@ -865,7 +890,10 @@ class AgentResponse(BaseModel):
     description: str | None = Field(None, description="Agent description")
     mode: Literal["primary", "subagent", "all"] = Field(..., description="Agent mode")
     hidden: bool = Field(..., description="Whether agent is hidden from listings")
-    native: bool = Field(..., description="Whether agent is built-in")
+    native: bool = Field(
+        ...,
+        description=("Legacy compatibility flag; Cognition does not create native Agents"),
+    )
     a2a: A2AConfig = Field(
         default_factory=A2AConfig,
         description="A2A exposure and public Agent Card presentation",
@@ -901,8 +929,7 @@ class AgentResponse(BaseModel):
     async_subagents: list[AsyncSubagentConfig] = Field(
         default_factory=list,
         description=(
-            "Experimental remote Agent Protocol async subagents exposed as "
-            "background task tools"
+            "Experimental remote Agent Protocol async subagents exposed as background task tools"
         ),
     )
     # ISSUE-009: Added tools and skills for better agent introspection
@@ -938,6 +965,8 @@ class AgentList(BaseModel):
     agents: list[AgentResponse] = Field(
         default_factory=list, description="List of available agents"
     )
+    has_more: bool = False
+    next_offset: int | None = None
 
 
 # ============================================================================
@@ -1176,6 +1205,25 @@ class ProviderCreate(BaseModel):
     extra: dict[str, Any] = Field(default_factory=dict)
     scope: dict[str, str] = Field(default_factory=dict)
 
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_legacy_extra_fields(cls, data: Any) -> Any:
+        """Accept legacy ``extra_fields`` while keeping ``extra`` canonical."""
+        if not isinstance(data, dict):
+            return data
+
+        normalized = dict(data)
+        legacy_extra = normalized.pop("extra_fields", None)
+        if isinstance(legacy_extra, dict):
+            canonical_extra = dict(legacy_extra)
+            canonical_extra.update(normalized.get("extra") or {})
+            normalized["extra"] = canonical_extra
+            if normalized.get("base_url") is None and isinstance(
+                canonical_extra.get("base_url"), str
+            ):
+                normalized["base_url"] = canonical_extra["base_url"]
+        return normalized
+
 
 class ProviderUpdate(BaseModel):
     """Request to partially update a provider config."""
@@ -1192,6 +1240,25 @@ class ProviderUpdate(BaseModel):
     region: str | None = None
     role_arn: str | None = None
     extra: dict[str, Any] | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_legacy_extra_fields(cls, data: Any) -> Any:
+        """Accept legacy ``extra_fields`` while keeping ``extra`` canonical."""
+        if not isinstance(data, dict):
+            return data
+
+        normalized = dict(data)
+        legacy_extra = normalized.pop("extra_fields", None)
+        if isinstance(legacy_extra, dict):
+            canonical_extra = dict(legacy_extra)
+            canonical_extra.update(normalized.get("extra") or {})
+            normalized["extra"] = canonical_extra
+            if normalized.get("base_url") is None and isinstance(
+                canonical_extra.get("base_url"), str
+            ):
+                normalized["base_url"] = canonical_extra["base_url"]
+        return normalized
 
 
 class ProviderResponse(BaseModel):

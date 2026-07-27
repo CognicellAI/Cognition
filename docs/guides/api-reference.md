@@ -337,7 +337,7 @@ Send a user message and receive the agent's streaming response via Server-Sent E
 | `content` | string (min 1) | Yes | The user's message |
 | `model` | string | No | Override model for this message only |
 | `parent_id` | string | No | Parent message ID for threaded context |
-| `callback_url` | URL | No | Best-effort completion callback URL for a final POST after the run finishes |
+| `callback_url` | URL | No | Best-effort completion callback URL for a final POST after the run finishes. Denied unless the URL has an operator-approved HTTPS origin. |
 
 **Headers:**
 ```
@@ -798,9 +798,9 @@ For scoped agents, use the same `X-Cognition-Scope-*` headers used to create or 
 
 Delete an agent definition from the ConfigRegistry.
 
-**Response `204 No Content`**  
-**Response `404 Not Found`:** Agent not found  
-**Response `400 Bad Request`:** Attempt to delete a built-in (native) agent
+- **Response `204 No Content`**
+- **Response `404 Not Found`:** Agent not found in the exact request scope
+- **Response `412 Precondition Failed`:** Stale `If-Match` revision
 
 ---
 
@@ -1278,7 +1278,7 @@ Get the current server configuration (infrastructure only). Secrets are redacted
 
 Update infrastructure configuration at runtime. Changes are persisted to `.cognition/config.yaml`.
 
-**Allowed paths:** `rate_limit.per_minute`, `rate_limit.burst`, `observability.otel_enabled`, `observability.metrics_port`, `observability.otel_endpoint`, `mlflow.enabled`, `mlflow.experiment_name`.
+**Allowed paths:** `rate_limit.per_minute`, `rate_limit.burst`, `observability.otel_enabled`, `observability.otel_max_export_bytes`, `observability.otlp_queue_size`, `observability.otlp_export_timeout_ms`, `observability.trace_sample_ratio`, `observability.metrics_enabled`, `observability.metrics_port`, `observability.otel_endpoint`, `observability.log_format`, `observability.native_agent_tracing`, `mlflow.enabled`, `mlflow.experiment_name`.
 
 **Request body:**
 ```json

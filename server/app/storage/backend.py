@@ -44,7 +44,9 @@ class SessionStore(Protocol):
         session_id: str,
         thread_id: str,
         config: SessionConfig,
+        agent_name: str,
         title: str | None = None,
+        scopes: dict[str, str] | None = None,
         metadata: dict[str, str] | None = None,
         workspace_path: str | None = None,
     ) -> Session:
@@ -54,6 +56,7 @@ class SessionStore(Protocol):
             session_id: Unique identifier for the session.
             thread_id: LangGraph thread identifier.
             config: Session configuration options.
+            agent_name: Builder-provisioned Agent bound to the session.
             title: Optional human-readable title.
 
         Returns:
@@ -61,7 +64,11 @@ class SessionStore(Protocol):
         """
         ...
 
-    async def get_session(self, session_id: str) -> Session | None:
+    async def get_session(
+        self,
+        session_id: str,
+        effective_scope: dict[str, str] | None = None,
+    ) -> Session | None:
         """Get a session by ID.
 
         Args:
@@ -72,7 +79,13 @@ class SessionStore(Protocol):
         """
         ...
 
-    async def list_sessions(self) -> list[Session]:
+    async def list_sessions(
+        self,
+        filter_scopes: dict[str, str] | None = None,
+        metadata_filters: dict[str, str] | None = None,
+        limit: int | None = None,
+        offset: int = 0,
+    ) -> list[Session]:
         """List all sessions.
 
         Returns:
@@ -88,6 +101,7 @@ class SessionStore(Protocol):
         config: SessionConfig | None = None,
         agent_name: str | None = None,
         metadata: dict[str, str] | None = None,
+        effective_scope: dict[str, str] | None = None,
     ) -> Session | None:
         """Update a session.
 
@@ -104,7 +118,12 @@ class SessionStore(Protocol):
         """
         ...
 
-    async def update_message_count(self, session_id: str, count: int) -> None:
+    async def update_message_count(
+        self,
+        session_id: str,
+        count: int,
+        effective_scope: dict[str, str] | None = None,
+    ) -> None:
         """Update the message count for a session.
 
         Args:
@@ -113,7 +132,11 @@ class SessionStore(Protocol):
         """
         ...
 
-    async def delete_session(self, session_id: str) -> bool:
+    async def delete_session(
+        self,
+        session_id: str,
+        effective_scope: dict[str, str] | None = None,
+    ) -> bool:
         """Delete a session.
 
         Args:
@@ -147,6 +170,7 @@ class MessageStore(Protocol):
         token_count: int | None = None,
         model_used: str | None = None,
         metadata: dict[str, Any] | None = None,
+        effective_scope: dict[str, str] | None = None,
     ) -> Message:
         """Create a new message.
 
@@ -167,7 +191,11 @@ class MessageStore(Protocol):
         """
         ...
 
-    async def get_message(self, message_id: str) -> Message | None:
+    async def get_message(
+        self,
+        message_id: str,
+        effective_scope: dict[str, str] | None = None,
+    ) -> Message | None:
         """Get a message by ID.
 
         Args:
@@ -179,7 +207,11 @@ class MessageStore(Protocol):
         ...
 
     async def get_messages_by_session(
-        self, session_id: str, limit: int = 50, offset: int = 0
+        self,
+        session_id: str,
+        limit: int = 50,
+        offset: int = 0,
+        effective_scope: dict[str, str] | None = None,
     ) -> tuple[list[Message], int]:
         """Get messages for a session with pagination.
 
@@ -193,7 +225,11 @@ class MessageStore(Protocol):
         """
         ...
 
-    async def list_messages_for_session(self, session_id: str) -> list[Message]:
+    async def list_messages_for_session(
+        self,
+        session_id: str,
+        effective_scope: dict[str, str] | None = None,
+    ) -> list[Message]:
         """List all messages for a session (no pagination).
 
         Args:
@@ -204,7 +240,11 @@ class MessageStore(Protocol):
         """
         ...
 
-    async def delete_messages_for_session(self, session_id: str) -> int:
+    async def delete_messages_for_session(
+        self,
+        session_id: str,
+        effective_scope: dict[str, str] | None = None,
+    ) -> int:
         """Delete all messages for a session.
 
         Args:
@@ -220,6 +260,7 @@ class MessageStore(Protocol):
         session_id: str,
         thread_id: str,
         checkpoint_messages: list[Any],
+        effective_scope: dict[str, str] | None = None,
     ) -> int:
         """Rebuild the message projection for a session from checkpoint state.
 
@@ -339,11 +380,18 @@ class RuntimeStore(Protocol):
         trace_id: str | None = None,
         metadata: dict[str, Any] | None = None,
         task_id: str | None = None,
+        agent_revision: int = 1,
+        runtime_manifest: dict[str, Any] | None = None,
+        manifest_digest: str | None = None,
     ) -> SessionRun:
         """Create a durable run for a session."""
         ...
 
-    async def get_run(self, run_id: str) -> SessionRun | None:
+    async def get_run(
+        self,
+        run_id: str,
+        effective_scope: dict[str, str] | None = None,
+    ) -> SessionRun | None:
         """Get a run by ID."""
         ...
 
@@ -351,15 +399,24 @@ class RuntimeStore(Protocol):
         self,
         session_id: str,
         idempotency_key: str,
+        effective_scope: dict[str, str] | None = None,
     ) -> SessionRun | None:
         """Get an existing run by session and idempotency key."""
         ...
 
-    async def list_runs(self, session_id: str) -> list[SessionRun]:
+    async def list_runs(
+        self,
+        session_id: str,
+        effective_scope: dict[str, str] | None = None,
+    ) -> list[SessionRun]:
         """List runs for a session, newest first."""
         ...
 
-    async def get_active_run(self, session_id: str) -> SessionRun | None:
+    async def get_active_run(
+        self,
+        session_id: str,
+        effective_scope: dict[str, str] | None = None,
+    ) -> SessionRun | None:
         """Get the active foreground run for a session, if any."""
         ...
 
@@ -372,6 +429,7 @@ class RuntimeStore(Protocol):
         error_code: str | None = None,
         status_reason: str | None = None,
         metadata: dict[str, Any] | None = None,
+        effective_scope: dict[str, str] | None = None,
     ) -> SessionRun | None:
         """Update durable run state."""
         ...
@@ -401,6 +459,7 @@ class RuntimeStore(Protocol):
         visibility: Literal["internal", "builder", "end_user"] | None = None,
         event_type: str | None = None,
         task_id: str | None = None,
+        effective_scope: dict[str, str] | None = None,
     ) -> list[SessionEvent]:
         """List runtime events for a session using cursor-style filters."""
         ...
@@ -420,16 +479,20 @@ class StorageBackend(Protocol):
         session_id: str,
         thread_id: str,
         config: SessionConfig,
+        agent_name: str,
         title: str | None = None,
         scopes: dict[str, str] | None = None,
-        agent_name: str = "default",
         metadata: dict[str, str] | None = None,
         workspace_path: str | None = None,
     ) -> Session:
         """Create a new session."""
         ...
 
-    async def get_session(self, session_id: str) -> Session | None:
+    async def get_session(
+        self,
+        session_id: str,
+        effective_scope: dict[str, str] | None = None,
+    ) -> Session | None:
         """Get a session by ID."""
         ...
 
@@ -437,6 +500,8 @@ class StorageBackend(Protocol):
         self,
         filter_scopes: dict[str, str] | None = None,
         metadata_filters: dict[str, str] | None = None,
+        limit: int | None = None,
+        offset: int = 0,
     ) -> list[Session]:
         """List all sessions."""
         ...
@@ -449,6 +514,7 @@ class StorageBackend(Protocol):
         config: SessionConfig | None = None,
         agent_name: str | None = None,
         metadata: dict[str, str] | None = None,
+        effective_scope: dict[str, str] | None = None,
     ) -> Session | None:
         """Update a session.
 
@@ -464,11 +530,20 @@ class StorageBackend(Protocol):
         """
         ...
 
-    async def update_message_count(self, session_id: str, count: int) -> None:
+    async def update_message_count(
+        self,
+        session_id: str,
+        count: int,
+        effective_scope: dict[str, str] | None = None,
+    ) -> None:
         """Update the message count for a session."""
         ...
 
-    async def delete_session(self, session_id: str) -> bool:
+    async def delete_session(
+        self,
+        session_id: str,
+        effective_scope: dict[str, str] | None = None,
+    ) -> bool:
         """Delete a session."""
         ...
 
@@ -485,25 +560,42 @@ class StorageBackend(Protocol):
         token_count: int | None = None,
         model_used: str | None = None,
         metadata: dict[str, Any] | None = None,
+        effective_scope: dict[str, str] | None = None,
     ) -> Message:
         """Create a new message."""
         ...
 
-    async def get_message(self, message_id: str) -> Message | None:
+    async def get_message(
+        self,
+        message_id: str,
+        effective_scope: dict[str, str] | None = None,
+    ) -> Message | None:
         """Get a message by ID."""
         ...
 
     async def get_messages_by_session(
-        self, session_id: str, limit: int = 50, offset: int = 0
+        self,
+        session_id: str,
+        limit: int = 50,
+        offset: int = 0,
+        effective_scope: dict[str, str] | None = None,
     ) -> tuple[list[Message], int]:
         """Get messages for a session with pagination."""
         ...
 
-    async def list_messages_for_session(self, session_id: str) -> list[Message]:
+    async def list_messages_for_session(
+        self,
+        session_id: str,
+        effective_scope: dict[str, str] | None = None,
+    ) -> list[Message]:
         """List all messages for a session."""
         ...
 
-    async def delete_messages_for_session(self, session_id: str) -> int:
+    async def delete_messages_for_session(
+        self,
+        session_id: str,
+        effective_scope: dict[str, str] | None = None,
+    ) -> int:
         """Delete all messages for a session."""
         ...
 
@@ -512,6 +604,7 @@ class StorageBackend(Protocol):
         session_id: str,
         thread_id: str,
         checkpoint_messages: list[Any],
+        effective_scope: dict[str, str] | None = None,
     ) -> int:
         """Rebuild the message projection for a session from checkpoint state."""
         ...
@@ -593,11 +686,18 @@ class StorageBackend(Protocol):
         trace_id: str | None = None,
         metadata: dict[str, Any] | None = None,
         task_id: str | None = None,
+        agent_revision: int = 1,
+        runtime_manifest: dict[str, Any] | None = None,
+        manifest_digest: str | None = None,
     ) -> SessionRun:
         """Create a durable run for a session."""
         ...
 
-    async def get_run(self, run_id: str) -> SessionRun | None:
+    async def get_run(
+        self,
+        run_id: str,
+        effective_scope: dict[str, str] | None = None,
+    ) -> SessionRun | None:
         """Get a run by ID."""
         ...
 
@@ -605,15 +705,24 @@ class StorageBackend(Protocol):
         self,
         session_id: str,
         idempotency_key: str,
+        effective_scope: dict[str, str] | None = None,
     ) -> SessionRun | None:
         """Get an existing run by session and idempotency key."""
         ...
 
-    async def list_runs(self, session_id: str) -> list[SessionRun]:
+    async def list_runs(
+        self,
+        session_id: str,
+        effective_scope: dict[str, str] | None = None,
+    ) -> list[SessionRun]:
         """List runs for a session, newest first."""
         ...
 
-    async def get_active_run(self, session_id: str) -> SessionRun | None:
+    async def get_active_run(
+        self,
+        session_id: str,
+        effective_scope: dict[str, str] | None = None,
+    ) -> SessionRun | None:
         """Get the active foreground run for a session, if any."""
         ...
 
@@ -626,6 +735,7 @@ class StorageBackend(Protocol):
         error_code: str | None = None,
         status_reason: str | None = None,
         metadata: dict[str, Any] | None = None,
+        effective_scope: dict[str, str] | None = None,
     ) -> SessionRun | None:
         """Update durable run state."""
         ...
@@ -655,6 +765,7 @@ class StorageBackend(Protocol):
         visibility: Literal["internal", "builder", "end_user"] | None = None,
         event_type: str | None = None,
         task_id: str | None = None,
+        effective_scope: dict[str, str] | None = None,
     ) -> list[SessionEvent]:
         """List runtime events for a session using cursor-style filters."""
         ...

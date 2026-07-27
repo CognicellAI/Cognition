@@ -122,7 +122,7 @@ class AgentDefinition(BaseModel):
     mode: Literal["primary", "subagent", "all"] = "primary"
     description: str | None = None
     hidden: bool = False
-    native: bool = False            # True for built-in agents
+    native: bool = False            # Reserved for non-API runtime-owned definitions
     a2a: A2AConfig = A2AConfig()    # Exposure and public Agent Card contract
 ```
 
@@ -155,7 +155,9 @@ interface URL from the incoming request and its private
 `/a2a/{agent_name}` route for backward compatibility. The configured URL must
 not contain credentials or a fragment.
 
-Built-in agents (`default`, `readonly`, etc.) have `a2a.exposed=false` by default. Set it to `true` explicitly for agents you want to expose:
+Cognition no longer ships default Agents. Builder-provisioned Agents have
+`a2a.exposed=false` by default. Set it to `true` explicitly for agents you want
+to expose:
 
 ```yaml
 # .cognition/agents/deploy-agent.yaml
@@ -266,19 +268,16 @@ definition = AgentDefinition(
 
 ## Agent Registry
 
-`AgentDefinitionRegistry` (`server/app/agent/agent_definition_registry.py`) is the server-level catalog of all available agents.
+The Config Registry is the server-level catalog of available Agents. Cognition
+starts empty: builders must create API Agents or provide explicit shared file
+Agents before creating sessions.
 
-### Built-in Agents
+### Builder-Defined Agents
 
-| Name | Mode | Description |
-|---|---|---|
-| `default` | `primary` | Full-access coding agent; all built-in tools enabled |
-| `readonly` | `primary` | Analysis-only; write and execute tools disabled |
-| `hitl_test` | `primary` | Manual HITL verification agent; attempts protected tool calls immediately |
-
-### User-Defined Agents
-
-On startup, the registry scans `.cognition/agents/` for `*.md` and `*.yaml` files and loads each as an `AgentDefinition`. The file watcher (`server/app/file_watcher.py`) calls `registry.reload()` when files change, enabling hot-reload without a server restart.
+Builders can create Agents through the API or seed shared file Agents from
+`.cognition/agents/`. API-created Agents resolve only at the complete trusted
+scope. Shared file Agents are read-only fallback definitions and should be used
+deliberately for deployment-level behavior.
 
 ### Registry API
 
@@ -332,7 +331,8 @@ Returns installed package versions, supported stream protocols, sandbox backends
 The factory:
 
 1. Selects the sandbox backend from settings (`local`, `docker`, `kubernetes`, or `aws_lambda_microvm`)
-2. Loads built-in tools: `BrowserTool`, `SearchTool`, `InspectPackageTool`
+2. Resolves built-in tool names only when host tools are explicitly enabled
+   for the deployment.
 3. Loads MCP tools from configured remote servers
 4. Resolves tools from the ConfigRegistry by registry name (filtered by `allowed_tool_names` from the AgentDefinition)
 5. Attaches the middleware stack:

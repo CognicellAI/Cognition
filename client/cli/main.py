@@ -195,6 +195,12 @@ def load_state() -> dict[str, Any]:
 
 @session_app.command("create")
 def create_session(
+    agent_name: str = typer.Option(
+        ...,
+        "--agent",
+        "-a",
+        help="Builder-provisioned Agent to bind to the session",
+    ),
     title: str | None = typer.Option(None, "--title", "-t", help="Session title"),
 ) -> None:
     """Create a new agent session."""
@@ -202,7 +208,10 @@ def create_session(
     url = f"{get_server_url()}/sessions"
 
     try:
-        response = httpx.post(url, json={"title": title})
+        response = httpx.post(
+            url,
+            json={"title": title, "agent_name": agent_name},
+        )
         response.raise_for_status()
         data = response.json()
 
@@ -373,6 +382,12 @@ from collections.abc import Callable
 def chat(
     message: str | None = typer.Argument(None, help="Message to send"),
     session_id: str | None = typer.Option(None, "--session", "-s", help="Session ID"),
+    agent_name: str | None = typer.Option(
+        None,
+        "--agent",
+        "-a",
+        help="Agent for a newly auto-created session",
+    ),
     interactive: bool = typer.Option(True, "--interactive/--single", help="Interactive mode"),
 ) -> None:
     """Enter interactive chat mode or send a single message."""
@@ -387,10 +402,22 @@ def chat(
     active_session_id = session_id or state.get("current_session_id")
 
     if not active_session_id:
+        if not agent_name:
+            console.print(
+                "[bold red]No active session found.[/bold red] "
+                "Pass [cyan]--agent <name>[/cyan] to create one."
+            )
+            raise typer.Exit(2)
         console.print("[yellow]No active session found. Creating one...[/yellow]")
         url = f"{get_server_url()}/sessions"
         try:
-            response = httpx.post(url, json={"title": "CLI Auto-Created"})
+            response = httpx.post(
+                url,
+                json={
+                    "title": "CLI Auto-Created",
+                    "agent_name": agent_name,
+                },
+            )
             response.raise_for_status()
             active_session_id = response.json()["id"]
             save_state(active_session_id)

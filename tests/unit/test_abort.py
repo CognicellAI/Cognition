@@ -21,7 +21,7 @@ class TestAbortFunctionality:
     def test_abort_ignored_endpoint_exists(self):
         """Test that the abort endpoint exists and returns success."""
         # Create a session first
-        session_resp = client.post("/sessions", json={"title": "abort-test"})
+        session_resp = client.post("/sessions", json={"agent_name": "default", "title": "abort-test"})
         session_id = session_resp.json()["id"]
 
         # Abort the session
@@ -50,7 +50,7 @@ class TestAbortFunctionality:
             mock_get_manager.return_value = mock_manager
 
             # Create a session
-            session_resp = client.post("/sessions", json={"title": "abort-cancel-test"})
+            session_resp = client.post("/sessions", json={"agent_name": "default", "title": "abort-cancel-test"})
             session_id = session_resp.json()["id"]
 
             # Mock an active streaming task
@@ -72,7 +72,7 @@ class TestAbortFunctionality:
     def test_abort_ignored_after_completion(self):
         """Test aborting a session after streaming completed."""
         # Create a session
-        session_resp = client.post("/sessions", json={"title": "post-completion-abort"})
+        session_resp = client.post("/sessions", json={"agent_name": "default", "title": "post-completion-abort"})
         session_id = session_resp.json()["id"]
 
         # Abort (even though nothing is streaming)
@@ -86,7 +86,7 @@ class TestAbortFunctionality:
     async def test_session_can_receive_messages_after_abort_ignored(self):
         """Test that a session can receive new messages after being aborted."""
         # Create a session
-        session_resp = client.post("/sessions", json={"title": "abort-resume-test"})
+        session_resp = client.post("/sessions", json={"agent_name": "default", "title": "abort-resume-test"})
         session_id = session_resp.json()["id"]
 
         # Abort

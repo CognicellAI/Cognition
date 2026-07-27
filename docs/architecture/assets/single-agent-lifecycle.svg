@@ -1,0 +1,518 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1920" height="1320" viewBox="0 0 1920 1320" role="img" aria-labelledby="title desc">
+  <title id="title">Single agent full-stack lifecycle in Cognition</title>
+  <desc id="desc">
+    A left-to-right lifecycle diagram showing one scoped Agent definition moving
+    through trusted ingress, REST or A2A APIs, durable task creation, runtime
+    resolution, Deep Agents execution, model tools and sandbox calls, event
+    streaming, persistence, optional human approval, completion, and teardown.
+  </desc>
+
+  <defs>
+    <style>
+      :root {
+        color-scheme: light dark;
+        --bg: #f8fafc;
+        --surface: #ffffff;
+        --surface-soft: #f1f5f9;
+        --text: #172033;
+        --muted: #5f6b7c;
+        --line: #c8d1dc;
+        --line-strong: #8794a6;
+        --builder: #7657d6;
+        --builder-soft: #eee9ff;
+        --interface: #187a93;
+        --interface-soft: #e1f5f8;
+        --runtime: #2867c7;
+        --runtime-soft: #e7f0ff;
+        --execution: #a45b10;
+        --execution-soft: #fff0dc;
+        --state: #26745e;
+        --state-soft: #e2f4ed;
+        --scope: #c43f65;
+        --scope-soft: #ffe7ef;
+        --shadow: #0f172a18;
+      }
+
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --bg: #0f1420;
+          --surface: #171e2c;
+          --surface-soft: #1c2535;
+          --text: #edf2f8;
+          --muted: #aab5c5;
+          --line: #39465a;
+          --line-strong: #738198;
+          --builder: #b8a4ff;
+          --builder-soft: #28223f;
+          --interface: #63c5db;
+          --interface-soft: #17323b;
+          --runtime: #83b4ff;
+          --runtime-soft: #192d4a;
+          --execution: #f2b76f;
+          --execution-soft: #3a2a19;
+          --state: #72cbb0;
+          --state-soft: #18372f;
+          --scope: #ff8cac;
+          --scope-soft: #422332;
+          --shadow: #00000055;
+        }
+      }
+
+      text {
+        font-family: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont,
+          "Segoe UI", sans-serif;
+        fill: var(--text);
+      }
+
+      .canvas { fill: var(--bg); }
+      .title { font-size: 34px; font-weight: 600; letter-spacing: -0.5px; }
+      .subtitle { font-size: 17px; fill: var(--muted); }
+      .phase-number { font-size: 13px; font-weight: 700; fill: var(--surface); text-anchor: middle; }
+      .phase-title { font-size: 13px; font-weight: 700; letter-spacing: 1.2px; fill: var(--muted); text-anchor: middle; }
+      .lane { fill: var(--surface); stroke: var(--line); stroke-width: 1; }
+      .lane-label { font-size: 15px; font-weight: 700; letter-spacing: 0.8px; }
+      .lane-note { font-size: 12px; fill: var(--muted); }
+      .guide { stroke: var(--line); stroke-width: 1; stroke-dasharray: 4 8; }
+      .node { fill: var(--surface); stroke-width: 1.5; filter: drop-shadow(0 5px 9px var(--shadow)); }
+      .external { stroke-dasharray: 7 5; }
+      .node-title { font-size: 16px; font-weight: 700; text-anchor: middle; }
+      .node-copy { font-size: 12.5px; fill: var(--muted); text-anchor: middle; }
+      .builder-node { stroke: var(--builder); }
+      .interface-node { stroke: var(--interface); }
+      .runtime-node { stroke: var(--runtime); }
+      .execution-node { stroke: var(--execution); }
+      .state-node { stroke: var(--state); }
+      .builder-label { fill: var(--builder); }
+      .interface-label { fill: var(--interface); }
+      .runtime-label { fill: var(--runtime); }
+      .execution-label { fill: var(--execution); }
+      .state-label { fill: var(--state); }
+      .flow { fill: none; stroke: var(--line-strong); stroke-width: 2; marker-end: url(#arrow); }
+      .flow-soft { fill: none; stroke: var(--line-strong); stroke-width: 1.5; stroke-dasharray: 6 5; marker-end: url(#arrow); }
+      .flow-runtime { fill: none; stroke: var(--runtime); stroke-width: 2.5; marker-end: url(#arrow-runtime); }
+      .flow-state { fill: none; stroke: var(--state); stroke-width: 2; marker-end: url(#arrow-state); }
+      .flow-scope { fill: none; stroke: var(--scope); stroke-width: 3; marker-end: url(#arrow-scope); }
+      .flow-label { font-size: 11.5px; fill: var(--muted); text-anchor: middle; }
+      .scope-label { font-size: 12px; font-weight: 700; fill: var(--scope); letter-spacing: 0.4px; }
+      .pill { stroke-width: 1; }
+      .pill-text { font-size: 12px; font-weight: 700; text-anchor: middle; }
+      .callout { fill: var(--scope-soft); stroke: var(--scope); stroke-width: 1.5; stroke-dasharray: 6 4; }
+      .callout-title { font-size: 13px; font-weight: 700; fill: var(--scope); text-anchor: middle; }
+      .callout-copy { font-size: 11.5px; fill: var(--muted); text-anchor: middle; }
+      .process-boundary { fill: none; stroke: var(--runtime); stroke-width: 1.5; stroke-dasharray: 9 7; opacity: 0.7; }
+      .boundary-label { font-size: 11px; font-weight: 700; fill: var(--runtime); letter-spacing: 0.7px; }
+      .observability { fill: var(--surface-soft); stroke: var(--line); stroke-width: 1; }
+      .observability-title { font-size: 14px; font-weight: 700; }
+      .observability-copy { font-size: 13px; fill: var(--muted); }
+      .legend-label { font-size: 12px; fill: var(--muted); }
+      .legend-line { stroke-width: 4; stroke-linecap: round; }
+    </style>
+
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--line-strong)"/>
+    </marker>
+    <marker id="arrow-runtime" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--runtime)"/>
+    </marker>
+    <marker id="arrow-state" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--state)"/>
+    </marker>
+    <marker id="arrow-scope" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--scope)"/>
+    </marker>
+  </defs>
+
+  <rect class="canvas" x="0" y="0" width="1920" height="1320"/>
+
+  <text class="title" x="52" y="58">One Agent, Full Stack</text>
+  <text class="subtitle" x="52" y="88">
+    From a builder-owned definition to a scoped task, one or more run attempts, durable evidence, and teardown
+  </text>
+
+  <g aria-label="Legend" transform="translate(1322 35)">
+    <line class="legend-line" x1="0" y1="13" x2="24" y2="13" stroke="var(--builder)"/>
+    <text class="legend-label" x="34" y="17">Builder / external</text>
+    <line class="legend-line" x1="150" y1="13" x2="174" y2="13" stroke="var(--interface)"/>
+    <text class="legend-label" x="184" y="17">API</text>
+    <line class="legend-line" x1="246" y1="13" x2="270" y2="13" stroke="var(--runtime)"/>
+    <text class="legend-label" x="280" y="17">Runtime</text>
+    <line class="legend-line" x1="355" y1="13" x2="379" y2="13" stroke="var(--execution)"/>
+    <text class="legend-label" x="389" y="17">Execution</text>
+    <line class="legend-line" x1="478" y1="13" x2="502" y2="13" stroke="var(--state)"/>
+    <text class="legend-label" x="512" y="17">Durable state</text>
+  </g>
+
+  <rect x="1320" y="70" width="545" height="38" rx="19" fill="var(--builder-soft)" stroke="var(--builder)" class="pill"/>
+  <text class="pill-text builder-label" x="1592" y="94">
+    Identity · authorization · tenancy · product lifecycle remain builder-owned
+  </text>
+
+  <!-- Lifecycle phase headers -->
+  <g aria-label="Lifecycle phases">
+    <circle cx="245" cy="156" r="17" fill="var(--builder)"/>
+    <text class="phase-number" x="245" y="161">1</text>
+    <text class="phase-title" x="245" y="190">DEFINE</text>
+
+    <circle cx="488" cy="156" r="17" fill="var(--interface)"/>
+    <text class="phase-number" x="488" y="161">2</text>
+    <text class="phase-title" x="488" y="190">START</text>
+
+    <circle cx="733" cy="156" r="17" fill="var(--interface)"/>
+    <text class="phase-number" x="733" y="161">3</text>
+    <text class="phase-title" x="733" y="190">SUBMIT</text>
+
+    <circle cx="978" cy="156" r="17" fill="var(--runtime)"/>
+    <text class="phase-number" x="978" y="161">4</text>
+    <text class="phase-title" x="978" y="190">RESOLVE</text>
+
+    <circle cx="1225" cy="156" r="17" fill="var(--runtime)"/>
+    <text class="phase-number" x="1225" y="161">5</text>
+    <text class="phase-title" x="1225" y="190">EXECUTE</text>
+
+    <circle cx="1472" cy="156" r="17" fill="var(--interface)"/>
+    <text class="phase-number" x="1472" y="161">6</text>
+    <text class="phase-title" x="1472" y="190">STREAM / WAIT</text>
+
+    <circle cx="1718" cy="156" r="17" fill="var(--state)"/>
+    <text class="phase-number" x="1718" y="161">7</text>
+    <text class="phase-title" x="1718" y="190">COMPLETE</text>
+  </g>
+
+  <!-- Swimlanes -->
+  <g aria-label="Full stack swimlanes">
+    <rect class="lane" x="42" y="220" width="1836" height="154" rx="12"/>
+    <rect x="42" y="220" width="122" height="154" rx="12" fill="var(--builder-soft)"/>
+    <text class="lane-label builder-label" x="64" y="257">BUILDER</text>
+    <text class="lane-note" x="64" y="280">outside Cognition</text>
+
+    <rect class="lane" x="42" y="390" width="1836" height="174" rx="12"/>
+    <rect x="42" y="390" width="122" height="174" rx="12" fill="var(--interface-soft)"/>
+    <text class="lane-label interface-label" x="64" y="427">API &amp;</text>
+    <text class="lane-label interface-label" x="64" y="447">STREAMING</text>
+    <text class="lane-note" x="64" y="472">REST · SSE · A2A</text>
+
+    <rect class="lane" x="42" y="580" width="1836" height="236" rx="12"/>
+    <rect x="42" y="580" width="122" height="236" rx="12" fill="var(--runtime-soft)"/>
+    <text class="lane-label runtime-label" x="64" y="617">AGENT</text>
+    <text class="lane-label runtime-label" x="64" y="637">RUNTIME</text>
+    <text class="lane-note" x="64" y="662">Deep Agents</text>
+    <text class="lane-note" x="64" y="680">+ LangGraph</text>
+
+    <rect class="lane" x="42" y="832" width="1836" height="184" rx="12"/>
+    <rect x="42" y="832" width="122" height="184" rx="12" fill="var(--execution-soft)"/>
+    <text class="lane-label execution-label" x="64" y="869">EXECUTION</text>
+    <text class="lane-note" x="64" y="894">models · tools</text>
+    <text class="lane-note" x="64" y="912">MCP · sandbox</text>
+
+    <rect class="lane" x="42" y="1032" width="1836" height="196" rx="12"/>
+    <rect x="42" y="1032" width="122" height="196" rx="12" fill="var(--state-soft)"/>
+    <text class="lane-label state-label" x="64" y="1069">DURABLE</text>
+    <text class="lane-label state-label" x="64" y="1089">STATE</text>
+    <text class="lane-note" x="64" y="1114">SQLite · Postgres</text>
+    <text class="lane-note" x="64" y="1132">or memory</text>
+  </g>
+
+  <!-- Phase guides -->
+  <g aria-hidden="true">
+    <line class="guide" x1="366" y1="205" x2="366" y2="1228"/>
+    <line class="guide" x1="610" y1="205" x2="610" y2="1228"/>
+    <line class="guide" x1="855" y1="205" x2="855" y2="1228"/>
+    <line class="guide" x1="1100" y1="205" x2="1100" y2="1228"/>
+    <line class="guide" x1="1348" y1="205" x2="1348" y2="1228"/>
+    <line class="guide" x1="1595" y1="205" x2="1595" y2="1228"/>
+  </g>
+
+  <!-- Builder nodes -->
+  <g aria-label="Builder and external systems">
+    <rect class="node builder-node" x="177" y="252" width="170" height="90" rx="10"/>
+    <text class="node-title builder-label" x="262" y="280">Builder app</text>
+    <text class="node-copy" x="262" y="304">
+      <tspan x="262" y="304">AgentDefinition</tspan>
+      <tspan x="262" y="322">prompt · tools · skills</tspan>
+    </text>
+
+    <rect class="node builder-node" x="416" y="252" width="176" height="90" rx="10"/>
+    <text class="node-title builder-label" x="504" y="280">Trusted ingress</text>
+    <text class="node-copy" x="504" y="304">
+      <tspan x="504" y="304">authenticate + authorize</tspan>
+      <tspan x="504" y="322">inject effective scope</tspan>
+    </text>
+
+    <rect class="node builder-node external" x="1394" y="252" width="168" height="90" rx="10"/>
+    <text class="node-title builder-label" x="1478" y="280">Agent client</text>
+    <text class="node-copy" x="1478" y="304">
+      <tspan x="1478" y="304">consume events</tspan>
+      <tspan x="1478" y="322">approve · poll · cancel</tspan>
+    </text>
+
+    <rect class="node builder-node external" x="1651" y="252" width="178" height="90" rx="10"/>
+    <text class="node-title builder-label" x="1740" y="280">Builder callback</text>
+    <text class="node-copy" x="1740" y="304">
+      <tspan x="1740" y="304">optional completion POST</tspan>
+      <tspan x="1740" y="322">or status polling</tspan>
+    </text>
+  </g>
+
+  <!-- Interface nodes -->
+  <g aria-label="API and streaming components">
+    <rect class="node interface-node" x="176" y="426" width="172" height="100" rx="10"/>
+    <text class="node-title interface-label" x="262" y="455">Agent CRUD</text>
+    <text class="node-copy" x="262" y="480">
+      <tspan x="262" y="480">validate + persist</tspan>
+      <tspan x="262" y="498">scoped definition</tspan>
+    </text>
+
+    <rect class="node interface-node" x="414" y="426" width="178" height="100" rx="10"/>
+    <text class="node-title interface-label" x="503" y="455">Session API</text>
+    <text class="node-copy" x="503" y="480">
+      <tspan x="503" y="480">validate visible Agent</tspan>
+      <tspan x="503" y="498">create session + thread</tspan>
+    </text>
+
+    <rect class="node interface-node" x="652" y="426" width="194" height="100" rx="10"/>
+    <text class="node-title interface-label" x="749" y="455">Message / A2A API</text>
+    <text class="node-copy" x="749" y="480">
+      <tspan x="749" y="480">rate limit · validate</tspan>
+      <tspan x="749" y="498">submit or continue work</tspan>
+    </text>
+
+    <rect class="node interface-node" x="1382" y="426" width="194" height="100" rx="10"/>
+    <text class="node-title interface-label" x="1479" y="455">SSE / A2A adapter</text>
+    <text class="node-copy" x="1479" y="480">
+      <tspan x="1479" y="480">typed events + replay</tspan>
+      <tspan x="1479" y="498">interrupt · input required</tspan>
+    </text>
+
+    <rect class="node interface-node" x="1644" y="426" width="190" height="100" rx="10"/>
+    <text class="node-title interface-label" x="1739" y="455">Task / run API</text>
+    <text class="node-copy" x="1739" y="480">
+      <tspan x="1739" y="480">terminal response</tspan>
+      <tspan x="1739" y="498">poll · list · subscribe</tspan>
+    </text>
+  </g>
+
+  <!-- Process-local boundary -->
+  <rect class="process-boundary" x="632" y="600" width="1207" height="194" rx="12"/>
+  <text class="boundary-label" x="650" y="623">PROCESS-LOCAL EXECUTION CONTROL</text>
+
+  <!-- Runtime nodes -->
+  <g aria-label="Agent runtime components">
+    <rect class="node runtime-node" x="652" y="646" width="194" height="102" rx="10"/>
+    <text class="node-title runtime-label" x="749" y="675">AgentTaskRuntime</text>
+    <text class="node-copy" x="749" y="700">
+      <tspan x="749" y="700">task identity + idempotency</tspan>
+      <tspan x="749" y="718">create run attempt</tspan>
+    </text>
+
+    <rect class="node runtime-node" x="885" y="646" width="174" height="102" rx="10"/>
+    <text class="node-title runtime-label" x="972" y="675">RuntimeResolver</text>
+    <text class="node-copy" x="972" y="700">
+      <tspan x="972" y="700">Agent · model · tools</tspan>
+      <tspan x="972" y="718">skills · MCP · policy</tspan>
+    </text>
+
+    <rect class="node runtime-node" x="1094" y="646" width="190" height="102" rx="10"/>
+    <text class="node-title runtime-label" x="1189" y="675">Graph factory</text>
+    <text class="node-copy" x="1189" y="700">
+      <tspan x="1189" y="700">middleware + context</tspan>
+      <tspan x="1189" y="718">cache + sandbox backend</tspan>
+    </text>
+
+    <rect class="node runtime-node" x="1318" y="646" width="186" height="102" rx="10"/>
+    <text class="node-title runtime-label" x="1411" y="675">DeepAgentRuntime</text>
+    <text class="node-copy" x="1411" y="700">
+      <tspan x="1411" y="700">astream same thread</tspan>
+      <tspan x="1411" y="718">normalize AgentEvents</tspan>
+    </text>
+
+    <rect class="node runtime-node" x="1536" y="646" width="176" height="102" rx="10"/>
+    <text class="node-title runtime-label" x="1624" y="675">Projector</text>
+    <text class="node-copy" x="1624" y="700">
+      <tspan x="1624" y="700">legal transitions</tspan>
+      <tspan x="1624" y="718">append correlated events</tspan>
+    </text>
+
+    <rect class="node runtime-node" x="1740" y="646" width="106" height="102" rx="10"/>
+    <text class="node-title runtime-label" x="1793" y="675">Manager</text>
+    <text class="node-copy" x="1793" y="700">
+      <tspan x="1793" y="700">abort</tspan>
+      <tspan x="1793" y="718">release</tspan>
+    </text>
+  </g>
+
+  <!-- Optional HITL loop -->
+  <rect class="callout" x="1352" y="760" width="330" height="40" rx="20"/>
+  <text class="callout-title" x="1517" y="777">OPTIONAL HUMAN APPROVAL</text>
+  <text class="callout-copy" x="1517" y="793">interrupt → waiting → resume same checkpoint thread</text>
+
+  <!-- Execution nodes -->
+  <g aria-label="Execution dependencies">
+    <rect class="node execution-node external" x="1079" y="875" width="176" height="100" rx="10"/>
+    <text class="node-title execution-label" x="1167" y="904">Model provider</text>
+    <text class="node-copy" x="1167" y="929">
+      <tspan x="1167" y="929">stream inference</tspan>
+      <tspan x="1167" y="947">tool-call decisions</tspan>
+    </text>
+
+    <rect class="node execution-node" x="1291" y="875" width="176" height="100" rx="10"/>
+    <text class="node-title execution-label" x="1379" y="904">Tools / MCP</text>
+    <text class="node-copy" x="1379" y="929">
+      <tspan x="1379" y="929">trusted runtime context</tspan>
+      <tspan x="1379" y="947">policy + results</tspan>
+    </text>
+
+    <rect class="node execution-node" x="1503" y="875" width="202" height="100" rx="10"/>
+    <text class="node-title execution-label" x="1604" y="904">Sandbox backend</text>
+    <text class="node-copy" x="1604" y="929">
+      <tspan x="1604" y="929">local · Docker · K8s</tspan>
+      <tspan x="1604" y="947">or Lambda MicroVM</tspan>
+    </text>
+
+    <rect class="node execution-node external" x="1740" y="875" width="106" height="100" rx="10"/>
+    <text class="node-title execution-label" x="1793" y="904">Teardown</text>
+    <text class="node-copy" x="1793" y="929">
+      <tspan x="1793" y="929">terminate</tspan>
+      <tspan x="1793" y="947">if exposed</tspan>
+    </text>
+  </g>
+
+  <!-- Durable state nodes -->
+  <g aria-label="Durable state components">
+    <rect class="node state-node" x="176" y="1074" width="174" height="104" rx="10"/>
+    <text class="node-title state-label" x="263" y="1102">ConfigRegistry</text>
+    <text class="node-copy" x="263" y="1127">
+      <tspan x="263" y="1127">Agent definitions</tspan>
+      <tspan x="263" y="1145">providers · tools · skills</tspan>
+    </text>
+
+    <rect class="node state-node" x="414" y="1074" width="180" height="104" rx="10"/>
+    <text class="node-title state-label" x="504" y="1102">Session state</text>
+    <text class="node-copy" x="504" y="1127">
+      <tspan x="504" y="1127">immutable scope</tspan>
+      <tspan x="504" y="1145">thread identity</tspan>
+    </text>
+
+    <rect class="node state-node" x="652" y="1074" width="194" height="104" rx="10"/>
+    <text class="node-title state-label" x="749" y="1102">Task + run attempt</text>
+    <text class="node-copy" x="749" y="1127">
+      <tspan x="749" y="1127">user message + status</tspan>
+      <tspan x="749" y="1145">idempotency record</tspan>
+    </text>
+
+    <rect class="node state-node" x="1052" y="1074" width="202" height="104" rx="10"/>
+    <text class="node-title state-label" x="1153" y="1102">Checkpoint + Store</text>
+    <text class="node-copy" x="1153" y="1127">
+      <tspan x="1153" y="1127">authoritative graph state</tspan>
+      <tspan x="1153" y="1145">cross-thread memory</tspan>
+    </text>
+
+    <rect class="node state-node" x="1376" y="1074" width="202" height="104" rx="10"/>
+    <text class="node-title state-label" x="1477" y="1102">Events + projections</text>
+    <text class="node-copy" x="1477" y="1127">
+      <tspan x="1477" y="1127">messages · artifacts</tspan>
+      <tspan x="1477" y="1145">ordered runtime evidence</tspan>
+    </text>
+
+    <rect class="node state-node" x="1641" y="1074" width="194" height="104" rx="10"/>
+    <text class="node-title state-label" x="1738" y="1102">Terminal state</text>
+    <text class="node-copy" x="1738" y="1127">
+      <tspan x="1738" y="1127">completed · failed</tspan>
+      <tspan x="1738" y="1145">cancelled · rejected</tspan>
+    </text>
+  </g>
+
+  <!-- Main lifecycle flow -->
+  <path class="flow" d="M347 297 H416"/>
+  <text class="flow-label" x="382" y="287">manage / invoke</text>
+
+  <path class="flow" d="M504 342 V426"/>
+  <text class="flow-label" x="535" y="389">trusted request</text>
+
+  <path class="flow" d="M592 476 H652"/>
+  <text class="flow-label" x="622" y="465">message</text>
+
+  <path class="flow-runtime" d="M749 526 V646"/>
+  <text class="flow-label" x="792" y="592">submit / recover</text>
+
+  <path class="flow-runtime" d="M846 697 H885"/>
+  <path class="flow-runtime" d="M1059 697 H1094"/>
+  <path class="flow-runtime" d="M1284 697 H1318"/>
+  <path class="flow-runtime" d="M1504 697 H1536"/>
+  <path class="flow-runtime" d="M1712 697 H1740"/>
+
+  <text class="flow-label" x="1076" y="687">compose</text>
+  <text class="flow-label" x="1301" y="687">invoke</text>
+  <text class="flow-label" x="1520" y="687">typed events</text>
+  <text class="flow-label" x="1726" y="687">terminal / abort</text>
+
+  <!-- Effective scope spine -->
+  <path class="flow-scope" d="M504 342 V360 H1860 V1008"/>
+  <text class="scope-label" x="1080" y="353">BUILDER-AUTHORIZED EFFECTIVE_SCOPE + CORRELATION</text>
+  <path class="flow-scope" d="M749 360 V421" opacity="0.7"/>
+  <path class="flow-scope" d="M972 360 V641" opacity="0.7"/>
+  <path class="flow-scope" d="M1479 360 V421" opacity="0.7"/>
+  <path class="flow-scope" d="M1477 1008 V1069" opacity="0.7"/>
+
+  <!-- Definition, session, task, and projections to durable state -->
+  <path class="flow-state" d="M262 526 V1074"/>
+  <text class="flow-label" x="305" y="814">persist scoped definition</text>
+
+  <path class="flow-state" d="M503 526 V1074"/>
+  <text class="flow-label" x="552" y="814">session + thread</text>
+
+  <path class="flow-state" d="M749 748 V1074"/>
+  <text class="flow-label" x="796" y="910">create task / run</text>
+
+  <path class="flow-state" d="M1189 748 L1153 1074"/>
+  <text class="flow-label" x="1185" y="1016">checkpointer + Store</text>
+
+  <path class="flow-state" d="M1624 748 L1477 1074"/>
+  <text class="flow-label" x="1576" y="1016">append + project</text>
+
+  <path class="flow-state" d="M1793 748 L1738 1074"/>
+  <text class="flow-label" x="1784" y="1016">finalize</text>
+
+  <!-- Config resolution -->
+  <path class="flow-soft" d="M972 748 C972 870 510 990 350 1105"/>
+  <text class="flow-label" x="667" y="949">scope-aware configuration lookup</text>
+
+  <!-- Model, tool, and sandbox loop -->
+  <path class="flow" d="M1370 748 L1188 875"/>
+  <path class="flow" d="M1411 748 L1379 875"/>
+  <path class="flow" d="M1452 748 L1604 875"/>
+  <path class="flow-soft" d="M1167 875 C1167 824 1320 800 1376 748"/>
+  <path class="flow-soft" d="M1379 875 C1379 824 1400 800 1411 748"/>
+  <path class="flow-soft" d="M1604 875 C1604 824 1500 798 1448 748"/>
+  <text class="flow-label" x="1238" y="835">model loop</text>
+  <text class="flow-label" x="1407" y="835">tool loop</text>
+  <text class="flow-label" x="1561" y="835">filesystem / command</text>
+
+  <!-- Stream, approval, and completion -->
+  <path class="flow" d="M1578 646 L1505 526"/>
+  <path class="flow" d="M1479 426 V342"/>
+  <text class="flow-label" x="1536" y="576">stream event</text>
+
+  <path class="flow-soft" d="M1478 342 C1478 382 1434 392 1434 426"/>
+  <text class="flow-label" x="1396" y="386">resume / cancel</text>
+
+  <path class="flow-soft" d="M1517 760 V748"/>
+  <path class="flow-soft" d="M1517 760 C1320 820 1275 576 1382 503"/>
+
+  <path class="flow" d="M1793 646 L1739 526"/>
+  <path class="flow" d="M1739 426 V342"/>
+  <text class="flow-label" x="1795" y="574">status / callback</text>
+
+  <path class="flow" d="M1793 748 V875"/>
+  <path class="flow-state" d="M1793 975 V1074"/>
+
+  <!-- Observability -->
+  <rect class="observability" x="176" y="1246" width="1659" height="48" rx="24"/>
+  <circle cx="212" cy="1270" r="6" fill="var(--runtime)"/>
+  <text class="observability-title" x="232" y="1275">OBSERVABILITY SPINE</text>
+  <text class="observability-copy" x="430" y="1275">
+    traces · metrics · structured logs · runtime events · session/run/task/thread correlation · scope-safe attributes
+  </text>
+  <path class="flow-soft" d="M749 1178 V1246"/>
+  <path class="flow-soft" d="M1411 748 V1246"/>
+  <path class="flow-soft" d="M1793 1178 V1246"/>
+</svg>

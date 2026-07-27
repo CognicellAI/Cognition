@@ -132,7 +132,8 @@ graph TD
     Router --> Prom
 ```
 
-See [Architecture](./docs/concepts/architecture.md) for a full breakdown of each layer, dependency rules, and the startup sequence.
+See [Architecture](./docs/architecture/index.md) for the code-derived C4 model,
+runtime flows, deployment topology, decision records, and risk register.
 
 ## Extend Your Agent
 
@@ -182,7 +183,7 @@ The CLI is one example of what you can build on Cognition. See the [Blueprints](
 | [Documentation Index](./docs/README.md) | All concepts and guides |
 | [Getting Started](./docs/guides/getting-started.md) | Install, configure, and send your first message |
 | [Core vs App Layer](./docs/guides/core-vs-app-layer.md) | Builder boundaries: what Cognition owns versus what your app owns |
-| [Architecture](./docs/concepts/architecture.md) | 7-layer architecture and design principles |
+| [Architecture](./docs/architecture/index.md) | Code-derived C4 views, runtime flows, deployment topology, risks, and decisions |
 | [Extending Agents](./docs/guides/extending-agents.md) | Memory, skills, tools, subagents, middleware, and per-agent tool policy |
 | [Configuration Reference](./docs/guides/configuration.md) | All YAML keys and environment variables |
 | [Examples](./examples/README.md) | Exhaustive `.cognition` examples, `.env` examples, and API payload samples |

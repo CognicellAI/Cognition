@@ -13,6 +13,7 @@ from deepagents.backends.protocol import (
     ReadResult,
 )
 
+from server.app.storage.config_models import SkillDefinition
 from server.app.storage.config_registry import ConfigRegistry
 
 logger = structlog.get_logger(__name__)
@@ -31,6 +32,7 @@ class ConfigRegistrySkillsBackend(BackendProtocol):
         registry: ConfigRegistry,
         scope: dict[str, str] | None = None,
         allowed_skill_names: list[str] | None = None,
+        pinned_skills: dict[str, SkillDefinition] | None = None,
     ):
         """Initialize the backend.
 
@@ -40,7 +42,35 @@ class ConfigRegistrySkillsBackend(BackendProtocol):
         """
         self._registry = registry
         self._scope = scope or {}
-        self._allowed_skill_names = set(allowed_skill_names or [])
+        self._allowed_skill_names = (
+            None
+            if allowed_skill_names is None
+            else set(allowed_skill_names)
+        )
+        self._pinned_skills = (
+            {name: skill.model_copy(deep=True) for name, skill in pinned_skills.items()}
+            if pinned_skills is not None
+            else None
+        )
+
+    async def _list_skills(self) -> list[SkillDefinition]:
+        if self._pinned_skills is not None:
+            return [
+                skill.model_copy(deep=True)
+                for skill in self._pinned_skills.values()
+            ]
+        return await self._registry.list_skills(scope=self._scope)
+
+    async def _get_skill(self, name: str) -> SkillDefinition | None:
+        if (
+            self._allowed_skill_names is not None
+            and name not in self._allowed_skill_names
+        ):
+            return None
+        if self._pinned_skills is not None:
+            skill = self._pinned_skills.get(name)
+            return skill.model_copy(deep=True) if skill is not None else None
+        return await self._registry.get_skill(name, scope=self._scope)
 
     async def als_info(self, path: str) -> list[FileInfo]:
         """List skill directories for SkillsMiddleware discovery.
@@ -54,13 +84,16 @@ class ConfigRegistrySkillsBackend(BackendProtocol):
         Returns:
             List of FileInfo dicts representing skill directories.
         """
-        skills = await self._registry.list_skills(scope=self._scope)
+        skills = await self._list_skills()
 
         file_infos: list[FileInfo] = []
         for skill in skills:
             if not skill.enabled:
                 continue
-            if self._allowed_skill_names and skill.name not in self._allowed_skill_names:
+            if (
+                self._allowed_skill_names is not None
+                and skill.name not in self._allowed_skill_names
+            ):
                 continue
 
             # Each skill appears as a directory under the source path.
@@ -103,7 +136,7 @@ class ConfigRegistrySkillsBackend(BackendProtocol):
             skill_name = file_path[1 : -len("/SKILL.md")]
 
             try:
-                skill = await self._registry.get_skill(skill_name, scope=self._scope)
+                skill = await self._get_skill(skill_name)
                 if skill is None or not skill.enabled:
                     responses.append(FileDownloadResponse(path=file_path, error="file_not_found"))
                 else:
@@ -157,7 +190,7 @@ class ConfigRegistrySkillsBackend(BackendProtocol):
         skill_name = file_path[1 : -len("/SKILL.md")]
 
         try:
-            skill = await self._registry.get_skill(skill_name, scope=self._scope)
+            skill = await self._get_skill(skill_name)
             if skill is None or not skill.enabled:
                 return ReadResult(error=f"Skill not found: {skill_name}")
 

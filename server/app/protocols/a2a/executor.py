@@ -292,7 +292,7 @@ class CognitionA2AExecutor(AgentExecutor):
                 system_prompt=system_prompt,
                 manager=self._agent_manager,
                 scope=scope,
-                run_id=None,
+                run_id=execution.run.id,
             )
             async for event in _with_flush_ticks(source, self._stream_flush_interval):
                 if event is _FLUSH_TICK:

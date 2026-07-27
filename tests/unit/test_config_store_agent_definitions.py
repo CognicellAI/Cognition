@@ -15,26 +15,20 @@ def store(tmp_path: Path) -> DefaultConfigStore:
     return DefaultConfigStore(MemoryConfigRegistry(), workspace_path=tmp_path)
 
 
-class TestBuiltins:
+class TestExplicitProvisioning:
     @pytest.mark.asyncio
-    async def test_default_agent_present(self, store: DefaultConfigStore):
+    async def test_store_starts_without_default_agent(self, store: DefaultConfigStore):
         agent = await store.get_agent_definition("default")
-        assert agent is not None
-        assert agent.native is True
-        assert agent.mode in ("primary", "all")
+        assert agent is None
 
     @pytest.mark.asyncio
-    async def test_builtin_agents_listed(self, store: DefaultConfigStore):
+    async def test_store_starts_empty(self, store: DefaultConfigStore):
         agents = await store.list_agent_definitions()
-        names = [agent.name for agent in agents]
-        assert "default" in names
-        assert "readonly" in names
-        assert "hitl_test" in names
+        assert agents == []
 
     @pytest.mark.asyncio
-    async def test_is_valid_primary_for_builtin(self, store: DefaultConfigStore):
-        assert await store.is_valid_primary("default") is True
-        assert await store.is_valid_primary("readonly") is True
+    async def test_unprovisioned_agent_is_not_valid(self, store: DefaultConfigStore):
+        assert await store.is_valid_primary("default") is False
 
 
 class TestFileAgents:
@@ -96,7 +90,7 @@ class TestDbAgents:
         assert await store.get_agent_definition("db-agent") is None
 
     @pytest.mark.asyncio
-    async def test_builtin_agent_not_overwritten_by_db_seed(self, store: DefaultConfigStore):
+    async def test_formerly_reserved_name_is_builder_owned(self, store: DefaultConfigStore):
         await store.upsert_agent(
             "default",
             {},
@@ -106,8 +100,8 @@ class TestDbAgents:
 
         agent = await store.get_agent_definition("default")
         assert agent is not None
-        assert agent.native is True
-        assert agent.system_prompt != "override"
+        assert agent.native is False
+        assert agent.system_prompt == "override"
 
 
 class TestScopePreservation:

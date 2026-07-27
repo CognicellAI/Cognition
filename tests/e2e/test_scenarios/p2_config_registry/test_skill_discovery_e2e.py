@@ -13,6 +13,7 @@ Requires:
 from __future__ import annotations
 
 import json
+import os
 import uuid
 
 import httpx
@@ -41,6 +42,8 @@ class TestSkillDiscoveryFromDB:
     ) -> None:
         """Create a skill via API, send a message, and verify the skill name
         appears in the SSE stream (token events from the LLM response)."""
+        if not os.getenv("COGNITION_OPENAI_COMPATIBLE_API_KEY"):
+            pytest.skip("Requires a real OpenAI-compatible provider API key")
 
         skill_name = _unique()
         skill_content = f"""---

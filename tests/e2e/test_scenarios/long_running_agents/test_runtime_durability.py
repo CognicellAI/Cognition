@@ -59,11 +59,11 @@ def _strict_tool_gate_enabled() -> bool:
     return os.getenv("COGNITION_STRICT_TOOL_E2E", "").lower() in {"1", "true", "yes"}
 
 
-def _use_isolated_user_scope(api_client: ScenarioTestClient) -> None:
+async def _use_isolated_user_scope(api_client: ScenarioTestClient) -> None:
     """Avoid persisted scoped provider config from other local scenario runs."""
-    api_client.scope_header = {
-        "X-Cognition-Scope-User": f"runtime-durability-{uuid.uuid4().hex[:8]}"
-    }
+    await api_client.use_scope(
+        {"X-Cognition-Scope-User": f"runtime-durability-{uuid.uuid4().hex[:8]}"}
+    )
 
 
 @pytest.mark.asyncio
@@ -74,7 +74,7 @@ class TestRuntimeDurability:
         self,
         api_client: ScenarioTestClient,
     ) -> None:
-        _use_isolated_user_scope(api_client)
+        await _use_isolated_user_scope(api_client)
         session_id = await api_client.create_session("Runtime Durability")
 
         try:
@@ -130,7 +130,7 @@ class TestRuntimeDurability:
         self,
         api_client: ScenarioTestClient,
     ) -> None:
-        _use_isolated_user_scope(api_client)
+        await _use_isolated_user_scope(api_client)
         agent_name = f"runtime-tool-durability-{uuid.uuid4().hex[:8]}"
         session_id: str | None = None
 

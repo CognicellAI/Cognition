@@ -35,6 +35,8 @@ import pytest_asyncio
 from kubernetes import client as k8s_client
 from kubernetes.config import load_kube_config
 
+from tests.e2e.conftest import E2E_DEFAULT_AGENT_NAME, ensure_e2e_agent
+
 pytestmark = [
     pytest.mark.e2e,
     pytest.mark.timeout(120),
@@ -117,9 +119,15 @@ class TestK8sSandboxLifecycle:
 
     @pytest_asyncio.fixture
     async def session_id(self, http_client: httpx.AsyncClient) -> str:
+        await ensure_e2e_agent(
+            http_client,
+            BASE_URL,
+            E2E_DEFAULT_AGENT_NAME,
+            headers=SCOPE_HEADER,
+        )
         response = await http_client.post(
             f"{BASE_URL}/sessions",
-            json={"title": "K8s E2E Test"},
+            json={"title": "K8s E2E Test", "agent_name": "default"},
             headers=SCOPE_HEADER,
         )
         assert response.status_code == 201
@@ -142,9 +150,15 @@ class TestK8sSandboxLifecycle:
 
     async def test_session_delete_cleans_up_sandbox(self, http_client: httpx.AsyncClient) -> None:
         """Session deletion terminates the sandbox backend."""
+        await ensure_e2e_agent(
+            http_client,
+            BASE_URL,
+            E2E_DEFAULT_AGENT_NAME,
+            headers=SCOPE_HEADER,
+        )
         response = await http_client.post(
             f"{BASE_URL}/sessions",
-            json={"title": "K8s E2E Terminate Test"},
+            json={"title": "K8s E2E Terminate Test", "agent_name": "default"},
             headers=SCOPE_HEADER,
         )
         assert response.status_code == 201

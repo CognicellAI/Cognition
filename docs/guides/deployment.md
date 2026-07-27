@@ -79,10 +79,18 @@ POSTGRES_DB=cognition
 COGNITION_SANDBOX_BACKEND=docker
 
 # Observability (optional but recommended)
-COGNITION_OTEL_ENABLED=true
+COGNITION_LOG_FORMAT=json
+COGNITION_METRICS_ENABLED=true
+COGNITION_METRICS_PORT=9090
+COGNITION_TRACING_ENABLED=true
 COGNITION_OTEL_ENDPOINT=http://otel-collector:4317
+COGNITION_OTLP_MAX_EXPORT_BYTES=3670016
+COGNITION_OTLP_QUEUE_SIZE=2048
+COGNITION_OTLP_EXPORT_TIMEOUT_MS=30000
+COGNITION_TRACE_SAMPLE_RATIO=0.10
 COGNITION_MLFLOW_ENABLED=true
 COGNITION_MLFLOW_TRACKING_URI=http://mlflow:5000
+COGNITION_NATIVE_AGENT_TRACING=otlp_to_mlflow
 ```
 
 ---
@@ -125,6 +133,14 @@ curl -s http://localhost:3000/api/health
 ## Step 5 — Database Migrations
 
 Cognition uses Alembic for schema management. Migrations run automatically at startup — the `SqliteStorageBackend` and `PostgresStorageBackend` both call `metadata.create_all()` during `initialize()`.
+
+For the v0.13 multi-tenancy migration, drain active writes before upgrading.
+The migration backfills canonical `scope_key` values and Agent revision
+metadata for sessions, runs, events, artifacts, and config entities. Mixed
+v0.12 and v0.13 writers are unsupported because v0.13 runtime isolation depends
+on exact-scope columns and pinned run manifests. Existing sessions that
+referenced removed built-in default Agents need compatible builder-provisioned
+Agent definitions before cutover.
 
 For explicit migration management:
 

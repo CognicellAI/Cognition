@@ -120,17 +120,15 @@ class TestAgentScopedSessions:
         assert "agent_name" in data
         assert data["agent_name"] == "readonly"
 
-    async def test_default_session_agent_name_is_default(self, api_client) -> None:
-        """Session created without agent_name has 'default' as agent_name."""
-        response = await api_client.post(
-            "/sessions",
+    async def test_session_without_agent_name_is_rejected(self, api_client) -> None:
+        """Session creation requires an explicit builder-provisioned agent_name."""
+        response = await api_client.client.post(
+            f"{api_client.base_url}/sessions",
             json={"title": "No Agent Specified Session"},
+            headers=api_client.scope_header,
         )
 
-        assert response.status_code == 201
-        data = response.json()
-
-        assert data["agent_name"] == "default"
+        assert response.status_code == 422
 
     async def test_multiple_sessions_different_agents(self, api_client) -> None:
         """Multiple sessions can have different agents."""

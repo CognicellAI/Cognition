@@ -21,7 +21,11 @@ from server.app.api.dependencies import (
     set_session_agent_manager_dep,
     set_storage_backend_dep,
 )
-from server.app.api.middleware import ObservabilityMiddleware, SecurityHeadersMiddleware
+from server.app.api.middleware import (
+    ObservabilityMiddleware,
+    SecurityHeadersMiddleware,
+    route_template_for_request,
+)
 from server.app.api.models import HealthStatus, ReadyStatus
 from server.app.api.routes import (
     agents,
@@ -39,7 +43,7 @@ from server.app.api.routes import (
 from server.app.exceptions import RateLimitError
 from server.app.file_watcher import WorkspaceWatcher
 from server.app.models import SessionStatus
-from server.app.observability import setup_metrics, setup_tracing
+from server.app.observability import setup_logging, setup_metrics, setup_tracing
 from server.app.observability.mlflow_config import setup_mlflow_tracing
 from server.app.rate_limiter import RateLimitConfig, get_rate_limiter
 from server.app.session_manager import initialize_session_manager
@@ -60,8 +64,12 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     """Application lifespan context manager."""
     global file_watcher
 
-    logger.info("Starting Cognition server")
     settings = get_settings()
+    setup_logging(
+        log_level=settings.log_level,
+        json_format=settings.log_format == "json",
+    )
+    logger.info("Starting Cognition server")
 
     # Initialize storage backend
     storage_backend = create_storage_backend(settings)
@@ -99,7 +107,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     logger.debug("Loaded YAML config", keys=list(yaml_config.keys()))
     await seed_providers_from_config(yaml_config, config_store)
     sandbox_profiles_seeded = await seed_sandbox_profiles_from_config(yaml_config, config_store)
-    skills_seeded = await seed_skills_from_sources(yaml_config, config_store, settings.workspace_path)
+    skills_seeded = await seed_skills_from_sources(
+        yaml_config, config_store, settings.workspace_path
+    )
     tools_seeded = await seed_tools_from_sources(yaml_config, config_store, settings.workspace_path)
     if sandbox_profiles_seeded or skills_seeded or tools_seeded:
         logger.info(
@@ -213,18 +223,22 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         file_watcher.watch_tools(str(tools_path))
         file_watcher.watch_middleware(str(middleware_path))
         file_watcher.start()
-        logger.info("File watcher started", tools=str(tools_path), middleware=str(middleware_path))
+        logger.info("File watcher started", watched_paths=["tools", "middleware"])
     except Exception as e:
-        logger.warning("Failed to start file watcher", error=str(e))
+        logger.warning("Failed to start file watcher", error_type=type(e).__name__)
 
     setup_tracing(
         endpoint=settings.otel_endpoint,
         app=app,
         enabled=settings.otel_enabled,
+        max_export_bytes=settings.otel_max_export_bytes,
+        queue_size=settings.otlp_queue_size,
+        export_timeout_millis=settings.otlp_export_timeout_ms,
+        trace_sample_ratio=settings.trace_sample_ratio,
     )
     setup_metrics(
         port=settings.metrics_port,
-        enabled=settings.otel_enabled,
+        enabled=settings.metrics_enabled,
     )
     setup_mlflow_tracing()
     rate_limiter = get_rate_limiter(
@@ -237,6 +251,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     logger.info(
         "Server configuration",
         otel_enabled=settings.otel_enabled,
+        metrics_enabled=settings.metrics_enabled,
         persistence_backend=settings.persistence_backend,
     )
     yield
@@ -324,8 +339,8 @@ async def rate_limit_exception_handler(request: Request, exc: RateLimitError) ->
     """Handle rate limit exceeded errors."""
     logger.warning(
         "Rate limit exceeded",
-        error=str(exc),
-        path=request.url.path,
+        error_type=type(exc).__name__,
+        endpoint=route_template_for_request(request),
     )
     return JSONResponse(
         status_code=429,
@@ -338,10 +353,10 @@ async def general_exception_handler(request: Request, exc: Exception) -> JSONRes
     """Handle unhandled exceptions."""
     logger.error(
         "Unhandled exception",
-        error=str(exc),
-        path=request.url.path,
+        error_type=type(exc).__name__,
+        endpoint=route_template_for_request(request),
     )
     return JSONResponse(
         status_code=500,
-        content={"detail": "Internal server error", "error": str(exc)},
+        content={"detail": "Internal server error"},
     )

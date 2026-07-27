@@ -13,6 +13,7 @@ from pathlib import Path
 
 import pytest
 
+from server.app.storage.common import effective_scope_key
 from server.app.storage.config_models import (
     GlobalAgentDefaults,
     GlobalProviderDefaults,
@@ -540,6 +541,96 @@ class TestSqliteConfigRegistry:
             result = await reg.get_tool("t", scope={"user": "alice"})
             assert result is not None
             assert result.path == "scoped.py"
+        finally:
+            await reg.close()
+
+    @pytest.mark.asyncio
+    async def test_inherited_config_resolution_uses_scope_key_indexes(self, tmp_path: Path):
+        import sqlite3
+
+        db_path = tmp_path / "indexed-config.db"
+        reg = SqliteConfigRegistry(str(db_path))
+        target_scope = {"tenant": "acme", "project": "red"}
+        candidate_keys = [
+            effective_scope_key({}),
+            effective_scope_key({"project": "red"}),
+            effective_scope_key({"tenant": "acme"}),
+            effective_scope_key(target_scope),
+        ]
+        placeholders = ",".join("?" for _ in candidate_keys)
+        try:
+            await reg.upsert_skill(
+                SkillDefinition(
+                    name="shared",
+                    path="global.md",
+                    scope={},
+                    source="api",
+                )
+            )
+            await reg.upsert_skill(
+                SkillDefinition(
+                    name="tenant-only",
+                    path="tenant.md",
+                    scope={"tenant": "acme"},
+                    source="api",
+                )
+            )
+            await reg.upsert_skill(
+                SkillDefinition(
+                    name="shared",
+                    path="exact.md",
+                    scope=target_scope,
+                    source="api",
+                )
+            )
+            for index in range(150):
+                await reg.upsert_skill(
+                    SkillDefinition(
+                        name=f"noise-{index}",
+                        path=f"noise-{index}.md",
+                        scope={"tenant": f"other-{index}"},
+                        source="api",
+                    )
+                )
+
+            result = await reg.get_skill("shared", target_scope)
+            assert result is not None
+            assert result.path == "exact.md"
+
+            visible = await reg.list_skills(target_scope)
+            visible_names = {skill.name for skill in visible}
+            assert {"shared", "tenant-only"} <= visible_names
+            assert all(not name.startswith("noise-") for name in visible_names)
+
+            with sqlite3.connect(db_path) as conn:
+                exact_plan = conn.execute(
+                    f"""
+                    EXPLAIN QUERY PLAN
+                    SELECT scope, definition
+                    FROM config_entities
+                    WHERE entity_type=? AND name=? AND scope_key IN ({placeholders})
+                    """,
+                    ("skill", "shared", *candidate_keys),
+                ).fetchall()
+                list_plan = conn.execute(
+                    f"""
+                    EXPLAIN QUERY PLAN
+                    SELECT name, scope, definition
+                    FROM config_entities
+                    WHERE entity_type=? AND scope_key IN ({placeholders})
+                    """,
+                    ("skill", *candidate_keys),
+                ).fetchall()
+
+            exact_plan_text = " ".join(str(row) for row in exact_plan)
+            list_plan_text = " ".join(str(row) for row in list_plan)
+            assert (
+                "idx_config_entities_lookup" in exact_plan_text
+                or "idx_config_entities_scope_list" in exact_plan_text
+            )
+            assert "idx_config_entities_scope_list" in list_plan_text
+            assert "SCAN config_entities" not in exact_plan_text
+            assert "SCAN config_entities" not in list_plan_text
         finally:
             await reg.close()
 

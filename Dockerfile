@@ -31,6 +31,10 @@ RUN uv sync --frozen --no-dev --no-install-project --extra openai --extra bedroc
 # Production stage
 FROM python:3.11-slim AS production
 
+ARG VERSION=dev
+ARG BUILD_DATE
+ARG VCS_REF
+
 # OCI Annotations / Labels
 LABEL org.opencontainers.image.title="Cognition"
 LABEL org.opencontainers.image.description="Batteries-included AI backend for coding agents"

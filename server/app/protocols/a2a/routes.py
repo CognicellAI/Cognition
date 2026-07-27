@@ -593,6 +593,7 @@ async def mount_a2a_routes(
         store,
         default_workspace_path=str(settings.workspace_path),
         artifact_store=artifact_store,
+        config_store=config_store,
     )
     handlers: dict[str, _ScopedRequestHandler] = {}
     retention = A2ARetentionManager(

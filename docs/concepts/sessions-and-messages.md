@@ -222,6 +222,11 @@ with httpx.stream(
 
 If you do not want to keep the SSE connection open until the run completes, you can provide `callback_url` in `POST /sessions/{id}/messages`. Cognition will still stream SSE to the caller, but it will also send a best-effort `POST` to the callback URL when the run finishes.
 
+Callbacks are denied by default. Operators must approve exact HTTPS origins with
+`COGNITION_CALLBACK_ALLOWED_ORIGINS`; Cognition rejects unapproved origins,
+non-HTTPS URLs, userinfo, fragments, and malformed ports before model execution
+starts.
+
 Example:
 
 ```bash

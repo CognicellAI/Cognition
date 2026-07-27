@@ -17,7 +17,6 @@ import pytest
 SSE_TIMEOUT = httpx.Timeout(30.0, connect=10.0)
 
 
-
 class TestSessionStateMachine:
     """Tests for the 11-state session lifecycle state machine."""
 
@@ -28,7 +27,7 @@ class TestSessionStateMachine:
         async with httpx.AsyncClient(timeout=SSE_TIMEOUT) as client:
             resp1 = await client.post(
                 f"{server}/sessions",
-                json={"title": "idempotent-test", "idempotency_key": key},
+                json={"title": "idempotent-test", "agent_name": "default", "idempotency_key": key},
                 headers=scope_headers,
             )
             assert resp1.status_code == 201
@@ -37,7 +36,11 @@ class TestSessionStateMachine:
 
             resp2 = await client.post(
                 f"{server}/sessions",
-                json={"title": "idempotent-test-2", "idempotency_key": key},
+                json={
+                    "title": "idempotent-test-2",
+                    "agent_name": "default",
+                    "idempotency_key": key,
+                },
                 headers=scope_headers,
             )
             assert resp2.status_code in {200, 201}
@@ -51,21 +54,29 @@ class TestSessionStateMachine:
         async with httpx.AsyncClient(timeout=SSE_TIMEOUT) as client:
             create_resp = await client.post(
                 f"{server}/sessions",
-                json={"title": "lifecycle-test"},
+                json={"title": "lifecycle-test", "agent_name": "default"},
                 headers=scope_headers,
             )
             assert create_resp.status_code == 201
             session_id = create_resp.json()["id"]
 
-            get_resp = await client.get(
-                f"{server}/sessions/{session_id}", headers=scope_headers
-            )
+            get_resp = await client.get(f"{server}/sessions/{session_id}", headers=scope_headers)
             assert get_resp.status_code == 200
             status = get_resp.json()["status"]
             assert status in {
-                "queued", "starting", "active", "idle", "stalled",
-                "waiting_for_approval", "aborting", "aborted", "failed", "done",
-                "expired", "inactive", "error",
+                "queued",
+                "starting",
+                "active",
+                "idle",
+                "stalled",
+                "waiting_for_approval",
+                "aborting",
+                "aborted",
+                "failed",
+                "done",
+                "expired",
+                "inactive",
+                "error",
             }
 
             async with client.stream(
@@ -92,18 +103,13 @@ class TestSessionStateMachine:
                     event_type = data.get("event") or current_event
                     if event_type == "error":
                         saw_error = True
-                    if (
-                        event_type == "run_state"
-                        and data.get("to_status") in {"idle", "done"}
-                    ):
+                    if event_type == "run_state" and data.get("to_status") in {"idle", "done"}:
                         saw_completed_run = True
                     if event_type == "done":
                         saw_completed_run = True
                     current_event = None
 
-            get_resp2 = await client.get(
-                f"{server}/sessions/{session_id}", headers=scope_headers
-            )
+            get_resp2 = await client.get(f"{server}/sessions/{session_id}", headers=scope_headers)
             assert get_resp2.status_code == 200
             final_status = get_resp2.json()["status"]
             if saw_error:
@@ -119,7 +125,7 @@ class TestSessionStateMachine:
         async with httpx.AsyncClient(timeout=SSE_TIMEOUT) as client:
             create_resp = await client.post(
                 f"{server}/sessions",
-                json={"title": "pause-test"},
+                json={"title": "pause-test", "agent_name": "default"},
                 headers=scope_headers,
             )
             assert create_resp.status_code == 201
@@ -131,19 +137,15 @@ class TestSessionStateMachine:
             )
             assert pause_resp.status_code == 409
 
-            get_resp = await client.get(
-                f"{server}/sessions/{session_id}", headers=scope_headers
-            )
+            get_resp = await client.get(f"{server}/sessions/{session_id}", headers=scope_headers)
             assert get_resp.json()["status"] == "idle"
 
-    async def test_pause_invalid_state(
-        self, server: str, scope_headers: dict[str, str]
-    ) -> None:
+    async def test_pause_invalid_state(self, server: str, scope_headers: dict[str, str]) -> None:
         """Pausing after a completed run returns 409 because the session is idle."""
         async with httpx.AsyncClient(timeout=SSE_TIMEOUT) as client:
             create_resp = await client.post(
                 f"{server}/sessions",
-                json={"title": "pause-invalid-test"},
+                json={"title": "pause-invalid-test", "agent_name": "default"},
                 headers=scope_headers,
             )
             session_id = create_resp.json()["id"]
@@ -167,7 +169,7 @@ class TestSessionStateMachine:
         async with httpx.AsyncClient(timeout=SSE_TIMEOUT) as client:
             create_resp = await client.post(
                 f"{server}/sessions",
-                json={"title": "cancel-test"},
+                json={"title": "cancel-test", "agent_name": "default"},
                 headers=scope_headers,
             )
             assert create_resp.status_code == 201
@@ -180,17 +182,17 @@ class TestSessionStateMachine:
             assert cancel_resp.json()["success"] is True
             assert cancel_resp.json()["status"] == "aborted"
 
-            get_resp = await client.get(
-                f"{server}/sessions/{session_id}", headers=scope_headers
-            )
+            get_resp = await client.get(f"{server}/sessions/{session_id}", headers=scope_headers)
             assert get_resp.json()["status"] == "aborted"
 
-    async def test_cancel_terminal_rejected(self, server: str, scope_headers: dict[str, str]) -> None:
+    async def test_cancel_terminal_rejected(
+        self, server: str, scope_headers: dict[str, str]
+    ) -> None:
         """Canceling an already-aborted session returns 409."""
         async with httpx.AsyncClient(timeout=SSE_TIMEOUT) as client:
             create_resp = await client.post(
                 f"{server}/sessions",
-                json={"title": "cancel-terminal-test"},
+                json={"title": "cancel-terminal-test", "agent_name": "default"},
                 headers=scope_headers,
             )
             session_id = create_resp.json()["id"]
@@ -213,7 +215,7 @@ class TestSessionStateMachine:
         ):
             create_resp = await control_client.post(
                 f"{server}/sessions",
-                json={"title": "abort-stream-test"},
+                json={"title": "abort-stream-test", "agent_name": "default"},
                 headers=scope_headers,
             )
             assert create_resp.status_code == 201
@@ -266,12 +268,14 @@ class TestSessionStateMachine:
             )
             assert get_resp.status_code == 200
 
-    async def test_heartbeat_in_sse_stream(self, server: str, scope_headers: dict[str, str]) -> None:
+    async def test_heartbeat_in_sse_stream(
+        self, server: str, scope_headers: dict[str, str]
+    ) -> None:
         """SSE stream emits heartbeat events during agent run."""
         async with httpx.AsyncClient(timeout=SSE_TIMEOUT) as client:
             create_resp = await client.post(
                 f"{server}/sessions",
-                json={"title": "heartbeat-test"},
+                json={"title": "heartbeat-test", "agent_name": "default"},
                 headers=scope_headers,
             )
             assert create_resp.status_code == 201
@@ -297,12 +301,14 @@ class TestSessionStateMachine:
 
             assert "done" in event_types or "status" in event_types or "run_state" in event_types
 
-    async def test_status_event_in_sse_stream(self, server: str, scope_headers: dict[str, str]) -> None:
+    async def test_status_event_in_sse_stream(
+        self, server: str, scope_headers: dict[str, str]
+    ) -> None:
         """SSE stream emits status events during session lifecycle."""
         async with httpx.AsyncClient(timeout=SSE_TIMEOUT) as client:
             create_resp = await client.post(
                 f"{server}/sessions",
-                json={"title": "status-event-test"},
+                json={"title": "status-event-test", "agent_name": "default"},
                 headers=scope_headers,
             )
             assert create_resp.status_code == 201

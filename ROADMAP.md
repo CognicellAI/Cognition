@@ -16,6 +16,7 @@ See AGENTS.md for category definitions, DoD requirements, and precedence rules.
 
 | Date | Description | Severity | Layer | Status |
 |------|-------------|----------|-------|--------|
+| 2026-07-23 | Default per-message completion callbacks to denied and require operator-approved HTTPS origins so scoped callers cannot select arbitrary destinations from the shared Cognition runtime. | High | 1/6 | Implemented on `release/v0.13.0`; release validation pending |
 | 2026-06-26 | Resolve open Dependabot alerts in `uv.lock` by upgrading `pydantic-settings`, `langsmith`, `langchain`, `langchain-anthropic`, `starlette`, `cryptography`, `aiohttp`, `python-multipart`, and `pyjwt` to patched versions | High | 1 | Completed |
 | 2026-05-27 | Resolve open Dependabot alerts in `uv.lock` by upgrading `GitPython`, `Mako`, `urllib3`, `python-multipart`, `idna`, and `langchain-openai` to patched versions | High | 1 | Completed |
 | 2026-05-21 | K8s sandbox shell injection in `_upload_files_via_execute` — file paths interpolated into shell command without `shlex.quote()` | High | 3 | Planned |
@@ -29,6 +30,7 @@ See AGENTS.md for category definitions, DoD requirements, and precedence rules.
 
 | Date | Description | Issue | Layer | Status |
 |------|-------------|-------|-------|--------|
+| 2026-07-23 | Bound encoded OTLP trace-export requests below an operator-configured byte ceiling, split batches before export, and measure spans that cannot fit individually. | Long agent runs can exceed common OTLP/gRPC Collector receive limits and lose telemetry | 7 | Implemented on `release/v0.13.0`; release validation pending |
 | 2026-07-21 | Persist a canonical ordered representation of every inbound A2A Part plus Message metadata, extensions, and references; derive model rendering without losing `mediaType`, filename, metadata, or content type. | A2A Part/message fidelity audit | 2/4/6 | Completed |
 | 2026-07-21 | Remove the A2A-specific `response_format` to DataPart projection so generic A2A output does not depend on a builder-installed Python schema. | Decision Room bring-your-own-agent interoperability | 4/6 | Completed |
 | 2026-07-21 | Preserve every valid A2A `DataPart` JSON value (object, array, string, number, boolean, and null) through inbound normalization, durable artifacts, and streaming replay. | A2A Part §4.1.6 DataPart conformance | 2/4/6 | Completed |
@@ -80,6 +82,7 @@ See AGENTS.md for category definitions, DoD requirements, and precedence rules.
 
 | Date | Description | Layer | Migration Plan | Status |
 |------|-------------|-------|----------------|--------|
+| 2026-07-23 | **v0.13.0 multi-tenant Agent runtime boundary** — remove platform Agents and implicit session binding; make API Agent CRUD exact-scope; add revision/digest identity; enforce scoped persistence at storage boundaries; pin resolved run manifests; bind graph caches and sandboxes to exact runtime identity; fail closed for unsupported host execution; and keep observability redacted, low-cardinality, and bounded. | 1/2/3/4/6/7 | Backfill canonical scope keys and Agent revision/digests, require builders to provision Agents and send `agent_name`, drain v0.12 writers before migration, and replace the worker set atomically. Mixed v0.12/v0.13 writers are unsupported. Observability cutover must preserve existing scrape/export paths while removing raw path and identity cardinality. | Implemented on `release/v0.13.0`; release validation pending |
 | 2026-03-19 | **Remove provider fallback chain; use Deep Agents `init_chat_model` natively** — `ProviderFallbackChain`, circuit breakers, and custom LLM factories replaced by a single `_resolve_provider_config()` + `_build_model()` using LangChain's `init_chat_model`. No fallback — if the configured provider fails, the error surfaces immediately. | 5 | Non-breaking: error path changes (errors surface instead of falling back to mock). Mock provider now test-only. `GlobalProviderDefaults.provider` default changed from `"mock"` to `"openai_compatible"`. | Completed |
 | 2026-03-21 | **Replace `astream_events()` callback parser with `astream()` v2 format** — `DeepAgentRuntime.astream_events()` previously called `astream_events(version="v2")` and manually matched raw LangGraph callback strings (`on_chat_model_stream`, `on_tool_start`, `on_tool_end`). Replaced with `astream(stream_mode=["messages", "updates", "custom"], subgraphs=True, version="v2")`. Uses `isinstance(msg, AIMessageChunk)` / `isinstance(msg, ToolMessage)` and real `tool_call_id` fields — fixes broken tool call correlation. Subagent execution now visible via `chunk["ns"]`. | 4 | Non-breaking for callers: same `AgentEvent` domain types emitted. `ToolCallEvent.tool_call_id` now real ID instead of CPython `id(data)`. Requires LangGraph >= 1.1 (upgraded as part of this change). | Completed |
 | 2026-03-21 | **Remove AST security theater — document real trust model** — Removed `BANNED_IMPORTS`, `BANNED_CALLS`, `BANNED_OS_CALLS`, `SecurityASTVisitor`, `scan_for_security_violations()` from `agent_registry.py` and the `tool_security` setting from `Settings`. AST scanning was a blocklist bypassable via reflection (`getattr(__builtins__, '__import__')('subprocess')`). It also created an inconsistency: file-discovered tools were scanned, API-registered source-in-DB tools were not. The consistent model: trust is established at the API authentication boundary. Real security boundaries (container isolation, `ToolSecurityMiddleware` blocklist, `COGNITION_BLOCKED_TOOLS`) are unchanged. Security trust model documented in `AGENTS.md`. | 3, 1 | `COGNITION_TOOL_SECURITY` env var is no longer read. Deployments using `tool_security=strict` will no longer block tool loading — if hard tool blocking is needed, migrate to `COGNITION_BLOCKED_TOOLS` + Gateway-layer authorization. | Completed |
@@ -87,6 +90,75 @@ See AGENTS.md for category definitions, DoD requirements, and precedence rules.
 | 2026-04-09 | **Defer runtime-controlled repo bootstrap for strict git isolation** — current local backend now provides session-scoped sandbox roots, but successful agent runs can still choose a shared clone destination like `/workspace/Cognition-Gateway`. Future work should move repo bootstrap under runtime control or per-session Docker sandboxes so clone destination is enforced structurally instead of via prompt guidance. | 4, 3 | Follow-on change after local sandbox rollout: introduce runtime-managed clone/bootstrap into `<session.workspace_path>/<repo>` or migrate to per-session Docker sandboxes. Keep current prompt guidance as a temporary mitigation until structural enforcement exists. | Planned |
 | 2026-04-12 | **Refactor `create_cognition_agent()` into `CognitionAgentParams` + `RuntimeContext`** — replace the 17-arg agent construction path with a structured parameter object, use runtime-context cache keys instead of MD5, and ensure subagent security middleware is injected into nested agent specs. | 4 | Migrate all internal callers to `CognitionAgentParams`, keep a compatibility wrapper only until callers are updated, then remove the keyword-based entry point and validate with boundary tests. | In Progress |
 | 2026-05-01 | **Unify file/API skills and tools through ConfigRegistry** — introduce workspace-level `skill_sources` / `tool_sources` bootstrap config, seed file-managed skills/tools into ConfigRegistry at startup, lock file-managed records from API mutation, and make agent `skills` / `tools` attach registry names only. Runtime resolves selected names through registry-backed backends/loaders instead of direct filesystem paths from agent definitions. | 4, 2, 6 | Non-backward-compatible config cleanup: agent `skills` / `tools` now mean selected registry names only; file source directories move to workspace config. Existing path-based agent attachments must migrate to seeded names. | Completed |
+
+### v0.13.0 multi-tenant Agent runtime boundary
+
+**Category:** Architectural change, feature enhancement, performance improvement,
+security fix, and bug fix
+
+**Layers:** 1 (Foundation), 2 (Persistence), 3 (Execution), 4 (Agent Runtime),
+6 (API and Streaming), 7 (Observability)
+
+**Estimated effort:** 5–7 engineer-weeks
+
+**Dependencies:** Existing ConfigRegistry, durable run/event/task storage,
+production sandbox backends, and trusted `effective_scope`
+
+**Acceptance criteria:**
+
+- Cognition supplies no default Agents and every new session binds an explicitly
+  builder-provisioned Agent.
+- API Agent CRUD uses exact scope while explicitly shared file Agents remain
+  available as read-only fallbacks.
+- Agent responses expose revision/digest identity and support optional HTTP
+  conditional writes without breaking unconditional callers.
+- Canonical scope keys and composite indexes back exact Agent/config, session,
+  run, event, task, and artifact access; stored scope dictionaries remain the
+  collision-checking source of truth.
+- Storage-level runtime access rejects wrong-scope identifiers as not found.
+- Every run pins a redacted dependency manifest, and graph/sandbox reuse cannot
+  cross manifest, session, or scope boundaries.
+- Production sandbox execution fails closed; unsafe local or host execution
+  requires explicit development configuration and is observable.
+- Shared graph/session caches are size/TTL bounded and clean up terminal state.
+- OTLP trace requests never exceed the configured encoded-byte ceiling.
+- HTTP metrics use route templates instead of concrete URL paths, and hot-path
+  Prometheus labels use only reviewed bounded vocabularies.
+- Metrics can start independently from trace export.
+- Production structured logging honors `COGNITION_LOG_FORMAT=json|console`.
+- Logs, metrics, and traces do not expose raw effective scope values or the
+  database `scope_key`.
+- HTTP logs include a safe request id, sorted scope key names, active trace/span
+  ids when available, and central redaction for credentials and raw scope fields.
+- Durable run/event projection binds safe session/run/task correlation,
+  Agent revision, manifest digest, and scope key names for background runtime
+  evidence.
+- Telemetry exporter metrics expose bounded success, failure, split, drop,
+  encoded-byte, and last-success signals without trace contents or tenant
+  identifiers.
+- v0.13 isolation boundaries emit redacted operational evidence for scope
+  denials, manifest pinning, cache decisions, strict-execution rejection,
+  sandbox lifecycle, and telemetry export health.
+- MLflow support honors `COGNITION_MLFLOW_*` operator settings, keeps upstream
+  `MLFLOW_*` aliases as compatibility fallbacks, uses a static operator-owned
+  experiment, and degrades safely when MLflow is unavailable.
+- `COGNITION_NATIVE_AGENT_TRACING` selects at most one semantic tracing mode;
+  `otlp_to_mlflow` uses the Collector path and `mlflow_autolog` explicitly
+  enables native MLflow LangChain/Deep Agents autologging.
+- Completion callbacks are denied unless their HTTPS origin is approved by the
+  operator.
+- Memory, SQLite, PostgreSQL, A2A, migration, and CI-scale query validation pass
+  together with Ruff, strict mypy, and the release image workflow.
+
+**Migration plan:**
+
+1. Provision replacement Agents and update clients to send `agent_name`.
+2. Drain active runs, back up persistence, and pause v0.12 writes.
+3. Apply the scope-key/revision/digest migration and verify backfill counts.
+4. Replace the complete worker set with v0.13 workers.
+5. Run cross-scope, sandbox, callback, and OTLP smoke tests before restoring
+   writes. Roll back before new writes by restoring v0.12; after new writes,
+   roll forward or restore the backup.
 
 ---
 
@@ -125,6 +197,9 @@ The following fallback patterns exist and are tracked for removal. They produce 
 
 | Description | Target Metric | Before | After | Layer | Status |
 |-------------|---------------|--------|-------|-------|--------|
+| Exact-scope indexed Agent/config and runtime lookup for v0.13.0 | PostgreSQL query plans use composite scope indexes; no application-side tenant scan; list work scales with the requested page | Agent/config and session lists can load broad result sets and filter scope in Python | CI-sized proof with 10,000 config rows, 1,000 scopes, and 50,000 sessions; median/p95 recorded without a wall-clock gate | 1/2/4/6 | Implemented on `release/v0.13.0`; release validation pending |
+| Bound shared runtime caches for v0.13.0 | Agent graph and session-service caches have configured size/TTL limits and observable eviction | Process-lifetime dictionaries can grow with tenant/session cardinality | Deterministic LRU/TTL bounds and terminal cleanup | 4/7 | Implemented on `release/v0.13.0`; release validation pending |
+| v0.13.0 observability cardinality, redaction, and MLflow hardening | Metric series stay bounded while varying session IDs, Agent names, tool names, model IDs, concrete resource URLs, and scope values; route-template labels replace raw paths; `COGNITION_MLFLOW_*` settings activate MLflow setup safely; v0.13 isolation boundaries emit bounded evidence | HTTP metrics use concrete paths; some hot-path labels include builder-controlled tool/provider/model strings; logging setup and metrics/tracing switches are incomplete; MLflow code reads upstream env names while deployment manifests use Cognition-prefixed names; strict execution and cache decisions lack safe aggregate metrics | Route-template metrics, bounded label vocabulary, structured logging configuration, metrics/tracing decoupling, MLflow config normalization, OTLP byte/queue/timeout/sample knobs, isolation-boundary metrics, and redaction/cardinality tests | 1/6/7 | Implemented on `release/v0.13.0`; release validation pending |
 | Coalesce durable A2A token output and add bounded request/output handling | Durable writes per streamed response | One write per model token | Bounded by configured byte/time chunk thresholds | 2/4/6/7 | Completed |
 | Strict mypy type checking for all production code (`server/`, `client/`) | Production mypy errors | ~341 errors | 0 errors | 1–6 | Completed |
 | Ruff lint cleanup for `feature/config-registry` — unused imports, unsorted import blocks, unused `type: ignore` comments (12 auto-fixed; 10 mypy suppressions removed as stubs are now available) | Lint/mypy errors | 12 ruff + 10 mypy | 0 | 1–6 | Completed |

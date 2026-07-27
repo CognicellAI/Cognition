@@ -37,7 +37,10 @@ class _FakeAgentService:
 
     async def stream_response(self, **kwargs):
         self.calls.append(kwargs)
-        messages = await self._store.list_messages_for_session(kwargs["session_id"])
+        messages = await self._store.list_messages_for_session(
+            kwargs["session_id"],
+            kwargs["scope"],
+        )
         message_id = messages[-1].id
         if message_id.startswith("slow-message"):
             self.started.set()
@@ -351,7 +354,10 @@ async def test_streaming_tokens_are_coalesced_into_durable_artifact_updates(
         update["artifact"]["parts"][0].get("text", "") for update in updates
     )
     durable = await setup_storage_backend.list_events(
-        task["contextId"], event_type="artifact.updated", task_id=task["id"]
+        task["contextId"],
+        event_type="artifact.updated",
+        task_id=task["id"],
+        effective_scope={"account": "acme"},
     )
 
     assert text == "one two three four five"
@@ -490,7 +496,10 @@ async def test_streaming_execution_timeout_emits_failed_terminal_status(
     task = await setup_storage_backend.get_task(task_id, {"account": "acme"})
     assert task is not None
     assert task.status.value == "failed"
-    run = await setup_storage_backend.get_run(task.last_run_id or task.current_run_id or "")
+    run = await setup_storage_backend.get_run(
+        task.last_run_id or task.current_run_id or "",
+        {"account": "acme"},
+    )
     assert run is not None
     assert run.error_code == "EXECUTION_TIMEOUT"
 
@@ -834,7 +843,10 @@ async def test_input_required_continues_same_task_with_new_attempt_and_can_cance
         completed_task = completed.json()["result"]["task"]
         assert completed_task["id"] == task["id"]
         assert completed_task["status"]["state"] == "TASK_STATE_COMPLETED"
-        runs = await setup_storage_backend.list_runs(task["contextId"])
+        runs = await setup_storage_backend.list_runs(
+            task["contextId"],
+            {"account": "acme"},
+        )
         assert [run.attempt for run in reversed(runs)] == [1, 2]
 
         terminal_followup = _send_request("terminal-followup")

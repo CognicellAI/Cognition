@@ -80,6 +80,17 @@ class SessionNotFoundError(SessionError):
         )
 
 
+class SessionAlreadyExistsError(SessionError):
+    """A session identifier is already owned by an existing scope."""
+
+    def __init__(self, session_id: str):
+        super().__init__(
+            message=f"Session already exists: {session_id}",
+            code=ErrorCode.VALIDATION_ERROR,
+            details={"session_id": session_id},
+        )
+
+
 class SessionLimitExceededError(SessionError):
     """Maximum number of sessions exceeded."""
 

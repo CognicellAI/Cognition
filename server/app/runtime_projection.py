@@ -17,6 +17,7 @@ from server.app.observability import (
     RUN_TRANSITION_COUNT,
     RUNTIME_EVENT_COUNT,
     current_trace_context,
+    observability_context,
 )
 from server.app.observability import (
     span as trace_span,
@@ -48,24 +49,41 @@ class RuntimeProjectionService:
         metadata: dict[str, Any] | None = None,
         task_id: str | None = None,
         parent_run_id: str | None = None,
+        agent_revision: int = 1,
+        runtime_manifest: dict[str, Any] | None = None,
+        manifest_digest: str | None = None,
     ) -> SessionRun:
         """Create or reuse a durable active run for a session."""
         scope = session.scopes if effective_scope is None else effective_scope
-        with trace_span(
-            "cognition.run.begin",
-            {
-                "cognition.session_id": session.id,
-                "cognition.thread_id": session.thread_id,
-                "cognition.scope_keys": ",".join(sorted(scope)),
-            },
+        with (
+            observability_context(
+                session_id=session.id,
+                thread_id=session.thread_id,
+                task_id=task_id,
+                scope_keys=sorted(scope),
+                agent_revision=agent_revision,
+                manifest_digest=manifest_digest,
+            ),
+            trace_span(
+                "cognition.run.begin",
+                {
+                    "cognition.session_id": session.id,
+                    "cognition.thread_id": session.thread_id,
+                    "cognition.scope_keys": ",".join(sorted(scope)),
+                },
+            ),
         ):
             span_trace_id, _span_id = current_trace_context()
             if idempotency_key:
-                existing = await self.store.get_run_by_idempotency_key(session.id, idempotency_key)
+                existing = await self.store.get_run_by_idempotency_key(
+                    session.id,
+                    idempotency_key,
+                    scope,
+                )
                 if existing is not None:
                     return existing
 
-            active = await self.store.get_active_run(session.id)
+            active = await self.store.get_active_run(session.id, scope)
             if active is not None:
                 raise ActiveRunConflictError(active)
 
@@ -80,6 +98,9 @@ class RuntimeProjectionService:
                 metadata=metadata,
                 task_id=task_id,
                 parent_run_id=parent_run_id,
+                agent_revision=agent_revision,
+                runtime_manifest=runtime_manifest,
+                manifest_digest=manifest_digest,
             )
             if task_id is not None:
                 task = await self.store.get_task(task_id, scope)
@@ -109,6 +130,7 @@ class RuntimeProjectionService:
                     "latest_run_id": run.id,
                     "last_activity_at": run.last_activity_at or run.created_at,
                 },
+                effective_scope=scope,
             )
             await self.append_event(
                 run,
@@ -135,7 +157,10 @@ class RuntimeProjectionService:
                 "cognition.visibility": visibility,
             },
         )
-        with trace_span("cognition.runtime_event", attributes):
+        with (
+            observability_context(**_runtime_context_fields(run)),
+            trace_span("cognition.runtime_event", attributes),
+        ):
             current_trace_id, current_span_id = current_trace_context()
             event = await self.store.append_event(
                 event_id=str(uuid.uuid4()),
@@ -181,14 +206,23 @@ class RuntimeProjectionService:
         session_status: SessionStatus | None = None,
     ) -> tuple[SessionRun, SessionEvent]:
         """Transition a run and return the durable transition event."""
-        with trace_span(
-            "cognition.run.transition",
-            _runtime_attributes(
-                run,
-                {
-                    "cognition.run_status": status.value,
-                    "cognition.error_code": error_code or "",
-                },
+        with (
+            observability_context(
+                **_runtime_context_fields(
+                    run,
+                    run_status=status.value,
+                    error_code=error_code,
+                )
+            ),
+            trace_span(
+                "cognition.run.transition",
+                _runtime_attributes(
+                    run,
+                    {
+                        "cognition.run_status": status.value,
+                        "cognition.error_code": error_code or "",
+                    },
+                ),
             ),
         ):
             effective_status = status
@@ -215,6 +249,7 @@ class RuntimeProjectionService:
                 status=effective_status,
                 error_code=error_code,
                 status_reason=reason,
+                effective_scope=run.effective_scope,
             )
             if updated is None:
                 updated = run
@@ -229,7 +264,10 @@ class RuntimeProjectionService:
                 },
             )
 
-            session = await self.store.get_session(run.session_id)
+            session = await self.store.get_session(
+                run.session_id,
+                run.effective_scope,
+            )
             metadata = dict(session.metadata) if session is not None else {}
             metadata.update(
                 {
@@ -252,15 +290,23 @@ class RuntimeProjectionService:
                     else _session_status_for_run(effective_status)
                 ),
                 metadata=metadata,
+                effective_scope=run.effective_scope,
             )
             RUN_TRANSITION_COUNT.labels(status=effective_status.value).inc()
             return updated, event
 
-    async def refresh_message_count(self, session_id: str) -> int:
+    async def refresh_message_count(
+        self,
+        session_id: str,
+        effective_scope: dict[str, str] | None = None,
+    ) -> int:
         """Synchronize session.message_count from the message projection."""
-        messages = await self.store.list_messages_for_session(session_id)
+        messages = await self.store.list_messages_for_session(
+            session_id,
+            effective_scope,
+        )
         count = len(messages)
-        await self.store.update_message_count(session_id, count)
+        await self.store.update_message_count(session_id, count, effective_scope)
         return count
 
     async def rebuild_messages_from_checkpoint(
@@ -272,19 +318,30 @@ class RuntimeProjectionService:
         rebuild = getattr(service, "rebuild_message_projection", None)
         if rebuild is None:
             return None
-        with trace_span(
-            "cognition.message_projection.rebuild",
-            _runtime_attributes(run, {"cognition.projection_source": "checkpoint"}),
+        with (
+            observability_context(**_runtime_context_fields(run)),
+            trace_span(
+                "cognition.message_projection.rebuild",
+                _runtime_attributes(run, {"cognition.projection_source": "checkpoint"}),
+            ),
         ):
             rebuilt_count = int(
-                await rebuild(session_id=run.session_id, thread_id=run.thread_id)
+                await rebuild(
+                    session_id=run.session_id,
+                    thread_id=run.thread_id,
+                    scope=run.effective_scope,
+                )
             )
             await self.append_event(
                 run,
                 "message.projection.rebuilt",
                 payload={"message_count": rebuilt_count, "source": "checkpoint"},
             )
-            await self.store.update_message_count(run.session_id, rebuilt_count)
+            await self.store.update_message_count(
+                run.session_id,
+                rebuilt_count,
+                run.effective_scope,
+            )
             return rebuilt_count
 
 
@@ -337,6 +394,20 @@ def _runtime_attributes(
     if extra:
         attributes.update(extra)
     return attributes
+
+
+def _runtime_context_fields(run: SessionRun, **extra: Any) -> dict[str, Any]:
+    fields: dict[str, Any] = {
+        "session_id": run.session_id,
+        "run_id": run.id,
+        "thread_id": run.thread_id,
+        "task_id": run.task_id,
+        "scope_keys": sorted(run.effective_scope),
+        "agent_revision": run.agent_revision,
+        "manifest_digest": run.manifest_digest,
+    }
+    fields.update(extra)
+    return fields
 
 
 def _task_status_for_run(status: RunStatus) -> TaskStatus | None:

@@ -123,6 +123,15 @@ spec:
               value: "{{ .Values.config.logLevel }}"
             
             # Database settings
+            # Database password must be defined before COGNITION_PERSISTENCE_URI
+            # so Kubernetes can expand $(DB_PASSWORD) inside the URI value.
+            {{- if not .Values.database.existingSecretName }}
+            - name: DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "cognition.fullname" . }}-db-credentials
+                  key: password
+            {{- end }}
             - name: COGNITION_PERSISTENCE_BACKEND
               value: "postgres"
             - name: COGNITION_PERSISTENCE_URI
@@ -229,15 +238,6 @@ spec:
               value: "{{ .Values.config.rateLimit.perMinute }}"
             - name: COGNITION_RATE_LIMIT_BURST
               value: "{{ .Values.config.rateLimit.burst }}"
-            
-            # Database password from secret (if not using existing secret with full URI)
-            {{- if not .Values.database.existingSecretName }}
-            - name: DB_PASSWORD
-              valueFrom:
-                secretKeyRef:
-                  name: {{ include "cognition.fullname" . }}-db-credentials
-                  key: password
-            {{- end }}
             
           ports:
             - name: http

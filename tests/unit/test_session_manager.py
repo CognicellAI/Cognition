@@ -60,6 +60,7 @@ class TestSessionManagerBasics:
     async def test_create_session(self, session_manager):
         """Test creating a session."""
         session = await session_manager.create_session(
+            agent_name="default",
             workspace_path="/workspace",
             title="Test Session",
         )
@@ -76,6 +77,7 @@ class TestSessionManagerBasics:
     async def test_get_session(self, session_manager):
         """Test retrieving a session."""
         created = await session_manager.create_session(
+            agent_name="default",
             workspace_path="/workspace",
             title="Test Session",
         )
@@ -95,8 +97,12 @@ class TestSessionManagerBasics:
     @pytest.mark.asyncio
     async def test_list_sessions(self, session_manager):
         """Test listing sessions."""
-        await session_manager.create_session(workspace_path="/ws1", title="Session 1")
-        await session_manager.create_session(workspace_path="/ws2", title="Session 2")
+        await session_manager.create_session(
+            agent_name="default", workspace_path="/ws1", title="Session 1"
+        )
+        await session_manager.create_session(
+            agent_name="default", workspace_path="/ws2", title="Session 2"
+        )
 
         sessions = await session_manager.list_sessions()
 
@@ -107,8 +113,12 @@ class TestSessionManagerBasics:
     )
     async def test_list_sessions_filtered_by_workspace(self, session_manager, temp_storage):
         """Test filtering sessions by workspace."""
-        first = await session_manager.create_session(workspace_path="/ws1", title="Session 1")
-        await session_manager.create_session(workspace_path="/ws2", title="Session 2")
+        first = await session_manager.create_session(
+            agent_name="default", workspace_path="/ws1", title="Session 1"
+        )
+        await session_manager.create_session(
+            agent_name="default", workspace_path="/ws2", title="Session 2"
+        )
 
         stored_first = await temp_storage.get_session(first.id)
         assert stored_first is not None
@@ -122,6 +132,7 @@ class TestSessionManagerBasics:
     async def test_delete_session(self, session_manager):
         """Test deleting a session."""
         session = await session_manager.create_session(
+            agent_name="default",
             workspace_path="/workspace",
             title="To Delete",
         )
@@ -141,6 +152,7 @@ class TestSessionManagerBasics:
     async def test_update_session(self, session_manager):
         """Test updating a session."""
         session = await session_manager.create_session(
+            agent_name="default",
             workspace_path="/workspace",
             title="Original",
         )
@@ -173,6 +185,7 @@ class TestSessionManagerLifecycleEvents:
         session_manager.on_session_created(on_created)
 
         session = await session_manager.create_session(
+            agent_name="default",
             workspace_path="/workspace",
             title="Test",
         )
@@ -194,6 +207,7 @@ class TestSessionManagerLifecycleEvents:
         session_manager.on_session_deleted(on_deleted)
 
         session = await session_manager.create_session(
+            agent_name="default",
             workspace_path="/workspace",
             title="Test",
         )
@@ -217,6 +231,7 @@ class TestSessionManagerLifecycleEvents:
         session_manager.on_session_updated(on_updated)
 
         session = await session_manager.create_session(
+            agent_name="default",
             workspace_path="/workspace",
             title="Original",
         )
@@ -242,7 +257,9 @@ class TestSessionManagerLifecycleEvents:
         session_manager.on_session_created(on_created_1)
         session_manager.on_session_created(on_created_2)
 
-        await session_manager.create_session(workspace_path="/workspace", title="Test")
+        await session_manager.create_session(
+            agent_name="default", workspace_path="/workspace", title="Test"
+        )
 
         assert callback_count == 2
 
@@ -254,6 +271,7 @@ class TestSessionManagerContext:
     async def test_create_context(self, session_manager):
         """Test creating SessionContext."""
         session = await session_manager.create_session(
+            agent_name="default",
             workspace_path="/workspace",
             title="Test",
             scopes={"user": "user123", "project": "proj456"},
@@ -274,8 +292,12 @@ class TestSessionManagerContext:
 class TestSessionWorkspaceIsolation:
     @pytest.mark.asyncio
     async def test_sessions_get_unique_workspace_paths(self, session_manager):
-        first = await session_manager.create_session(workspace_path="/workspace", title="One")
-        second = await session_manager.create_session(workspace_path="/workspace", title="Two")
+        first = await session_manager.create_session(
+            agent_name="default", workspace_path="/workspace", title="One"
+        )
+        second = await session_manager.create_session(
+            agent_name="default", workspace_path="/workspace", title="Two"
+        )
 
         assert first.workspace_path != second.workspace_path
         assert first.workspace_path.endswith(first.id)
@@ -320,8 +342,12 @@ class TestSessionManagerStats:
     @pytest.mark.asyncio
     async def test_stats_after_creating_sessions(self, session_manager):
         """Test stats reflect created sessions."""
-        await session_manager.create_session(workspace_path="/ws1", title="Session 1")
-        await session_manager.create_session(workspace_path="/ws2", title="Session 2")
+        await session_manager.create_session(
+            agent_name="default", workspace_path="/ws1", title="Session 1"
+        )
+        await session_manager.create_session(
+            agent_name="default", workspace_path="/ws2", title="Session 2"
+        )
 
         stats = session_manager.get_stats()
 

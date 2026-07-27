@@ -90,6 +90,24 @@ class TestHealthEndpoints:
         data = response.json()
         assert data["ready"] is True
 
+    def test_general_exception_response_redacts_internal_error(self):
+        """Unhandled 500 responses must not expose raw exception text."""
+
+        class FailingStorage:
+            async def list_sessions(self):
+                raise RuntimeError("secret database path /private/tenant/acme")
+
+        app.dependency_overrides[get_storage_backend_dep] = lambda: FailingStorage()
+        redacting_client = TestClient(app, raise_server_exceptions=False)
+        try:
+            response = redacting_client.get("/health")
+        finally:
+            app.dependency_overrides.pop(get_storage_backend_dep, None)
+
+        assert response.status_code == 500
+        assert response.json() == {"detail": "Internal server error"}
+        assert "secret database path" not in response.text
+
 
 class TestSessionEndpoints:
     """Test session API endpoints."""
@@ -98,7 +116,11 @@ class TestSessionEndpoints:
         """Test creating a session."""
         response = client.post(
             "/sessions",
-            json={"title": "Test Session", "metadata": {"workflow": "review", "repo": "acme/app"}},
+            json={
+                "agent_name": "default",
+                "title": "Test Session",
+                "metadata": {"workflow": "review", "repo": "acme/app"},
+            },
         )
         assert response.status_code == 201
         data = response.json()
@@ -111,7 +133,7 @@ class TestSessionEndpoints:
     def test_create_session_validation(self):
         """Test session creation validation."""
         # Title too long should fail
-        response = client.post("/sessions", json={"title": "x" * 201})
+        response = client.post("/sessions", json={"agent_name": "default", "title": "x" * 201})
         assert response.status_code == 422
 
     def test_list_sessions(self):
@@ -119,7 +141,11 @@ class TestSessionEndpoints:
         # Create a session first
         client.post(
             "/sessions",
-            json={"title": "list-test-session", "metadata": {"repo": "myorg/myrepo"}},
+            json={
+                "agent_name": "default",
+                "title": "list-test-session",
+                "metadata": {"repo": "myorg/myrepo"},
+            },
         )
 
         response = client.get("/sessions")
@@ -140,7 +166,9 @@ class TestSessionEndpoints:
     def test_get_session(self):
         """Test getting a session."""
         # Create a session
-        create_resp = client.post("/sessions", json={"title": "get-test-session"})
+        create_resp = client.post(
+            "/sessions", json={"agent_name": "default", "title": "get-test-session"}
+        )
         session_id = create_resp.json()["id"]
 
         # Get the session
@@ -157,7 +185,9 @@ class TestSessionEndpoints:
 
     def test_get_session_context_debug_metadata(self):
         """Context debug endpoint returns redacted policy/token metadata."""
-        create_resp = client.post("/sessions", json={"title": "context-debug"})
+        create_resp = client.post(
+            "/sessions", json={"agent_name": "default", "title": "context-debug"}
+        )
         session_id = create_resp.json()["id"]
 
         response = client.get(f"/sessions/{session_id}/context")
@@ -174,7 +204,9 @@ class TestSessionEndpoints:
 
     def test_get_session_context_debug_redacts_message_content(self):
         """Context debug endpoint returns counts and IDs, not raw message content."""
-        create_resp = client.post("/sessions", json={"title": "context-debug-redaction"})
+        create_resp = client.post(
+            "/sessions", json={"agent_name": "default", "title": "context-debug-redaction"}
+        )
         session_id = create_resp.json()["id"]
         message_id = str(uuid.uuid4())
 
@@ -206,13 +238,19 @@ class TestSessionEndpoints:
     def test_update_session(self):
         """Test updating a session."""
         # Create a session
-        create_resp = client.post("/sessions", json={"title": "original-title"})
+        create_resp = client.post(
+            "/sessions", json={"agent_name": "default", "title": "original-title"}
+        )
         session_id = create_resp.json()["id"]
 
         # Update the session
         response = client.patch(
             f"/sessions/{session_id}",
-            json={"title": "updated-title", "metadata": {"ticket": "ABC-123"}},
+            json={
+                "agent_name": "default",
+                "title": "updated-title",
+                "metadata": {"ticket": "ABC-123"},
+            },
         )
         assert response.status_code == 200
         data = response.json()
@@ -231,7 +269,9 @@ class TestSessionEndpoints:
         )
         assert provider_resp.status_code == 201
 
-        create_resp = client.post("/sessions", json={"title": "session-provider-resolution"})
+        create_resp = client.post(
+            "/sessions", json={"agent_name": "default", "title": "session-provider-resolution"}
+        )
         session_id = create_resp.json()["id"]
 
         response = client.patch(
@@ -259,7 +299,9 @@ class TestSessionEndpoints:
             },
         )
 
-        create_resp = client.post("/sessions", json={"title": "session-provider-ambiguous"})
+        create_resp = client.post(
+            "/sessions", json={"agent_name": "default", "title": "session-provider-ambiguous"}
+        )
         session_id = create_resp.json()["id"]
 
         response = client.patch(
@@ -270,7 +312,9 @@ class TestSessionEndpoints:
         assert "multiple provider types" in response.json()["detail"]
 
     def test_update_session_model_only_rejects_unknown_model(self):
-        create_resp = client.post("/sessions", json={"title": "session-provider-unknown-model"})
+        create_resp = client.post(
+            "/sessions", json={"agent_name": "default", "title": "session-provider-unknown-model"}
+        )
         session_id = create_resp.json()["id"]
 
         response = client.patch(
@@ -283,7 +327,9 @@ class TestSessionEndpoints:
     def test_delete_session(self):
         """Test deleting a session."""
         # Create a session
-        create_resp = client.post("/sessions", json={"title": "delete-test-session"})
+        create_resp = client.post(
+            "/sessions", json={"agent_name": "default", "title": "delete-test-session"}
+        )
         session_id = create_resp.json()["id"]
 
         # Delete the session
@@ -301,7 +347,9 @@ class TestMessageEndpoints:
     def test_list_messages(self):
         """Test listing messages."""
         # Create a session first
-        session_resp = client.post("/sessions", json={"title": "msg-list-test"})
+        session_resp = client.post(
+            "/sessions", json={"agent_name": "default", "title": "msg-list-test"}
+        )
         session_id = session_resp.json()["id"]
 
         response = client.get(f"/sessions/{session_id}/messages")
@@ -319,7 +367,7 @@ class TestMessageEndpoints:
     def test_send_message_sse(self):
         """Test sending a message returns SSE stream."""
         # Create session first
-        session_resp = client.post("/sessions", json={"title": "sse-test"})
+        session_resp = client.post("/sessions", json={"agent_name": "default", "title": "sse-test"})
         session_id = session_resp.json()["id"]
 
         response = client.post(
@@ -348,7 +396,9 @@ class TestMessageEndpoints:
 
     def test_send_message_accepts_callback_url(self):
         """Test sending a message with callback_url returns SSE stream."""
-        session_resp = client.post("/sessions", json={"title": "callback-test"})
+        session_resp = client.post(
+            "/sessions", json={"agent_name": "default", "title": "callback-test"}
+        )
         session_id = session_resp.json()["id"]
 
         with patch(
@@ -389,7 +439,7 @@ class TestRuntimeDurabilityEndpoints:
         try:
             session_resp = client.post(
                 "/sessions",
-                json={"title": "scoped-runtime-contract"},
+                json={"agent_name": "default", "title": "scoped-runtime-contract"},
                 headers=headers,
             )
             assert session_resp.status_code == 201
@@ -397,7 +447,10 @@ class TestRuntimeDurabilityEndpoints:
 
             async def _seed_run() -> str:
                 store = get_storage_backend_dep()
-                session = await store.get_session(session_id)
+                session = await store.get_session(
+                    session_id,
+                    {"tenant": "acme", "project": "ios"},
+                )
                 assert session is not None
                 projection = RuntimeProjectionService(store)
                 run = await projection.begin_run(session=session)
@@ -427,22 +480,25 @@ class TestRuntimeDurabilityEndpoints:
             assert event_types == ["run.started", "tool.call.started"]
 
             assert (
-                client.get(f"/sessions/{session_id}/runs", headers=wrong_headers).status_code
-                == 403
+                client.get(f"/sessions/{session_id}/runs", headers=wrong_headers).status_code == 404
             )
             assert (
-                client.get(f"/sessions/{session_id}/runs/{run_id}", headers=wrong_headers).status_code
-                == 403
+                client.get(
+                    f"/sessions/{session_id}/runs/{run_id}", headers=wrong_headers
+                ).status_code
+                == 404
             )
             assert (
                 client.get(f"/sessions/{session_id}/events", headers=wrong_headers).status_code
-                == 403
+                == 404
             )
         finally:
             app.dependency_overrides.pop(get_settings_dep, None)
 
     def test_event_endpoint_filters_and_paginates_durable_activity(self):
-        session_resp = client.post("/sessions", json={"title": "runtime-events-filtering"})
+        session_resp = client.post(
+            "/sessions", json={"agent_name": "default", "title": "runtime-events-filtering"}
+        )
         session_id = session_resp.json()["id"]
 
         async def _seed_events() -> tuple[str, str]:
@@ -510,7 +566,9 @@ class TestRuntimeDurabilityEndpoints:
         assert first_page_data["has_more"] is True
 
     def test_terminal_run_clears_active_run_from_session_summary(self):
-        session_resp = client.post("/sessions", json={"title": "runtime-summary"})
+        session_resp = client.post(
+            "/sessions", json={"agent_name": "default", "title": "runtime-summary"}
+        )
         session_id = session_resp.json()["id"]
 
         async def _complete_run() -> str:
@@ -532,7 +590,9 @@ class TestRuntimeDurabilityEndpoints:
         assert session_data["status"] == "idle"
 
     def test_message_idempotency_key_does_not_reuse_terminal_run_for_new_work(self):
-        session_resp = client.post("/sessions", json={"title": "runtime-idempotency"})
+        session_resp = client.post(
+            "/sessions", json={"agent_name": "default", "title": "runtime-idempotency"}
+        )
         session_id = session_resp.json()["id"]
 
         async def _seed_idempotent_run() -> str:
@@ -664,7 +724,9 @@ class TestAPIIntegration:
     def test_full_workflow(self):
         """Test complete workflow."""
         # Create session
-        session_resp = client.post("/sessions", json={"title": "integration-test"})
+        session_resp = client.post(
+            "/sessions", json={"agent_name": "default", "title": "integration-test"}
+        )
         assert session_resp.status_code == 201
         session_id = session_resp.json()["id"]
 
@@ -700,15 +762,13 @@ class TestSessionAgentName:
         data = response.json()
         assert data["agent_name"] == "readonly"
 
-    def test_create_session_default_agent(self):
-        """Test creating session without agent_name defaults to 'default'."""
+    def test_create_session_requires_agent_name(self):
+        """Session creation rejects an omitted Agent binding."""
         response = client.post(
             "/sessions",
-            json={"title": "Default Agent Session"},
+            json={"title": "Missing Agent Session"},
         )
-        assert response.status_code == 201
-        data = response.json()
-        assert data["agent_name"] == "default"
+        assert response.status_code == 422
 
     def test_create_session_invalid_agent_name(self):
         """Test creating session with unknown agent_name returns 422."""
@@ -892,7 +952,7 @@ class TestSessionAgentName:
 
             session_resp = client.post(
                 "/sessions",
-                json={"title": "scoped-session-agent-update"},
+                json={"agent_name": "default", "title": "scoped-session-agent-update"},
                 headers=headers,
             )
             assert session_resp.status_code == 201
@@ -973,7 +1033,7 @@ class TestScopedSessionAgentName:
             patch_target_resp = client.post(
                 "/sessions",
                 headers=headers,
-                json={"title": "patch generated agent probe"},
+                json={"agent_name": "default", "title": "patch generated agent probe"},
             )
             assert patch_target_resp.status_code == 201, patch_target_resp.text
 

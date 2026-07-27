@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Literal
 
-from pydantic import Field, SecretStr, field_validator
+from pydantic import AliasChoices, Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -32,6 +32,11 @@ class Settings(BaseSettings):
     host: str = Field(default="127.0.0.1", alias="COGNITION_HOST")
     port: int = Field(default=8000, alias="COGNITION_PORT")
     log_level: str = Field(default="info", alias="COGNITION_LOG_LEVEL")
+    log_format: Literal["json", "console"] = Field(
+        default="json",
+        alias="COGNITION_LOG_FORMAT",
+        description="Structured log renderer. Use 'console' for local development.",
+    )
 
     # Workspace settings
     workspace_root: Path = Field(
@@ -83,9 +88,57 @@ class Settings(BaseSettings):
     rate_limit_burst: int = Field(default=10, alias="COGNITION_RATE_LIMIT_BURST")
 
     # Observability settings
-    otel_enabled: bool = Field(default=False, alias="COGNITION_OTEL_ENABLED")
+    otel_enabled: bool = Field(
+        default=False,
+        validation_alias=AliasChoices(
+            "COGNITION_TRACING_ENABLED",
+            "COGNITION_OTEL_ENABLED",
+        ),
+        description=(
+            "Enable OpenTelemetry tracing. COGNITION_OTEL_ENABLED remains a compatibility alias."
+        ),
+    )
     otel_endpoint: str | None = Field(default=None, alias="COGNITION_OTEL_ENDPOINT")
+    otel_max_export_bytes: int = Field(
+        default=3_670_016,
+        ge=65_536,
+        validation_alias=AliasChoices(
+            "COGNITION_OTLP_MAX_EXPORT_BYTES",
+            "COGNITION_OTEL_MAX_EXPORT_BYTES",
+        ),
+        description="Maximum encoded OTLP trace request size (default 3.5 MiB).",
+    )
+    otlp_queue_size: int = Field(
+        default=2048,
+        ge=1,
+        alias="COGNITION_OTLP_QUEUE_SIZE",
+        description="Maximum queued trace spans for the bounded OTLP exporter.",
+    )
+    otlp_export_timeout_ms: int = Field(
+        default=30_000,
+        ge=1,
+        alias="COGNITION_OTLP_EXPORT_TIMEOUT_MS",
+        description="Per-attempt OTLP trace export timeout in milliseconds.",
+    )
+    trace_sample_ratio: float = Field(
+        default=0.10,
+        ge=0.0,
+        le=1.0,
+        alias="COGNITION_TRACE_SAMPLE_RATIO",
+        description="Parent-based root trace sample ratio for normal runs.",
+    )
+    metrics_enabled: bool = Field(default=True, alias="COGNITION_METRICS_ENABLED")
     metrics_port: int = Field(default=9090, alias="COGNITION_METRICS_PORT")
+    native_agent_tracing: Literal[
+        "disabled",
+        "langsmith_otel",
+        "mlflow_autolog",
+        "otlp_to_mlflow",
+    ] = Field(
+        default="disabled",
+        alias="COGNITION_NATIVE_AGENT_TRACING",
+        description="Optional native semantic agent tracing mode selected by the operator.",
+    )
 
     # CORS settings
     cors_origins: list[str] = Field(
@@ -98,7 +151,12 @@ class Settings(BaseSettings):
         alias="COGNITION_CORS_CREDENTIALS",
     )
 
-    @field_validator("cors_origins", "scope_keys", mode="before")
+    @field_validator(
+        "cors_origins",
+        "scope_keys",
+        "callback_allowed_origins",
+        mode="before",
+    )
     @classmethod
     def parse_comma_separated_list(cls, v: Any) -> list[str] | Any:
         """Parse comma-separated string or JSON array into list.
@@ -137,6 +195,46 @@ class Settings(BaseSettings):
     sandbox_backend: Literal["local", "docker", "kubernetes", "aws_lambda_microvm"] = Field(
         default="local",
         alias="COGNITION_SANDBOX_BACKEND",
+    )
+    unsafe_local_execution: bool = Field(
+        default=False,
+        alias="COGNITION_ALLOW_UNSAFE_LOCAL_EXECUTION",
+        description="Explicitly permit host-local execution for standalone development.",
+    )
+    allow_host_tools: bool = Field(
+        default=False,
+        alias="COGNITION_ALLOW_HOST_TOOLS",
+        description="Explicitly inject Browser/Search/package host tools in development.",
+    )
+    allow_api_python_tools: bool = Field(
+        default=False,
+        alias="COGNITION_ALLOW_API_PYTHON_TOOLS",
+        description="Explicitly permit host loading of API Python tool code in development.",
+    )
+    callback_allowed_origins: list[str] = Field(
+        default_factory=list,
+        alias="COGNITION_CALLBACK_ALLOWED_ORIGINS",
+        description="Operator-approved HTTPS origins for per-message callbacks.",
+    )
+    agent_cache_max_entries: int = Field(
+        default=128,
+        ge=1,
+        alias="COGNITION_AGENT_CACHE_MAX_ENTRIES",
+    )
+    agent_cache_ttl_seconds: float = Field(
+        default=900.0,
+        gt=0,
+        alias="COGNITION_AGENT_CACHE_TTL_SECONDS",
+    )
+    session_service_cache_max_entries: int = Field(
+        default=256,
+        ge=1,
+        alias="COGNITION_SESSION_SERVICE_CACHE_MAX_ENTRIES",
+    )
+    session_service_cache_ttl_seconds: float = Field(
+        default=1800.0,
+        gt=0,
+        alias="COGNITION_SESSION_SERVICE_CACHE_TTL_SECONDS",
     )
     docker_image: str = Field(
         default="cognition-sandbox:latest",

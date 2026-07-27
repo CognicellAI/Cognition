@@ -154,7 +154,11 @@ async def test_run_and_events_retain_task_correlation(task_store: StorageBackend
 
     assert run.task_id == "task-1"
     assert event.task_id == "task-1"
-    events = await task_store.list_events("context-1", task_id="task-1")
+    events = await task_store.list_events(
+        "context-1",
+        task_id="task-1",
+        effective_scope=scope,
+    )
     assert [item.id for item in events] == ["event-1"]
 
 

@@ -90,7 +90,12 @@ async def create_skill(
         "source": "api",
     }
     await config_store.upsert_skill_from_dict(skill_data)
-    logger.info("skill_created", name=body.name, scope=effective_scope, enabled=body.enabled)
+    logger.info(
+        "skill_created",
+        name=body.name,
+        scope_keys=sorted(effective_scope),
+        enabled=body.enabled,
+    )
 
     skill = await config_store.get_skill(body.name, scope=effective_scope)
     if skill is None:
@@ -135,7 +140,12 @@ async def update_skill(
 
     updated = skill.model_copy(update=updates)
     await config_store.upsert_skill(updated)
-    logger.info("skill_updated", name=name, scope=scope_dict, fields=list(updates.keys()))
+    logger.info(
+        "skill_updated",
+        name=name,
+        scope_keys=sorted(scope_dict or {}),
+        fields=list(updates.keys()),
+    )
     return _to_response(updated)
 
 
@@ -156,4 +166,4 @@ async def delete_skill(
     deleted = await config_store.delete_skill(name, scope=scope_dict)
     if not deleted:
         raise HTTPException(status_code=404, detail=f"Skill '{name}' not found")
-    logger.info("skill_deleted", name=name, scope=scope_dict)
+    logger.info("skill_deleted", name=name, scope_keys=sorted(scope_dict or {}))

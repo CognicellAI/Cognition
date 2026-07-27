@@ -37,7 +37,13 @@ from psycopg.types.json import Json
 from psycopg_pool import AsyncConnectionPool
 
 from server.app.agent.definition import AgentDefinition
+from server.app.storage.common import (
+    canonical_json_digest,
+    effective_scope_key,
+    inherited_scope_keys,
+)
 from server.app.storage.config_models import (
+    AgentConfigRecord,
     ConfigChange,
     EntityType,
     GlobalAgentDefaults,
@@ -54,6 +60,10 @@ logger = logging.getLogger(__name__)
 # Sentinel names for the "global defaults" singleton rows
 _GLOBAL_PROVIDER_NAME = "__global__"
 _GLOBAL_AGENT_NAME = "__defaults__"
+
+
+class ConfigRevisionConflictError(Exception):
+    """Raised when an exact-scoped conditional configuration write is stale."""
 
 
 @runtime_checkable
@@ -141,27 +151,45 @@ class ConfigRegistry(Protocol):
         scope: dict[str, str],
         definition: dict[str, Any],
         source: str = "api",
-    ) -> None:
-        """Create or replace an agent definition."""
+        expected_revision: int | None = None,
+        create_only: bool = False,
+    ) -> AgentConfigRecord:
+        """Create or replace an exact-scoped Agent definition."""
+        ...
+
+    async def get_agent_record(
+        self, name: str, scope: dict[str, str] | None = None
+    ) -> AgentConfigRecord | None:
+        """Return an Agent only at the complete exact scope."""
         ...
 
     async def get_agent_raw(
         self, name: str, scope: dict[str, str] | None = None
     ) -> dict[str, Any] | None:
-        """Return the best-matching agent definition dict, or None."""
+        """Return the exact-scoped Agent definition dict, or None."""
         ...
 
     async def get_agent_raw_with_scope(
         self, name: str, scope: dict[str, str] | None = None
     ) -> tuple[dict[str, Any], dict[str, str]] | None:
-        """Return (definition_dict, matched_scope) for the best-matching agent, or None."""
+        """Return (definition_dict, exact_scope) for an exact-scoped Agent."""
         ...
 
-    async def list_agents(self, scope: dict[str, str] | None = None) -> list[AgentDefinition]:
-        """List all agent definitions visible in the given scope."""
+    async def list_agents(
+        self,
+        scope: dict[str, str] | None = None,
+        limit: int | None = None,
+        offset: int = 0,
+    ) -> list[AgentDefinition]:
+        """List Agent definitions at the complete exact scope."""
         ...
 
-    async def delete_agent(self, name: str, scope: dict[str, str] | None = None) -> bool:
+    async def delete_agent(
+        self,
+        name: str,
+        scope: dict[str, str] | None = None,
+        expected_revision: int | None = None,
+    ) -> bool:
         """Delete an agent definition row. Returns True if row existed."""
         ...
 
@@ -339,6 +367,7 @@ class SqliteConfigRegistry:
     def __init__(self, db_path: str) -> None:
         self._db_path = db_path
         self._conn: aiosqlite.Connection | None = None
+        self._schema_initialized = False
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -362,16 +391,62 @@ class SqliteConfigRegistry:
                     entity_type TEXT NOT NULL,
                     name TEXT NOT NULL,
                     scope TEXT NOT NULL DEFAULT '{}',
+                    scope_key TEXT NOT NULL,
                     definition TEXT NOT NULL,
+                    revision INTEGER NOT NULL DEFAULT 1,
+                    definition_digest TEXT NOT NULL,
                     source TEXT NOT NULL DEFAULT 'file',
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL,
-                    UNIQUE(entity_type, name, scope)
+                    UNIQUE(entity_type, name, scope_key)
                 )
                 """
             )
+            entity_columns = {
+                str(row[1]) for row in conn.execute("PRAGMA table_info(config_entities)")
+            }
+            if "scope_key" not in entity_columns:
+                conn.execute(
+                    "ALTER TABLE config_entities ADD COLUMN scope_key TEXT NOT NULL DEFAULT ''"
+                )
+            if "revision" not in entity_columns:
+                conn.execute(
+                    "ALTER TABLE config_entities ADD COLUMN revision INTEGER NOT NULL DEFAULT 1"
+                )
+            if "definition_digest" not in entity_columns:
+                conn.execute(
+                    "ALTER TABLE config_entities "
+                    "ADD COLUMN definition_digest TEXT NOT NULL DEFAULT ''"
+                )
+            for row_id, raw_scope, raw_definition in conn.execute(
+                "SELECT id, scope, definition FROM config_entities"
+            ):
+                parsed_scope = _scope_from_json(raw_scope)
+                parsed_definition = _definition_from_raw(raw_definition)
+                conn.execute(
+                    """
+                    UPDATE config_entities
+                    SET scope_key=?, definition_digest=?
+                    WHERE id=?
+                    """,
+                    (
+                        effective_scope_key(parsed_scope),
+                        canonical_json_digest(parsed_definition),
+                        row_id,
+                    ),
+                )
+            conn.execute("DROP INDEX IF EXISTS idx_config_entities_lookup")
             conn.execute(
-                "CREATE INDEX IF NOT EXISTS idx_config_entities_type ON config_entities(entity_type)"
+                """
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_config_entities_lookup
+                ON config_entities(entity_type, name, scope_key)
+                """
+            )
+            conn.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_config_entities_scope_list
+                ON config_entities(entity_type, scope_key, name)
+                """
             )
             conn.execute(
                 """
@@ -380,21 +455,39 @@ class SqliteConfigRegistry:
                     entity_type TEXT NOT NULL,
                     name TEXT NOT NULL,
                     scope TEXT NOT NULL DEFAULT '{}',
+                    scope_key TEXT NOT NULL,
                     operation TEXT NOT NULL,
                     changed_at TEXT NOT NULL,
                     processed INTEGER NOT NULL DEFAULT 0
                 )
                 """
             )
+            change_columns = {
+                str(row[1]) for row in conn.execute("PRAGMA table_info(config_changes)")
+            }
+            if "scope_key" not in change_columns:
+                conn.execute(
+                    "ALTER TABLE config_changes ADD COLUMN scope_key TEXT NOT NULL DEFAULT ''"
+                )
+                for row_id, raw_scope in conn.execute(
+                    "SELECT id, scope FROM config_changes"
+                ):
+                    conn.execute(
+                        "UPDATE config_changes SET scope_key=? WHERE id=?",
+                        (effective_scope_key(_scope_from_json(raw_scope)), row_id),
+                    )
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_config_changes_time ON config_changes(changed_at)"
             )
             conn.commit()
+            self._schema_initialized = True
         finally:
             conn.close()
 
     async def _get_conn(self) -> aiosqlite.Connection:
         """Return a cached aiosqlite connection, creating it on first call."""
+        if not self._schema_initialized:
+            await self.initialize_schema()
         if self._conn is None:
             self._conn = await aiosqlite.connect(self._db_path)
             self._conn.row_factory = aiosqlite.Row
@@ -413,37 +506,99 @@ class SqliteConfigRegistry:
         scope: dict[str, str],
         definition: dict[str, Any],
         source: str,
-    ) -> None:
+        *,
+        expected_revision: int | None = None,
+        create_only: bool = False,
+    ) -> AgentConfigRecord:
         scope_json = _scope_to_json(scope)
-        def_json = json.dumps(definition)
+        scope_key = effective_scope_key(scope)
+        def_json = json.dumps(definition, sort_keys=True, separators=(",", ":"))
+        digest = canonical_json_digest(definition)
         now = datetime.now(UTC).isoformat()
         conn = await self._get_conn()
+        cursor = await conn.execute(
+            """
+            SELECT scope, revision
+            FROM config_entities
+            WHERE entity_type=? AND name=? AND scope_key=?
+            """,
+            (entity_type, name, scope_key),
+        )
+        existing = await cursor.fetchone()
+        if existing is not None and _scope_from_json(existing["scope"]) != scope:
+            raise ConfigRevisionConflictError("Canonical scope hash collision")
+        if create_only and existing is not None:
+            raise ConfigRevisionConflictError("Entity already exists at this scope")
+        current_revision = int(existing["revision"]) if existing is not None else None
+        if expected_revision is not None and current_revision != expected_revision:
+            raise ConfigRevisionConflictError(
+                f"Expected revision {expected_revision}, found {current_revision}"
+            )
+        revision = (current_revision or 0) + 1
         await conn.execute(
             """
-            INSERT INTO config_entities (entity_type, name, scope, definition, source, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(entity_type, name, scope)
+            INSERT INTO config_entities (
+                entity_type, name, scope, scope_key, definition, revision,
+                definition_digest, source, created_at, updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(entity_type, name, scope_key)
             DO UPDATE SET definition=excluded.definition,
+                          scope=excluded.scope,
+                          revision=excluded.revision,
+                          definition_digest=excluded.definition_digest,
                           source=excluded.source,
                           updated_at=excluded.updated_at
             """,
-            (entity_type, name, scope_json, def_json, source, now, now),
+            (
+                entity_type,
+                name,
+                scope_json,
+                scope_key,
+                def_json,
+                revision,
+                digest,
+                source,
+                now,
+                now,
+            ),
         )
         await self._record_change(conn, entity_type, name, scope, "upsert")
         await conn.commit()
+        return AgentConfigRecord(
+            name=name,
+            scope=scope,
+            scope_key=scope_key,
+            definition=definition,
+            revision=revision,
+            definition_digest=digest,
+            source="file" if source == "file" else "api",
+        )
 
     async def _delete_entity(
         self, entity_type: str, name: str, scope: dict[str, str] | None
     ) -> bool:
-        scope_json = _scope_to_json(scope)
+        exact_scope = scope or {}
+        scope_key = effective_scope_key(exact_scope)
         conn = await self._get_conn()
+        existing = await (
+            await conn.execute(
+                """
+                SELECT scope FROM config_entities
+                WHERE entity_type=? AND name=? AND scope_key=?
+                """,
+                (entity_type, name, scope_key),
+            )
+        ).fetchone()
+        if existing is None or _scope_from_json(existing["scope"]) != exact_scope:
+            return False
         cursor = await conn.execute(
-            "DELETE FROM config_entities WHERE entity_type=? AND name=? AND scope=?",
-            (entity_type, name, scope_json),
+            "DELETE FROM config_entities WHERE entity_type=? AND name=? AND scope_key=?",
+            (entity_type, name, scope_key),
         )
         deleted = cursor.rowcount > 0
         if deleted:
-            await self._record_change(conn, entity_type, name, scope or {}, "delete")
+            await self._record_change(conn, entity_type, name, exact_scope, "delete")
         await conn.commit()
         return deleted
 
@@ -458,10 +613,16 @@ class SqliteConfigRegistry:
         Scope resolution: rows with more scope keys win over fewer.
         """
         target_scope = scope or {}
+        candidate_keys = inherited_scope_keys(target_scope)
+        placeholders = ",".join("?" for _ in candidate_keys)
         conn = await self._get_conn()
         async with conn.execute(
-            "SELECT scope, definition FROM config_entities WHERE entity_type=? AND name=?",
-            (entity_type, name),
+            f"""
+            SELECT scope, definition
+            FROM config_entities
+            WHERE entity_type=? AND name=? AND scope_key IN ({placeholders})
+            """,
+            (entity_type, name, *candidate_keys),
         ) as cursor:
             rows = await cursor.fetchall()
 
@@ -488,10 +649,16 @@ class SqliteConfigRegistry:
     ) -> tuple[dict[str, Any], dict[str, str]] | None:
         """Return (definition_dict, matched_scope) for the best-matching row."""
         target_scope = scope or {}
+        candidate_keys = inherited_scope_keys(target_scope)
+        placeholders = ",".join("?" for _ in candidate_keys)
         conn = await self._get_conn()
         async with conn.execute(
-            "SELECT scope, definition FROM config_entities WHERE entity_type=? AND name=?",
-            (entity_type, name),
+            f"""
+            SELECT scope, definition
+            FROM config_entities
+            WHERE entity_type=? AND name=? AND scope_key IN ({placeholders})
+            """,
+            (entity_type, name, *candidate_keys),
         ) as cursor:
             rows = await cursor.fetchall()
 
@@ -519,10 +686,16 @@ class SqliteConfigRegistry:
         For each (name), only the most-specific row is returned.
         """
         target_scope = scope or {}
+        candidate_keys = inherited_scope_keys(target_scope)
+        placeholders = ",".join("?" for _ in candidate_keys)
         conn = await self._get_conn()
         async with conn.execute(
-            "SELECT name, scope, definition FROM config_entities WHERE entity_type=?",
-            (entity_type,),
+            f"""
+            SELECT name, scope, definition
+            FROM config_entities
+            WHERE entity_type=? AND scope_key IN ({placeholders})
+            """,
+            (entity_type, *candidate_keys),
         ) as cursor:
             rows = await cursor.fetchall()
 
@@ -550,10 +723,19 @@ class SqliteConfigRegistry:
         now = datetime.now(UTC).isoformat()
         await conn.execute(
             """
-            INSERT INTO config_changes (entity_type, name, scope, operation, changed_at, processed)
-            VALUES (?, ?, ?, ?, ?, 0)
+            INSERT INTO config_changes (
+                entity_type, name, scope, scope_key, operation, changed_at, processed
+            )
+            VALUES (?, ?, ?, ?, ?, ?, 0)
             """,
-            (entity_type, name, _scope_to_json(scope), operation, now),
+            (
+                entity_type,
+                name,
+                _scope_to_json(scope),
+                effective_scope_key(scope),
+                operation,
+                now,
+            ),
         )
 
     # ------------------------------------------------------------------
@@ -636,24 +818,99 @@ class SqliteConfigRegistry:
         scope: dict[str, str],
         definition: dict[str, Any],
         source: str = "api",
-    ) -> None:
-        await self._upsert_entity("agent", name, scope, definition, source)
+        expected_revision: int | None = None,
+        create_only: bool = False,
+    ) -> AgentConfigRecord:
+        validated = AgentDefinition.model_validate(definition).model_dump(mode="json")
+        return await self._upsert_entity(
+            "agent",
+            name,
+            scope,
+            validated,
+            source,
+            expected_revision=expected_revision,
+            create_only=create_only,
+        )
+
+    async def get_agent_record(
+        self, name: str, scope: dict[str, str] | None = None
+    ) -> AgentConfigRecord | None:
+        exact_scope = scope or {}
+        scope_key = effective_scope_key(exact_scope)
+        conn = await self._get_conn()
+        row = await (
+            await conn.execute(
+                """
+                SELECT scope, definition, revision, definition_digest, source
+                FROM config_entities
+                WHERE entity_type='agent' AND name=? AND scope_key=?
+                """,
+                (name, scope_key),
+            )
+        ).fetchone()
+        if row is None or _scope_from_json(row["scope"]) != exact_scope:
+            return None
+        return AgentConfigRecord(
+            name=name,
+            scope=exact_scope,
+            scope_key=scope_key,
+            definition=_definition_from_raw(row["definition"]),
+            revision=int(row["revision"]),
+            definition_digest=str(row["definition_digest"]),
+            source="file" if row["source"] == "file" else "api",
+        )
 
     async def get_agent_raw(
         self, name: str, scope: dict[str, str] | None = None
     ) -> dict[str, Any] | None:
-        return await self._get_entity("agent", name, scope)
+        record = await self.get_agent_record(name, scope)
+        return dict(record.definition) if record else None
 
     async def get_agent_raw_with_scope(
         self, name: str, scope: dict[str, str] | None = None
     ) -> tuple[dict[str, Any], dict[str, str]] | None:
-        return await self._get_entity_with_scope("agent", name, scope)
+        record = await self.get_agent_record(name, scope)
+        return (dict(record.definition), dict(record.scope)) if record else None
 
-    async def list_agents(self, scope: dict[str, str] | None = None) -> list[AgentDefinition]:
-        rows = await self._list_entities("agent", scope)
-        return [AgentDefinition.model_validate(r) for r in rows]
+    async def list_agents(
+        self,
+        scope: dict[str, str] | None = None,
+        limit: int | None = None,
+        offset: int = 0,
+    ) -> list[AgentDefinition]:
+        exact_scope = scope or {}
+        scope_key = effective_scope_key(exact_scope)
+        conn = await self._get_conn()
+        query = """
+            SELECT scope, definition
+            FROM config_entities
+            WHERE entity_type='agent' AND scope_key=?
+            ORDER BY name
+        """
+        params: list[Any] = [scope_key]
+        if limit is not None:
+            query += " LIMIT ? OFFSET ?"
+            params.extend([limit, offset])
+        async with conn.execute(query, params) as cursor:
+            rows = await cursor.fetchall()
+        return [
+            AgentDefinition.model_validate(_definition_from_raw(row["definition"]))
+            for row in rows
+            if _scope_from_json(row["scope"]) == exact_scope
+        ]
 
-    async def delete_agent(self, name: str, scope: dict[str, str] | None = None) -> bool:
+    async def delete_agent(
+        self,
+        name: str,
+        scope: dict[str, str] | None = None,
+        expected_revision: int | None = None,
+    ) -> bool:
+        if expected_revision is not None:
+            record = await self.get_agent_record(name, scope)
+            if record is None or record.revision != expected_revision:
+                raise ConfigRevisionConflictError(
+                    f"Expected revision {expected_revision} was not current"
+                )
         return await self._delete_entity("agent", name, scope)
 
     # ------------------------------------------------------------------
@@ -761,22 +1018,42 @@ class SqliteConfigRegistry:
         source: str = "file",
     ) -> bool:
         scope_json = _scope_to_json(scope)
-        def_json = json.dumps(definition)
+        scope_key = effective_scope_key(scope)
+        def_json = json.dumps(definition, sort_keys=True, separators=(",", ":"))
+        digest = canonical_json_digest(definition)
         now = datetime.now(UTC).isoformat()
         conn = await self._get_conn()
         cursor = await conn.execute(
-            "SELECT id FROM config_entities WHERE entity_type=? AND name=? AND scope=?",
-            (entity_type, name, scope_json),
+            """
+            SELECT id, scope FROM config_entities
+            WHERE entity_type=? AND name=? AND scope_key=?
+            """,
+            (entity_type, name, scope_key),
         )
         existing = await cursor.fetchone()
         if existing:
+            if _scope_from_json(existing["scope"]) != scope:
+                raise ConfigRevisionConflictError("Canonical scope hash collision")
             return False
         await conn.execute(
             """
-            INSERT INTO config_entities (entity_type, name, scope, definition, source, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO config_entities (
+                entity_type, name, scope, scope_key, definition, revision,
+                definition_digest, source, created_at, updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?, ?)
             """,
-            (entity_type, name, scope_json, def_json, source, now, now),
+            (
+                entity_type,
+                name,
+                scope_json,
+                scope_key,
+                def_json,
+                digest,
+                source,
+                now,
+                now,
+            ),
         )
         await self._record_change(conn, entity_type, name, scope, "upsert")
         await conn.commit()
@@ -898,43 +1175,116 @@ class PostgresConfigRegistry:
         scope: dict[str, str],
         definition: dict[str, Any],
         source: str,
-    ) -> None:
+        *,
+        expected_revision: int | None = None,
+        create_only: bool = False,
+    ) -> AgentConfigRecord:
         pool = await self._get_pool()
         now = datetime.now(UTC)
+        scope_key = effective_scope_key(scope)
+        digest = canonical_json_digest(definition)
+        scope_param = self._jsonb_param(self._serialize_scope(scope))
+        definition_param = self._jsonb_param(self._serialize_definition(definition))
         async with pool.connection() as conn:
-            await conn.execute(
-                """
-                INSERT INTO config_entities (entity_type, name, scope, definition, source, created_at, updated_at)
-                VALUES (%s, %s, %s, %s, %s, %s, %s)
-                ON CONFLICT (entity_type, name, scope)
-                DO UPDATE SET definition=EXCLUDED.definition,
-                              source=EXCLUDED.source,
-                              updated_at=EXCLUDED.updated_at
-                """,
-                (
-                    entity_type,
-                    name,
-                    self._jsonb_param(self._serialize_scope(scope)),
-                    self._jsonb_param(self._serialize_definition(definition)),
-                    source,
-                    now,
-                    now,
-                ),
-            )
+            if expected_revision is not None:
+                row = await self._fetch_one(
+                    conn,
+                    """
+                    UPDATE config_entities
+                    SET definition=%s, revision=revision + 1,
+                        definition_digest=%s, source=%s, updated_at=%s
+                    WHERE entity_type=%s AND name=%s AND scope_key=%s
+                      AND scope=%s AND revision=%s
+                    RETURNING revision
+                    """,
+                    (
+                        definition_param,
+                        digest,
+                        source,
+                        now,
+                        entity_type,
+                        name,
+                        scope_key,
+                        scope_param,
+                        expected_revision,
+                    ),
+                )
+                if row is None:
+                    raise ConfigRevisionConflictError(
+                        f"Expected revision {expected_revision} was not current"
+                    )
+            else:
+                conflict_action = (
+                    "DO NOTHING"
+                    if create_only
+                    else """
+                    DO UPDATE SET scope=EXCLUDED.scope,
+                                  definition=EXCLUDED.definition,
+                                  revision=config_entities.revision + 1,
+                                  definition_digest=EXCLUDED.definition_digest,
+                                  source=EXCLUDED.source,
+                                  updated_at=EXCLUDED.updated_at
+                    """
+                )
+                row = await self._fetch_one(
+                    conn,
+                    f"""
+                    INSERT INTO config_entities (
+                        entity_type, name, scope, scope_key, definition, revision,
+                        definition_digest, source, created_at, updated_at
+                    )
+                    VALUES (%s, %s, %s, %s, %s, 1, %s, %s, %s, %s)
+                    ON CONFLICT (entity_type, name, scope_key)
+                    {conflict_action}
+                    RETURNING revision
+                    """,
+                    (
+                        entity_type,
+                        name,
+                        scope_param,
+                        scope_key,
+                        definition_param,
+                        digest,
+                        source,
+                        now,
+                        now,
+                    ),
+                )
+                if row is None:
+                    raise ConfigRevisionConflictError("Entity already exists at this scope")
             await self._record_change(conn, entity_type, name, scope, "upsert")
+        revision = int(row["revision"])
+        return AgentConfigRecord(
+            name=name,
+            scope=scope,
+            scope_key=scope_key,
+            definition=definition,
+            revision=revision,
+            definition_digest=digest,
+            source="file" if source == "file" else "api",
+        )
 
     async def _delete_entity(
         self, entity_type: str, name: str, scope: dict[str, str] | None
     ) -> bool:
+        exact_scope = scope or {}
         pool = await self._get_pool()
         async with pool.connection() as conn:
             result = await conn.execute(
-                "DELETE FROM config_entities WHERE entity_type=%s AND name=%s AND scope=%s",
-                (entity_type, name, self._jsonb_param(self._serialize_scope(scope or {}))),
+                """
+                DELETE FROM config_entities
+                WHERE entity_type=%s AND name=%s AND scope_key=%s AND scope=%s
+                """,
+                (
+                    entity_type,
+                    name,
+                    effective_scope_key(exact_scope),
+                    self._jsonb_param(self._serialize_scope(exact_scope)),
+                ),
             )
             deleted = result.rowcount is not None and result.rowcount > 0
             if deleted:
-                await self._record_change(conn, entity_type, name, scope or {}, "delete")
+                await self._record_change(conn, entity_type, name, exact_scope, "delete")
         return deleted
 
     async def _get_entity(
@@ -944,12 +1294,17 @@ class PostgresConfigRegistry:
         scope: dict[str, str] | None,
     ) -> dict[str, Any] | None:
         target_scope = scope or {}
+        candidate_keys = inherited_scope_keys(target_scope)
         pool = await self._get_pool()
         async with pool.connection() as conn:
             rows = await self._fetch_all(
                 conn,
-                "SELECT scope, definition FROM config_entities WHERE entity_type=%s AND name=%s",
-                (entity_type, name),
+                """
+                SELECT scope, definition
+                FROM config_entities
+                WHERE entity_type=%s AND name=%s AND scope_key = ANY(%s::text[])
+                """,
+                (entity_type, name, candidate_keys),
             )
         if not rows:
             return None
@@ -972,12 +1327,17 @@ class PostgresConfigRegistry:
     ) -> tuple[dict[str, Any], dict[str, str]] | None:
         """Return (definition_dict, matched_scope) for the best-matching row."""
         target_scope = scope or {}
+        candidate_keys = inherited_scope_keys(target_scope)
         pool = await self._get_pool()
         async with pool.connection() as conn:
             rows = await self._fetch_all(
                 conn,
-                "SELECT scope, definition FROM config_entities WHERE entity_type=%s AND name=%s",
-                (entity_type, name),
+                """
+                SELECT scope, definition
+                FROM config_entities
+                WHERE entity_type=%s AND name=%s AND scope_key = ANY(%s::text[])
+                """,
+                (entity_type, name, candidate_keys),
             )
         if not rows:
             return None
@@ -998,12 +1358,17 @@ class PostgresConfigRegistry:
         scope: dict[str, str] | None,
     ) -> list[dict[str, Any]]:
         target_scope = scope or {}
+        candidate_keys = inherited_scope_keys(target_scope)
         pool = await self._get_pool()
         async with pool.connection() as conn:
             rows = await self._fetch_all(
                 conn,
-                "SELECT name, scope, definition FROM config_entities WHERE entity_type=%s",
-                (entity_type,),
+                """
+                SELECT name, scope, definition
+                FROM config_entities
+                WHERE entity_type=%s AND scope_key = ANY(%s::text[])
+                """,
+                (entity_type, candidate_keys),
             )
         best_by_name: dict[str, tuple[int, dict[str, Any]]] = {}
         for row in rows:
@@ -1027,10 +1392,19 @@ class PostgresConfigRegistry:
         now = datetime.now(UTC)
         await conn.execute(
             """
-            INSERT INTO config_changes (entity_type, name, scope, operation, changed_at, processed)
-            VALUES (%s, %s, %s, %s, %s, false)
+            INSERT INTO config_changes (
+                entity_type, name, scope, scope_key, operation, changed_at, processed
+            )
+            VALUES (%s, %s, %s, %s, %s, %s, false)
             """,
-            (entity_type, name, self._jsonb_param(self._serialize_scope(scope)), operation, now),
+            (
+                entity_type,
+                name,
+                self._jsonb_param(self._serialize_scope(scope)),
+                effective_scope_key(scope),
+                operation,
+                now,
+            ),
         )
         # NOTIFY for cross-instance invalidation
         await conn.execute("NOTIFY cognition_config_changes")
@@ -1107,25 +1481,130 @@ class PostgresConfigRegistry:
         scope: dict[str, str],
         definition: dict[str, Any],
         source: str = "api",
-    ) -> None:
-        await self._upsert_entity("agent", name, scope, definition, source)
+        expected_revision: int | None = None,
+        create_only: bool = False,
+    ) -> AgentConfigRecord:
+        validated = AgentDefinition.model_validate(definition).model_dump(mode="json")
+        return await self._upsert_entity(
+            "agent",
+            name,
+            scope,
+            validated,
+            source,
+            expected_revision=expected_revision,
+            create_only=create_only,
+        )
+
+    async def get_agent_record(
+        self, name: str, scope: dict[str, str] | None = None
+    ) -> AgentConfigRecord | None:
+        exact_scope = scope or {}
+        scope_key = effective_scope_key(exact_scope)
+        pool = await self._get_pool()
+        async with pool.connection() as conn:
+            row = await self._fetch_one(
+                conn,
+                """
+                SELECT scope, definition, revision, definition_digest, source
+                FROM config_entities
+                WHERE entity_type='agent' AND name=%s AND scope_key=%s AND scope=%s
+                """,
+                (
+                    name,
+                    scope_key,
+                    self._jsonb_param(self._serialize_scope(exact_scope)),
+                ),
+            )
+        if row is None:
+            return None
+        return AgentConfigRecord(
+            name=name,
+            scope=exact_scope,
+            scope_key=scope_key,
+            definition=_definition_from_raw(row["definition"]),
+            revision=int(row["revision"]),
+            definition_digest=str(row["definition_digest"]),
+            source="file" if row["source"] == "file" else "api",
+        )
 
     async def get_agent_raw(
         self, name: str, scope: dict[str, str] | None = None
     ) -> dict[str, Any] | None:
-        return await self._get_entity("agent", name, scope)
+        record = await self.get_agent_record(name, scope)
+        return dict(record.definition) if record else None
 
     async def get_agent_raw_with_scope(
         self, name: str, scope: dict[str, str] | None = None
     ) -> tuple[dict[str, Any], dict[str, str]] | None:
-        return await self._get_entity_with_scope("agent", name, scope)
+        record = await self.get_agent_record(name, scope)
+        return (dict(record.definition), dict(record.scope)) if record else None
 
-    async def list_agents(self, scope: dict[str, str] | None = None) -> list[AgentDefinition]:
-        rows = await self._list_entities("agent", scope)
-        return [AgentDefinition.model_validate(r) for r in rows]
+    async def list_agents(
+        self,
+        scope: dict[str, str] | None = None,
+        limit: int | None = None,
+        offset: int = 0,
+    ) -> list[AgentDefinition]:
+        exact_scope = scope or {}
+        pool = await self._get_pool()
+        async with pool.connection() as conn:
+            query = """
+                SELECT definition
+                FROM config_entities
+                WHERE entity_type='agent' AND scope_key=%s AND scope=%s
+                ORDER BY name
+            """
+            params: list[Any] = [
+                effective_scope_key(exact_scope),
+                self._jsonb_param(self._serialize_scope(exact_scope)),
+            ]
+            if limit is not None:
+                query += " LIMIT %s OFFSET %s"
+                params.extend([limit, offset])
+            rows = await self._fetch_all(
+                conn,
+                query,
+                tuple(params),
+            )
+        return [
+            AgentDefinition.model_validate(_definition_from_raw(row["definition"]))
+            for row in rows
+        ]
 
-    async def delete_agent(self, name: str, scope: dict[str, str] | None = None) -> bool:
-        return await self._delete_entity("agent", name, scope)
+    async def delete_agent(
+        self,
+        name: str,
+        scope: dict[str, str] | None = None,
+        expected_revision: int | None = None,
+    ) -> bool:
+        exact_scope = scope or {}
+        pool = await self._get_pool()
+        async with pool.connection() as conn:
+            params: list[Any] = [
+                name,
+                effective_scope_key(exact_scope),
+                self._jsonb_param(self._serialize_scope(exact_scope)),
+            ]
+            revision_clause = ""
+            if expected_revision is not None:
+                revision_clause = " AND revision=%s"
+                params.append(expected_revision)
+            result = await conn.execute(
+                f"""
+                DELETE FROM config_entities
+                WHERE entity_type='agent' AND name=%s AND scope_key=%s AND scope=%s
+                {revision_clause}
+                """,
+                tuple(params),
+            )
+            deleted = result.rowcount is not None and result.rowcount > 0
+            if not deleted and expected_revision is not None:
+                raise ConfigRevisionConflictError(
+                    f"Expected revision {expected_revision} was not current"
+                )
+            if deleted:
+                await self._record_change(conn, "agent", name, exact_scope, "delete")
+            return deleted
 
     # ------------------------------------------------------------------
     # MCP server CRUD
@@ -1219,24 +1698,36 @@ class PostgresConfigRegistry:
     ) -> bool:
         pool = await self._get_pool()
         now = datetime.now(UTC)
+        scope_key = effective_scope_key(scope)
+        digest = canonical_json_digest(definition)
         async with pool.connection() as conn:
             existing = await self._fetch_one(
                 conn,
-                "SELECT id FROM config_entities WHERE entity_type=%s AND name=%s AND scope=%s",
-                (entity_type, name, self._jsonb_param(self._serialize_scope(scope))),
+                """
+                SELECT id, scope FROM config_entities
+                WHERE entity_type=%s AND name=%s AND scope_key=%s
+                """,
+                (entity_type, name, scope_key),
             )
             if existing:
+                if _scope_from_json(existing["scope"]) != scope:
+                    raise ConfigRevisionConflictError("Canonical scope hash collision")
                 return False
             await conn.execute(
                 """
-                INSERT INTO config_entities (entity_type, name, scope, definition, source, created_at, updated_at)
-                VALUES (%s, %s, %s, %s, %s, %s, %s)
+                INSERT INTO config_entities (
+                    entity_type, name, scope, scope_key, definition, revision,
+                    definition_digest, source, created_at, updated_at
+                )
+                VALUES (%s, %s, %s, %s, %s, 1, %s, %s, %s, %s)
                 """,
                 (
                     entity_type,
                     name,
                     self._jsonb_param(self._serialize_scope(scope)),
+                    scope_key,
                     self._jsonb_param(self._serialize_definition(definition)),
+                    digest,
                     source,
                     now,
                     now,
@@ -1298,6 +1789,7 @@ class MemoryConfigRegistry:
     def __init__(self) -> None:
         # Keyed by (entity_type, name, scope_json)
         self._store: dict[tuple[str, str, str], dict[str, Any]] = {}
+        self._records: dict[tuple[str, str, str], AgentConfigRecord] = {}
         self._changes: list[ConfigChange] = []
         self._change_id = 0
 
@@ -1352,16 +1844,29 @@ class MemoryConfigRegistry:
 
     def _upsert(
         self, entity_type: str, name: str, scope: dict[str, str], defn: dict[str, Any], source: str
-    ) -> None:
+    ) -> AgentConfigRecord:
         key = self._key(entity_type, name, scope)
+        existing = self._records.get(key)
+        record = AgentConfigRecord(
+            name=name,
+            scope=scope,
+            scope_key=effective_scope_key(scope),
+            definition=defn,
+            revision=(existing.revision + 1) if existing else 1,
+            definition_digest=canonical_json_digest(defn),
+            source="file" if source == "file" else "api",
+        )
         self._store[key] = defn
+        self._records[key] = record
         self._record_change(entity_type, name, scope, "upsert")
+        return record
 
     def _delete(self, entity_type: str, name: str, scope: dict[str, str] | None) -> bool:
         key = self._key(entity_type, name, scope or {})
         if key not in self._store:
             return False
         del self._store[key]
+        self._records.pop(key, None)
         self._record_change(entity_type, name, scope or {}, "delete")
         return True
 
@@ -1437,23 +1942,73 @@ class MemoryConfigRegistry:
         scope: dict[str, str],
         definition: dict[str, Any],
         source: str = "api",
-    ) -> None:
-        self._upsert("agent", name, scope, definition, source)
+        expected_revision: int | None = None,
+        create_only: bool = False,
+    ) -> AgentConfigRecord:
+        key = self._key("agent", name, scope)
+        existing = self._records.get(key)
+        if create_only and existing is not None:
+            raise ConfigRevisionConflictError("Entity already exists at this scope")
+        current_revision = existing.revision if existing else None
+        if expected_revision is not None and current_revision != expected_revision:
+            raise ConfigRevisionConflictError(
+                f"Expected revision {expected_revision}, found {current_revision}"
+            )
+        validated = AgentDefinition.model_validate(definition).model_dump(mode="json")
+        return self._upsert("agent", name, scope, validated, source)
+
+    async def get_agent_record(
+        self, name: str, scope: dict[str, str] | None = None
+    ) -> AgentConfigRecord | None:
+        record = self._records.get(self._key("agent", name, scope or {}))
+        return record.model_copy(deep=True) if record else None
 
     async def get_agent_raw(
         self, name: str, scope: dict[str, str] | None = None
     ) -> dict[str, Any] | None:
-        return self._get_entity("agent", name, scope)
+        record = await self.get_agent_record(name, scope)
+        return dict(record.definition) if record else None
 
     async def get_agent_raw_with_scope(
         self, name: str, scope: dict[str, str] | None = None
     ) -> tuple[dict[str, Any], dict[str, str]] | None:
-        return self._get_entity_with_scope("agent", name, scope)
+        record = await self.get_agent_record(name, scope)
+        return (dict(record.definition), dict(record.scope)) if record else None
 
-    async def list_agents(self, scope: dict[str, str] | None = None) -> list[AgentDefinition]:
-        return [AgentDefinition.model_validate(r) for r in self._list_entities("agent", scope)]
+    async def list_agents(
+        self,
+        scope: dict[str, str] | None = None,
+        limit: int | None = None,
+        offset: int = 0,
+    ) -> list[AgentDefinition]:
+        exact_scope = scope or {}
+        rows = sorted(
+            [
+                (_name, record.definition)
+                for (entity_type, _name, scope_json), record in self._records.items()
+                if entity_type == "agent" and _scope_from_json(scope_json) == exact_scope
+            ],
+            key=lambda item: item[0],
+        )
+        page = rows[offset:] if limit is None else rows[offset : offset + limit]
+        return [
+            AgentDefinition.model_validate(definition)
+            for _name, definition in page
+        ]
 
-    async def delete_agent(self, name: str, scope: dict[str, str] | None = None) -> bool:
+    async def delete_agent(
+        self,
+        name: str,
+        scope: dict[str, str] | None = None,
+        expected_revision: int | None = None,
+    ) -> bool:
+        record = await self.get_agent_record(name, scope)
+        if expected_revision is not None and (
+            record is None or record.revision != expected_revision
+        ):
+            raise ConfigRevisionConflictError(
+                f"Expected revision {expected_revision} was not current"
+            )
         return self._delete("agent", name, scope)
 
     # MCP
@@ -1535,6 +2090,15 @@ class MemoryConfigRegistry:
         if key in self._store:
             return False
         self._store[key] = definition
+        self._records[key] = AgentConfigRecord(
+            name=name,
+            scope=scope,
+            scope_key=effective_scope_key(scope),
+            definition=definition,
+            revision=1,
+            definition_digest=canonical_json_digest(definition),
+            source="file" if source == "file" else "api",
+        )
         self._record_change(entity_type, name, scope, "upsert")
         return True
 
@@ -1546,6 +2110,7 @@ class MemoryConfigRegistry:
 
 
 __all__ = [
+    "ConfigRevisionConflictError",
     "ConfigRegistry",
     "MemoryConfigRegistry",
     "PostgresConfigRegistry",
