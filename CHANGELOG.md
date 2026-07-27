@@ -9,6 +9,8 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.13.0-rc.1] — 2026-07-27
+
 ### Highlights
 
 - Reworked Cognition into a stricter multi-tenant Agent CRUD runtime: deployments start without built-in platform Agents, builders explicitly provision every Agent, and runtime data access is enforced at exact effective-scope boundaries.
