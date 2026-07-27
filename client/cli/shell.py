@@ -40,16 +40,18 @@ class SessionStats:
     """Tracks real-time session telemetry."""
 
     def __init__(self) -> None:
-        self.input_tokens = 0
-        self.output_tokens = 0
-        self.cost = 0.0
+        self.input_tokens: int | None = None
+        self.output_tokens: int | None = None
+        self.usage_status = "unavailable"
         self.model = "UNKNOWN"
         self.provider = "UNKNOWN"
 
     def update(self, data: dict[str, Any]) -> None:
-        self.input_tokens += data.get("input_tokens", 0)
-        self.output_tokens += data.get("output_tokens", 0)
-        self.cost += data.get("estimated_cost", 0.0)
+        self.usage_status = data.get("status", self.usage_status)
+        if data.get("input_tokens") is not None:
+            self.input_tokens = (self.input_tokens or 0) + int(data["input_tokens"])
+        if data.get("output_tokens") is not None:
+            self.output_tokens = (self.output_tokens or 0) + int(data["output_tokens"])
         self.model = data.get("model", self.model)
         self.provider = data.get("provider", self.provider)
 
@@ -110,12 +112,19 @@ class CognitionShell:
             ),
             Text.assemble(
                 ("TOKENS: ", "bold white"),
-                (f"In: {self.stats.input_tokens}", "green"),
+                (
+                    f"In: {self.stats.input_tokens if self.stats.input_tokens is not None else 'n/a'}",
+                    "green",
+                ),
                 (" | ", "white"),
-                (f"Out: {self.stats.output_tokens}", "yellow"),
+                (
+                    f"Out: {self.stats.output_tokens if self.stats.output_tokens is not None else 'n/a'}",
+                    "yellow",
+                ),
             ),
             Text.assemble(
-                ("SESSION_COST: ", "bold white"), (f"${self.stats.cost:.4f}", "bold green")
+                ("USAGE: ", "bold white"),
+                (self.stats.usage_status.upper(), "bold green"),
             ),
         )
         return Panel(grid, style="white", border_style="dim")

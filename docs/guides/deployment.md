@@ -79,19 +79,25 @@ POSTGRES_DB=cognition
 COGNITION_SANDBOX_BACKEND=docker
 
 # Observability (optional but recommended)
+# NOTE: COGNITION_OTLP_ENDPOINT, OTLP metric export, and trace detail/content
+# settings are proposed for v0.13 curated tracing pending ADR-0002 acceptance.
 COGNITION_LOG_FORMAT=json
 COGNITION_METRICS_ENABLED=true
 COGNITION_METRICS_PORT=9090
 COGNITION_TRACING_ENABLED=true
-COGNITION_OTEL_ENDPOINT=http://otel-collector:4317
+COGNITION_OTLP_ENDPOINT=http://otel-collector:4317
 COGNITION_OTLP_MAX_EXPORT_BYTES=3670016
 COGNITION_OTLP_QUEUE_SIZE=2048
 COGNITION_OTLP_EXPORT_TIMEOUT_MS=30000
+COGNITION_OTLP_METRIC_EXPORT_INTERVAL_MS=60000
 COGNITION_TRACE_SAMPLE_RATIO=0.10
-COGNITION_MLFLOW_ENABLED=true
-COGNITION_MLFLOW_TRACKING_URI=http://mlflow:5000
-COGNITION_NATIVE_AGENT_TRACING=otlp_to_mlflow
+COGNITION_TRACE_DETAIL=standard
 ```
+
+MLflow trace routing is configured on the OpenTelemetry Collector, not on the
+Cognition server. Set the Collector's MLflow exporter endpoint and
+`x-mlflow-experiment-id` header, or use the local Compose default:
+`MLFLOW_EXPERIMENT_ID=0`.
 
 ---
 

@@ -139,7 +139,7 @@ the session to `idle` so the same session can receive follow-up messages.
 ```json
 {
   "title": "My session",
-  "agent_name": "default",
+  "agent_name": "support-agent",
   "metadata": {
     "repository": "myorg/myrepo",
     "pr_number": "42"
@@ -150,7 +150,7 @@ the session to `idle` so the same session can receive follow-up messages.
 | Field | Type | Required | Description |
 |---|---|---|---|
 | `title` | string (max 200) | No | Human-readable label |
-| `agent_name` | string | No | Agent to bind; must be a known `primary` or `all` agent. Defaults to `"default"`. Returns `422` if name is unknown. |
+| `agent_name` | string | Yes | Explicit builder-provisioned Agent to bind; must be a known `primary` or `all` Agent at the trusted request scope. Returns `422` if name is unknown. |
 | `metadata` | object | No | Arbitrary builder-defined flat key-value metadata attached to the session |
 
 **Headers (when scoping enabled):**
@@ -166,7 +166,7 @@ X-Cognition-Scope-Project: proj-123
   "title": "My session",
   "thread_id": "7f3e4a12-...",
   "status": "idle",
-  "agent_name": "default",
+  "agent_name": "support-agent",
   "metadata": {"repository": "myorg/myrepo", "pr_number": "42"},
   "created_at": "2026-03-02T12:00:00Z",
   "updated_at": "2026-03-02T12:00:00Z",
@@ -387,7 +387,7 @@ List messages in a session with pagination.
       "tool_calls": [
         {"name": "bash", "args": {"command": "ls -la"}, "id": "call_xyz"}
       ],
-      "token_count": 142,
+      "token_count": null,
       "model_used": "gpt-4o"
     }
   ],
@@ -524,15 +524,34 @@ Use this payload with `POST /sessions/{session_id}/resume`.
 
 ### `usage`
 
-Token usage and estimated cost for this response.
+!!! note "v0.13 implementation note"
+
+    The shape below is the authoritative Usage Event contract from
+    [ADR-0002](../architecture/decisions/0002-curated-opentelemetry-agent-tracing.md).
+    Local observability validation remains a release gate.
+
+Provider-reported token usage for this terminal run. Cognition never estimates
+missing tokens or costs; unavailable provider metadata is represented with
+`status: "unavailable"` and nullable token fields.
 
 ```json
 {
+  "type": "usage",
+  "source": "provider_usage_metadata",
+  "status": "complete",
   "input_tokens": 245,
   "output_tokens": 380,
-  "estimated_cost": 0.0038,
+  "total_tokens": 625,
+  "cache_read_tokens": null,
+  "cache_write_tokens": null,
+  "reasoning_tokens": null,
+  "model_calls": 1,
+  "reported_model_calls": 1,
+  "unreported_model_calls": 0,
+  "estimated_cost": null,
   "provider": "openai",
-  "model": "gpt-4o"
+  "model": "gpt-4o",
+  "by_model": []
 }
 ```
 
@@ -604,7 +623,7 @@ The session remains reusable unless it has moved to a terminal session state.
     "role": "assistant",
     "content": "Here are the files in your workspace...",
     "tool_calls": [...],
-    "token_count": 380,
+    "token_count": null,
     "model_used": "gpt-4o",
     "created_at": "2026-03-02T12:00:01Z"
   }
@@ -1278,7 +1297,7 @@ Get the current server configuration (infrastructure only). Secrets are redacted
 
 Update infrastructure configuration at runtime. Changes are persisted to `.cognition/config.yaml`.
 
-**Allowed paths:** `rate_limit.per_minute`, `rate_limit.burst`, `observability.otel_enabled`, `observability.otel_max_export_bytes`, `observability.otlp_queue_size`, `observability.otlp_export_timeout_ms`, `observability.trace_sample_ratio`, `observability.metrics_enabled`, `observability.metrics_port`, `observability.otel_endpoint`, `observability.log_format`, `observability.native_agent_tracing`, `mlflow.enabled`, `mlflow.experiment_name`.
+**Allowed paths:** `rate_limit.per_minute`, `rate_limit.burst`, `observability.otel_enabled`, `observability.otel_max_export_bytes`, `observability.otlp_queue_size`, `observability.otlp_export_timeout_ms`, `observability.otlp_metric_export_interval_ms` (proposed), `observability.trace_sample_ratio`, `observability.trace_detail` (proposed), `observability.metrics_enabled`, `observability.metrics_port`, `observability.otel_endpoint`, `observability.log_format`.
 
 **Request body:**
 ```json

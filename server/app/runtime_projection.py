@@ -16,11 +16,9 @@ from server.app.models import (
 from server.app.observability import (
     RUN_TRANSITION_COUNT,
     RUNTIME_EVENT_COUNT,
+    add_span_event,
     current_trace_context,
     observability_context,
-)
-from server.app.observability import (
-    span as trace_span,
 )
 from server.app.storage.backend import StorageBackend
 
@@ -55,24 +53,22 @@ class RuntimeProjectionService:
     ) -> SessionRun:
         """Create or reuse a durable active run for a session."""
         scope = session.scopes if effective_scope is None else effective_scope
-        with (
-            observability_context(
-                session_id=session.id,
-                thread_id=session.thread_id,
-                task_id=task_id,
-                scope_keys=sorted(scope),
-                agent_revision=agent_revision,
-                manifest_digest=manifest_digest,
-            ),
-            trace_span(
+        with observability_context(
+            session_id=session.id,
+            thread_id=session.thread_id,
+            task_id=task_id,
+            scope_keys=sorted(scope),
+            agent_revision=agent_revision,
+            manifest_digest=manifest_digest,
+        ):
+            add_span_event(
                 "cognition.run.begin",
                 {
-                    "cognition.session_id": session.id,
-                    "cognition.thread_id": session.thread_id,
-                    "cognition.scope_keys": ",".join(sorted(scope)),
+                    "session.id": session.id,
+                    "cognition.thread.id": session.thread_id,
+                    "cognition.scope.keys": ",".join(sorted(scope)),
                 },
-            ),
-        ):
+            )
             span_trace_id, _span_id = current_trace_context()
             if idempotency_key:
                 existing = await self.store.get_run_by_idempotency_key(
@@ -157,11 +153,13 @@ class RuntimeProjectionService:
                 "cognition.visibility": visibility,
             },
         )
-        with (
-            observability_context(**_runtime_context_fields(run)),
-            trace_span("cognition.runtime_event", attributes),
-        ):
+        with observability_context(**_runtime_context_fields(run)):
+            add_span_event("cognition.runtime_event", attributes)
             current_trace_id, current_span_id = current_trace_context()
+            event_trace_id = trace_id or run.trace_id or current_trace_id
+            event_span_id = span_id
+            if event_span_id is None and event_trace_id == current_trace_id:
+                event_span_id = current_span_id
             event = await self.store.append_event(
                 event_id=str(uuid.uuid4()),
                 session_id=run.session_id,
@@ -170,8 +168,8 @@ class RuntimeProjectionService:
                 payload=payload,
                 visibility=visibility,
                 effective_scope=run.effective_scope,
-                trace_id=trace_id or current_trace_id or run.trace_id,
-                span_id=span_id or current_span_id,
+                trace_id=event_trace_id,
+                span_id=event_span_id,
                 task_id=run.task_id,
             )
             RUNTIME_EVENT_COUNT.labels(event_type=event_type, visibility=visibility).inc()
@@ -206,15 +204,14 @@ class RuntimeProjectionService:
         session_status: SessionStatus | None = None,
     ) -> tuple[SessionRun, SessionEvent]:
         """Transition a run and return the durable transition event."""
-        with (
-            observability_context(
-                **_runtime_context_fields(
-                    run,
-                    run_status=status.value,
-                    error_code=error_code,
-                )
-            ),
-            trace_span(
+        with observability_context(
+            **_runtime_context_fields(
+                run,
+                run_status=status.value,
+                error_code=error_code,
+            )
+        ):
+            add_span_event(
                 "cognition.run.transition",
                 _runtime_attributes(
                     run,
@@ -223,8 +220,7 @@ class RuntimeProjectionService:
                         "cognition.error_code": error_code or "",
                     },
                 ),
-            ),
-        ):
+            )
             effective_status = status
             task_status = _task_status_for_run(status)
             if run.task_id is not None and task_status is not None:
@@ -318,13 +314,11 @@ class RuntimeProjectionService:
         rebuild = getattr(service, "rebuild_message_projection", None)
         if rebuild is None:
             return None
-        with (
-            observability_context(**_runtime_context_fields(run)),
-            trace_span(
+        with observability_context(**_runtime_context_fields(run)):
+            add_span_event(
                 "cognition.message_projection.rebuild",
                 _runtime_attributes(run, {"cognition.projection_source": "checkpoint"}),
-            ),
-        ):
+            )
             rebuilt_count = int(
                 await rebuild(
                     session_id=run.session_id,
@@ -384,13 +378,13 @@ def _runtime_attributes(
     extra: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     attributes: dict[str, Any] = {
-        "cognition.session_id": run.session_id,
-        "cognition.run_id": run.id,
-        "cognition.thread_id": run.thread_id,
-        "cognition.scope_keys": ",".join(sorted(run.effective_scope)),
+        "session.id": run.session_id,
+        "cognition.run.id": run.id,
+        "cognition.thread.id": run.thread_id,
+        "cognition.scope.keys": ",".join(sorted(run.effective_scope)),
     }
     if run.trace_id:
-        attributes["cognition.trace_id"] = run.trace_id
+        attributes["cognition.trace.id"] = run.trace_id
     if extra:
         attributes.update(extra)
     return attributes

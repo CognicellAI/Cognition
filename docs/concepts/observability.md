@@ -2,6 +2,19 @@
 
 Cognition provides a three-pillar observability stack — distributed traces, time-series metrics, and experiment tracking — all independently toggleable and all with graceful degradation when the underlying packages are not installed.
 
+!!! note "v0.13 implementation note: curated Agent tracing"
+
+    The v0.13 branch follows
+    [ADR-0002](../architecture/decisions/0002-curated-opentelemetry-agent-tracing.md)
+    and the
+    [curated tracing proposal](../proposals/curated-opentelemetry-tracing.md):
+    one active `cognition.agent.run` application span per durable run,
+    canonical OTLP delivery, automatic framework instrumentation, and
+    provider-authoritative Usage Events. LangGraph, model, tool, and subagent
+    spans inherit that active context and remain in the same semantic trace. A
+    split GenAI trace is a context-propagation regression. Local observability
+    smoke validation remains a release gate.
+
 ---
 
 ## Three Pillars
@@ -10,9 +23,11 @@ Cognition provides a three-pillar observability stack — distributed traces, ti
 |---|---|---|---|
 | Distributed traces | OpenTelemetry → OTLP → Collector | Request and LLM call tracing | `COGNITION_TRACING_ENABLED` |
 | Time-series metrics | Prometheus | Counters and histograms | `COGNITION_METRICS_ENABLED` |
-| Experiment tracking | MLflow | LLM evaluation and run history | `COGNITION_MLFLOW_ENABLED` |
+| Experiment tracking | MLflow via Collector | LLM evaluation and run history | Collector configuration |
 
-All three subsystems are initialised in the FastAPI lifespan in `server/app/main.py`. Disabling any one of them requires only an environment variable change — no code changes.
+Tracing and metrics are initialised in the FastAPI lifespan in
+`server/app/main.py`. MLflow is a downstream OTLP destination configured in the
+operator-owned Collector, not by Cognition application startup.
 
 ---
 
@@ -23,7 +38,7 @@ Implemented in `server/app/observability/__init__.py:setup_tracing()`.
 ### What Gets Traced
 
 - **HTTP requests** — every inbound request with method, matched route template, status class, and duration
-- **LLM calls** — latency and sampled/redacted framework trace details when tracing is enabled
+- **LLM calls** — latency and sampled raw framework trace details when tracing is enabled
 - **Tool executions** — duration and success/failure, with tool names kept out of Prometheus labels
 
 ### Configuration
@@ -31,13 +46,19 @@ Implemented in `server/app/observability/__init__.py:setup_tracing()`.
 | Variable | Default | Description |
 |---|---|---|
 | `COGNITION_TRACING_ENABLED` | `false` | Enable/disable tracing. `COGNITION_OTEL_ENABLED` remains a compatibility alias. |
-| `COGNITION_OTEL_ENDPOINT` | `null` | OTLP collector URL (e.g. `http://localhost:4317`) |
+| `COGNITION_OTLP_ENDPOINT` | `null` | Canonical OTLP collector URL (e.g. `http://localhost:4317`). `COGNITION_OTEL_ENDPOINT` remains a compatibility alias. |
 | `COGNITION_OTLP_MAX_EXPORT_BYTES` | `3670016` | Maximum encoded OTLP trace export request size. `COGNITION_OTEL_MAX_EXPORT_BYTES` remains a compatibility alias. |
 | `COGNITION_OTLP_QUEUE_SIZE` | `2048` | Maximum queued trace spans before export |
 | `COGNITION_OTLP_EXPORT_TIMEOUT_MS` | `30000` | Per-attempt trace export deadline |
+| `COGNITION_OTLP_METRIC_EXPORT_INTERVAL_MS` | `60000` | OTLP metric export interval |
 | `COGNITION_TRACE_SAMPLE_RATIO` | `0.10` | Parent-based root trace sample ratio for normal runs |
+| `COGNITION_TRACE_DETAIL` | `standard` | `standard` omits duplicate/standalone hook instrumentation while preserving native semantic parents; `debug` keeps additional framework internals |
 
-Transport is auto-detected: gRPC for `http://host:4317`-style endpoints, HTTP for `/v1/traces` paths. When `COGNITION_OTEL_ENDPOINT` is null, traces are not exported but the instrumentation is still active (useful for local development with a local Jaeger or similar).
+Cognition emits raw trace content supplied by its root run span and enabled
+auto-instrumentation. Builders own downstream trace redaction, access control,
+retention, and export policy in their observability pipelines.
+
+Transport is auto-detected: gRPC for `http://host:4317`-style endpoints, HTTP for `/v1/traces` paths. When `COGNITION_OTLP_ENDPOINT` is null, traces are not exported but the instrumentation is still active (useful for local development with a local Jaeger or similar).
 
 ### Manual Instrumentation
 
@@ -160,13 +181,12 @@ async def call_model(messages):
 
 Prometheus labels are intentionally narrow. Do not add tenant, scope, Agent,
 tool, model, session, run, trace, digest, callback URL, exception text, or raw
-path values as labels; use redacted logs/traces for per-run diagnosis.
+path values as labels; use redacted logs and raw sampled traces for per-run
+diagnosis.
 
 ---
 
 ## MLflow Experiment Tracking
-
-Implemented in `server/app/observability/mlflow_config.py`.
 
 ### How It Works
 
@@ -176,33 +196,28 @@ MLflow receives traces via the OTel Collector — there is no direct MLflow SDK 
 Cognition (OTel SDK) → OTel Collector → MLflow Tracking Server
 ```
 
-`setup_mlflow_tracing()` performs two things at startup when
-`COGNITION_MLFLOW_ENABLED=true`:
-1. Sets the MLflow tracking URI
-2. Creates or sets the MLflow experiment (default name: `cognition`)
+Cognition does not create MLflow experiments or configure the MLflow Python
+client at startup. The Collector owns the MLflow destination endpoint and the
+`x-mlflow-experiment-id` header required by MLflow's OTLP ingest endpoint. The
+local Compose stack defaults that experiment id to `0`; production operators
+should set the approved experiment id in Collector configuration.
 
 ### Configuration
 
-| Variable | Default | Description |
+| Collector setting | Default | Description |
 |---|---|---|
-| `COGNITION_MLFLOW_ENABLED` | `false` | Enable MLflow integration |
-| `COGNITION_MLFLOW_TRACKING_URI` | `null` | MLflow server URL (e.g. `http://localhost:5000`) |
-| `COGNITION_MLFLOW_EXPERIMENT_NAME` | `cognition` | Experiment name |
-
-The upstream `MLFLOW_ENABLED`, `MLFLOW_TRACKING_URI`, and
-`MLFLOW_EXPERIMENT_NAME` names remain compatibility aliases when the
-Cognition-prefixed setting is unset.
+| `otlphttp/mlflow.endpoint` | `http://mlflow:5000` in Compose | MLflow server URL |
+| `x-mlflow-experiment-id` | `${env:MLFLOW_EXPERIMENT_ID}` in Compose | MLflow experiment id for OTLP traces |
+| `compression` | `gzip` in Compose | OTLP/HTTP compression for MLflow ingest |
 
 ### What Gets Recorded
 
-With the local MLflow/Collector stack enabled, Cognition can export redacted
+With the local MLflow/Collector stack enabled, Cognition exports raw
 OpenTelemetry traces to MLflow for operator debugging and evaluation workflows.
-The startup integration configures the MLflow tracking target and experiment;
-the Collector owns trace ingestion. Native Deep Agents semantic tracing through
-`mlflow.langchain.autolog()` is available through the explicit operator mode
-`COGNITION_NATIVE_AGENT_TRACING=mlflow_autolog`. Use exactly one semantic mode
-per deployment/invocation: `otlp_to_mlflow` for Collector-backed traces, or
-`mlflow_autolog` for native MLflow LangChain/Deep Agents traces.
+The Collector owns trace ingestion and metrics fan-out. Cognition does not
+enable direct MLflow or LangSmith autolog destination modes; LangSmith's
+OTel-only bridge is used only as an in-process instrumentation adapter that
+emits through Cognition's global OpenTelemetry provider.
 
 ### Offline Evaluation Pipeline
 

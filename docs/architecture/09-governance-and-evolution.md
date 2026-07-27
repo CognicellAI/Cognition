@@ -50,7 +50,7 @@ clearly.
 | ConfigRegistry, ConfigStore, dispatcher, cache | Agent runtime, state/configuration, runtime flows, risks | Cross-process invalidation and precedence tests |
 | Sandbox protocol, packages, profiles, images | Execution/sandboxes, deployment, system context | Backend conformance and teardown tests |
 | Scope extraction or propagation | Every C4 level, state/configuration, risks | Cross-scope negative tests for touched resources |
-| Metrics, traces, logs, callbacks, health | Server composition, deployment, risks | Cardinality, redaction, dependency-failure tests |
+| Metrics, traces, logs, callbacks, health | Server composition, deployment, risks | Cardinality, raw-trace export, log redaction, dependency-failure tests |
 | Docker, Compose, Helm, CI/release workflows | Container/deployment views | Image build, Helm render/lint, and topology checks |
 
 ## Architecture change workflow
@@ -145,4 +145,3 @@ and extension boundaries:
 - [Architecture overview](index.md)
 - [Code-derived risk register](10-code-derived-risks.md)
 - [Architecture decisions](decisions/index.md)
-

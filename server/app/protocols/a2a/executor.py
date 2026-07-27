@@ -32,6 +32,7 @@ from server.app.agent.runtime import (
     RejectedEvent,
     RunStateEvent,
     TokenEvent,
+    UsageEvent,
 )
 from server.app.agent.task_runtime import (
     AgentTaskRuntime,
@@ -50,9 +51,8 @@ from server.app.observability import (
     RUNTIME_TASK_DURATION,
     RUNTIME_TASK_TRANSITIONS_TOTAL,
     RUNTIME_TIME_TO_FIRST_OUTPUT,
-)
-from server.app.observability import (
-    span as trace_span,
+    agent_run_span,
+    current_trace_context,
 )
 from server.app.protocols.a2a.inbound import InvalidA2APartError, normalize_a2a_parts
 from server.app.protocols.a2a.task_store import (
@@ -122,35 +122,25 @@ class CognitionA2AExecutor(AgentExecutor):
         scope = effective_scope_from_context(context.call_context)
         message_id = context.message.message_id if context.message else None
         try:
-            with trace_span(
-                "cognition.a2a.normalize",
-                {
-                    "a2a.task_id": context.task_id,
-                    "a2a.part_count": len(context.message.parts) if context.message else 0,
-                    "cognition.scope_keys": ",".join(sorted(scope)),
-                },
-            ):
-                normalized = normalize_a2a_parts(
-                    context.message.parts if context.message else (),
-                    task_id=context.task_id,
-                    message_id=message_id,
-                    max_raw_part_bytes=self._max_raw_part_bytes,
-                    max_parts=self._max_parts,
-                    max_message_bytes=self._max_message_bytes,
-                    max_text_part_bytes=self._max_text_part_bytes,
-                    max_data_part_bytes=self._max_data_part_bytes,
-                    message_metadata=(
-                        MessageToDict(context.message.metadata)
-                        if context.message and context.message.HasField("metadata")
-                        else None
-                    ),
-                    message_extensions=(
-                        tuple(context.message.extensions) if context.message else ()
-                    ),
-                    reference_task_ids=(
-                        tuple(context.message.reference_task_ids) if context.message else ()
-                    ),
-                )
+            normalized = normalize_a2a_parts(
+                context.message.parts if context.message else (),
+                task_id=context.task_id,
+                message_id=message_id,
+                max_raw_part_bytes=self._max_raw_part_bytes,
+                max_parts=self._max_parts,
+                max_message_bytes=self._max_message_bytes,
+                max_text_part_bytes=self._max_text_part_bytes,
+                max_data_part_bytes=self._max_data_part_bytes,
+                message_metadata=(
+                    MessageToDict(context.message.metadata)
+                    if context.message and context.message.HasField("metadata")
+                    else None
+                ),
+                message_extensions=(tuple(context.message.extensions) if context.message else ()),
+                reference_task_ids=(
+                    tuple(context.message.reference_task_ids) if context.message else ()
+                ),
+            )
         except InvalidA2APartError as exc:
             from server.app.observability import A2A_LIMIT_REJECTIONS_TOTAL
 
@@ -161,6 +151,8 @@ class CognitionA2AExecutor(AgentExecutor):
         idempotency_key = message_id or context.task_id if self._message_id_idempotency else None
         execution: TaskExecution | None = None
         active_metric = False
+        run_span_context: Any | None = None
+        run_span: Any | None = None
         execution_started = time.monotonic()
 
         try:
@@ -284,6 +276,47 @@ class CognitionA2AExecutor(AgentExecutor):
                 last_flush_at = time.monotonic()
 
             system_prompt = execution.session.config.system_prompt
+            span_context = agent_run_span(
+                session_id=execution.session.id,
+                run_id=execution.run.id,
+                thread_id=execution.session.thread_id,
+                scope_keys=sorted(scope),
+                agent_name=execution.session.agent_name,
+                agent_revision=execution.run.agent_revision,
+                manifest_digest=execution.run.manifest_digest,
+                parent_run_id=execution.run.parent_run_id,
+                effective_scope=scope,
+                transport="a2a",
+            )
+            run_span = span_context.__enter__()
+            run_span_context = span_context
+            if run_span is not None:
+                run_span.set_attribute(
+                    "gen_ai.input.messages",
+                    json.dumps(
+                        [{"role": "user", "content": user_text}],
+                        ensure_ascii=False,
+                        separators=(",", ":"),
+                    ),
+                )
+                run_span.add_event(
+                    "cognition.message.user.received",
+                    {
+                        "cognition.message.input_bytes": len(
+                            user_text.encode("utf-8")
+                        )
+                    },
+                )
+            trace_id, _span_id = current_trace_context(run_span)
+            if trace_id and execution.run.trace_id != trace_id:
+                updated_run = await self._runtime.projection.store.update_run(
+                    execution.run.id,
+                    trace_id=trace_id,
+                    effective_scope=execution.run.effective_scope,
+                )
+                if updated_run is not None:
+                    execution.run.trace_id = updated_run.trace_id
+
             source = service.stream_response(
                 session_id=execution.session.id,
                 thread_id=execution.session.thread_id,
@@ -293,6 +326,7 @@ class CognitionA2AExecutor(AgentExecutor):
                 manager=self._agent_manager,
                 scope=scope,
                 run_id=execution.run.id,
+                trace_parent_span=run_span,
             )
             async for event in _with_flush_ticks(source, self._stream_flush_interval):
                 if event is _FLUSH_TICK:
@@ -305,6 +339,8 @@ class CognitionA2AExecutor(AgentExecutor):
                 if current is None:
                     raise RuntimeTaskNotFoundError(execution.task.id)
                 if current.status == TaskStatus.CANCELED:
+                    if run_span is not None:
+                        run_span.add_event("cognition.run.canceled")
                     await self._agent_manager.abort_session(
                         execution.session.id,
                         execution.session.thread_id,
@@ -315,6 +351,24 @@ class CognitionA2AExecutor(AgentExecutor):
                     return
 
                 if isinstance(event, DirectMessageEvent):
+                    if run_span is not None:
+                        run_span.set_attribute(
+                            "gen_ai.output.messages",
+                            json.dumps(
+                                [{"role": "assistant", "content": event.content}],
+                                ensure_ascii=False,
+                                separators=(",", ":"),
+                            ),
+                        )
+                        run_span.add_event(
+                            "cognition.run.completed",
+                            {
+                                "cognition.run.terminal_status": "done",
+                                "cognition.message.output_bytes": len(
+                                    event.content.encode("utf-8")
+                                ),
+                            },
+                        )
                     persisted_message = await self._runtime.persist_direct_message(
                         execution,
                         content=event.content,
@@ -391,6 +445,8 @@ class CognitionA2AExecutor(AgentExecutor):
                 if isinstance(event, InterruptEvent) or (
                     isinstance(event, RunStateEvent) and event.to_status == "waiting_for_approval"
                 ):
+                    if run_span is not None:
+                        run_span.add_event("cognition.hitl.interrupt")
                     _task, _run, _event = await self._runtime.transition(
                         execution.task,
                         execution.run,
@@ -407,6 +463,16 @@ class CognitionA2AExecutor(AgentExecutor):
                     return
 
                 if isinstance(event, ErrorEvent):
+                    if run_span is not None:
+                        run_span.add_event(
+                            "cognition.run.failed",
+                            {
+                                "cognition.error.code": event.code,
+                                "cognition.error.message_bytes": len(
+                                    event.message.encode("utf-8")
+                                ),
+                            },
+                        )
                     if event.code == "ABORTED":
                         status = RunStatus.ABORTED
                         state = TaskState.TASK_STATE_CANCELED
@@ -426,6 +492,15 @@ class CognitionA2AExecutor(AgentExecutor):
                     return
 
                 if isinstance(event, RejectedEvent):
+                    if run_span is not None:
+                        run_span.add_event(
+                            "cognition.run.rejected",
+                            {
+                                "cognition.run.reason_bytes": len(
+                                    event.reason.encode("utf-8")
+                                )
+                            },
+                        )
                     await self._runtime.transition(
                         execution.task,
                         execution.run,
@@ -442,10 +517,57 @@ class CognitionA2AExecutor(AgentExecutor):
                     )
                     return
 
+                if isinstance(event, UsageEvent):
+                    if run_span is not None:
+                        usage_attributes: dict[str, str | int] = {
+                            "cognition.usage.source": event.source,
+                            "cognition.usage.status": event.status,
+                            "cognition.usage.model_calls": event.model_calls,
+                            "cognition.usage.reported_model_calls": (
+                                event.reported_model_calls
+                            ),
+                            "cognition.usage.unreported_model_calls": (
+                                event.unreported_model_calls
+                            ),
+                        }
+                        for key, value in (
+                            ("cognition.usage.input_tokens", event.input_tokens),
+                            ("cognition.usage.output_tokens", event.output_tokens),
+                            ("cognition.usage.total_tokens", event.total_tokens),
+                        ):
+                            if value is not None:
+                                usage_attributes[key] = value
+                        for key, attribute_value in usage_attributes.items():
+                            run_span.set_attribute(key, attribute_value)
+                        run_span.add_event(
+                            "cognition.usage.recorded",
+                            usage_attributes,
+                        )
+                    continue
+
                 if isinstance(event, DoneEvent) or (
                     isinstance(event, RunStateEvent) and event.to_status == "done"
                 ):
                     await flush_text_chunk(last_chunk=True)
+                    if run_span is not None:
+                        output = "".join(accumulated_text)
+                        run_span.set_attribute(
+                            "gen_ai.output.messages",
+                            json.dumps(
+                                [{"role": "assistant", "content": output}],
+                                ensure_ascii=False,
+                                separators=(",", ":"),
+                            ),
+                        )
+                        run_span.add_event(
+                            "cognition.run.completed",
+                            {
+                                "cognition.run.terminal_status": "done",
+                                "cognition.message.output_bytes": len(
+                                    output.encode("utf-8")
+                                ),
+                            },
+                        )
                     await self._complete(
                         execution,
                         event_queue,
@@ -468,6 +590,8 @@ class CognitionA2AExecutor(AgentExecutor):
         except RuntimeTaskConflictError as exc:
             raise InvalidParamsError(message=str(exc)) from exc
         except Exception:
+            if run_span is not None:
+                run_span.add_event("cognition.run.exception")
             logger.exception(
                 "A2A task execution failed",
                 task_id=context.task_id,
@@ -491,6 +615,8 @@ class CognitionA2AExecutor(AgentExecutor):
                 return
             raise
         finally:
+            if run_span_context is not None:
+                run_span_context.__exit__(None, None, None)
             if active_metric:
                 RUNTIME_ACTIVE_TASKS.labels(transport="a2a").dec()
                 final_task = await self._runtime.get(
@@ -663,21 +789,34 @@ def _artifact_size(kind: str, value: Any) -> int:
 
 async def _with_flush_ticks(source: AsyncIterator[Any], interval: float) -> AsyncIterator[Any]:
     """Yield source events plus periodic ticks without cancelling the producer."""
-    iterator = aiter(source)
-    pending: asyncio.Future[Any] = asyncio.ensure_future(anext(iterator))
+    done_marker = object()
+    queue: asyncio.Queue[Any] = asyncio.Queue()
+
+    async def produce() -> None:
+        try:
+            async for item in source:
+                await queue.put(item)
+        except asyncio.CancelledError:
+            raise
+        except BaseException as exc:
+            await queue.put(exc)
+        finally:
+            await queue.put(done_marker)
+
+    producer = asyncio.create_task(produce())
     try:
         while True:
-            done, _ = await asyncio.wait({pending}, timeout=interval)
-            if not done:
+            try:
+                event = await asyncio.wait_for(queue.get(), timeout=interval)
+            except TimeoutError:
                 yield _FLUSH_TICK
                 continue
-            try:
-                event = pending.result()
-            except StopAsyncIteration:
+            if event is done_marker:
                 return
+            if isinstance(event, BaseException):
+                raise event
             yield event
-            pending = asyncio.ensure_future(anext(iterator))
     finally:
-        if not pending.done():
-            pending.cancel()
-            await asyncio.gather(pending, return_exceptions=True)
+        if not producer.done():
+            producer.cancel()
+        await asyncio.gather(producer, return_exceptions=True)

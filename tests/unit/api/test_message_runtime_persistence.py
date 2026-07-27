@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from collections.abc import AsyncGenerator
-from contextlib import contextmanager
 from types import SimpleNamespace
 from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -577,12 +576,13 @@ async def test_runtime_events_capture_current_trace_context(tmp_path) -> None:
     )
     projection = RuntimeProjectionService(store)
 
-    @contextmanager
-    def _fake_span(_name: str, _attributes: dict[str, Any] | None = None) -> Any:
-        yield None
+    span_events: list[tuple[str, dict[str, Any] | None]] = []
+
+    def _fake_span_event(name: str, attributes: dict[str, Any] | None = None) -> None:
+        span_events.append((name, attributes))
 
     with (
-        patch("server.app.runtime_projection.trace_span", new=_fake_span),
+        patch("server.app.runtime_projection.add_span_event", new=_fake_span_event),
         patch(
             "server.app.runtime_projection.current_trace_context",
             return_value=("trace-123", "span-456"),
@@ -594,6 +594,24 @@ async def test_runtime_events_capture_current_trace_context(tmp_path) -> None:
     assert run.trace_id == "trace-123"
     assert event.trace_id == "trace-123"
     assert event.span_id == "span-456"
+
+    with (
+        patch("server.app.runtime_projection.add_span_event", new=_fake_span_event),
+        patch(
+            "server.app.runtime_projection.current_trace_context",
+            return_value=("trace-drift", "span-drift"),
+        ),
+    ):
+        drifted_event = await projection.append_event(run, "tool.call.completed")
+
+    assert drifted_event.trace_id == "trace-123"
+    assert drifted_event.span_id is None
+    assert [name for name, _attributes in span_events] == [
+        "cognition.run.begin",
+        "cognition.runtime_event",
+        "cognition.runtime_event",
+        "cognition.runtime_event",
+    ]
 
 
 @pytest.mark.asyncio

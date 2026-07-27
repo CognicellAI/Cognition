@@ -98,7 +98,15 @@ class Settings(BaseSettings):
             "Enable OpenTelemetry tracing. COGNITION_OTEL_ENABLED remains a compatibility alias."
         ),
     )
-    otel_endpoint: str | None = Field(default=None, alias="COGNITION_OTEL_ENDPOINT")
+    otel_endpoint: str | None = Field(
+        default=None,
+        alias="COGNITION_OTLP_ENDPOINT",
+        validation_alias=AliasChoices("COGNITION_OTLP_ENDPOINT", "COGNITION_OTEL_ENDPOINT"),
+        description=(
+            "Canonical OTLP collector endpoint. COGNITION_OTEL_ENDPOINT remains a "
+            "compatibility alias."
+        ),
+    )
     otel_max_export_bytes: int = Field(
         default=3_670_016,
         ge=65_536,
@@ -127,18 +135,24 @@ class Settings(BaseSettings):
         alias="COGNITION_TRACE_SAMPLE_RATIO",
         description="Parent-based root trace sample ratio for normal runs.",
     )
+    trace_detail: Literal["standard", "debug"] = Field(
+        default="standard",
+        alias="COGNITION_TRACE_DETAIL",
+        description="Trace detail profile. Standard removes routine framework hook noise.",
+    )
+    observability_scope_hmac_key: SecretStr | None = Field(
+        default=None,
+        alias="COGNITION_OBSERVABILITY_SCOPE_HMAC_KEY",
+        description="Optional operator key for future scope fingerprinting; raw scopes are never emitted.",
+    )
+    otlp_metric_export_interval_ms: int = Field(
+        default=60_000,
+        ge=1_000,
+        alias="COGNITION_OTLP_METRIC_EXPORT_INTERVAL_MS",
+        description="OTLP metric export interval. Local Compose may override this for smoke tests.",
+    )
     metrics_enabled: bool = Field(default=True, alias="COGNITION_METRICS_ENABLED")
     metrics_port: int = Field(default=9090, alias="COGNITION_METRICS_PORT")
-    native_agent_tracing: Literal[
-        "disabled",
-        "langsmith_otel",
-        "mlflow_autolog",
-        "otlp_to_mlflow",
-    ] = Field(
-        default="disabled",
-        alias="COGNITION_NATIVE_AGENT_TRACING",
-        description="Optional native semantic agent tracing mode selected by the operator.",
-    )
 
     # CORS settings
     cors_origins: list[str] = Field(

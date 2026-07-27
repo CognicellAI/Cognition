@@ -362,9 +362,7 @@ class RuntimeStore(Protocol):
         """Conditionally update a task, returning None on mismatch/not-found."""
         ...
 
-    async def delete_task_data(
-        self, task_id: str, effective_scope: dict[str, str]
-    ) -> bool:
+    async def delete_task_data(self, task_id: str, effective_scope: dict[str, str]) -> bool:
         """Delete a terminal task and its task-owned runtime projections."""
         ...
 
@@ -429,6 +427,7 @@ class RuntimeStore(Protocol):
         error_code: str | None = None,
         status_reason: str | None = None,
         metadata: dict[str, Any] | None = None,
+        trace_id: str | None = None,
         effective_scope: dict[str, str] | None = None,
     ) -> SessionRun | None:
         """Update durable run state."""
@@ -668,9 +667,7 @@ class StorageBackend(Protocol):
         """Conditionally update a task, returning None on mismatch/not-found."""
         ...
 
-    async def delete_task_data(
-        self, task_id: str, effective_scope: dict[str, str]
-    ) -> bool:
+    async def delete_task_data(self, task_id: str, effective_scope: dict[str, str]) -> bool:
         """Delete a terminal task and its task-owned runtime projections."""
         ...
 
@@ -735,6 +732,7 @@ class StorageBackend(Protocol):
         error_code: str | None = None,
         status_reason: str | None = None,
         metadata: dict[str, Any] | None = None,
+        trace_id: str | None = None,
         effective_scope: dict[str, str] | None = None,
     ) -> SessionRun | None:
         """Update durable run state."""

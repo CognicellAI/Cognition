@@ -54,6 +54,7 @@ task-oriented.
 | Document | Description |
 |---|---|
 | [Sandboxed Skill Package Registry](./proposals/sandboxed-skill-registry.md) | Release-independent design for scope-aware skill packages, configurable storage, immutable revisions, and sandbox-only execution |
+| [Curated OpenTelemetry Agent Tracing](./proposals/curated-opentelemetry-tracing.md) | Draft design for bounded Agent-run traces, automatic framework instrumentation, canonical OTLP delivery, and provider-authoritative Usage Events |
 
 ---
 

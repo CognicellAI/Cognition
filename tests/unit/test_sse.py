@@ -436,16 +436,24 @@ class TestEventBuilder:
         event = EventBuilder.usage(
             input_tokens=100,
             output_tokens=50,
-            estimated_cost=0.002,
+            total_tokens=150,
             provider="openai",
             model="gpt-4",
+            status="complete",
+            model_calls=1,
+            reported_model_calls=1,
         )
         assert event["event"] == "usage"
+        assert event["data"]["source"] == "provider_usage_metadata"
+        assert event["data"]["status"] == "complete"
         assert event["data"]["input_tokens"] == 100
         assert event["data"]["output_tokens"] == 50
-        assert event["data"]["estimated_cost"] == 0.002
+        assert event["data"]["total_tokens"] == 150
+        assert event["data"]["estimated_cost"] is None
         assert event["data"]["provider"] == "openai"
         assert event["data"]["model"] == "gpt-4"
+        assert event["data"]["model_calls"] == 1
+        assert event["data"]["reported_model_calls"] == 1
 
     def test_planning_event(self) -> None:
         """Test creating planning event."""

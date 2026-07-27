@@ -58,7 +58,7 @@ class TestMLflowTracingIntegration:
         assert response.status_code == 200
 
         # With MLflow enabled, trace would include:
-        # - cognition.session_id tag
+        # - session.id tag
         # - cognition.workspace tag
         # - cognition.session_title tag
         print(f"\n  Trace would include metadata: session_id={session_id}")

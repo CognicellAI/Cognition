@@ -15,6 +15,7 @@ Persistence contract:
 
 from __future__ import annotations
 
+import json
 import time
 import uuid
 from collections.abc import AsyncGenerator, Mapping
@@ -60,6 +61,7 @@ from server.app.llm.deep_agent_service import (
     SessionAgentManager,
     StatusEvent,
     StepCompleteEvent,
+    StreamEvent,
     TokenEvent,
     ToolCallEvent,
     ToolResultEvent,
@@ -71,6 +73,10 @@ from server.app.observability import (
     STORAGE_OPERATION_DURATION,
     STORAGE_OPERATIONS_TOTAL,
     STRICT_EXECUTION_REJECTIONS_TOTAL,
+    add_span_event,
+    agent_run_span,
+    current_trace_context,
+    set_span_attributes,
     storage_backend_label,
 )
 from server.app.rate_limiter import RateLimiter
@@ -164,13 +170,121 @@ def _sanitize_sandbox_metadata(value: Any) -> Any:
     return value
 
 
+def _usage_event_payload(event: UsageEvent) -> dict[str, Any]:
+    """Return the stable builder usage payload without deriving estimates."""
+    return {
+        "type": "usage",
+        "source": event.source,
+        "status": event.status,
+        "input_tokens": event.input_tokens,
+        "output_tokens": event.output_tokens,
+        "total_tokens": event.total_tokens,
+        "cache_read_tokens": event.cache_read_tokens,
+        "cache_write_tokens": event.cache_write_tokens,
+        "reasoning_tokens": event.reasoning_tokens,
+        "model_calls": event.model_calls,
+        "reported_model_calls": event.reported_model_calls,
+        "unreported_model_calls": event.unreported_model_calls,
+        "provider": event.provider,
+        "model": event.model,
+        "by_model": event.by_model,
+        "estimated_cost": event.estimated_cost,
+    }
+
+
+def _drop_null_trace_attributes(attributes: Mapping[str, Any]) -> dict[str, Any]:
+    """Return attributes that can be safely attached to an OpenTelemetry span."""
+    return {
+        str(key): value
+        for key, value in attributes.items()
+        if value is not None
+    }
+
+
+def _trace_messages_payload(messages: list[dict[str, str]]) -> str:
+    """Serialize GenAI message previews for MLflow-compatible OTLP ingestion."""
+    return json.dumps(messages, ensure_ascii=False, separators=(",", ":"))
+
+
+def _trace_json_byte_length(value: Any) -> int:
+    """Return best-effort UTF-8 byte size for a value without exposing the value."""
+    try:
+        serialized = json.dumps(value, ensure_ascii=False, default=str)
+    except (TypeError, ValueError):
+        serialized = str(value)
+    return len(serialized.encode("utf-8"))
+
+
+def _usage_trace_attributes(event: UsageEvent) -> dict[str, Any]:
+    """Return run-summary attributes without duplicating model-span semantics."""
+    by_model = (
+        json.dumps(event.by_model, ensure_ascii=False, default=str)
+        if event.by_model
+        else None
+    )
+    return _drop_null_trace_attributes(
+        {
+            "cognition.usage.source": event.source,
+            "cognition.usage.status": event.status,
+            "cognition.usage.model_calls": event.model_calls,
+            "cognition.usage.reported_model_calls": event.reported_model_calls,
+            "cognition.usage.unreported_model_calls": event.unreported_model_calls,
+            "cognition.usage.by_model": by_model,
+            "cognition.usage.provider": event.provider,
+            "cognition.usage.model": event.model,
+            "cognition.usage.input_tokens": event.input_tokens,
+            "cognition.usage.output_tokens": event.output_tokens,
+            "cognition.usage.total_tokens": event.total_tokens,
+            "cognition.usage.cache_read_tokens": event.cache_read_tokens,
+            "cognition.usage.cache_write_tokens": event.cache_write_tokens,
+            "cognition.usage.reasoning_tokens": event.reasoning_tokens,
+        }
+    )
+
+
+def _add_trace_event(
+    span_obj: Any | None,
+    name: str,
+    attributes: Mapping[str, Any] | None = None,
+) -> None:
+    """Add an event to a known span, falling back to the current span."""
+    if span_obj is not None:
+        span_obj.add_event(name, dict(attributes or {}))
+        return
+    add_span_event(name, dict(attributes or {}))
+
+
+def _set_trace_attributes(span_obj: Any | None, attributes: Mapping[str, Any]) -> None:
+    """Set attributes on a known span, falling back to the current span."""
+    if span_obj is not None:
+        for key, value in attributes.items():
+            if value is not None:
+                span_obj.set_attribute(str(key), value)
+        return
+    set_span_attributes(attributes)
+
+
 async def _sandbox_lifecycle_sse(
     event: SandboxLifecycleEvent,
     *,
     projection: RuntimeProjectionService | None = None,
     run: SessionRun | None = None,
+    span_obj: Any | None = None,
 ) -> dict[str, Any]:
     metadata = cast(dict[str, Any], _sanitize_sandbox_metadata(event.metadata))
+    _add_trace_event(
+        span_obj,
+        f"cognition.sandbox.{event.phase}",
+        _drop_null_trace_attributes(
+            {
+                "cognition.sandbox.id": event.sandbox_id,
+                "cognition.sandbox.backend": event.sandbox_backend,
+                "cognition.sandbox.duration_ms": event.duration_ms,
+                "cognition.sandbox.exit_code": event.exit_code,
+                "cognition.sandbox.warm_pool_hit": event.is_warm_pool_hit,
+            }
+        ),
+    )
     sse: dict[str, Any] = cast(
         dict[str, Any],
         EventBuilder.sandbox_lifecycle(
@@ -206,12 +320,20 @@ async def _release_sandbox_lifecycle_sse_events(
     *,
     projection: RuntimeProjectionService | None = None,
     run: SessionRun | None = None,
+    span_obj: Any | None = None,
 ) -> list[dict[str, Any]]:
     """Release sandbox resources and return lifecycle events emitted by teardown."""
     agent_manager.release_sandbox_backend(session_id)
     events: list[dict[str, Any]] = []
     for event in agent_manager.drain_sandbox_events(session_id):
-        events.append(await _sandbox_lifecycle_sse(event, projection=projection, run=run))
+        events.append(
+            await _sandbox_lifecycle_sse(
+                event,
+                projection=projection,
+                run=run,
+                span_obj=span_obj,
+            )
+        )
     return events
 
 
@@ -292,6 +414,8 @@ async def agent_event_stream(
 
         if not service:
             service = agent_manager.register_session(session_id, workspace_path)
+        assert service is not None
+        runtime_service = service
 
         session = await _get_scoped_session_for_messages(store, session_id, scope)
 
@@ -309,23 +433,77 @@ async def agent_event_stream(
         tool_calls: list[dict[str, Any]] = []
         tool_call_message_ids: dict[str, str] = {}
         metadata: dict[str, Any] = {}
+        run_span: Any | None = None
 
         # Drain sandbox lifecycle events queued during agent setup
         for se in agent_manager.drain_sandbox_events(session_id):
             yield await _sandbox_lifecycle_sse(se, projection=projection, run=run)
 
+        async def _agent_run_events() -> AsyncGenerator[StreamEvent, None]:
+            nonlocal run, run_span
+            with agent_run_span(
+                session_id=session_id,
+                run_id=run.id if run is not None else thread_id,
+                thread_id=thread_id,
+                scope_keys=scope_keys,
+                agent_name=session.agent_name,
+                agent_revision=run.agent_revision if run is not None else None,
+                manifest_digest=run.manifest_digest if run is not None else None,
+                parent_run_id=run.parent_run_id if run is not None else None,
+                effective_scope=scope,
+                transport="rest",
+            ) as span_obj:
+                run_span = span_obj
+                _set_trace_attributes(
+                    run_span,
+                    _drop_null_trace_attributes(
+                        {
+                            "cognition.message.input_bytes": len(
+                                content.encode("utf-8")
+                            ),
+                            "cognition.message.input_role": "user",
+                            "gen_ai.input.messages": _trace_messages_payload(
+                                [{"role": "user", "content": content}]
+                            ),
+                        }
+                    )
+                )
+                _add_trace_event(
+                    run_span,
+                    "cognition.message.user.received",
+                    {
+                        "cognition.message.input_bytes": len(content.encode("utf-8")),
+                    },
+                )
+                try:
+                    async for runtime_event in runtime_service.stream_response(
+                        session_id=session_id,
+                        thread_id=thread_id,
+                        project_path=workspace_path,
+                        content=content,
+                        system_prompt=system_prompt,
+                        manager=agent_manager,
+                        scope=scope,
+                        run_id=run.id if run is not None else None,
+                        trace_parent_span=run_span,
+                    ):
+                        yield runtime_event
+                finally:
+                    if run is not None:
+                        trace_id, _span_id = current_trace_context(run_span)
+                        if trace_id and run.trace_id != trace_id:
+                            updated_run = await store.update_run(
+                                run.id,
+                                trace_id=trace_id,
+                                effective_scope=run.effective_scope,
+                            )
+                            if updated_run is not None:
+                                run = updated_run
+                    run_span = None
+
         # Stream response using DeepAgents with multi-step support
         # Pass agent_manager to enable abort functionality
-        async for event in service.stream_response(
-            session_id=session_id,
-            thread_id=thread_id,
-            project_path=workspace_path,
-            content=content,
-            system_prompt=system_prompt,
-            manager=agent_manager,
-            scope=scope,
-            run_id=run.id if run is not None else None,
-        ):
+        async for event in _agent_run_events():
             if isinstance(event, TokenEvent):
                 assistant_content_parts.append(event.content)
                 sse = EventBuilder.token(event.content)
@@ -340,6 +518,19 @@ async def agent_event_stream(
                 yield sse
 
             elif isinstance(event, ToolCallEvent):
+                _add_trace_event(
+                    run_span,
+                    "cognition.tool.call.started",
+                    _drop_null_trace_attributes(
+                        {
+                            "gen_ai.tool.name": event.name,
+                            "cognition.tool.call.id": event.tool_call_id,
+                            "cognition.tool.argument_bytes": _trace_json_byte_length(
+                                event.args
+                            ),
+                        }
+                    ),
+                )
                 tool_call = {
                     "name": event.name,
                     "args": event.args,
@@ -391,6 +582,23 @@ async def agent_event_stream(
                 yield sse
 
             elif isinstance(event, ToolResultEvent):
+                _add_trace_event(
+                    run_span,
+                    (
+                        "cognition.tool.call.completed"
+                        if event.exit_code == 0
+                        else "cognition.tool.call.failed"
+                    ),
+                    _drop_null_trace_attributes(
+                        {
+                            "cognition.tool.call.id": event.tool_call_id,
+                            "cognition.tool.exit_code": event.exit_code,
+                            "cognition.tool.output_bytes": len(
+                                (event.output or "").encode("utf-8")
+                            ),
+                        }
+                    ),
+                )
                 await store.create_message(
                     message_id=str(uuid.uuid4()),
                     session_id=session_id,
@@ -429,6 +637,18 @@ async def agent_event_stream(
                 yield sse
 
             elif isinstance(event, ToolSafetyEvent):
+                _add_trace_event(
+                    run_span,
+                    f"cognition.tool.safety.{event.action}",
+                    _drop_null_trace_attributes(
+                        {
+                            "gen_ai.tool.name": event.tool_name,
+                            "cognition.tool.call.id": event.tool_call_id,
+                            "cognition.tool.safety.action": event.action,
+                            "cognition.tool.safety.error_count": len(event.errors or []),
+                        }
+                    ),
+                )
                 await _touch_session_activity(
                     store,
                     session_id,
@@ -464,6 +684,21 @@ async def agent_event_stream(
                 yield sse
 
             elif isinstance(event, ContextEvent):
+                _add_trace_event(
+                    run_span,
+                    f"cognition.context.{event.action}",
+                    _drop_null_trace_attributes(
+                        {
+                            "cognition.context.action": event.action,
+                            "cognition.context.message_count": event.message_count,
+                            "cognition.context.retained_messages": event.retained_messages,
+                            "cognition.context.evicted_messages": event.evicted_messages,
+                            "cognition.context.summarized_messages": (
+                                event.summarized_messages
+                            ),
+                        }
+                    ),
+                )
                 await _touch_session_activity(
                     store,
                     session_id,
@@ -505,6 +740,11 @@ async def agent_event_stream(
                 yield sse
 
             elif isinstance(event, PlanningEvent):
+                _add_trace_event(
+                    run_span,
+                    "cognition.planning.updated",
+                    {"cognition.planning.todo_count": len(event.todos)},
+                )
                 await _touch_session_activity(
                     store,
                     session_id,
@@ -521,6 +761,16 @@ async def agent_event_stream(
                 yield sse
 
             elif isinstance(event, StepCompleteEvent):
+                _add_trace_event(
+                    run_span,
+                    "cognition.step.completed",
+                    _drop_null_trace_attributes(
+                        {
+                            "cognition.step.number": event.step_number,
+                            "cognition.step.total": event.total_steps,
+                        }
+                    ),
+                )
                 await _touch_session_activity(
                     store,
                     session_id,
@@ -545,6 +795,19 @@ async def agent_event_stream(
                 yield sse
 
             elif isinstance(event, InterruptEvent):
+                _add_trace_event(
+                    run_span,
+                    "cognition.hitl.interrupt",
+                    _drop_null_trace_attributes(
+                        {
+                            "gen_ai.tool.name": event.tool_name,
+                            "cognition.tool.call.id": event.tool_call_id,
+                            "cognition.hitl.action_count": len(
+                                event.action_requests or []
+                            ),
+                        }
+                    ),
+                )
                 run_state_event: dict[str, Any] | None = None
                 if projection is not None and run is not None:
                     run, durable_state = await projection.transition_run_with_event(
@@ -595,6 +858,19 @@ async def agent_event_stream(
                 yield sse
 
             elif isinstance(event, DelegationEvent):
+                _add_trace_event(
+                    run_span,
+                    "cognition.subagent.started",
+                    _drop_null_trace_attributes(
+                        {
+                            "cognition.subagent.from": event.from_agent,
+                            "cognition.subagent.to": event.to_agent,
+                            "cognition.subagent.task_bytes": len(
+                                event.task.encode("utf-8")
+                            ),
+                        }
+                    ),
+                )
                 # ISSUE-010: Emit delegation event for UI visibility
                 await _touch_session_activity(
                     store,
@@ -625,9 +901,19 @@ async def agent_event_stream(
                     session_id,
                     effective_scope=scope,
                 )
-                yield await _sandbox_lifecycle_sse(event, projection=projection, run=run)
+                yield await _sandbox_lifecycle_sse(
+                    event,
+                    projection=projection,
+                    run=run,
+                    span_obj=run_span,
+                )
 
             elif isinstance(event, StatusEvent):
+                _add_trace_event(
+                    run_span,
+                    "cognition.run.status",
+                    {"cognition.run.status": event.status},
+                )
                 await _touch_session_activity(
                     store,
                     session_id,
@@ -644,29 +930,41 @@ async def agent_event_stream(
                 yield sse
 
             elif isinstance(event, UsageEvent):
+                usage_payload = _usage_event_payload(event)
+                usage_trace_attributes = _usage_trace_attributes(event)
+                _set_trace_attributes(run_span, usage_trace_attributes)
+                _add_trace_event(run_span, "cognition.usage.recorded", usage_trace_attributes)
+                metadata["usage"] = usage_payload
                 metadata["input_tokens"] = event.input_tokens
                 metadata["output_tokens"] = event.output_tokens
+                metadata["total_tokens"] = event.total_tokens
                 metadata["estimated_cost"] = event.estimated_cost
+                metadata["usage_status"] = event.status
+                metadata["usage_source"] = event.source
                 metadata["provider"] = event.provider
                 metadata["model"] = event.model
                 sse = EventBuilder.usage(
                     input_tokens=event.input_tokens,
                     output_tokens=event.output_tokens,
+                    total_tokens=event.total_tokens,
                     estimated_cost=event.estimated_cost,
                     provider=event.provider,
                     model=event.model,
+                    source=event.source,
+                    status=event.status,
+                    cache_read_tokens=event.cache_read_tokens,
+                    cache_write_tokens=event.cache_write_tokens,
+                    reasoning_tokens=event.reasoning_tokens,
+                    model_calls=event.model_calls,
+                    reported_model_calls=event.reported_model_calls,
+                    unreported_model_calls=event.unreported_model_calls,
+                    by_model=event.by_model,
                 )
                 if projection is not None and run is not None:
                     durable = await projection.append_event(
                         run,
                         "usage.recorded",
-                        payload={
-                            "input_tokens": event.input_tokens,
-                            "output_tokens": event.output_tokens,
-                            "estimated_cost": event.estimated_cost,
-                            "provider": event.provider,
-                            "model": event.model,
-                        },
+                        payload=usage_payload,
                     )
                     sse = enrich_sse_event(sse, durable)
                 yield sse
@@ -677,6 +975,7 @@ async def agent_event_stream(
                         sandbox_snapshot,
                         projection=projection,
                         run=run,
+                        span_obj=run_span,
                     )
 
                 active_runtime_count = agent_manager.active_runtime_count(session_id)
@@ -724,11 +1023,42 @@ async def agent_event_stream(
                     )
                 yield state_sse
                 assistant_content = "".join(assistant_content_parts)
+                _set_trace_attributes(
+                    run_span,
+                    _drop_null_trace_attributes(
+                        {
+                            "cognition.message.output_bytes": len(
+                                assistant_content.encode("utf-8")
+                            ),
+                            "cognition.message.output_role": "assistant",
+                            "cognition.run.terminal_status": completion_status,
+                            "gen_ai.output.messages": _trace_messages_payload(
+                                [
+                                    {
+                                        "role": "assistant",
+                                        "content": assistant_content,
+                                    }
+                                ]
+                            ),
+                        }
+                    )
+                )
+                _add_trace_event(
+                    run_span,
+                    "cognition.run.completed",
+                    {
+                        "cognition.run.terminal_status": completion_status,
+                        "cognition.message.output_bytes": len(
+                            assistant_content.encode("utf-8")
+                        ),
+                        "cognition.tool.call_count": len(tool_calls),
+                    },
+                )
                 sse = EventBuilder.done(
                     assistant_data={
                         "content": assistant_content,
                         "tool_calls": tool_calls or None,
-                        "token_count": metadata.get("output_tokens"),
+                        "token_count": None,
                         "model_used": metadata.get("model"),
                         "metadata": metadata,
                     },
@@ -744,11 +1074,24 @@ async def agent_event_stream(
                 yield sse
 
             elif isinstance(event, ErrorEvent):
+                _add_trace_event(
+                    run_span,
+                    "cognition.run.failed",
+                    _drop_null_trace_attributes(
+                        {
+                            "cognition.error.code": event.code,
+                            "cognition.error.message_bytes": len(
+                                event.message.encode("utf-8")
+                            ),
+                        }
+                    ),
+                )
                 for teardown_sse in await _release_sandbox_lifecycle_sse_events(
                     agent_manager,
                     session_id,
                     projection=projection,
                     run=run,
+                    span_obj=run_span,
                 ):
                     yield teardown_sse
                 if event.code == "ABORTED":
@@ -827,6 +1170,21 @@ async def agent_event_stream(
                 return
 
             elif isinstance(event, HeartbeatEvent):
+                _add_trace_event(
+                    run_span,
+                    "cognition.run.heartbeat",
+                    _drop_null_trace_attributes(
+                        {
+                            "cognition.heartbeat.step_label": event.step_label,
+                            "cognition.heartbeat.last_model_call": event.last_model_call,
+                            "cognition.heartbeat.last_tool_call": event.last_tool_call,
+                            "cognition.heartbeat.active_subagent_count": (
+                                event.active_subagent_count
+                            ),
+                            "cognition.heartbeat.sandbox_ready": event.sandbox_ready,
+                        }
+                    ),
+                )
                 await _touch_session_activity(
                     store,
                     session_id,
@@ -855,6 +1213,21 @@ async def agent_event_stream(
                 yield sse
 
             elif isinstance(event, RunStateEvent):
+                _add_trace_event(
+                    run_span,
+                    "cognition.run.state",
+                    _drop_null_trace_attributes(
+                        {
+                            "cognition.run.from_status": event.from_status,
+                            "cognition.run.to_status": event.to_status,
+                            "cognition.run.reason_bytes": (
+                                len(event.reason.encode("utf-8"))
+                                if event.reason is not None
+                                else None
+                            ),
+                        }
+                    ),
+                )
                 if event.to_status:
                     await store.update_session(
                         session_id=session_id,
@@ -887,6 +1260,21 @@ async def agent_event_stream(
                 yield sse
 
             elif isinstance(event, CallbackEvent):
+                _add_trace_event(
+                    run_span,
+                    f"cognition.callback.delivery.{event.status}",
+                    _drop_null_trace_attributes(
+                        {
+                            "cognition.callback.id": event.callback_id,
+                            "cognition.callback.status": event.status,
+                            "cognition.callback.attempt": event.attempt,
+                            "cognition.callback.response_status": event.response_status,
+                            "cognition.callback.has_error": (
+                                event.error_message is not None
+                            ),
+                        }
+                    ),
+                )
                 sse = EventBuilder.callback(
                     callback_id=event.callback_id,
                     url=event.url,
@@ -911,6 +1299,14 @@ async def agent_event_stream(
                 yield sse
 
     except Exception as e:
+        _add_trace_event(
+            run_span,
+            "cognition.run.exception",
+            {
+                "cognition.error.type": type(e).__name__,
+                "cognition.error.message_bytes": len(str(e).encode("utf-8")),
+            },
+        )
         logger.error(
             "Agent streaming error",
             error_type=type(e).__name__,
@@ -1244,19 +1640,26 @@ async def send_message(
             yield event
 
         if request.callback_url:
+            assistant_metadata = assistant_data.get("metadata", {}) if assistant_data else {}
+            usage_payload = (
+                assistant_metadata.get("usage")
+                if isinstance(assistant_metadata.get("usage"), dict)
+                else {
+                    "type": "usage",
+                    "source": "provider_usage_metadata",
+                    "status": "unavailable",
+                    "input_tokens": None,
+                    "output_tokens": None,
+                    "total_tokens": None,
+                    "estimated_cost": None,
+                }
+            )
             callback_payload = {
                 "session_id": session_id,
                 "message_id": message_id,
                 "status": completion_status,
                 "output": assistant_data.get("content") if assistant_data else None,
-                "token_usage": {
-                    "input": assistant_data.get("metadata", {}).get("input_tokens", 0)
-                    if assistant_data
-                    else 0,
-                    "output": assistant_data.get("metadata", {}).get("output_tokens", 0)
-                    if assistant_data
-                    else 0,
-                },
+                "token_usage": usage_payload,
                 "model_used": assistant_data.get("model_used") if assistant_data else None,
                 "completed_at": __import__("datetime")
                 .datetime.now(__import__("datetime").UTC)

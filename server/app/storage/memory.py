@@ -151,8 +151,7 @@ class MemoryStorageBackend:
             and (
                 not metadata_filters
                 or all(
-                    session.metadata.get(key) == value
-                    for key, value in metadata_filters.items()
+                    session.metadata.get(key) == value for key, value in metadata_filters.items()
                 )
             )
         ]
@@ -482,9 +481,7 @@ class MemoryStorageBackend:
         task.updated_at = now_utc_iso()
         return task
 
-    async def delete_task_data(
-        self, task_id: str, effective_scope: dict[str, str]
-    ) -> bool:
+    async def delete_task_data(self, task_id: str, effective_scope: dict[str, str]) -> bool:
         """Delete only terminal, exact-scope data owned by one task."""
         task = await self.get_task(task_id, effective_scope)
         if task is None or not TaskStatus.is_terminal(task.status):
@@ -536,8 +533,7 @@ class MemoryStorageBackend:
                 [
                     run
                     for run in self._runs.values()
-                    if run.session_id == session_id
-                    and run.effective_scope == exact_scope
+                    if run.session_id == session_id and run.effective_scope == exact_scope
                 ]
             )
             + 1
@@ -601,8 +597,7 @@ class MemoryStorageBackend:
         runs = [
             run
             for run in self._runs.values()
-            if run.session_id == session_id
-            and run.effective_scope == (effective_scope or {})
+            if run.session_id == session_id and run.effective_scope == (effective_scope or {})
         ]
         runs.sort(key=lambda run: run.created_at, reverse=True)
         return runs
@@ -635,6 +630,7 @@ class MemoryStorageBackend:
         error_code: str | None = None,
         status_reason: str | None = None,
         metadata: dict[str, Any] | None = None,
+        trace_id: str | None = None,
         effective_scope: dict[str, str] | None = None,
     ) -> SessionRun | None:
         """Update durable run state."""
@@ -659,6 +655,8 @@ class MemoryStorageBackend:
             run.status_reason = status_reason
         if metadata is not None:
             run.metadata = dict(metadata)
+        if trace_id is not None:
+            run.trace_id = trace_id
         run.updated_at = now
         return run
 
@@ -730,8 +728,7 @@ class MemoryStorageBackend:
         events = [
             event
             for event in self._events.values()
-            if event.session_id == session_id
-            and event.effective_scope == (effective_scope or {})
+            if event.session_id == session_id and event.effective_scope == (effective_scope or {})
         ]
         if run_id is not None:
             events = [event for event in events if event.run_id == run_id]

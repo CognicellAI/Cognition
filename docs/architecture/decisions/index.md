@@ -1,7 +1,7 @@
 # Architecture Decision Records
 
 **Status:** Active index  
-**Last updated:** 2026-07-25
+**Last updated:** 2026-07-26
 
 Architecture Decision Records (ADRs) capture decisions that should survive the
 implementation that first introduced them. Use an ADR when changing:
@@ -22,6 +22,7 @@ belongs in `ROADMAP.md`.
 | ADR | Status | Decision |
 |---|---|---|
 | [ADR-0001](0001-v013-exact-scope-agent-runtime-boundary.md) | Accepted | v0.13 uses an exact-scope Agent runtime boundary with explicit Agent provisioning, pinned run manifests, and fail-closed production execution. |
+| [ADR-0002](0002-curated-opentelemetry-agent-tracing.md) | Accepted | Agent runs use a curated OpenTelemetry trace rooted at the durable attempt, with automatic framework instrumentation, routine-span filtering, run/session correlation, and canonical OTLP delivery. |
 
 Use [the ADR template](0000-template.md) and assign the next four-digit number.
 Files use `NNNN-short-decision-title.md`.

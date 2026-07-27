@@ -314,7 +314,7 @@ class ContextMessageDebug(BaseModel):
     id: str
     role: str
     token_count: int | None = None
-    estimated_tokens: int
+    estimated_tokens: int | None = None
     created_at: datetime
 
 
@@ -327,7 +327,7 @@ class ContextDebugResponse(BaseModel):
     scope_keys: list[str] = Field(default_factory=list)
     policy: dict[str, Any] = Field(default_factory=dict)
     message_count: int
-    estimated_tokens: int
+    estimated_tokens: int | None = None
     messages: list[ContextMessageDebug] = Field(default_factory=list)
 
 
@@ -423,7 +423,11 @@ class UsageEvent(BaseModel):
 
     event: Literal["usage"] = "usage"
     data: dict = Field(
-        ..., description="Usage with 'input_tokens', 'output_tokens', 'estimated_cost'"
+        ...,
+        description=(
+            "Provider-authoritative usage with nullable token fields and "
+            "complete/partial/unavailable status"
+        ),
     )
 
 
@@ -648,8 +652,8 @@ class ConfigUpdateRequest(BaseModel):
         description=(
             "Observability settings (otel_enabled, otel_max_export_bytes, "
             "otlp_queue_size, otlp_export_timeout_ms, trace_sample_ratio, "
-            "metrics_enabled, metrics_port, otel_endpoint, log_format, "
-            "native_agent_tracing)"
+            "trace_detail, otlp_metric_export_interval_ms, metrics_enabled, "
+            "metrics_port, otel_endpoint, log_format)"
         ),
     )
 

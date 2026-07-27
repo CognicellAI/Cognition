@@ -1070,3 +1070,4 @@ class TestConfigMaxTokens:
 
         kwargs = init_model.call_args.kwargs
         assert "max_tokens" not in kwargs
+        assert kwargs["stream_usage"] is True

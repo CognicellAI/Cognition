@@ -130,7 +130,7 @@ Defined in `server/app/models.py:Message`:
 | `content` | `str` | Message text |
 | `tool_calls` | `list[ToolCall]` | Tool invocations made by this assistant turn |
 | `tool_call_id` | `str \| None` | For `tool` role messages, the call this responds to |
-| `token_count` | `int \| None` | Token count for the message |
+| `token_count` | `int \| None` | Legacy nullable per-message token field; final assistant messages no longer receive run-level token totals |
 | `model_used` | `str \| None` | Model that produced this message |
 | `parent_id` | `str \| None` | Parent message for threaded structure |
 | `created_at` | `datetime` | Creation timestamp |
@@ -189,7 +189,7 @@ All event types are defined in `server/app/agent/runtime.py` and serialized to S
 | Step complete | `step_complete` | `step_number: int`, `total_steps: int`, `description: str` | A plan step finished |
 | Delegation | `delegation` | `target_agent: str`, `task: str` | Primary agent delegating to a subagent |
 | Status | `status` | `status: "thinking" \| "idle"` | Agent status change |
-| Usage | `usage` | `input_tokens: int`, `output_tokens: int`, `estimated_cost: float`, `provider: str`, `model: str` | Token accounting |
+| Usage | `usage` | `status`, `source`, nullable token fields, `model_calls`, `provider`, `model` | Provider-reported usage accounting |
 | Error | `error` | `message: str`, `code: str` | Recoverable error |
 | Done | `done` | `assistant_data: dict` | Stream complete; contains the full assistant message |
 

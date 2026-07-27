@@ -289,13 +289,9 @@ class SSEStream:
                 break
 
             try:
-                heartbeat_task = asyncio.ensure_future(
-                    asyncio.sleep(self.heartbeat_interval)
-                )
+                heartbeat_task = asyncio.ensure_future(asyncio.sleep(self.heartbeat_interval))
                 if next_event_task is None:
-                    next_event_task = asyncio.ensure_future(
-                        event_stream.__anext__()
-                    )
+                    next_event_task = asyncio.ensure_future(event_stream.__anext__())
                 done, pending = await asyncio.wait(
                     {heartbeat_task, next_event_task},
                     return_when=asyncio.FIRST_COMPLETED,
@@ -527,21 +523,42 @@ class EventBuilder:
 
     @staticmethod
     def usage(
-        input_tokens: int,
-        output_tokens: int,
-        estimated_cost: float,
+        input_tokens: int | None = None,
+        output_tokens: int | None = None,
+        total_tokens: int | None = None,
+        estimated_cost: float | None = None,
         provider: str | None = None,
         model: str | None = None,
+        source: str = "provider_usage_metadata",
+        status: str = "unavailable",
+        cache_read_tokens: int | None = None,
+        cache_write_tokens: int | None = None,
+        reasoning_tokens: int | None = None,
+        model_calls: int = 0,
+        reported_model_calls: int = 0,
+        unreported_model_calls: int = 0,
+        by_model: list[dict[str, Any]] | None = None,
     ) -> dict:
         """Create a usage event."""
         return {
             "event": "usage",
             "data": {
+                "type": "usage",
+                "source": source,
+                "status": status,
                 "input_tokens": input_tokens,
                 "output_tokens": output_tokens,
+                "total_tokens": total_tokens,
+                "cache_read_tokens": cache_read_tokens,
+                "cache_write_tokens": cache_write_tokens,
+                "reasoning_tokens": reasoning_tokens,
+                "model_calls": model_calls,
+                "reported_model_calls": reported_model_calls,
+                "unreported_model_calls": unreported_model_calls,
                 "estimated_cost": estimated_cost,
                 "provider": provider,
                 "model": model,
+                "by_model": by_model or [],
             },
         }
 

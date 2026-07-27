@@ -6,12 +6,16 @@ Provides structured logging, OpenTelemetry tracing, and metrics collection.
 from __future__ import annotations
 
 import functools
-import inspect
+import hashlib
+import hmac
+import json
 import logging
+import os
 import re
 import time
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from contextlib import contextmanager
+from contextvars import ContextVar
 from typing import Any, TypeVar
 from uuid import uuid4
 
@@ -36,25 +40,32 @@ except ImportError:
     start_http_server = None  # type: ignore[assignment]
 
 try:
-    from opentelemetry import trace
+    from opentelemetry import context as context_api
+    from opentelemetry import metrics, trace
     from opentelemetry.exporter.otlp.proto.common.trace_encoder import encode_spans
+    from opentelemetry.exporter.otlp.proto.grpc.metric_exporter import (
+        OTLPMetricExporter as GRPCOTLPMetricExporter,
+    )
+    from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import (
+        OTLPSpanExporter as GRPCOTLPSpanExporter,
+    )
+    from opentelemetry.exporter.otlp.proto.http.metric_exporter import (
+        OTLPMetricExporter as HTTPOTLPMetricExporter,
+    )
+    from opentelemetry.exporter.otlp.proto.http.trace_exporter import (
+        OTLPSpanExporter as HTTPOTLPSpanExporter,
+    )
+    from opentelemetry.sdk.metrics import MeterProvider
+    from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader
     from opentelemetry.sdk.resources import Resource
-    from opentelemetry.sdk.trace import ReadableSpan, TracerProvider
+    from opentelemetry.sdk.trace import ReadableSpan, SpanProcessor, TracerProvider
     from opentelemetry.sdk.trace.export import (
         BatchSpanProcessor,
         SpanExporter,
         SpanExportResult,
     )
     from opentelemetry.sdk.trace.sampling import ParentBased, TraceIdRatioBased
-
-    # Try different OTLP exporters
-    try:
-        from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
-    except ImportError:
-        try:
-            from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
-        except ImportError:
-            OTLPSpanExporter = None  # type: ignore[assignment,misc]
+    from opentelemetry.trace import Link, SpanKind
 
     # Instrumentation imports
     try:
@@ -64,25 +75,48 @@ try:
 
     try:
         from opentelemetry.instrumentation.langchain import LangchainInstrumentor
+        from opentelemetry.instrumentation.langchain.callback_handler import (
+            TraceloopCallbackHandler,
+        )
+        from opentelemetry.instrumentation.utils import (
+            _SUPPRESS_INSTRUMENTATION_KEY,
+        )
+        from opentelemetry.semconv_ai import Meters
     except ImportError:
         LangchainInstrumentor = None  # type: ignore[assignment,misc]
+        TraceloopCallbackHandler = None  # type: ignore[assignment,misc]
+        _SUPPRESS_INSTRUMENTATION_KEY = None  # type: ignore[assignment]
+        Meters = None  # type: ignore[assignment,misc]
 
     OPENTELEMETRY_AVAILABLE = True
 except ImportError:
     OPENTELEMETRY_AVAILABLE = False
+    context_api = None  # type: ignore[assignment]
+    metrics = None  # type: ignore[assignment]
     trace = None  # type: ignore[assignment]
-    OTLPSpanExporter = None  # type: ignore[assignment,misc]
+    GRPCOTLPSpanExporter = None  # type: ignore[assignment,misc]
+    HTTPOTLPSpanExporter = None  # type: ignore[assignment,misc]
+    GRPCOTLPMetricExporter = None  # type: ignore[assignment,misc]
+    HTTPOTLPMetricExporter = None  # type: ignore[assignment,misc]
+    MeterProvider = None  # type: ignore[assignment,misc]
+    PeriodicExportingMetricReader = None  # type: ignore[assignment,misc]
     Resource = None  # type: ignore[assignment,misc]
     TracerProvider = None  # type: ignore[assignment,misc]
     BatchSpanProcessor = None  # type: ignore[assignment,misc]
     SpanExporter = object  # type: ignore[assignment,misc]
     SpanExportResult = None  # type: ignore[assignment,misc]
     ReadableSpan = Any  # type: ignore[misc,assignment]
+    SpanProcessor = object  # type: ignore[assignment,misc]
     encode_spans = None  # type: ignore[assignment]
     ParentBased = None  # type: ignore[assignment,misc]
     TraceIdRatioBased = None  # type: ignore[assignment,misc]
+    Link = None  # type: ignore[assignment,misc]
+    SpanKind = None  # type: ignore[assignment,misc]
     FastAPIInstrumentor = None  # type: ignore[assignment,misc]
     LangchainInstrumentor = None  # type: ignore[assignment,misc]
+    TraceloopCallbackHandler = None  # type: ignore[assignment,misc]
+    _SUPPRESS_INSTRUMENTATION_KEY = None  # type: ignore[assignment]
+    Meters = None  # type: ignore[assignment,misc]
 
 # Type variable for generic function decorator
 F = TypeVar("F", bound=Callable[..., Any])
@@ -99,8 +133,42 @@ _SENSITIVE_KEY_PARTS = (
     "token",
 )
 _RAW_SCOPE_KEYS = {"scope", "scopes", "effective_scope", "scope_key"}
-_SAFE_SCOPE_KEYS = {"scope_keys", "cognition.scope_keys"}
+_SAFE_SCOPE_KEYS = {"scope_keys", "cognition.scope.keys"}
+_OBSERVABILITY_SCOPE_HMAC_KEY: str | None = None
 _REDACTED = "[REDACTED]"
+_TRACE_PROBE_EXCLUDED_URLS = "/health,/ready,/metrics"
+_METRICS_ONLY_LANGCHAIN_SCOPE = "opentelemetry.instrumentation.langchain"
+_LANGCHAIN_METRICS_CALLBACK: Any | None = None
+_LANGCHAIN_METRICS_WRAPPER_INSTALLED = False
+_ACTIVE_AGENT_RUN_SPAN: ContextVar[Any | None] = ContextVar(
+    "cognition_active_agent_run_span",
+    default=None,
+)
+
+
+class _OTelAsyncContextDetachNoiseFilter(logging.Filter):
+    """Hide known upstream async-generator context detach warnings in standard mode."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if record.name != "opentelemetry.context":
+            return True
+        if record.getMessage() != "Failed to detach context":
+            return True
+        exc = record.exc_info[1] if record.exc_info else None
+        return not (isinstance(exc, ValueError) and "different Context" in str(exc))
+
+
+def _install_otel_context_noise_filter(trace_detail: str) -> None:
+    """Suppress upstream OpenTelemetry async-context detach noise in standard mode."""
+    if trace_detail == "debug":
+        return
+    otel_context_logger = logging.getLogger("opentelemetry.context")
+    if not any(
+        isinstance(existing_filter, _OTelAsyncContextDetachNoiseFilter)
+        for existing_filter in otel_context_logger.filters
+    ):
+        otel_context_logger.addFilter(_OTelAsyncContextDetachNoiseFilter())
+
 
 # Metrics (with fallback if prometheus not available)
 if PROMETHEUS_AVAILABLE:
@@ -465,6 +533,112 @@ def _encoded_span_batch_size(spans: Sequence[ReadableSpan]) -> int:
     return len(request.SerializeToString()) + 5
 
 
+def _is_error_span(span: ReadableSpan) -> bool:
+    status = getattr(span, "status", None)
+    status_code = getattr(status, "status_code", None)
+    return getattr(status_code, "name", "") == "ERROR"
+
+
+def _should_drop_span(span: ReadableSpan, trace_detail: str) -> bool:
+    """Return whether a span is routine framework noise in standard mode."""
+    instrumentation_scope = getattr(span, "instrumentation_scope", None)
+    instrumentation_name = getattr(instrumentation_scope, "name", None)
+    if instrumentation_name == _METRICS_ONLY_LANGCHAIN_SCOPE:
+        return True
+    # Native LangSmith spans form the semantic LangGraph tree. Dropping an
+    # intermediate hook by name would leave its exported children orphaned.
+    if instrumentation_name == "langsmith":
+        return False
+    if trace_detail == "debug" or _is_error_span(span):
+        return False
+    name = span.name.lower()
+    if "middleware" in name:
+        return True
+    return name.startswith("execute_task ") and (".before_" in name or ".after_" in name)
+
+
+def _scope_fingerprint(scope: Mapping[str, str] | None) -> str | None:
+    """Return an operator-keyed pseudonymous scope fingerprint."""
+    if not _OBSERVABILITY_SCOPE_HMAC_KEY or not scope:
+        return None
+    canonical_scope = {
+        str(key): str(value)
+        for key, value in scope.items()
+        if key is not None and value is not None
+    }
+    if not canonical_scope:
+        return None
+    payload = json.dumps(canonical_scope, sort_keys=True, separators=(",", ":"))
+    return hmac.new(
+        _OBSERVABILITY_SCOPE_HMAC_KEY.encode("utf-8"),
+        payload.encode("utf-8"),
+        hashlib.sha256,
+    ).hexdigest()
+
+
+class CuratingSpanExporter(SpanExporter):  # type: ignore[misc]
+    """Drop routine spans before OTLP export."""
+
+    def __init__(
+        self,
+        exporter: Any,
+        *,
+        trace_detail: str,
+    ) -> None:
+        self._exporter = exporter
+        self._trace_detail = trace_detail
+
+    def export(self, spans: Sequence[ReadableSpan]) -> Any:
+        curated_spans = [
+            span for span in spans if not _should_drop_span(span, self._trace_detail)
+        ]
+        if not curated_spans:
+            return SpanExportResult.SUCCESS if SpanExportResult is not None else None
+        return self._exporter.export(tuple(curated_spans))
+
+    def shutdown(self) -> None:
+        self._exporter.shutdown()
+
+    def force_flush(self, timeout_millis: int = 30_000) -> bool:
+        force_flush = getattr(self._exporter, "force_flush", None)
+        if force_flush is None:
+            return True
+        return bool(force_flush(timeout_millis=timeout_millis))
+
+
+class CuratingSpanProcessor(SpanProcessor):  # type: ignore[misc]
+    """Curate spans before they enter the delegated batch queue."""
+
+    def __init__(
+        self,
+        processor: Any,
+        *,
+        trace_detail: str,
+    ) -> None:
+        self._processor = processor
+        self._trace_detail = trace_detail
+
+    def on_start(self, span: Any, parent_context: Any | None = None) -> None:
+        """Delegate start notifications without mutation."""
+        on_start = getattr(self._processor, "on_start", None)
+        if on_start is not None:
+            on_start(span, parent_context=parent_context)
+
+    def on_end(self, span: ReadableSpan) -> None:
+        """Drop routine spans before queueing."""
+        if _should_drop_span(span, self._trace_detail):
+            return
+        self._processor.on_end(span)
+
+    def shutdown(self) -> None:
+        """Shut down the delegated processor."""
+        self._processor.shutdown()
+
+    def force_flush(self, timeout_millis: int = 30_000) -> bool:
+        """Flush the delegated processor."""
+        return bool(self._processor.force_flush(timeout_millis=timeout_millis))
+
+
 class ByteBoundedSpanExporter(SpanExporter):  # type: ignore[misc]
     """Split exporter batches by their actual encoded protobuf request size."""
 
@@ -553,6 +727,170 @@ class ByteBoundedSpanExporter(SpanExporter):  # type: ignore[misc]
         return bool(force_flush(timeout_millis=timeout_millis))
 
 
+def _is_http_otlp_endpoint(endpoint: str) -> bool:
+    return (
+        ":4318" in endpoint or endpoint.endswith("/v1/traces") or endpoint.endswith("/v1/metrics")
+    )
+
+
+def _trace_endpoint(endpoint: str) -> str:
+    if endpoint.endswith("/v1/traces"):
+        return endpoint
+    if endpoint.endswith("/v1/metrics"):
+        return endpoint.removesuffix("/v1/metrics") + "/v1/traces"
+    if ":4318" in endpoint:
+        return endpoint.rstrip("/") + "/v1/traces"
+    return endpoint
+
+
+def _metric_endpoint(endpoint: str) -> str:
+    if endpoint.endswith("/v1/metrics"):
+        return endpoint
+    if endpoint.endswith("/v1/traces"):
+        return endpoint.removesuffix("/v1/traces") + "/v1/metrics"
+    if ":4318" in endpoint:
+        return endpoint.rstrip("/") + "/v1/metrics"
+    return endpoint
+
+
+def _create_trace_exporter(endpoint: str) -> Any:
+    if _is_http_otlp_endpoint(endpoint):
+        if HTTPOTLPSpanExporter is None:
+            return None
+        return HTTPOTLPSpanExporter(endpoint=_trace_endpoint(endpoint))
+    if GRPCOTLPSpanExporter is None:
+        return None
+    return GRPCOTLPSpanExporter(endpoint=endpoint)
+
+
+def _create_metric_exporter(endpoint: str) -> Any:
+    if _is_http_otlp_endpoint(endpoint):
+        if HTTPOTLPMetricExporter is None:
+            return None
+        return HTTPOTLPMetricExporter(endpoint=_metric_endpoint(endpoint))
+    if GRPCOTLPMetricExporter is None:
+        return None
+    return GRPCOTLPMetricExporter(endpoint=endpoint)
+
+
+def _enable_langsmith_otel_bridge() -> None:
+    """Route native LangChain callback spans through the global OTel provider."""
+    os.environ["LANGSMITH_TRACING"] = "true"
+    os.environ["LANGSMITH_OTEL_ENABLED"] = "true"
+    os.environ["LANGSMITH_OTEL_ONLY"] = "true"
+
+
+def _instrument_langchain_metrics(
+    tracer_provider: Any,
+    meter_provider: Any,
+) -> None:
+    """Prepare the upstream LangChain callback for standard GenAI metrics."""
+    global _LANGCHAIN_METRICS_CALLBACK, _LANGCHAIN_METRICS_WRAPPER_INSTALLED
+    if (
+        LangchainInstrumentor is None
+        or TraceloopCallbackHandler is None
+        or Meters is None
+        or meter_provider is None
+        or context_api is None
+        or _SUPPRESS_INSTRUMENTATION_KEY is None
+    ):
+        _LANGCHAIN_METRICS_CALLBACK = None
+        return
+    # Initialize the upstream content/attribute configuration without installing
+    # its global callback-manager and semantic-span wrappers.
+    LangchainInstrumentor(use_attributes=True)
+    tracer = tracer_provider.get_tracer(_METRICS_ONLY_LANGCHAIN_SCOPE)
+    meter = meter_provider.get_meter(_METRICS_ONLY_LANGCHAIN_SCOPE)
+    duration_histogram = meter.create_histogram(
+        name=Meters.LLM_OPERATION_DURATION,
+        unit="s",
+        description="GenAI operation duration",
+    )
+    token_histogram = meter.create_histogram(
+        name=Meters.LLM_TOKEN_USAGE,
+        unit="token",
+        description="Measures number of input and output tokens used",
+    )
+    def _observe_unsuppressed(method_name: str, instance: Any, *args: Any, **kwargs: Any) -> Any:
+        token = context_api.attach(
+            context_api.set_value(_SUPPRESS_INSTRUMENTATION_KEY, False)
+        )
+        try:
+            method = getattr(TraceloopCallbackHandler, method_name)
+            return method(instance, *args, **kwargs)
+        finally:
+            context_api.detach(token)
+
+    def _on_chat_model_start(instance: Any, *args: Any, **kwargs: Any) -> Any:
+        return _observe_unsuppressed(
+            "on_chat_model_start",
+            instance,
+            *args,
+            **kwargs,
+        )
+
+    def _on_llm_start(instance: Any, *args: Any, **kwargs: Any) -> Any:
+        return _observe_unsuppressed("on_llm_start", instance, *args, **kwargs)
+
+    def _on_llm_end(instance: Any, *args: Any, **kwargs: Any) -> Any:
+        return _observe_unsuppressed("on_llm_end", instance, *args, **kwargs)
+
+    def _on_llm_error(instance: Any, *args: Any, **kwargs: Any) -> Any:
+        return _observe_unsuppressed("on_llm_error", instance, *args, **kwargs)
+
+    metrics_only_handler = type(
+        "_CognitionMetricsOnlyLangChainHandler",
+        (TraceloopCallbackHandler,),
+        {
+            "_cognition_metrics_only": True,
+            "_safe_attach_context": lambda _self, _span: None,
+            "get_workflow_name": lambda _self, _parent_run_id: "",
+            "get_entity_path": lambda _self, _parent_run_id: "",
+            "on_chat_model_start": _on_chat_model_start,
+            "on_llm_start": _on_llm_start,
+            "on_llm_end": _on_llm_end,
+            "on_llm_error": _on_llm_error,
+        },
+    )
+    _LANGCHAIN_METRICS_CALLBACK = metrics_only_handler(
+        tracer,
+        duration_histogram,
+        token_histogram,
+    )
+    if not _LANGCHAIN_METRICS_WRAPPER_INSTALLED:
+        from wrapt import wrap_function_wrapper
+
+        def _add_metrics_handler(
+            wrapped: Callable[..., Any],
+            instance: Any,
+            args: tuple[Any, ...],
+            kwargs: dict[str, Any],
+        ) -> None:
+            wrapped(*args, **kwargs)
+            callback = _LANGCHAIN_METRICS_CALLBACK
+            if callback is None or any(
+                getattr(handler, "_cognition_metrics_only", False)
+                for handler in instance.inheritable_handlers
+            ):
+                return
+            callback._callback_manager = instance
+            instance.add_handler(callback, True)
+
+        wrap_function_wrapper(
+            "langchain_core.callbacks",
+            "BaseCallbackManager.__init__",
+            _add_metrics_handler,
+        )
+        _LANGCHAIN_METRICS_WRAPPER_INSTALLED = True
+
+
+def langchain_metrics_callbacks() -> list[Any]:
+    """Return the upstream metrics callback for an Agent invocation."""
+    if _LANGCHAIN_METRICS_CALLBACK is None:
+        return []
+    return [_LANGCHAIN_METRICS_CALLBACK]
+
+
 def setup_tracing(
     service_name: str = "cognition",
     endpoint: str | None = None,
@@ -562,6 +900,9 @@ def setup_tracing(
     queue_size: int = 2048,
     export_timeout_millis: int = 30_000,
     trace_sample_ratio: float = 1.0,
+    metric_export_interval_millis: int = 60_000,
+    trace_detail: str = "standard",
+    observability_scope_hmac_key: str | None = None,
 ) -> None:
     """Initialize OpenTelemetry tracing.
 
@@ -572,6 +913,8 @@ def setup_tracing(
         enabled: Whether to enable tracing (defaults to True)
     """
     logger = structlog.get_logger()
+    global _OBSERVABILITY_SCOPE_HMAC_KEY
+    _OBSERVABILITY_SCOPE_HMAC_KEY = observability_scope_hmac_key or None
 
     if not enabled:
         logger.debug("OpenTelemetry tracing disabled by settings")
@@ -581,7 +924,29 @@ def setup_tracing(
         logger.debug("OpenTelemetry not available, skipping tracing setup")
         return
 
+    trace_detail = trace_detail.lower()
+    _install_otel_context_noise_filter(trace_detail)
+
     resource = Resource.create({"service.name": service_name})
+    meter_provider = None
+    if MeterProvider is not None:
+        metric_readers = []
+        if endpoint:
+            metric_exporter = _create_metric_exporter(endpoint)
+            if metric_exporter is not None and PeriodicExportingMetricReader is not None:
+                metric_readers.append(
+                    PeriodicExportingMetricReader(
+                        metric_exporter,
+                        export_interval_millis=metric_export_interval_millis,
+                    )
+                )
+        meter_provider = MeterProvider(resource=resource, metric_readers=metric_readers)
+        if metrics is not None:
+            try:
+                metrics.set_meter_provider(meter_provider)
+            except Exception:
+                logger.debug("OpenTelemetry meter provider already configured")
+
     clamped_sample_ratio = max(0.0, min(1.0, trace_sample_ratio))
     sampler = (
         ParentBased(TraceIdRatioBased(clamped_sample_ratio))
@@ -593,52 +958,52 @@ def setup_tracing(
         **({"sampler": sampler} if sampler is not None else {}),
     )
 
-    if endpoint and OTLPSpanExporter and BatchSpanProcessor:
-        # Check if using HTTP or gRPC based on endpoint schema
-        if "http" in endpoint and not endpoint.endswith("/v1/traces"):
-            # Append path for HTTP exporter if missing
-            if ":4318" in endpoint:
-                endpoint = f"{endpoint}/v1/traces"
-
-        exporter = ByteBoundedSpanExporter(
-            OTLPSpanExporter(endpoint=endpoint),
-            max_export_bytes=max_export_bytes,
-        )
-        processor = BatchSpanProcessor(
-            exporter,
-            max_queue_size=queue_size,
-            max_export_batch_size=min(512, queue_size),
-            export_timeout_millis=export_timeout_millis,
-        )
-        provider.add_span_processor(processor)
+    if endpoint and BatchSpanProcessor:
+        raw_exporter = _create_trace_exporter(endpoint)
+        if raw_exporter is None:
+            logger.warning("OTLP trace exporter unavailable; traces will not be exported")
+        else:
+            bounded_exporter = ByteBoundedSpanExporter(
+                raw_exporter,
+                max_export_bytes=max_export_bytes,
+            )
+            batch_processor = BatchSpanProcessor(
+                bounded_exporter,
+                max_queue_size=queue_size,
+                max_export_batch_size=min(512, queue_size),
+                export_timeout_millis=export_timeout_millis,
+            )
+            processor = CuratingSpanProcessor(
+                batch_processor,
+                trace_detail=trace_detail,
+            )
+            provider.add_span_processor(processor)
 
     if trace:
         trace.set_tracer_provider(provider)
 
+    # LangChain's built-in LangSmith bridge converts its native callback tree
+    # to OpenTelemetry spans on Cognition's existing global provider. OTEL_ONLY
+    # prevents a second direct LangSmith export path; the spans still leave
+    # Cognition only through the canonical, curated OTLP exporter above.
+    _enable_langsmith_otel_bridge()
+
     # Instrument FastAPI
     if app and FastAPIInstrumentor:
-        FastAPIInstrumentor.instrument_app(app, tracer_provider=provider)
+        FastAPIInstrumentor.instrument_app(
+            app,
+            tracer_provider=provider,
+            meter_provider=meter_provider,
+            excluded_urls=_TRACE_PROBE_EXCLUDED_URLS,
+            exclude_spans=["receive", "send"],
+        )
 
-    # Instrument LangChain
-    if LangchainInstrumentor:
-        instrument_signature = inspect.signature(LangchainInstrumentor().instrument)
-        supports_module_kwarg = False
-
-        wrapped = getattr(LangchainInstrumentor, "_instrument", None)
-        if wrapped is not None:
-            try:
-                supports_module_kwarg = "module" in inspect.getsource(wrapped)
-            except (OSError, TypeError):
-                supports_module_kwarg = False
-
-        if supports_module_kwarg:
-            logger.warning(
-                "Skipping LangChain OpenTelemetry instrumentation due to incompatible wrapt API"
-            )
-        elif "tracer_provider" in instrument_signature.parameters:
-            LangchainInstrumentor().instrument(tracer_provider=provider)
-        else:
-            LangchainInstrumentor().instrument()
+    # Retain OpenLLMetry's LangChain integration only for its standard GenAI
+    # token and duration instruments. LangSmith's OTel-only bridge owns the
+    # semantic spans, so disable the adapter's direct wrappers and synchronously
+    # discard its callback spans in _should_drop_span before they reach the
+    # batch queue.
+    _instrument_langchain_metrics(provider, meter_provider)
 
 
 def setup_logging(log_level: str = "info", json_format: bool = False) -> None:
@@ -720,15 +1085,135 @@ def get_tracer(name: str) -> Any:
     return trace.get_tracer(name)
 
 
-def current_trace_context() -> tuple[str | None, str | None]:
-    """Return current OpenTelemetry trace/span ids as hex strings if available."""
+def current_trace_context(span_obj: Any | None = None) -> tuple[str | None, str | None]:
+    """Return OpenTelemetry trace/span ids for a span or the active context."""
     if not OPENTELEMETRY_AVAILABLE or trace is None:
         return None, None
-    span_obj = trace.get_current_span()
+    span_obj = span_obj or trace.get_current_span()
     context = span_obj.get_span_context()
     if not context.is_valid:
         return None, None
     return f"{context.trace_id:032x}", f"{context.span_id:016x}"
+
+
+def add_span_event(name: str, attributes: dict[str, Any] | None = None) -> None:
+    """Add an event to the active span if tracing is available."""
+    if not OPENTELEMETRY_AVAILABLE or trace is None:
+        return
+    span_obj = trace.get_current_span()
+    context = span_obj.get_span_context()
+    if not context.is_valid:
+        return
+    span_obj.add_event(name, attributes or {})
+
+
+def set_span_attributes(attributes: Mapping[str, Any]) -> None:
+    """Set non-null attributes on the active span if tracing is available."""
+    if not OPENTELEMETRY_AVAILABLE or trace is None:
+        return
+    span_obj = trace.get_current_span()
+    context = span_obj.get_span_context()
+    if not context.is_valid:
+        return
+    for key, value in attributes.items():
+        if value is not None:
+            span_obj.set_attribute(str(key), value)
+
+
+@contextmanager
+def agent_run_trace_context(span_obj: Any | None = None) -> Any:
+    """Re-activate the application run span at a framework invocation boundary.
+
+    Some async framework setup paths attach and detach their own OpenTelemetry
+    context before LangGraph starts. Cognition keeps the run span in an
+    independent ContextVar so the framework entry point can explicitly restore
+    the intended parent without rewriting any emitted span.
+    """
+    if trace is None or context_api is None:
+        yield
+        return
+    span_obj = span_obj or _ACTIVE_AGENT_RUN_SPAN.get()
+    if span_obj is None or not span_obj.get_span_context().is_valid:
+        yield
+        return
+    token = context_api.attach(trace.set_span_in_context(span_obj))
+    try:
+        yield
+    finally:
+        context_api.detach(token)
+
+
+@contextmanager
+def agent_run_span(
+    *,
+    session_id: str,
+    run_id: str,
+    thread_id: str,
+    scope_keys: Sequence[str] | None = None,
+    agent_name: str | None = None,
+    agent_revision: int | None = None,
+    manifest_digest: str | None = None,
+    parent_run_id: str | None = None,
+    effective_scope: Mapping[str, str] | None = None,
+    transport: str | None = None,
+    sandbox_backend: str | None = None,
+) -> Any:
+    """Create the application span that owns one durable Agent run trace.
+
+    The run is intentionally detached from the transport trace because durable
+    execution may outlive its REST or A2A ingress. When ingress tracing is
+    active, a span link preserves that causal relationship. The run span is
+    made current for the full streaming lifecycle so LangGraph, model, tool,
+    and subagent auto-instrumentation inherit the same trace ID.
+    """
+    attributes = {
+        "gen_ai.operation.name": "invoke_agent",
+        "gen_ai.conversation.id": thread_id,
+        "session.id": session_id,
+        "cognition.run.id": run_id,
+        "cognition.thread.id": thread_id,
+        "cognition.scope.keys": ",".join(scope_keys or []),
+        "gen_ai.agent.name": agent_name or "",
+        "cognition.agent.revision": agent_revision or 0,
+        "cognition.manifest.digest": manifest_digest or "",
+        "cognition.run.parent_id": parent_run_id or "",
+    }
+    if transport:
+        attributes["cognition.transport"] = transport
+    if sandbox_backend:
+        attributes["cognition.sandbox.backend"] = sandbox_backend
+    fingerprint = _scope_fingerprint(effective_scope)
+    if fingerprint:
+        attributes["cognition.scope.fingerprint"] = fingerprint
+
+    tracer = get_tracer(__name__)
+    if (
+        tracer is None
+        or trace is None
+        or context_api is None
+        or Link is None
+        or SpanKind is None
+    ):
+        yield None
+        return
+
+    ingress_context = trace.get_current_span().get_span_context()
+    links = [Link(ingress_context)] if ingress_context.is_valid else None
+    with tracer.start_as_current_span(
+        "cognition.agent.run",
+        context=context_api.Context(),
+        kind=SpanKind.INTERNAL,
+        attributes=attributes,
+        links=links,
+    ) as span_obj:
+        previous_span = _ACTIVE_AGENT_RUN_SPAN.get()
+        _ACTIVE_AGENT_RUN_SPAN.set(span_obj)
+        try:
+            yield span_obj
+        finally:
+            # Async generators may be finalized from a copied Context. Restoring
+            # the value is safe there; resetting the original token is not.
+            _ACTIVE_AGENT_RUN_SPAN.set(previous_span)
 
 
 def traced(name: str | None = None) -> Callable[[F], F]:

@@ -64,7 +64,7 @@ class A2ARetentionManager:
             try:
                 with span(
                     "cognition.a2a.cleanup",
-                    {"cognition.scope_keys": ",".join(sorted(scope))},
+                    {"cognition.scope.keys": ",".join(sorted(scope))},
                 ):
                     deleted = await self._cleanup(agent_name, scope)
             except Exception:

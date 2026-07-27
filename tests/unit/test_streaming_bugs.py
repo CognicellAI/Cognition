@@ -32,6 +32,7 @@ from server.app.agent.runtime import (
     ArtifactEvent,
     DoneEvent,
     ErrorEvent,
+    ModelUsageEvent,
     TokenEvent,
     UsageEvent,
 )
@@ -306,12 +307,49 @@ class TestContentNotDoubled:
         )
 
     @pytest.mark.asyncio
-    async def test_usage_event_output_tokens_not_doubled(self):
-        """output_tokens uses the shared Deep Agents-aligned counter once."""
-        from server.app.agent.token_counter import count_text_tokens
+    async def test_usage_event_uses_provider_metadata_not_output_text(self):
+        """output_tokens comes from provider metadata, not streamed text length."""
         from server.app.llm.deep_agent_service import DeepAgentStreamingService
 
-        # Two chunks should be counted as their assembled output once.
+        session = _make_session()
+        mock_runtime = _make_mock_runtime(
+            TokenEvent(content="Hello"),
+            TokenEvent(content="World"),
+            ModelUsageEvent(
+                call_id="call-1",
+                provider="mock",
+                model="mock-model",
+                usage_metadata={
+                    "input_tokens": 12,
+                    "output_tokens": 3,
+                    "total_tokens": 15,
+                },
+            ),
+            DoneEvent(),
+        )
+        service = DeepAgentStreamingService(_make_settings())
+        service.storage_backend = MagicMock()
+        service.storage_backend.get_session = AsyncMock(return_value=session)
+        service.storage_backend.get_checkpointer = AsyncMock(return_value=MagicMock())
+        service.storage_backend.get_store = AsyncMock(return_value=MagicMock())
+
+        p1, p2, p3, p4 = _stream_patches(mock_runtime, session)
+        with p1, p2, p3, p4:
+            collected = await _collect(service, session)
+
+        usage_events = [e for e in collected if isinstance(e, UsageEvent)]
+        assert len(usage_events) == 1
+        assert usage_events[0].status == "complete"
+        assert usage_events[0].input_tokens == 12
+        assert usage_events[0].output_tokens == 3
+        assert usage_events[0].total_tokens == 15
+        assert usage_events[0].estimated_cost is None
+
+    @pytest.mark.asyncio
+    async def test_usage_event_unavailable_without_provider_metadata(self):
+        """Missing provider metadata remains unavailable instead of estimated."""
+        from server.app.llm.deep_agent_service import DeepAgentStreamingService
+
         session = _make_session()
         mock_runtime = _make_mock_runtime(
             TokenEvent(content="Hello"),
@@ -330,11 +368,11 @@ class TestContentNotDoubled:
 
         usage_events = [e for e in collected if isinstance(e, UsageEvent)]
         assert len(usage_events) == 1
-        expected = count_text_tokens("HelloWorld")
-        assert usage_events[0].output_tokens == expected, (
-            f"output_tokens should match shared counter ({expected}), "
-            f"got {usage_events[0].output_tokens}"
-        )
+        assert usage_events[0].status == "unavailable"
+        assert usage_events[0].input_tokens is None
+        assert usage_events[0].output_tokens is None
+        assert usage_events[0].estimated_cost is None
+        assert usage_events[0].unreported_model_calls == 1
 
 
 # ---------------------------------------------------------------------------

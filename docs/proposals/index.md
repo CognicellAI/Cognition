@@ -2,17 +2,18 @@
 
 **Status:** Design workspace  
 **Audience:** Maintainers, deployment operators, and builders  
-**Last updated:** 2026-07-23
+**Last updated:** 2026-07-26
 
-Proposals describe shaped architectural directions that are not yet part of
-Cognition's implemented contract. They are release-independent until accepted
-through the roadmap and architecture decision process.
+Proposals describe shaped architectural directions as they move from design to
+implementation. They are release-independent until accepted through the roadmap
+and architecture decision process.
 
 ## Active proposals
 
 | Proposal | Status | Purpose |
 | --- | --- | --- |
 | [Sandboxed skill package registry](sandboxed-skill-registry.md) | Draft | Store scope-bound skill packages in a configurable backend and materialize immutable revisions into isolated sandboxes |
+| [Curated OpenTelemetry Agent tracing](curated-opentelemetry-tracing.md) | Implemented on v0.13 branch | Replace noisy, duplicative traces and estimated usage with a bounded Agent-run trace and provider-authoritative Usage Events |
 
 ## Status meanings
 
@@ -24,8 +25,8 @@ through the roadmap and architecture decision process.
 | Implemented | Delivered and reflected in the code-derived architecture |
 | Superseded | Replaced by another proposal or architecture decision |
 
-A proposal must not be presented as current architecture. Once implementation
-starts, follow the [architecture change workflow](../architecture/09-governance-and-evolution.md)
+A draft proposal must not be presented as current architecture. Once
+implementation starts, follow the [architecture change workflow](../architecture/09-governance-and-evolution.md)
 and create an Architecture Decision Record (ADR) when the change affects a
 public protocol, persistence authority, execution boundary, or extension model.
 
