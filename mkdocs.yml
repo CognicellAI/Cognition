@@ -78,9 +78,11 @@ nav:
           - Index: architecture/decisions/index.md
           - ADR Template: architecture/decisions/0000-template.md
           - ADR-0001 Exact-Scope Agent Runtime Boundary: architecture/decisions/0001-v013-exact-scope-agent-runtime-boundary.md
+          - ADR-0002 Curated OpenTelemetry Agent Tracing: architecture/decisions/0002-curated-opentelemetry-agent-tracing.md
   - Proposals:
       - Overview: proposals/index.md
       - Sandboxed Skill Package Registry: proposals/sandboxed-skill-registry.md
+      - Curated OpenTelemetry Agent Tracing: proposals/curated-opentelemetry-tracing.md
   - Concepts:
       - Sessions & Messages: concepts/sessions-and-messages.md
       - Agent Runtime: concepts/agent-runtime.md

@@ -9,7 +9,7 @@ from typing import Any, cast
 
 import pytest
 from fastapi import Request, Response
-from starlette.types import Receive, Scope, Send
+from starlette.types import Message, Receive, Scope, Send
 from structlog.contextvars import get_contextvars
 
 from server.app.agent.middleware import CognitionObservabilityMiddleware
@@ -228,6 +228,67 @@ async def test_http_middleware_binds_redacted_context_and_clears_it(
     assert "acme" not in str(bound)
     assert "secret-project" not in str(bound)
     assert cleared is True
+
+
+@pytest.mark.asyncio
+async def test_http_metrics_record_after_final_stream_body(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    count = _Metric()
+    duration = _Metric()
+    monkeypatch.setattr("server.app.api.middleware.REQUEST_COUNT", count)
+    monkeypatch.setattr("server.app.api.middleware.REQUEST_DURATION", duration)
+
+    sent: list[Message] = []
+
+    async def streaming_app(scope: Scope, receive: Receive, send: Send) -> None:
+        await send(
+            {
+                "type": "http.response.start",
+                "status": 202,
+                "headers": [],
+            }
+        )
+        await send(
+            {
+                "type": "http.response.body",
+                "body": b"first",
+                "more_body": True,
+            }
+        )
+        assert duration.observed == []
+        await send(
+            {
+                "type": "http.response.body",
+                "body": b"last",
+                "more_body": False,
+            }
+        )
+
+    async def receive() -> Message:
+        return {"type": "http.request", "body": b"", "more_body": False}
+
+    async def send(message: Message) -> None:
+        sent.append(message)
+
+    scope: Scope = {
+        "type": "http",
+        "method": "GET",
+        "path": "/sessions/session-123/messages",
+        "headers": [],
+        "route": SimpleNamespace(path="/sessions/{session_id}/messages"),
+    }
+    middleware = ObservabilityMiddleware(app=streaming_app)
+
+    await middleware(scope, receive, send)
+
+    assert len(duration.observed) == 1
+    assert count.labels_seen == [
+        {"method": "GET", "endpoint": "/sessions/{session_id}/messages", "status": "2xx"}
+    ]
+    start = sent[0]
+    assert start["type"] == "http.response.start"
+    assert any(name == b"x-request-id" for name, _value in start["headers"])
 
 
 @pytest.mark.asyncio

@@ -39,6 +39,7 @@ from server.app.agent.runtime import (
     HeartbeatEvent,  # noqa: F401 — re-exported for consumers of this module
     HitlDecisionEvent,
     InterruptEvent,
+    ModelUsageEvent,
     PlanningEvent,
     RejectedEvent,  # noqa: F401 — re-exported for custom runtimes
     RunStateEvent,  # noqa: F401 — re-exported for consumers of this module
@@ -55,14 +56,14 @@ from server.app.agent.runtime import (
 from server.app.agent.runtime import (
     _resolve_middleware as _resolve_single_middleware,
 )
-from server.app.agent.token_counter import count_text_tokens
+from server.app.agent.usage import ProviderUsageAggregator
 from server.app.exceptions import LLMProviderConfigError
 from server.app.observability import (
     CONTEXT_EVENT_COUNT,
     RUNTIME_CACHE_EVICTIONS_TOTAL,
     RUNTIME_CACHE_SIZE,
+    add_span_event,
 )
-from server.app.observability import span as trace_span
 from server.app.settings import Settings
 from server.app.storage.common import canonical_json_digest
 from server.app.storage.config_models import SandboxProfile, SkillDefinition
@@ -121,16 +122,8 @@ def _pinned_skills(
         return None
     snapshots: dict[str, SkillDefinition] = {}
     for name, identity in skills.items():
-        definition = (
-            identity.get("definition")
-            if isinstance(identity, Mapping)
-            else None
-        )
-        expected_digest = (
-            identity.get("digest")
-            if isinstance(identity, Mapping)
-            else None
-        )
+        definition = identity.get("definition") if isinstance(identity, Mapping) else None
+        expected_digest = identity.get("digest") if isinstance(identity, Mapping) else None
         if not isinstance(name, str) or not isinstance(definition, Mapping):
             continue
         skill = SkillDefinition.model_validate(dict(definition))
@@ -147,21 +140,9 @@ def _pinned_sandbox_profile(
     if not isinstance(runtime_manifest, Mapping):
         return None
     dependencies = runtime_manifest.get("dependencies")
-    profile = (
-        dependencies.get("sandbox_profile")
-        if isinstance(dependencies, Mapping)
-        else None
-    )
-    definition = (
-        profile.get("definition")
-        if isinstance(profile, Mapping)
-        else None
-    )
-    expected_digest = (
-        profile.get("digest")
-        if isinstance(profile, Mapping)
-        else None
-    )
+    profile = dependencies.get("sandbox_profile") if isinstance(dependencies, Mapping) else None
+    definition = profile.get("definition") if isinstance(profile, Mapping) else None
+    expected_digest = profile.get("digest") if isinstance(profile, Mapping) else None
     if not isinstance(definition, Mapping):
         return None
     sandbox_profile = SandboxProfile.model_validate(dict(definition))
@@ -190,13 +171,13 @@ def _audit_context_event(event: ContextEvent) -> None:
         artifact_id=event.artifact_id,
     )
     CONTEXT_EVENT_COUNT.labels(action=event.action).inc()
-    with trace_span(
+    add_span_event(
         "cognition.context",
         {
             "cognition.context.action": event.action,
-            "cognition.session_id": event.session_id or "",
-            "cognition.run_id": event.run_id or "",
-            "cognition.scope_keys": ",".join(event.scope_keys),
+            "session.id": event.session_id or "",
+            "cognition.run.id": event.run_id or "",
+            "cognition.scope.keys": ",".join(event.scope_keys),
             "cognition.context.policy_keys": ",".join(sorted(event.policy)),
             "cognition.context.input_tokens": event.input_tokens or 0,
             "cognition.context.output_tokens": event.output_tokens or 0,
@@ -206,8 +187,7 @@ def _audit_context_event(event: ContextEvent) -> None:
             "cognition.context.summarized_messages": event.summarized_messages or 0,
             "cognition.context.offloaded_messages": event.offloaded_messages or 0,
         },
-    ):
-        pass
+    )
 
 
 def _model_cache_key_from_resolved(
@@ -269,16 +249,13 @@ class ResolvedAgentConfig:
 
 @dataclass
 class StreamAccumulator:
-    """Tracks token counts and accumulated content during streaming."""
+    """Tracks accumulated content and tool-call state during streaming."""
 
-    input_tokens: int = 0
-    output_tokens: int = 0
     accumulated_content: str = ""
     _current_tool_call: str | None = field(default=None, repr=False)
 
     def record_token(self, content: str) -> None:
         self.accumulated_content += content
-        self.output_tokens = count_text_tokens(self.accumulated_content)
 
     def set_tool_call(self, tool_call_id: str | None) -> None:
         self._current_tool_call = tool_call_id
@@ -405,30 +382,19 @@ class DeepAgentStreamingService:
 
         effective_scope = _effective_session_scope(session, scope)
         pinned_agent = (
-            runtime_manifest.get("agent")
-            if isinstance(runtime_manifest, Mapping)
-            else None
+            runtime_manifest.get("agent") if isinstance(runtime_manifest, Mapping) else None
         )
         pinned_definition = (
-            pinned_agent.get("definition")
-            if isinstance(pinned_agent, Mapping)
-            else None
+            pinned_agent.get("definition") if isinstance(pinned_agent, Mapping) else None
         )
         agent_def: AgentDefinition | None
         if isinstance(pinned_definition, Mapping):
             agent_def = AgentDefinition.model_validate(dict(pinned_definition))
             expected_digest = (
-                pinned_agent.get("definition_digest")
-                if isinstance(pinned_agent, Mapping)
-                else None
+                pinned_agent.get("definition_digest") if isinstance(pinned_agent, Mapping) else None
             )
-            actual_digest = canonical_json_digest(
-                agent_def.model_dump(mode="json")
-            )
-            if (
-                agent_def.name != session.agent_name
-                or expected_digest != actual_digest
-            ):
+            actual_digest = canonical_json_digest(agent_def.model_dump(mode="json"))
+            if agent_def.name != session.agent_name or expected_digest != actual_digest:
                 raise AgentDefinitionUnavailableError(
                     session.agent_name,
                     "pinned manifest Agent identity is invalid",
@@ -482,8 +448,7 @@ class DeepAgentStreamingService:
                 **(
                     {
                         "permissions": [
-                            permission.model_dump()
-                            for permission in subagent.permissions
+                            permission.model_dump() for permission in subagent.permissions
                         ]
                     }
                     if subagent.permissions
@@ -552,6 +517,7 @@ class DeepAgentStreamingService:
         manager: SessionAgentManager | None = None,
         scope: dict[str, str] | None = None,
         run_id: str | None = None,
+        trace_parent_span: Any | None = None,
     ) -> AsyncGenerator[StreamEvent, None]:
         """Stream LLM response using DeepAgents with multi-step support."""
         runtime: DeepAgentRuntime | None = None
@@ -627,7 +593,6 @@ class DeepAgentStreamingService:
                 run_id=thread_id,
                 scope_keys=sorted((effective_scope or {}).keys()),
                 policy=context_policy,
-                input_tokens=count_text_tokens(content),
                 message_count=getattr(session, "message_count", None),
             )
             _audit_context_event(context_event)
@@ -686,6 +651,7 @@ class DeepAgentStreamingService:
                 thread_id=thread_id,
                 recursion_limit=recursion_limit,
                 context=invocation_context,
+                trace_parent_span=trace_parent_span,
             )
             if manager:
                 manager.register_runtime(session_id, runtime)
@@ -693,7 +659,11 @@ class DeepAgentStreamingService:
             # Build message input (system prompt already embedded in agent graph)
             messages = self._build_messages(content, None)
 
-            acc = StreamAccumulator(input_tokens=count_text_tokens(content))
+            acc = StreamAccumulator()
+            usage_aggregator = ProviderUsageAggregator(
+                default_provider=provider,
+                default_model=model_id,
+            )
             execution_timeout_seconds = (
                 agent_cfg.agent_def.config.timeout_seconds
                 if agent_cfg.agent_def is not None
@@ -714,6 +684,14 @@ class DeepAgentStreamingService:
                         if isinstance(event, TokenEvent):
                             acc.record_token(event.content)
                             yield event
+
+                        elif isinstance(event, ModelUsageEvent):
+                            usage_aggregator.observe_usage_metadata(
+                                event.call_id,
+                                event.usage_metadata,
+                                provider=event.provider,
+                                model=event.model,
+                            )
 
                         elif isinstance(event, ToolCallEvent):
                             acc.set_tool_call(event.tool_call_id)
@@ -785,29 +763,10 @@ class DeepAgentStreamingService:
                     )
                     return
 
-                yield UsageEvent(
-                    input_tokens=acc.input_tokens,
-                    output_tokens=acc.output_tokens,
-                    estimated_cost=self._estimate_cost(acc.input_tokens, acc.output_tokens, provider),
-                    provider=provider,
-                    model=model_id,
-                )
-                usage_context_event = ContextEvent(
-                    action="usage_snapshot",
-                    session_id=session.id if session else session_id,
-                    run_id=thread_id,
-                    scope_keys=sorted((effective_scope or {}).keys()),
-                    policy=context_policy,
-                    input_tokens=acc.input_tokens,
-                    output_tokens=acc.output_tokens,
-                    message_count=getattr(session, "message_count", None),
-                    retained_messages=getattr(session, "message_count", None),
-                    evicted_messages=0,
-                    summarized_messages=0,
-                    offloaded_messages=0,
-                )
-                _audit_context_event(usage_context_event)
-                yield usage_context_event
+                if acc.accumulated_content:
+                    usage_aggregator.mark_unreported_fallback()
+                usage_report = usage_aggregator.build_report()
+                yield UsageEvent(**usage_report.to_payload())
                 yield DoneEvent()
 
             finally:
@@ -847,6 +806,7 @@ class DeepAgentStreamingService:
         tool_name: str,
         args: dict[str, Any] | None = None,
         scope: dict[str, str] | None = None,
+        trace_parent_span: Any | None = None,
     ) -> AsyncGenerator[StreamEvent, None]:
         """Resume an interrupted Deep Agents run from persisted checkpoint state."""
         try:
@@ -911,7 +871,6 @@ class DeepAgentStreamingService:
                 run_id=thread_id,
                 scope_keys=sorted((effective_scope or {}).keys()),
                 policy=context_policy,
-                input_tokens=0,
                 message_count=getattr(session, "message_count", None),
             )
             _audit_context_event(context_event)
@@ -946,9 +905,7 @@ class DeepAgentStreamingService:
                 config_store=self._get_config_store(),
                 sandbox_profile=agent_cfg.sandbox_profile,
                 sandbox_execution_role_arn=agent_cfg.sandbox_execution_role_arn,
-                pinned_sandbox_profile_config=_pinned_sandbox_profile(
-                    active_run.runtime_manifest
-                ),
+                pinned_sandbox_profile_config=_pinned_sandbox_profile(active_run.runtime_manifest),
             )
             agent = await create_cognition_agent(agent_params)
             invocation_context.sandbox_backend = agent.sandbox_backend
@@ -966,17 +923,30 @@ class DeepAgentStreamingService:
                 thread_id=thread_id,
                 recursion_limit=recursion_limit,
                 context=invocation_context,
+                trace_parent_span=trace_parent_span,
             )
 
-            acc = StreamAccumulator(input_tokens=0)
+            acc = StreamAccumulator()
+            usage_aggregator = ProviderUsageAggregator(
+                default_provider=provider,
+                default_model=model_id,
+            )
             async for event in runtime.astream_resume_events(
                 decision=decision,
                 tool_name=tool_name,
                 args=args,
                 thread_id=thread_id,
+                trace_parent_span=trace_parent_span,
             ):
                 if isinstance(event, TokenEvent):
                     acc.record_token(event.content)
+                if isinstance(event, ModelUsageEvent):
+                    usage_aggregator.observe_usage_metadata(
+                        event.call_id,
+                        event.usage_metadata,
+                        provider=event.provider,
+                        model=event.model,
+                    )
                 if isinstance(event, InterruptEvent):
                     continue
                 if isinstance(event, DoneEvent):
@@ -993,20 +963,20 @@ class DeepAgentStreamingService:
                         StatusEvent,
                         ErrorEvent,
                         UsageEvent,
+                        ModelUsageEvent,
                         PlanningEvent,
                         StepCompleteEvent,
                         DelegationEvent,
                     ),
                 ):
+                    if isinstance(event, ModelUsageEvent):
+                        continue
                     yield cast(StreamEvent, event)
 
-            yield UsageEvent(
-                input_tokens=0,
-                output_tokens=acc.output_tokens,
-                estimated_cost=self._estimate_cost(0, acc.output_tokens, provider),
-                provider=provider,
-                model=model_id,
-            )
+            if acc.accumulated_content:
+                usage_aggregator.mark_unreported_fallback()
+            usage_report = usage_aggregator.build_report()
+            yield UsageEvent(**usage_report.to_payload())
             yield DoneEvent()
 
         except LLMProviderConfigError as e:
@@ -1111,26 +1081,6 @@ class DeepAgentStreamingService:
         messages.append(HumanMessage(content=user_content))
         return messages
 
-    def _estimate_cost(
-        self,
-        input_tokens: int,
-        output_tokens: int,
-        provider: str,
-    ) -> float:
-        """Estimate cost based on provider pricing (rough approximation)."""
-        pricing: dict[str, dict[str, float]] = {
-            "openai": {"input": 0.0025, "output": 0.01},
-            "anthropic": {"input": 0.003, "output": 0.015},
-            "bedrock": {"input": 0.003, "output": 0.015},
-            "openai_compatible": {"input": 0.001, "output": 0.002},
-            "google_genai": {"input": 0.0005, "output": 0.0015},
-            "google_vertexai": {"input": 0.0005, "output": 0.0015},
-        }
-        rates = pricing.get(provider, pricing["openai"])
-        input_cost = (input_tokens / 1000) * rates["input"]
-        output_cost = (output_tokens / 1000) * rates["output"]
-        return round(input_cost + output_cost, 6)
-
 
 class SessionAgentManager:
     """Manages DeepAgent services per session.
@@ -1233,17 +1183,11 @@ class SessionAgentManager:
                 if not self._active_runtimes.get(session_id)
             ),
         )
-        expired = [
-            session_id
-            for last_access, session_id in candidates
-            if now - last_access > ttl
-        ]
+        expired = [session_id for last_access, session_id in candidates if now - last_access > ttl]
         for session_id in expired:
             self.unregister_session(session_id)
             self._service_cache_evictions += 1
-            RUNTIME_CACHE_EVICTIONS_TOTAL.labels(
-                cache="session_service", reason="ttl"
-            ).inc()
+            RUNTIME_CACHE_EVICTIONS_TOTAL.labels(cache="session_service", reason="ttl").inc()
 
         while len(self._services) > self.settings.session_service_cache_max_entries:
             idle = sorted(
@@ -1257,9 +1201,7 @@ class SessionAgentManager:
                 break
             self.unregister_session(idle[0][1])
             self._service_cache_evictions += 1
-            RUNTIME_CACHE_EVICTIONS_TOTAL.labels(
-                cache="session_service", reason="capacity"
-            ).inc()
+            RUNTIME_CACHE_EVICTIONS_TOTAL.labels(cache="session_service", reason="capacity").inc()
 
     def get_service_cache_stats(self) -> dict[str, int]:
         """Return safe cache cardinality/eviction metrics."""
@@ -1584,9 +1526,7 @@ class SessionAgentManager:
                 metadata=self._sandbox_runtime_metadata(backend, session_id=session_id),
             ),
         )
-        self._sandbox_emitted_lifecycle_phases.setdefault(session_id, set()).add(
-            "teardown_started"
-        )
+        self._sandbox_emitted_lifecycle_phases.setdefault(session_id, set()).add("teardown_started")
         if hasattr(backend, "terminate"):
             try:
                 backend.terminate()

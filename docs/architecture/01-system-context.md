@@ -107,7 +107,7 @@ than model-supplied arguments.
 | Model-provider adapters | `server/app/agent/resolver.py` — `RuntimeResolver.build_model` |
 | Remote MCP integration | `server/app/agent/mcp_client.py` |
 | Sandbox choices | `server/app/settings.py` — `sandbox_backend`; `server/app/agent/sandbox_backend.py` |
-| Telemetry integrations | `server/app/observability/__init__.py`; `server/app/observability/mlflow_config.py` |
+| Telemetry integrations | `server/app/observability/__init__.py`; `docker/otel-collector-config.yml` |
 | Deployment-facing authentication assumption | No authentication middleware is registered in `server/app/main.py`; security headers and scope extraction are present |
 
 ## Related views

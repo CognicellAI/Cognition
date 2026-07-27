@@ -417,18 +417,26 @@ for the end-to-end setup flow and Terraform example.
 
 ## Observability
 
+!!! note "v0.13 implementation note"
+
+    The `COGNITION_OTLP_ENDPOINT`, trace detail/content, and OTLP metric export
+    settings below are part of the accepted curated tracing plan in
+    [ADR-0002](../architecture/decisions/0002-curated-opentelemetry-agent-tracing.md).
+    Local observability validation remains a release gate.
+
 | YAML key | Environment variable | Default | Description |
 |---|---|---|---|
 | `observability.otel_enabled` | `COGNITION_TRACING_ENABLED` | `false` | Enable OpenTelemetry tracing. `COGNITION_OTEL_ENABLED` remains a compatibility alias. |
-| `observability.otel_endpoint` | `COGNITION_OTEL_ENDPOINT` | `null` | OTLP collector URL |
+| `observability.otel_endpoint` | `COGNITION_OTLP_ENDPOINT` | `null` | Canonical OTLP collector URL. `COGNITION_OTEL_ENDPOINT` remains a compatibility alias. |
 | `observability.otel_max_export_bytes` | `COGNITION_OTLP_MAX_EXPORT_BYTES` | `3670016` | Maximum encoded OTLP trace export request size. Default is 3.5 MiB, below the common 4 MiB collector gRPC limit. `COGNITION_OTEL_MAX_EXPORT_BYTES` remains a compatibility alias. |
 | `observability.otlp_queue_size` | `COGNITION_OTLP_QUEUE_SIZE` | `2048` | Maximum queued trace spans for bounded OTLP export |
 | `observability.otlp_export_timeout_ms` | `COGNITION_OTLP_EXPORT_TIMEOUT_MS` | `30000` | Per-attempt OTLP trace export timeout in milliseconds |
+| `observability.otlp_metric_export_interval_ms` | `COGNITION_OTLP_METRIC_EXPORT_INTERVAL_MS` | `60000` | OTLP metric export interval |
 | `observability.trace_sample_ratio` | `COGNITION_TRACE_SAMPLE_RATIO` | `0.10` | Parent-based root trace sample ratio for normal runs |
+| `observability.trace_detail` | `COGNITION_TRACE_DETAIL` | `standard` | `standard` or `debug` span detail profile |
 | `observability.metrics_enabled` | `COGNITION_METRICS_ENABLED` | `true` | Enable the Prometheus metrics endpoint independently from tracing |
 | `observability.metrics_port` | `COGNITION_METRICS_PORT` | `9090` | Prometheus metrics scrape port |
 | `observability.log_format` | `COGNITION_LOG_FORMAT` | `json` | Structured log renderer: `json` or `console` |
-| `observability.native_agent_tracing` | `COGNITION_NATIVE_AGENT_TRACING` | `disabled` | Optional semantic tracing mode: `disabled`, `langsmith_otel`, `mlflow_autolog`, or `otlp_to_mlflow` |
 
 ---
 
@@ -456,16 +464,11 @@ its sandbox dynamically.
 
 ## MLflow
 
-| YAML key | Environment variable | Default | Description |
-|---|---|---|---|
-| `mlflow.enabled` | `COGNITION_MLFLOW_ENABLED` | `false` | Enable MLflow experiment tracking |
-| `mlflow.tracking_uri` | `COGNITION_MLFLOW_TRACKING_URI` | `null` | MLflow server URL |
-| `mlflow.experiment_name` | `COGNITION_MLFLOW_EXPERIMENT_NAME` | `cognition` | MLflow experiment name |
-| `mlflow.native_agent_tracing` | `COGNITION_NATIVE_AGENT_TRACING` | `disabled` | Select `otlp_to_mlflow` for Collector-backed MLflow traces or `mlflow_autolog` for native MLflow LangChain/Deep Agents traces |
-
-The upstream `MLFLOW_ENABLED`, `MLFLOW_TRACKING_URI`, and
-`MLFLOW_EXPERIMENT_NAME` names are accepted as compatibility aliases when the
-Cognition-prefixed setting is unset.
+MLflow is configured as a downstream OTLP destination in the OpenTelemetry
+Collector, not as a Cognition runtime setting. Configure the Collector's
+`otlphttp/mlflow` exporter with the MLflow endpoint and
+`x-mlflow-experiment-id` header. The local Compose stack reads
+`MLFLOW_EXPERIMENT_ID` for that header and defaults to experiment `0`.
 
 ---
 
@@ -758,6 +761,6 @@ LLM provider and agent configuration is now managed via the **ConfigRegistry API
 
 The `PATCH /config` endpoint is restricted to **infrastructure settings only**:
 
-**Allowed paths:** `rate_limit.per_minute`, `rate_limit.burst`, `observability.otel_enabled`, `observability.otel_max_export_bytes`, `observability.otlp_queue_size`, `observability.otlp_export_timeout_ms`, `observability.trace_sample_ratio`, `observability.metrics_enabled`, `observability.metrics_port`, `observability.otel_endpoint`, `observability.log_format`, `observability.native_agent_tracing`, `mlflow.enabled`, `mlflow.experiment_name`.
+**Allowed paths:** `rate_limit.per_minute`, `rate_limit.burst`, `observability.otel_enabled`, `observability.otel_max_export_bytes`, `observability.otlp_queue_size`, `observability.otlp_export_timeout_ms`, `observability.otlp_metric_export_interval_ms` (proposed), `observability.trace_sample_ratio`, `observability.trace_detail` (proposed), `observability.metrics_enabled`, `observability.metrics_port`, `observability.otel_endpoint`, `observability.log_format`.
 
 Changes are persisted to `.cognition/config.yaml` and a backup is created at `.cognition/config.yaml.backup`. Roll back with `POST /config/rollback`.

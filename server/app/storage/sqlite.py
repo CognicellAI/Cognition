@@ -244,9 +244,9 @@ class SqliteStorageBackend:
                 (session_id, effective_scope_key(effective_scope)),
             ) as cursor:
                 row = await cursor.fetchone()
-                if row and (
-                    json.loads(row["scopes"]) if row["scopes"] else {}
-                ) == (effective_scope or {}):
+                if row and (json.loads(row["scopes"]) if row["scopes"] else {}) == (
+                    effective_scope or {}
+                ):
                     return self._row_to_session(row)
         return None
 
@@ -353,8 +353,7 @@ class SqliteStorageBackend:
 
         async with aiosqlite.connect(self.db_path) as db:
             await db.execute(
-                f"UPDATE sessions SET {', '.join(updates)} "
-                "WHERE id = ? AND scope_key = ?",
+                f"UPDATE sessions SET {', '.join(updates)} WHERE id = ? AND scope_key = ?",
                 params,
             )
             await db.commit()
@@ -751,7 +750,9 @@ class SqliteStorageBackend:
             query += f" AND status IN ({placeholders})"
             params.extend(status.value for status in sorted(statuses, key=str))
         if cursor is not None:
-            query += " AND (created_at, id) < (SELECT created_at, id FROM runtime_tasks WHERE id = ?)"
+            query += (
+                " AND (created_at, id) < (SELECT created_at, id FROM runtime_tasks WHERE id = ?)"
+            )
             params.append(cursor)
         page_size = max(1, min(limit, 1000))
         query += " ORDER BY created_at DESC, id DESC LIMIT ?"
@@ -810,7 +811,7 @@ class SqliteStorageBackend:
         async with aiosqlite.connect(self.db_path) as db:
             cursor_result = await db.execute(
                 f"""
-                UPDATE runtime_tasks SET {', '.join(updates)}
+                UPDATE runtime_tasks SET {", ".join(updates)}
                 WHERE id = ? AND scope_key = ? AND status = ?
                 """,
                 params,
@@ -820,9 +821,7 @@ class SqliteStorageBackend:
             return None
         return await self.get_task(task_id, effective_scope)
 
-    async def delete_task_data(
-        self, task_id: str, effective_scope: dict[str, str]
-    ) -> bool:
+    async def delete_task_data(self, task_id: str, effective_scope: dict[str, str]) -> bool:
         """Delete only terminal, exact-scope data owned by one task."""
         current = await self.get_task(task_id, effective_scope)
         if current is None or not TaskStatus.is_terminal(current.status):
@@ -1030,6 +1029,7 @@ class SqliteStorageBackend:
         error_code: str | None = None,
         status_reason: str | None = None,
         metadata: dict[str, Any] | None = None,
+        trace_id: str | None = None,
         effective_scope: dict[str, str] | None = None,
     ) -> SessionRun | None:
         """Update durable run state."""
@@ -1064,6 +1064,9 @@ class SqliteStorageBackend:
         if metadata is not None:
             updates.append("metadata = ?")
             params.append(json.dumps(metadata))
+        if trace_id is not None:
+            updates.append("trace_id = ?")
+            params.append(trace_id)
         if not updates:
             return run
         updates.append("updated_at = ?")
@@ -1071,8 +1074,7 @@ class SqliteStorageBackend:
         params.extend([run_id, effective_scope_key(effective_scope)])
         async with aiosqlite.connect(self.db_path) as db:
             await db.execute(
-                f"UPDATE session_runs SET {', '.join(updates)} "
-                "WHERE id = ? AND scope_key = ?",
+                f"UPDATE session_runs SET {', '.join(updates)} WHERE id = ? AND scope_key = ?",
                 params,
             )
             await db.commit()

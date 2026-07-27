@@ -14,6 +14,7 @@ Git-Style Workspace Model:
 
 from __future__ import annotations
 
+import json
 import time
 import uuid
 from collections.abc import AsyncGenerator
@@ -24,7 +25,6 @@ from fastapi.responses import StreamingResponse
 
 from server.app.agent.resolver import RuntimeResolver
 from server.app.agent.task_runtime import AgentTaskRuntime, ContinueTask, TaskExecution
-from server.app.agent.token_counter import count_text_tokens
 from server.app.api.dependencies import (
     get_artifact_store,
     get_config_store,
@@ -64,6 +64,8 @@ from server.app.models import RunStatus, SessionConfig, SessionStatus
 from server.app.observability import (
     STORAGE_OPERATION_DURATION,
     STORAGE_OPERATIONS_TOTAL,
+    agent_run_span,
+    current_trace_context,
     storage_backend_label,
 )
 from server.app.runtime_projection import RuntimeProjectionService
@@ -373,13 +375,17 @@ async def get_session_context(
             id=message.id,
             role=message.role,
             token_count=message.token_count,
-            estimated_tokens=message.token_count
-            if message.token_count is not None
-            else count_text_tokens(message.content),
+            estimated_tokens=message.token_count,
             created_at=message.created_at,
         )
         for message in messages
     ]
+    debug_token_values = [message.estimated_tokens for message in debug_messages]
+    total_estimated_tokens = (
+        sum(value for value in debug_token_values if value is not None)
+        if debug_token_values and all(value is not None for value in debug_token_values)
+        else None
+    )
 
     return ContextDebugResponse(
         session_id=session.id,
@@ -388,7 +394,7 @@ async def get_session_context(
         scope_keys=sorted(scope_dict),
         policy=await _resolve_context_policy(session, config_store, scope_dict or None),
         message_count=len(messages),
-        estimated_tokens=sum(message.estimated_tokens for message in debug_messages),
+        estimated_tokens=total_estimated_tokens,
         messages=debug_messages,
     )
 
@@ -675,21 +681,132 @@ async def resume_session(
 
     accept_header = http_request.headers.get("accept", "")
     wants_stream = "text/event-stream" in accept_header.lower()
+    resume_run_span: Any | None = None
+
+    async def resume_events() -> AsyncGenerator[Any, None]:
+        nonlocal resume_run_span
+        with agent_run_span(
+            session_id=session_id,
+            run_id=active_run.id if active_run is not None else session.thread_id,
+            thread_id=session.thread_id,
+            scope_keys=sorted(session.scopes),
+            agent_name=session.agent_name,
+            agent_revision=active_run.agent_revision if active_run is not None else None,
+            manifest_digest=active_run.manifest_digest if active_run is not None else None,
+            parent_run_id=active_run.parent_run_id if active_run is not None else None,
+            effective_scope=session.scopes,
+            transport="rest",
+        ) as span_obj:
+            resume_run_span = span_obj
+            if resume_run_span is not None:
+                resume_run_span.set_attribute(
+                    "gen_ai.input.messages",
+                    json.dumps(
+                        [
+                            {
+                                "role": "user",
+                                "content": f"Human decision: {request.decision}",
+                            }
+                        ],
+                        ensure_ascii=False,
+                        separators=(",", ":"),
+                    ),
+                )
+                resume_run_span.add_event(
+                    "cognition.hitl.decision",
+                    {
+                        "cognition.hitl.decision": request.decision,
+                        "gen_ai.tool.name": request.tool_name,
+                    },
+                )
+            trace_id, _span_id = current_trace_context(resume_run_span)
+            if (
+                active_run is not None
+                and trace_id
+                and active_run.trace_id != trace_id
+            ):
+                updated_run = await store.update_run(
+                    active_run.id,
+                    trace_id=trace_id,
+                    effective_scope=active_run.effective_scope,
+                )
+                if updated_run is not None:
+                    active_run.trace_id = updated_run.trace_id
+            try:
+                async for runtime_event in service.resume_response(
+                    session_id=session_id,
+                    thread_id=session.thread_id,
+                    project_path=str(settings.workspace_path),
+                    decision=request.decision,
+                    tool_name=request.tool_name,
+                    args=request.args,
+                    scope=session.scopes,
+                    trace_parent_span=resume_run_span,
+                ):
+                    yield runtime_event
+            finally:
+                resume_run_span = None
+
+    def record_resume_usage(event: UsageEvent) -> None:
+        if resume_run_span is None:
+            return
+        attributes: dict[str, str | int] = {
+            "cognition.usage.source": event.source,
+            "cognition.usage.status": event.status,
+            "cognition.usage.model_calls": event.model_calls,
+            "cognition.usage.reported_model_calls": event.reported_model_calls,
+            "cognition.usage.unreported_model_calls": event.unreported_model_calls,
+        }
+        for key, token_value in (
+            ("cognition.usage.input_tokens", event.input_tokens),
+            ("cognition.usage.output_tokens", event.output_tokens),
+            ("cognition.usage.total_tokens", event.total_tokens),
+        ):
+            if token_value is not None:
+                attributes[key] = token_value
+        for key, attribute_value in attributes.items():
+            resume_run_span.set_attribute(key, attribute_value)
+        resume_run_span.add_event("cognition.usage.recorded", attributes)
+
+    def record_resume_completed(content: str) -> None:
+        if resume_run_span is None:
+            return
+        resume_run_span.set_attribute(
+            "gen_ai.output.messages",
+            json.dumps(
+                [{"role": "assistant", "content": content}],
+                ensure_ascii=False,
+                separators=(",", ":"),
+            ),
+        )
+        resume_run_span.add_event(
+            "cognition.run.completed",
+            {
+                "cognition.run.terminal_status": "done",
+                "cognition.message.output_bytes": len(content.encode("utf-8")),
+            },
+        )
+
+    def record_resume_failed(event: ResumeErrorEvent) -> None:
+        if resume_run_span is None:
+            return
+        resume_run_span.add_event(
+            "cognition.run.failed",
+            {
+                "cognition.error.code": event.code,
+                "cognition.error.message_bytes": len(event.message.encode("utf-8")),
+            },
+        )
 
     if not wants_stream:
         assistant_content: list[str] = []
-        async for event in service.resume_response(
-            session_id=session_id,
-            thread_id=session.thread_id,
-            project_path=str(settings.workspace_path),
-            decision=request.decision,
-            tool_name=request.tool_name,
-            args=request.args,
-            scope=session.scopes,
-        ):
+        async for event in resume_events():
             if isinstance(event, TokenEvent):
                 assistant_content.append(event.content)
+            if isinstance(event, UsageEvent):
+                record_resume_usage(event)
             if isinstance(event, ResumeErrorEvent):
+                record_resume_failed(event)
                 if active_run is not None:
                     await projection.transition_run(
                         active_run,
@@ -703,17 +820,20 @@ async def resume_session(
                     status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                     detail=event.message,
                 )
-            if isinstance(event, DoneEvent) and active_run is not None:
-                if execution is not None:
-                    await task_runtime.persist_assistant_message(
-                        execution,
-                        content="".join(assistant_content),
+            if isinstance(event, DoneEvent):
+                content = "".join(assistant_content)
+                record_resume_completed(content)
+                if active_run is not None:
+                    if execution is not None:
+                        await task_runtime.persist_assistant_message(
+                            execution,
+                            content=content,
+                        )
+                    await projection.transition_run(
+                        active_run,
+                        RunStatus.DONE,
+                        session_status=SessionStatus.IDLE,
                     )
-                await projection.transition_run(
-                    active_run,
-                    RunStatus.DONE,
-                    session_status=SessionStatus.IDLE,
-                )
         return {"success": True, "message": "Session resumed"}
 
     sse = SSEStream.from_settings(settings)
@@ -728,15 +848,7 @@ async def resume_session(
         )
         yield EventBuilder.status("resuming")
 
-        async for event in service.resume_response(
-            session_id=session_id,
-            thread_id=session.thread_id,
-            project_path=str(settings.workspace_path),
-            decision=request.decision,
-            tool_name=request.tool_name,
-            args=request.args,
-            scope=session.scopes,
-        ):
+        async for event in resume_events():
             if isinstance(event, TokenEvent):
                 assistant_content.append(event.content)
                 yield EventBuilder.token(event.content)
@@ -762,12 +874,23 @@ async def resume_session(
                     has_rejection_message=event.has_rejection_message,
                 )
             elif isinstance(event, UsageEvent):
+                record_resume_usage(event)
                 yield EventBuilder.usage(
                     input_tokens=event.input_tokens,
                     output_tokens=event.output_tokens,
+                    total_tokens=event.total_tokens,
                     estimated_cost=event.estimated_cost,
                     provider=event.provider,
                     model=event.model,
+                    source=event.source,
+                    status=event.status,
+                    cache_read_tokens=event.cache_read_tokens,
+                    cache_write_tokens=event.cache_write_tokens,
+                    reasoning_tokens=event.reasoning_tokens,
+                    model_calls=event.model_calls,
+                    reported_model_calls=event.reported_model_calls,
+                    unreported_model_calls=event.unreported_model_calls,
+                    by_model=event.by_model,
                 )
             elif isinstance(event, ContextEvent):
                 yield EventBuilder.context(
@@ -788,6 +911,7 @@ async def resume_session(
                 )
             elif isinstance(event, DoneEvent):
                 content = "".join(assistant_content)
+                record_resume_completed(content)
                 if active_run is not None:
                     if execution is not None:
                         await task_runtime.persist_assistant_message(
@@ -804,10 +928,11 @@ async def resume_session(
                     assistant_data={
                         "content": content,
                         "tool_calls": None,
-                        "token_count": 0,
+                        "token_count": None,
                     },
                 )
             elif isinstance(event, ResumeErrorEvent):
+                record_resume_failed(event)
                 if active_run is not None:
                     await projection.transition_run(
                         active_run,

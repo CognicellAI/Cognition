@@ -233,7 +233,7 @@ Every event has a type. Here are the ones you'll use in a UI:
 | `tool_call` | `name`, `args`, `id` | Show a "running tool…" indicator |
 | `tool_result` | `tool_call_id`, `output`, `exit_code` | Hide the indicator; optionally show the output |
 | `status` | `status: "thinking" \| "idle"` | Drive a loading spinner |
-| `usage` | `input_tokens`, `output_tokens`, `estimated_cost`, `model` | Update a cost tracker |
+| `usage` | `status`, nullable token fields, `model_calls`, `model` | Show provider-reported usage availability |
 | `done` | `assistant_data` | Final message stored; stream is complete |
 | `error` | `message`, `code` | Show an error; stream is terminated |
 

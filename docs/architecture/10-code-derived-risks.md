@@ -2,7 +2,7 @@
 
 **Status:** Current audit register  
 **Audit baseline:** `release/v0.13.0` architecture, verified against commit `890e1ad`  
-**Last verified:** 2026-07-25
+**Last verified:** 2026-07-26
 
 This register records architectural constraints observed directly in code. It is
 not a substitute for issues or `ROADMAP.md`; it ensures future architecture work
@@ -76,11 +76,13 @@ inputs to future roadmap work.
 | AR-028 | Open | `/ready` always reports true; `/health` lists every session | Readiness does not prove dependencies and health cost grows with data | `main.py::ready_check`, `health_check` |
 | AR-029 | Resolved — v0.13 | HTTP metric endpoint label used concrete URL paths | Metrics now use the matched route template or `unmatched` and status class labels, avoiding resource-ID cardinality | `api/middleware.py::ObservabilityMiddleware`; `tests/unit/test_observability_cardinality.py` |
 | AR-030 | Resolved — v0.13 | Metrics startup was coupled to the OpenTelemetry enabled flag | `COGNITION_METRICS_ENABLED` controls Prometheus startup independently from trace export | `main.py::lifespan`; `settings.py`; `tests/unit/test_observability_config.py` |
-| AR-031 | Resolved — v0.13 | MLflow code read `MLFLOW_*` while deployment manifests primarily set `COGNITION_MLFLOW_*` | Cognition-prefixed MLflow settings now activate the integration; upstream `MLFLOW_*` names remain compatibility aliases | `observability/mlflow_config.py`; `tests/unit/test_observability_config.py` |
+| AR-031 | Resolved — v0.13 | Cognition startup carried an obsolete MLflow tracing shim while semantic traces already flowed through canonical OTLP and the Collector | Removed the MLflow startup shim; MLflow is now only a Collector destination with the experiment id configured by the operator-owned pipeline | `observability/__init__.py`; `docker/otel-collector-config.yml`; `tests/unit/test_observability_config.py` |
 | AR-032 | Resolved — v0.13 | General 500 responses included `str(exc)` | Unhandled 500 responses now return a generic error body and log only redacted error classification with route-template context | `main.py::general_exception_handler`; `tests/unit/test_rest_api.py` |
 | AR-033 | Open | FastAPI startup uses `create_all`/manual checks rather than Alembic upgrade | A new image can start against a partially upgraded schema unless operators migrate first | `main.py`; backend `initialize`; `storage/migrations.py` |
 | AR-034 | Open | CI omits full E2E, migration-upgrade, Helm lint, and image vulnerability gates | Release automation does not prove every documented deployment path | `.github/workflows/ci.yml`; `pre-release-images.yml` |
 | AR-035 | Open | `cognition-client` entry point references a TUI module absent from the inspected client tree | A published console entry point may be unusable | `pyproject.toml`; `client/` |
+| AR-036 | Resolved — v0.13 branch | A measured short Agent run produced 209 spans, 172 routine middleware-hook spans, and 742,119 bytes of attributes, including repeated Agent content; a later smoke test also exposed separate Cognition and LangGraph traces for one turn | The final local Compose trace `tr-f0174459e7d636b60018689dfe78b4aa` has one `cognition.agent.run` root, the native LangGraph/model tree beneath it, 20 spans, no orphaned children, no duplicate metrics-adapter spans, and a persisted matching durable trace ID. Raw content remains builder-owned and byte-bounded at export. | [curated tracing proposal](../proposals/curated-opentelemetry-tracing.md); [ADR-0002](decisions/0002-curated-opentelemetry-agent-tracing.md) |
+| AR-037 | Resolved — v0.13 branch | Usage Events counted generated text and applied a hard-coded price estimate instead of projecting provider-reported usage metadata | The final local provider run reports a complete Usage Event of 8,996 input and 30 output tokens, the MLflow trace total matches exactly, Prometheus receives the same automatic histogram values, the final message keeps `token_count=null`, and `estimated_cost` remains null. | [curated tracing proposal](../proposals/curated-opentelemetry-tracing.md#separate-workstream-authoritative-usage-events); [ADR-0002](decisions/0002-curated-opentelemetry-agent-tracing.md) |
 
 ## Review rules
 

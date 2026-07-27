@@ -11,7 +11,6 @@ from unittest.mock import AsyncMock, patch
 import pytest
 from fastapi.testclient import TestClient
 
-from server.app.agent.token_counter import count_text_tokens
 from server.app.api.dependencies import (
     get_settings_dep,
     get_storage_backend_dep,
@@ -199,7 +198,7 @@ class TestSessionEndpoints:
         assert data["scope_keys"] == []
         assert data["policy"] == {}
         assert data["message_count"] == 0
-        assert data["estimated_tokens"] == 0
+        assert data["estimated_tokens"] is None
         assert data["messages"] == []
 
     def test_get_session_context_debug_redacts_message_content(self):
@@ -227,11 +226,10 @@ class TestSessionEndpoints:
         assert response.status_code == 200
         data = response.json()
         assert data["message_count"] == 1
-        assert data["estimated_tokens"] == count_text_tokens(
-            "secret customer content should not appear"
-        )
+        assert data["estimated_tokens"] is None
         assert data["messages"][0]["id"] == message_id
         assert data["messages"][0]["role"] == "user"
+        assert data["messages"][0]["estimated_tokens"] is None
         assert "content" not in data["messages"][0]
         assert "secret customer content" not in response.text
 

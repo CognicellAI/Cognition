@@ -72,8 +72,6 @@ async def server():
         env["COGNITION_ALLOW_UNSAFE_LOCAL_EXECUTION"] = "true"
         env["COGNITION_ALLOW_HOST_TOOLS"] = "true"
         env["COGNITION_ALLOW_API_PYTHON_TOOLS"] = "true"
-        # Disable MLflow to avoid side effects in tests
-        env["COGNITION_MLFLOW_ENABLED"] = "false"
         # Disable OpenTelemetry to avoid port conflicts
         env["COGNITION_OTEL_ENABLED"] = "false"
 

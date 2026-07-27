@@ -295,6 +295,7 @@ class TestBuildModel:
             resolver.build_model("openai", "gpt-4o")
             assert mock_init.call_args[0][0] == "gpt-4o"
             assert mock_init.call_args.kwargs["model_provider"] == "openai"
+            assert mock_init.call_args.kwargs["stream_usage"] is True
 
     def test_openai_compatible_raises_without_base_url(self) -> None:
         from server.app.exceptions import LLMProviderConfigError

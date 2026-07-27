@@ -344,9 +344,7 @@ class PostgresStorageBackend:
             if metadata_filters:
                 predicates = []
                 for key, value in metadata_filters.items():
-                    predicates.append(
-                        f"metadata->>${parameter_index} = ${parameter_index + 1}"
-                    )
+                    predicates.append(f"metadata->>${parameter_index} = ${parameter_index + 1}")
                     params.extend([key, value])
                     parameter_index += 2
                 query += " AND " + " AND ".join(predicates)
@@ -889,7 +887,7 @@ class PostgresStorageBackend:
         async with self._pool.acquire() as conn:
             result = await conn.execute(
                 f"""
-                UPDATE runtime_tasks SET {', '.join(updates)}
+                UPDATE runtime_tasks SET {", ".join(updates)}
                 WHERE id = ${where_task} AND scope_key = ${where_scope}
                   AND status = ${where_status}
                 """,
@@ -899,9 +897,7 @@ class PostgresStorageBackend:
             return None
         return await self.get_task(task_id, effective_scope)
 
-    async def delete_task_data(
-        self, task_id: str, effective_scope: dict[str, str]
-    ) -> bool:
+    async def delete_task_data(self, task_id: str, effective_scope: dict[str, str]) -> bool:
         """Delete only terminal, exact-scope data owned by one task."""
         current = await self.get_task(task_id, effective_scope)
         if current is None or not TaskStatus.is_terminal(current.status):
@@ -1107,6 +1103,7 @@ class PostgresStorageBackend:
         error_code: str | None = None,
         status_reason: str | None = None,
         metadata: dict[str, Any] | None = None,
+        trace_id: str | None = None,
         effective_scope: dict[str, str] | None = None,
     ) -> SessionRun | None:
         """Update durable run state."""
@@ -1148,6 +1145,10 @@ class PostgresStorageBackend:
         if metadata is not None:
             updates.append(f"metadata = ${param_idx}")
             params.append(json.dumps(metadata))
+            param_idx += 1
+        if trace_id is not None:
+            updates.append(f"trace_id = ${param_idx}")
+            params.append(trace_id)
             param_idx += 1
         if not updates:
             return run

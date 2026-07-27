@@ -297,6 +297,7 @@ class RuntimeResolver:
                 if not resolved_key and self._settings.openai_api_key:
                     resolved_key = self._settings.openai_api_key.get_secret_value()
                 kwargs: dict[str, Any] = {"model_provider": "openai"}
+                kwargs["stream_usage"] = True
                 if resolved_key:
                     kwargs["api_key"] = resolved_key
                 if base_url or self._settings.openai_api_base:
@@ -350,6 +351,7 @@ class RuntimeResolver:
                     "model_provider": "openai",
                     "base_url": resolved_base_url,
                     "api_key": resolved_key,
+                    "stream_usage": True,
                 }
                 if temperature is not None:
                     compat_kwargs["temperature"] = temperature

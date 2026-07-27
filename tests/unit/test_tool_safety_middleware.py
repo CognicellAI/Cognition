@@ -77,7 +77,7 @@ def test_cognition_context_carries_trusted_runtime_fields() -> None:
     assert context.metadata == {"assignment_id": "assign-1"}
 
 
-def test_tool_safety_trace_attributes_are_redacted() -> None:
+def test_tool_safety_trace_attributes_use_scope_key_names() -> None:
     attributes = _tool_safety_attributes(
         action="context_injected",
         tool_name="update_assignment",
@@ -93,9 +93,9 @@ def test_tool_safety_trace_attributes_are_redacted() -> None:
 
     assert attributes["cognition.tool_safety.action"] == "context_injected"
     assert attributes["tool.name"] == "update_assignment"
-    assert attributes["cognition.session_id"] == "session-1"
-    assert attributes["cognition.run_id"] == "run-1"
-    assert attributes["cognition.scope_keys"] == "project,tenant"
+    assert attributes["session.id"] == "session-1"
+    assert attributes["cognition.run.id"] == "run-1"
+    assert attributes["cognition.scope.keys"] == "project,tenant"
     assert "acme" not in str(attributes)
 
 

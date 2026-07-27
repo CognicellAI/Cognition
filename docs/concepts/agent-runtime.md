@@ -81,13 +81,21 @@ class InterruptEvent:
 class StatusEvent:
     status: str    # "thinking" | "idle"
 
+# Proposed v0.13 shape from ADR-0002. Treat as pending until that ADR is
+# accepted and the compatibility tests land.
 @dataclass
 class UsageEvent:
-    input_tokens: int
-    output_tokens: int
-    estimated_cost: float
-    provider: str
-    model: str
+    source: str = "provider_usage_metadata"
+    status: Literal["complete", "partial", "unavailable"]
+    input_tokens: int | None
+    output_tokens: int | None
+    total_tokens: int | None
+    estimated_cost: None
+    model_calls: int
+    reported_model_calls: int
+    unreported_model_calls: int
+    provider: str | None
+    model: str | None
 
 @dataclass
 class DoneEvent:

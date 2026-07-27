@@ -44,7 +44,6 @@ from server.app.exceptions import RateLimitError
 from server.app.file_watcher import WorkspaceWatcher
 from server.app.models import SessionStatus
 from server.app.observability import setup_logging, setup_metrics, setup_tracing
-from server.app.observability.mlflow_config import setup_mlflow_tracing
 from server.app.rate_limiter import RateLimitConfig, get_rate_limiter
 from server.app.session_manager import initialize_session_manager
 from server.app.settings import get_settings
@@ -235,12 +234,18 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         queue_size=settings.otlp_queue_size,
         export_timeout_millis=settings.otlp_export_timeout_ms,
         trace_sample_ratio=settings.trace_sample_ratio,
+        metric_export_interval_millis=settings.otlp_metric_export_interval_ms,
+        trace_detail=settings.trace_detail,
+        observability_scope_hmac_key=(
+            settings.observability_scope_hmac_key.get_secret_value()
+            if settings.observability_scope_hmac_key is not None
+            else None
+        ),
     )
     setup_metrics(
         port=settings.metrics_port,
         enabled=settings.metrics_enabled,
     )
-    setup_mlflow_tracing()
     rate_limiter = get_rate_limiter(
         RateLimitConfig(
             requests_per_minute=settings.rate_limit_per_minute,

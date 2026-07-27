@@ -9,6 +9,75 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Highlights
+
+- Reworked Cognition into a stricter multi-tenant Agent CRUD runtime: deployments start without built-in platform Agents, builders explicitly provision every Agent, and runtime data access is enforced at exact effective-scope boundaries.
+- Added v0.13 runtime identity primitives for safer shared deployments, including canonical `scope_key` values, Agent revisions, definition digests, pinned run manifests, scope-aware graph-cache keys, and bounded runtime caches.
+- Rebuilt Agent observability around canonical OpenTelemetry: one durable `cognition.agent.run` trace per run attempt, native LangGraph/model/tool/subagent spans under the same trace, byte-bounded OTLP export, and MLflow routing through the Collector instead of Cognition-owned autologging.
+- Replaced Cognition's estimated token accounting with provider-authoritative Usage Events sourced only from LangChain `AIMessage.usage_metadata`; Cognition no longer tokenizes text, fabricates zeroes, or calculates costs.
+- Preserved Cognition's backend mission by keeping tenant IAM, billing, trace retention, redaction, MLflow experiment ownership, and publishing UX as builder/operator responsibilities.
+
+### Breaking Changes
+
+- Removed implicit default Agent provisioning. New projects must create Agents before starting sessions, and `POST /sessions` now requires an explicit `agent_name`.
+- Removed the reserved-name behavior for formerly built-in Agents. Names such as `default` are now ordinary builder-owned Agent names when explicitly provisioned.
+- Removed the Cognition token counter and all character/text-derived token estimates from billable usage. Legacy usage fields remain for compatibility but are nullable when provider metadata is unavailable.
+- Removed the Cognition MLflow startup shim and `COGNITION_MLFLOW_*` tracing configuration. MLflow is now configured as an OpenTelemetry Collector destination.
+- Removed the pre-release `COGNITION_NATIVE_AGENT_TRACING` destination switch. Direct MLflow or LangSmith destination modes are no longer Cognition runtime settings.
+- Mixed v0.12/v0.13 writers are unsupported during migration. Operators should drain writes before applying the scope-key, Agent-revision, and runtime-manifest migration path.
+
+### Added
+
+- Added exact-scope API Agent CRUD identity using canonical `scope_key`, monotonically increasing Agent `revision`, and stable `definition_digest` values.
+- Added `revision` and `definition_digest` to Agent responses, plus ETag/conditional mutation support for stale-write detection.
+- Added persistent run-manifest resolution so each run pins the Agent revision and dependency digests once at creation; later Agent or dependency updates affect only future runs.
+- Added scope-aware runtime isolation for sessions, runs, events, tasks, messages, checkpoints, artifacts, cleanup, mutation, and deletion paths across memory, SQLite, and PostgreSQL storage.
+- Added composite scope indexes and storage-side pagination for scoped Agent/config and runtime lookups, with CI-sized PostgreSQL validation coverage for 10,000 config rows, 1,000 scopes, and 50,000 sessions.
+- Added bounded LRU/TTL caches for compiled Agent graphs and per-session services, including eviction metrics and deterministic terminal cleanup.
+- Added strict production execution settings that fail closed for unsupported host/local execution, attached Python tools, unsafe callbacks, and sandbox fallback paths unless explicit development flags are enabled.
+- Added operator-controlled callback origin allow-listing; per-message callbacks are denied unless their HTTPS origin is explicitly approved.
+- Added provider-authoritative `usage.recorded` events with `complete`, `partial`, and `unavailable` statuses, per-model aggregation, streaming deduplication, cache-token fields, and subagent/mixed-model support.
+- Added OpenTelemetry `MeterProvider` wiring for auto-instrumented GenAI token and operation-duration metrics, exported through the Collector to Prometheus.
+- Added byte-bounded OTLP trace export with configurable maximum encoded request size, queue size, export timeout, batch splitting, oversize-span accounting, and telemetry health metrics.
+- Added curated OpenTelemetry Agent tracing docs, ADR-0002, and a detailed tracing/usage proposal covering builder responsibilities, Collector fan-out, MLflow behavior, and validation expectations.
+
+### Changed
+
+- Agent runtime resolution now separates exact-scope API-created Agents from explicitly shared file-based fallback definitions; broader API-Agent inheritance is not used for runtime execution.
+- Graph cache identity now includes scope fingerprint, Agent revision, manifest digest, sandbox backend identity, model identity, and relevant runtime settings; cached graphs resolve the current run's sandbox dynamically.
+- Runtime metrics and logs now avoid high-cardinality tenant/session/run/tool/model/path labels and expose bounded operational evidence for scope denials, manifest pinning, cache decisions, sandbox lifecycle, strict-execution rejection, and telemetry export health.
+- Request logging and metrics middleware now use pure ASGI timing so streaming durations cover the full response body.
+- LangSmith's OpenTelemetry-only bridge is used as the LangGraph/LangChain span adapter on Cognition's global tracer provider; it does not create a direct LangSmith export path.
+- OpenLLMetry LangChain instrumentation is retained only for standard GenAI metrics. Duplicate metric-adapter spans are filtered before OTLP export.
+- MLflow local Compose support now routes through the Collector's `otlphttp/mlflow` exporter with gzip compression and an operator-provided `MLFLOW_EXPERIMENT_ID`.
+- CLI usage display now reports exact, partial, or unavailable provider usage instead of estimated values or fabricated zeroes.
+- The architecture documentation set now treats the code-derived architecture docs and ADR index as the official future-tracking surface.
+
+### Fixed
+
+- Fixed cross-scope runtime access so wrong-scope identifiers return not-found for sessions, runs, events, tasks, messages, checkpoints, artifacts, cleanup, mutation, and deletion paths.
+- Fixed API-created Agent lookup so same-name Agents in sibling, partial, empty, and exact scopes cannot bleed into one another at runtime.
+- Fixed stale graph reuse by binding cache identity to pinned runtime manifests and exact runtime identity instead of mutable process-level service objects.
+- Fixed long-run telemetry drops caused by OTLP requests exceeding common Collector payload limits.
+- Fixed trace splitting where Cognition and LangGraph spans could appear as separate semantic traces for the same run attempt.
+- Fixed duplicated trace noise from framework hook wrappers, ASGI send/receive spans, probe endpoints, and duplicate GenAI instrumentation.
+- Fixed incorrect usage projection where Cognition text estimates could disagree with provider-reported token metadata.
+- Fixed misleading final-message token attribution by no longer writing run totals into the assistant message's `token_count`.
+- Fixed `/context` fallback usage estimation so `estimated_tokens` remains `null` unless authoritative persisted usage exists.
+- Fixed MLflow configuration ownership by removing Cognition startup experiment creation and placing endpoint/experiment routing in the Collector.
+
+### Security
+
+- Hardened multi-tenant runtime storage boundaries with fail-closed exact-scope checks for every persisted runtime resource touched by v0.13 work.
+- Restricted model-directed execution so production deployments do not silently fall back to host-local paths when sandbox execution is unavailable.
+- Prevented builder-controlled callback URLs from being used unless their HTTPS origin is operator-approved.
+- Kept trace redaction, trace retention, trace access control, MLflow experiment ownership, credentials, tenant authorization, and billing policy outside Cognition and under builder/operator control.
+
+### Validation
+
+- Added regression coverage for same-name Agent isolation, storage-level scope failures, runtime manifest pinning, graph-cache invalidation, strict execution rejection, callback origin denial, bounded OTLP batching, provider usage aggregation, auto-instrumented GenAI metrics, and curated trace shape.
+- Validated the branch with full unit tests, Ruff, strict mypy, strict MkDocs, Collector configuration validation, local Compose observability smoke testing, and `git diff --check`.
+
 ## [0.12.0] — 2026-07-22
 
 ### Highlights
