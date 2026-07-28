@@ -603,7 +603,7 @@ async def test_task_projection_preserves_every_data_json_value(
     async with client:
         sent = await client.post(
             "/a2a/researcher",
-            json=_send_request(f"tck-artifact-data-{variant}-task"),
+            json=_send_request(f"tck-artifact-data-{variant}-task-{tmp_path.name}"),
         )
         task = sent.json()["result"]["task"]
         fetched = await client.post(
