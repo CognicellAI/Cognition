@@ -9,16 +9,7 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-### Fixed
-
-- Fixed release image packaging so the documented `cognition db upgrade`,
-  `cognition db current`, and related Alembic migration commands are installed
-  in the container alongside the required migration dependencies.
-- Fixed SQLite Alembic migration URLs to use SQLAlchemy's async SQLite driver so
-  documented migration commands can run against disposable and development
-  SQLite databases.
-
-## [0.13.0-rc.1] — 2026-07-27
+## [0.13.0] — 2026-07-27
 
 ### Highlights
 
@@ -76,6 +67,8 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Fixed misleading final-message token attribution by no longer writing run totals into the assistant message's `token_count`.
 - Fixed `/context` fallback usage estimation so `estimated_tokens` remains `null` unless authoritative persisted usage exists.
 - Fixed MLflow configuration ownership by removing Cognition startup experiment creation and placing endpoint/experiment routing in the Collector.
+- Fixed release image packaging so the documented `cognition db upgrade`, `cognition db current`, and related Alembic migration commands are installed in the container alongside the required migration dependencies.
+- Fixed SQLite Alembic migration URLs to use SQLAlchemy's async SQLite driver so documented migration commands can run against disposable and development SQLite databases.
 
 ### Security
 
