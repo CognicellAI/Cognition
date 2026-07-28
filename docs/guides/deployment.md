@@ -138,7 +138,10 @@ curl -s http://localhost:3000/api/health
 
 ## Step 5 — Database Migrations
 
-Cognition uses Alembic for schema management. Migrations run automatically at startup — the `SqliteStorageBackend` and `PostgresStorageBackend` both call `metadata.create_all()` during `initialize()`.
+Cognition uses Alembic for schema management. Run migrations explicitly before
+starting code that requires a newer schema. Server startup creates missing
+tables for fresh development environments, but it does not replace ordered
+Alembic upgrades for staging or production.
 
 For the v0.13 multi-tenancy migration, drain active writes before upgrading.
 The migration backfills canonical `scope_key` values and Agent revision

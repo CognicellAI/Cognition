@@ -9,6 +9,15 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed release image packaging so the documented `cognition db upgrade`,
+  `cognition db current`, and related Alembic migration commands are installed
+  in the container alongside the required migration dependencies.
+- Fixed SQLite Alembic migration URLs to use SQLAlchemy's async SQLite driver so
+  documented migration commands can run against disposable and development
+  SQLite databases.
+
 ## [0.13.0-rc.1] — 2026-07-27
 
 ### Highlights

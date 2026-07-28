@@ -22,11 +22,20 @@ WORKDIR /app
 COPY pyproject.toml uv.lock README.md ./
 COPY packages/ ./packages/
 
-# Install production deps only using the frozen lockfile (no test extras)
+# Install production deps only using the frozen lockfile (no test extras).
 # --no-dev: skip dev-only deps (ruff, mypy, pre-commit)
 # --no-install-project: deps only — source code is copied in the next stage
 # --extra openai,bedrock,deploy,k8s: include all production extras
 RUN uv sync --frozen --no-dev --no-install-project --extra openai --extra bedrock --extra deploy --extra k8s
+
+# Copy the project before the final sync so package entry points such as
+# `cognition db upgrade` are installed into the image virtual environment.
+COPY server/ ./server/
+COPY client/ ./client/
+COPY shared/ ./shared/
+
+# Install the Cognition package itself without resolving dependencies again.
+RUN uv sync --frozen --no-dev --extra openai --extra bedrock --extra deploy --extra k8s
 
 # Production stage
 FROM python:3.11-slim AS production
@@ -64,7 +73,8 @@ ENV PYTHONPATH="/app"
 # Set working directory
 WORKDIR /app
 
-# Copy application code
+# Copy application code. These copies keep the runtime image source aligned with
+# the already-installed package and avoid carrying the builder toolchain forward.
 COPY server/ ./server/
 COPY client/ ./client/
 COPY shared/ ./shared/
