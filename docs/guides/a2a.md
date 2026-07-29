@@ -224,7 +224,10 @@ The system under test is `tests/support/a2a_tck_sut.py`, a deterministic,
 test-only Cognition agent definition. It exercises Cognition's real Agent Card,
 JSON-RPC, persistence, task lifecycle, artifact, and streaming paths without
 introducing model-provider or OAuth-gateway availability into protocol
-conformance. It is not Stock Guru and is never mounted in the production
+conformance. The manual Kennel Stock Guru TCK run was the exploratory signal
+that prompted investigation of the Cognition runtime; Stock Guru was not
+identified as the source of the discrepancies. The deterministic fixture is
+used for repeatable release gating and is never mounted in the production
 application.
 
 Each run produces a versioned evidence archive containing the official HTML,

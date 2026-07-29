@@ -146,8 +146,12 @@ def render_explanation(
         "## What this validates",
         "",
         "This report validates Cognition's A2A v1 adapter using Cognition's "
-        "deterministic, test-only TCK fixture. It does not evaluate Stock Guru "
-        "or any other production LLM agent, gateway, or OAuth deployment.",
+        "deterministic, test-only TCK fixture. The earlier manual Kennel Stock "
+        "Guru run was the exploratory signal that prompted this runtime-level "
+        "investigation; Stock Guru was not identified as the cause of the "
+        "discrepancies. Production agents, model providers, gateways, and OAuth "
+        "deployments are outside this release gate so it can isolate Cognition's "
+        "protocol runtime.",
         "",
         "The official A2A TCK source was used unchanged at revision "
         f"`{manifest['officialTckRevision']}`. The fixture implements the TCK's "

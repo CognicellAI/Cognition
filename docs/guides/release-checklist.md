@@ -37,8 +37,8 @@ All three must pass before the release PR is merged.
 
 ### A2A v1 Conformance
 
-The `a2a-conformance` job is required release evidence, not an evaluation of a
-sample agent. It runs the unchanged official A2A TCK revision pinned in
+The `a2a-conformance` job is required release evidence for Cognition's protocol
+runtime. It runs the unchanged official A2A TCK revision pinned in
 `.github/workflows/a2a-conformance.yml` against Cognition's deterministic
 test-only fixture.
 
@@ -49,8 +49,10 @@ test-only fixture.
    reviewer, review date, and workflow URL in the release PR.
 4. Treat `SHOULD` and `MAY` findings as advisory follow-up unless a release
    explicitly declares that optional capability.
-5. Do not patch the TCK, point the conformance gate at Stock Guru, or add a
-   production model/OAuth gateway dependency to the deterministic fixture.
+5. Keep exploratory production-agent runs, such as the Kennel Stock Guru run
+   that surfaced this investigation, separate from the repeatable release gate.
+   Do not patch the TCK or add model/OAuth gateway dependencies to the
+   deterministic fixture.
 
 ## Container Validation
 
