@@ -42,15 +42,22 @@ runtime. It runs the unchanged official A2A TCK revision pinned in
 `.github/workflows/a2a-conformance.yml` against Cognition's deterministic
 test-only fixture.
 
-1. Pull requests must pass all applicable `MUST` requirements.
+1. Pull requests run all applicable `MUST` requirements and preserve the
+   resulting compatibility evidence; findings are advisory for v0.13.1.
 2. The pre-release workflow must run the full suite for the exact candidate
    commit.
 3. Review `COGNITION-EXPLANATION.md` in the uploaded evidence and record the
    reviewer, review date, and workflow URL in the release PR.
+   - Confirm every failed requirement has a documented Cognition assessment.
+   - An `upstream-tck-defect` classification must identify the exact pinned TCK
+     revision, explain why changing Cognition would violate the protocol, and
+     link the upstream issue.
+   - Do not release with an `unassessed-finding`; determine whether it is a
+     Cognition gap or a verified external harness defect first.
 4. Treat `SHOULD` and `MAY` findings as advisory follow-up unless a release
    explicitly declares that optional capability.
 5. Keep exploratory production-agent runs, such as the Kennel Stock Guru run
-   that surfaced this investigation, separate from the repeatable release gate.
+   that surfaced this investigation, separate from repeatable release reporting.
    Do not patch the TCK or add model/OAuth gateway dependencies to the
    deterministic fixture.
 

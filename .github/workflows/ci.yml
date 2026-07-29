@@ -2,7 +2,7 @@ name: CI/CD
 
 on:
   push:
-    branches: [main, pivot, "release/**"]
+    branches: [main, pivot]
   pull_request:
     branches: [main, pivot, "release/**"]
   release:

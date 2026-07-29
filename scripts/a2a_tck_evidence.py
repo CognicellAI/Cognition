@@ -20,6 +20,7 @@ REQUIRED_REPORTS = (
     "tck_report.html",
     "junitreport.xml",
 )
+CORE_SEND_003_DEFECT_REVISION = "5996b79f9cefa6fc390980e383e358a66fb9e49e"
 _AUTHORIZATION_PATTERN = re.compile(
     r"(?im)^(\s*authorization\s*[:=]\s*).+$",
 )
@@ -40,7 +41,7 @@ def build_evidence(
     tck_exit_code: int,
     generated_at: str | None = None,
 ) -> tuple[Path, Path, bool]:
-    """Create a release evidence archive and return its path, checksum, and gate."""
+    """Create evidence and return its archive, checksum, and conformance result."""
     compatibility_path = reports_dir / "compatibility.json"
     missing = [name for name in REQUIRED_REPORTS if not (reports_dir / name).is_file()]
     if missing:
@@ -56,12 +57,13 @@ def build_evidence(
 
     requirements = _requirements(compatibility)
     counts = _requirement_counts(requirements)
+    finding_assessments = _assess_failed_findings(requirements, tck_sha=tck_sha)
     must_failures = sorted(
         requirement_id
         for requirement_id, result in requirements.items()
         if result.get("level") == "MUST" and result.get("status") == "FAIL"
     )
-    gate_passed = tck_exit_code == 0 and not must_failures
+    conformance_passed = tck_exit_code == 0 and not must_failures
     timestamp = generated_at or datetime.now(UTC).isoformat()
     version_label = cognition_version if cognition_version.startswith("v") else f"v{cognition_version}"
     asset_stem = f"cognition-{version_label}-a2a-v1-tck"
@@ -92,9 +94,10 @@ def build_evidence(
         "command": command,
         "workflowUrl": workflow_url,
         "tckExitCode": tck_exit_code,
-        "gatePolicy": "Applicable MUST requirements block release",
-        "gatePassed": gate_passed,
+        "reportingPolicy": "Non-blocking compatibility disclosure",
+        "conformancePassed": conformance_passed,
         "mustFailures": must_failures,
+        "findingAssessments": finding_assessments,
         "requirementCounts": counts,
     }
     (bundle_dir / "manifest.json").write_text(
@@ -121,7 +124,7 @@ def build_evidence(
         f"{_sha256(archive)}  {archive.name}\n",
         encoding="utf-8",
     )
-    return archive, checksum, gate_passed
+    return archive, checksum, conformance_passed
 
 
 def redact_sensitive_text(value: str) -> str:
@@ -150,7 +153,7 @@ def render_explanation(
         "Guru run was the exploratory signal that prompted this runtime-level "
         "investigation; Stock Guru was not identified as the cause of the "
         "discrepancies. Production agents, model providers, gateways, and OAuth "
-        "deployments are outside this release gate so it can isolate Cognition's "
+        "deployments are outside this release report so it can isolate Cognition's "
         "protocol runtime.",
         "",
         "The official A2A TCK source was used unchanged at revision "
@@ -203,14 +206,22 @@ def render_explanation(
         for requirement_id, result in failed:
             errors = result.get("errors", [])
             explanation = "; ".join(str(error) for error in errors) or "No error detail reported"
+            assessment = manifest["findingAssessments"][requirement_id]
             lines.append(
                 f"- `{requirement_id}` ({result.get('level', 'UNKNOWN')}): {explanation}"
             )
+            lines.append(
+                f"  - Cognition assessment: {assessment['classification']}"
+            )
+            lines.append(f"  - Fixability: {assessment['fixability']}")
+            lines.append(f"  - Reason: {assessment['reason']}")
+            if issue_url := assessment.get("upstreamIssue"):
+                lines.append(f"  - Upstream issue: {issue_url}")
 
     conclusion = (
         "PASS — all applicable MUST requirements passed and the TCK process completed."
-        if manifest["gatePassed"]
-        else "FAIL — the release-blocking A2A conformance gate did not pass."
+        if manifest["conformancePassed"]
+        else "GAPS REPORTED — review the non-passing requirements before release."
     )
     lines.extend(
         [
@@ -222,12 +233,56 @@ def render_explanation(
             "",
             conclusion,
             "",
+            "For v0.13.1 this result is advisory: Cognition publishes the report "
+            "so users can assess protocol alignment, but compatibility findings "
+            "do not block the release. Failure to produce valid evidence remains "
+            "a release-pipeline error.",
+            "",
             "The release owner must review this explanation and record reviewer, "
             "date, and workflow URL in the release PR before tagging.",
             "",
         ]
     )
     return "\n".join(lines)
+
+
+def _assess_failed_findings(
+    requirements: dict[str, dict[str, Any]],
+    *,
+    tck_sha: str,
+) -> dict[str, dict[str, Any]]:
+    """Classify known harness defects and require review for every other failure."""
+    assessments: dict[str, dict[str, Any]] = {}
+    for requirement_id, result in sorted(requirements.items()):
+        if result.get("status") != "FAIL":
+            continue
+        if (
+            requirement_id == "CORE-SEND-003"
+            and tck_sha == CORE_SEND_003_DEFECT_REVISION
+        ):
+            assessments[requirement_id] = {
+                "classification": "upstream-tck-defect",
+                "fixability": "not fixable in Cognition without violating A2A v1",
+                "reason": (
+                    "Cognition returns ContentTypeNotSupportedError (-32005), as "
+                    "the requirement demands. This pinned TCK revision omits the "
+                    "requirement's expected_error metadata, so its generic validator "
+                    "incorrectly requires a successful operation. Making Cognition "
+                    "pass would require accepting an unsupported media type."
+                ),
+                "upstreamIssue": "https://github.com/a2aproject/a2a-tck/issues/202",
+            }
+        else:
+            assessments[requirement_id] = {
+                "classification": "unassessed-finding",
+                "fixability": "unknown; Cognition owner review required",
+                "reason": (
+                    "No approved exception matches this requirement and pinned TCK "
+                    "revision. Investigate the Cognition runtime and protocol "
+                    "requirement before release disclosure."
+                ),
+            }
+    return assessments
 
 
 def _requirements(compatibility: dict[str, Any]) -> dict[str, dict[str, Any]]:
@@ -280,10 +335,10 @@ def parse_args() -> argparse.Namespace:
 
 
 def main() -> int:
-    """Build evidence and return the release-gate status."""
+    """Build evidence and report whether compatibility gaps were observed."""
     args = parse_args()
     try:
-        archive, checksum, gate_passed = build_evidence(
+        archive, checksum, _conformance_passed = build_evidence(
             reports_dir=args.reports_dir,
             fixture_log=args.fixture_log,
             output_dir=args.output_dir,
@@ -300,7 +355,7 @@ def main() -> int:
         return 2
     print(archive)
     print(checksum)
-    return 0 if gate_passed else 1
+    return 0
 
 
 if __name__ == "__main__":

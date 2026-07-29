@@ -215,10 +215,18 @@ not patched. Transport selection is driven by the deterministic fixture's Agent
 Card, as recommended by the TCK, instead of forcing a transport on the command
 line.
 
-Pull requests run the applicable `MUST` suite as a release-blocking gate.
-Pre-release and release workflows run the full suite; `SHOULD` and `MAY`
-results are reported for review but do not redefine Cognition's required
-conformance surface.
+Pull requests run the applicable `MUST` suite. Pre-release and release
+workflows run the full suite. For v0.13.1 these results are non-blocking
+compatibility disclosures: reports show users where Cognition aligns or
+diverges, while TCK findings do not prevent a release. Failure to produce a
+valid report remains a CI failure.
+
+Each failed requirement receives a Cognition assessment in the manifest and
+explanation. A finding is classified as an upstream harness defect only for an
+explicit requirement and pinned TCK revision with a documented protocol
+conflict and upstream issue. Every other new failure is marked unassessed and
+requires Cognition-owner review; the reporting workflow does not automatically
+waive it.
 
 The system under test is `tests/support/a2a_tck_sut.py`, a deterministic,
 test-only Cognition agent definition. It exercises Cognition's real Agent Card,
@@ -227,7 +235,7 @@ introducing model-provider or OAuth-gateway availability into protocol
 conformance. The manual Kennel Stock Guru TCK run was the exploratory signal
 that prompted investigation of the Cognition runtime; Stock Guru was not
 identified as the source of the discrepancies. The deterministic fixture is
-used for repeatable release gating and is never mounted in the production
+used for repeatable release reporting and is never mounted in the production
 application.
 
 Each run produces a versioned evidence archive containing the official HTML,

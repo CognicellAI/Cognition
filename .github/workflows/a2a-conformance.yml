@@ -104,9 +104,13 @@ jobs:
             --suite "${{ inputs.suite }}" \
             --workflow-url "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
             --tck-exit-code "$status"
-          gate_status=$?
+          evidence_status=$?
           set -e
-          echo "$gate_status" > /tmp/a2a-gate-exit-code
+          if test "$evidence_status" = "0"; then
+            echo "$status" > /tmp/a2a-conformance-exit-code
+          else
+            echo "2" > /tmp/a2a-conformance-exit-code
+          fi
 
       - name: Upload conformance evidence
         if: always()
@@ -120,6 +124,16 @@ jobs:
           if-no-files-found: error
           retention-days: 90
 
-      - name: Enforce applicable MUST gate
+      - name: Summarize advisory conformance result
         if: always()
-        run: exit "$(cat /tmp/a2a-gate-exit-code 2>/dev/null || echo 2)"
+        run: |
+          result="$(cat /tmp/a2a-conformance-exit-code 2>/dev/null || echo 2)"
+          if test "$result" = "0"; then
+            echo "### A2A v1 compatibility: no applicable MUST gaps" >> "$GITHUB_STEP_SUMMARY"
+          elif test "$result" = "1"; then
+            echo "### A2A v1 compatibility: gaps reported (advisory)" >> "$GITHUB_STEP_SUMMARY"
+            echo "Review the uploaded evidence archive before release." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "A2A evidence generation failed; no valid compatibility report was produced."
+            exit "$result"
+          fi

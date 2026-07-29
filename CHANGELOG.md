@@ -13,11 +13,15 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
-- Added release-bound A2A v1 conformance evidence: one pinned, unchanged
-  official TCK workflow now gates applicable `MUST` requirements and attaches
-  versioned reports plus Cognition's interpretation to every GitHub release.
+- Added release-bound A2A v1 compatibility evidence: one pinned, unchanged
+  official TCK workflow records applicable `MUST`, `SHOULD`, and `MAY` findings
+  without blocking v0.13.1, and attaches versioned reports plus Cognition's
+  interpretation to every GitHub release.
 
 ### Fixed
+
+- Avoid duplicate CI runs when a release branch has both a push and an open
+  pull request.
 
 - Reject inbound A2A Parts whose explicit `mediaType` is not advertised by the
   selected Agent Card before model execution, returning the protocol content
