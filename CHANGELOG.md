@@ -9,6 +9,20 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.13.1] — 2026-07-29
+
+### Added
+
+- Added release-bound A2A v1 conformance evidence: one pinned, unchanged
+  official TCK workflow now gates applicable `MUST` requirements and attaches
+  versioned reports plus Cognition's interpretation to every GitHub release.
+
+### Fixed
+
+- Reject inbound A2A Parts whose explicit `mediaType` is not advertised by the
+  selected Agent Card before model execution, returning the protocol content
+  type error consistently for unary and streaming sends.
+
 ## [0.13.0] — 2026-07-27
 
 ### Highlights

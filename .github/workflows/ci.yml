@@ -46,58 +46,34 @@ jobs:
       - name: Run linting
         run: uv run ruff check .
 
-      - name: Check out official A2A TCK
-        if: matrix.python-version == '3.12'
-        uses: actions/checkout@v4
+  a2a-conformance:
+    uses: ./.github/workflows/a2a-conformance.yml
+    with:
+      suite: ${{ github.event_name == 'release' && 'full' || 'must' }}
+      artifact-name: a2a-v1-tck-${{ github.sha }}
+
+  publish-a2a-conformance-evidence:
+    needs: a2a-conformance
+    if: always() && github.event_name == 'release'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download conformance evidence
+        uses: actions/download-artifact@v4
         with:
-          repository: a2aproject/a2a-tck
-          # Pinned for reproducible A2A 1.0 JSON-RPC conformance. Update this
-          # SHA deliberately when adopting a newer official TCK revision.
-          ref: 5996b79f9cefa6fc390980e383e358a66fb9e49e
-          path: .a2a-tck
+          name: a2a-v1-tck-${{ github.sha }}
+          path: a2a-tck-evidence
 
-      - name: Install official A2A TCK
-        if: matrix.python-version == '3.12'
-        run: uv sync --project .a2a-tck
-
-      - name: Start Cognition A2A conformance fixture
-        if: matrix.python-version == '3.12'
+      - name: Attach evidence to GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          nohup uv run uvicorn tests.support.a2a_tck_sut:create_app \
-            --factory --host 127.0.0.1 --port 9999 \
-            > /tmp/cognition-a2a-tck.log 2>&1 &
-          echo $! > /tmp/cognition-a2a-tck.pid
-          for attempt in $(seq 1 30); do
-            if curl --fail --silent \
-              http://127.0.0.1:9999/.well-known/agent-card.json > /dev/null; then
-              exit 0
-            fi
-            sleep 1
-          done
-          cat /tmp/cognition-a2a-tck.log
-          exit 1
-
-      - name: Run official A2A 1.0 JSON-RPC TCK
-        if: matrix.python-version == '3.12'
-        working-directory: .a2a-tck
-        run: uv run python run_tck.py --sut-host http://127.0.0.1:9999 --transport jsonrpc
-
-      - name: Stop Cognition A2A conformance fixture
-        if: ${{ matrix.python-version == '3.12' && always() }}
-        run: |
-          if test -f /tmp/cognition-a2a-tck.pid; then
-            kill "$(cat /tmp/cognition-a2a-tck.pid)" || true
-          fi
-
-      - name: Upload A2A conformance evidence
-        if: ${{ matrix.python-version == '3.12' && always() }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: a2a-jsonrpc-tck-python-${{ matrix.python-version }}
-          path: |
-            .a2a-tck/reports/
-            /tmp/cognition-a2a-tck.log
-          if-no-files-found: warn
+          gh release upload "${{ github.event.release.tag_name }}" \
+            a2a-tck-evidence/*.zip \
+            a2a-tck-evidence/*.sha256 \
+            --repo "${{ github.repository }}" \
+            --clobber
 
   # ─── Cache warm-up (every push to main) ───────────────────────────────────
   # Builds without pushing on every push to main so that layer caches are
@@ -130,7 +106,7 @@ jobs:
 
   # ─── Build amd64 app image (native x86 runner) ────────────────────────────
   build-amd64-app:
-    needs: test
+    needs: [test, a2a-conformance]
     if: github.event_name == 'release'
     runs-on: ubuntu-latest
     permissions:
@@ -167,7 +143,7 @@ jobs:
 
   # ─── Build amd64 sandbox image (native x86 runner) ────────────────────────
   build-amd64-sandbox:
-    needs: test
+    needs: [test, a2a-conformance]
     if: github.event_name == 'release'
     runs-on: ubuntu-latest
     permissions:
@@ -204,7 +180,7 @@ jobs:
 
   # ─── Build arm64 app image (native ARM runner — no QEMU) ──────────────────
   build-arm64-app:
-    needs: test
+    needs: [test, a2a-conformance]
     if: github.event_name == 'release'
     runs-on: ubuntu-24.04-arm  # Native ARM64 — eliminates QEMU emulation overhead
     permissions:
@@ -241,7 +217,7 @@ jobs:
 
   # ─── Build arm64 sandbox image (native ARM runner — no QEMU) ──────────────
   build-arm64-sandbox:
-    needs: test
+    needs: [test, a2a-conformance]
     if: github.event_name == 'release'
     runs-on: ubuntu-24.04-arm  # Native ARM64 — eliminates QEMU emulation overhead
     permissions:

@@ -35,6 +35,23 @@ uv run mypy .
 
 All three must pass before the release PR is merged.
 
+### A2A v1 Conformance
+
+The `a2a-conformance` job is required release evidence, not an evaluation of a
+sample agent. It runs the unchanged official A2A TCK revision pinned in
+`.github/workflows/a2a-conformance.yml` against Cognition's deterministic
+test-only fixture.
+
+1. Pull requests must pass all applicable `MUST` requirements.
+2. The pre-release workflow must run the full suite for the exact candidate
+   commit.
+3. Review `COGNITION-EXPLANATION.md` in the uploaded evidence and record the
+   reviewer, review date, and workflow URL in the release PR.
+4. Treat `SHOULD` and `MAY` findings as advisory follow-up unless a release
+   explicitly declares that optional capability.
+5. Do not patch the TCK, point the conformance gate at Stock Guru, or add a
+   production model/OAuth gateway dependency to the deterministic fixture.
+
 ## Container Validation
 
 Before tagging, prove the release commit can build all required container variants.
@@ -80,6 +97,8 @@ For a release to be considered healthy, the release workflow must be able to com
 6. `build-arm64-sandbox`
 7. `merge-manifests-app`
 8. `merge-manifests-sandbox`
+9. `a2a-conformance`
+10. `publish-a2a-conformance-evidence`
 
 If one image family fails, the other should still be able to build independently. That behavior is required for release workflow hygiene.
 
@@ -93,6 +112,8 @@ The PR should include:
 2. changelog entry
 3. any required roadmap release metadata updates
 4. validation output summary
+5. A2A TCK evidence review: reviewer, date, workflow URL, applicable `MUST`
+   result, and disposition of advisory findings
 
 Recommended PR body sections:
 
@@ -126,6 +147,10 @@ Verify all of the following:
 4. sandbox multi-arch manifest was published
 5. expected semver tags exist for both packages
 6. no last-minute divergence exists between release notes and shipped code
+7. `cognition-vX.Y.Z-a2a-v1-tck.zip` and its `.sha256` file are attached to
+   the GitHub release
+8. the archive contains the official reports, manifest, redacted fixture log,
+   and Cognition explanation for the exact release commit
 
 ## Recovery Rule
 

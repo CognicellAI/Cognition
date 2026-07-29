@@ -9,7 +9,12 @@ from a2a.helpers.proto_helpers import new_data_part
 from a2a.types import Part
 from google.protobuf.json_format import ParseDict  # type: ignore[import-untyped]
 
-from server.app.protocols.a2a.inbound import InvalidA2APartError, normalize_a2a_parts
+from server.app.protocols.a2a.inbound import (
+    InvalidA2APartError,
+    UnsupportedA2AMediaTypeError,
+    normalize_a2a_parts,
+    validate_a2a_part_media_types,
+)
 
 
 def _part(value: dict) -> Part:
@@ -69,6 +74,35 @@ def test_artifact_ids_are_idempotent_per_message_and_unique_across_messages() ->
 
     assert first.artifacts[0].id == retry.artifacts[0].id
     assert first.artifacts[0].id != continuation.artifacts[0].id
+
+
+def test_media_type_validation_is_case_insensitive_and_ignores_parameters() -> None:
+    validate_a2a_part_media_types(
+        [
+            _part({"text": "Analyze", "mediaType": "Text/Plain; charset=utf-8"}),
+            _part({"data": {"priority": 3}, "mediaType": "APPLICATION/JSON"}),
+            _part({"raw": "aGVsbG8="}),
+        ],
+        ["text/plain", "application/json"],
+    )
+
+
+def test_media_type_validation_rejects_modes_outside_agent_card() -> None:
+    with pytest.raises(
+        UnsupportedA2AMediaTypeError,
+        match="application/x-unsupported-tck-type",
+    ):
+        validate_a2a_part_media_types(
+            [
+                _part(
+                    {
+                        "raw": "dGNr",
+                        "mediaType": "application/x-unsupported-tck-type",
+                    }
+                )
+            ],
+            ["text/plain", "application/json"],
+        )
 
 
 @pytest.mark.parametrize(

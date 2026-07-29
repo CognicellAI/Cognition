@@ -139,6 +139,7 @@ async def _build_client(
     artifact_store: MemoryArtifactStore | None = None,
     max_raw_part_bytes: int = 10 * 1024 * 1024,
     stream_chunk_bytes: int = 4096,
+    input_modes: list[str] | None = None,
 ) -> httpx.AsyncClient:
     app = FastAPI()
     config_store = DefaultConfigStore(MemoryConfigRegistry())
@@ -149,7 +150,11 @@ async def _build_client(
             "name": "researcher",
             "system_prompt": "Research carefully",
             "mode": "primary",
-            "a2a": {"exposed": True},
+            "a2a": {
+                "exposed": True,
+                "default_input_modes": input_modes
+                or ["text/plain", "application/json"],
+            },
         },
     )
     artifact_store = artifact_store or MemoryArtifactStore()
@@ -719,6 +724,7 @@ async def test_all_inbound_part_variants_are_ordered_scoped_and_inert(
         tmp_path,
         manager,
         artifact_store,
+        input_modes=["text/plain", "application/json", "application/pdf"],
     )
     request = _send_request("all-input-parts")
     request["params"]["message"].update(
@@ -822,6 +828,42 @@ async def test_oversized_raw_input_fails_before_task_or_model_execution(
 
     assert "error" in response.json()
     assert manager.service.calls == []
+
+
+@pytest.mark.parametrize("method", ["SendMessage", "SendStreamingMessage"])
+async def test_unsupported_media_type_fails_before_task_or_model_execution(
+    setup_storage_backend: StorageBackend,
+    tmp_path,
+    method: str,
+) -> None:
+    manager = _FakeSessionAgentManager(setup_storage_backend)
+    client = await _build_client(
+        setup_storage_backend,
+        tmp_path,
+        manager,
+    )
+    request = _send_request(f"unsupported-media-{method}")
+    request["method"] = method
+    request["params"]["message"]["parts"] = [
+        {
+            "raw": "dGNr",
+            "mediaType": "application/x-unsupported-tck-type",
+        }
+    ]
+
+    async with client:
+        response = await client.post("/a2a/researcher", json=request)
+
+    body = response.json()
+    assert body["error"]["code"] == -32005
+    assert "unsupported media type" in body["error"]["message"]
+    assert manager.service.calls == []
+    tasks, cursor = await setup_storage_backend.list_tasks(
+        "researcher",
+        {"account": "acme"},
+    )
+    assert tasks == []
+    assert cursor is None
 
 
 async def test_input_required_continues_same_task_with_new_attempt_and_can_cancel(

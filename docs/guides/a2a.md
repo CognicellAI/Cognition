@@ -205,3 +205,31 @@ continuation, listing, subscription, and cancellation.
 
 For complete JSON-RPC requests, responses, headers, and errors, see the
 [A2A API Reference](api-reference.md#a2a-protocol).
+
+## Conformance testing
+
+Cognition validates the A2A adapter against the official
+[`a2aproject/a2a-tck`](https://github.com/a2aproject/a2a-tck) at the revision
+pinned in `.github/workflows/a2a-conformance.yml`. The official TCK checkout is
+not patched. Transport selection is driven by the deterministic fixture's Agent
+Card, as recommended by the TCK, instead of forcing a transport on the command
+line.
+
+Pull requests run the applicable `MUST` suite as a release-blocking gate.
+Pre-release and release workflows run the full suite; `SHOULD` and `MAY`
+results are reported for review but do not redefine Cognition's required
+conformance surface.
+
+The system under test is `tests/support/a2a_tck_sut.py`, a deterministic,
+test-only Cognition agent definition. It exercises Cognition's real Agent Card,
+JSON-RPC, persistence, task lifecycle, artifact, and streaming paths without
+introducing model-provider or OAuth-gateway availability into protocol
+conformance. It is not Stock Guru and is never mounted in the production
+application.
+
+Each run produces a versioned evidence archive containing the official HTML,
+JSON, and JUnit reports, a redacted fixture log, a machine-readable manifest,
+and `COGNITION-EXPLANATION.md`. Cognition's optional SendMessage idempotency
+extension remains enabled and independently tested in production code; only
+the deterministic TCK fixture disables it because official scenarios reuse
+message IDs as test data.
