@@ -324,19 +324,16 @@ The storage and execution backends never call each other. Composition happens on
 
 ---
 
-## Built-in Tools
+## Tool Surface
 
-Beyond the sandbox backends, deployments may explicitly enable host-provided
-tools from `server/app/agent/tools.py`. Production multi-tenant deployments
-should keep host tools disabled unless the operator accepts the trust boundary:
+Cognition does not inject its own default tools. An agent receives the standard
+Deep Agents tool surface plus tools the builder explicitly attaches through an
+agent definition, the scoped tool registry, or MCP configuration. This keeps
+tool availability definition-driven and prevents undeclared host-network or
+package-inspection capabilities from appearing in every agent.
 
-| Tool | Class | Description |
-|---|---|---|
-| `browser` | `BrowserTool` | Fetch web pages as text, markdown, or HTML via `httpx` |
-| `search` | `SearchTool` | DuckDuckGo web search, returns titles, links, and snippets |
-| `inspect_package` | `InspectPackageTool` | Inspect Python packages: list submodules, classes, and functions |
-
-These run in the local process (not inside the Docker sandbox) and are always available regardless of `sandbox_backend` setting.
+Configured host-side MCP tools remain a development-only trust boundary and
+require `COGNITION_ALLOW_HOST_TOOLS=true`.
 
 ---
 

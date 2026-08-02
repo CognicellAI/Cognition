@@ -294,7 +294,7 @@ Cognition ships four sandbox backends:
 |---|---|---|---|
 | `sandbox.backend` | `COGNITION_SANDBOX_BACKEND` | `local` | `local`, `docker`, `kubernetes`, or `aws_lambda_microvm` |
 | (environment only) | `COGNITION_ALLOW_UNSAFE_LOCAL_EXECUTION` | `false` | Explicitly allow the `local` backend to run commands as the Cognition host process. Use only for standalone development. |
-| (environment only) | `COGNITION_ALLOW_HOST_TOOLS` | `false` | Explicitly inject host-backed Browser, Search, and package-inspection tools. Use only for development deployments that accept host access. |
+| (environment only) | `COGNITION_ALLOW_HOST_TOOLS` | `false` | Permit explicitly configured host-side MCP tools. Use only for development deployments that accept host access. Cognition does not inject host tools by default. |
 | (environment only) | `COGNITION_ALLOW_API_PYTHON_TOOLS` | `false` | Explicitly allow API-registered Python tool code to be loaded by the runtime. Use only for trusted development or admin-only deployments. |
 
 Production deployments should select `docker`, `kubernetes`, or

@@ -695,14 +695,14 @@ class TestUpdateAgent:
         )
         response = client.patch(
             "/agents/test-patch-excluded-tools-agent",
-            json={"excluded_tools": ["glob", "grep", "inspect_package", "ls"]},
+            json={"excluded_tools": ["glob", "grep", "ls", "read_file"]},
         )
         assert response.status_code == 200
         assert response.json()["config"]["excluded_tools"] == [
             "glob",
             "grep",
-            "inspect_package",
             "ls",
+            "read_file",
         ]
 
         get_resp = client.get("/agents/test-patch-excluded-tools-agent")
@@ -710,13 +710,13 @@ class TestUpdateAgent:
         assert get_resp.json()["config"]["excluded_tools"] == [
             "glob",
             "grep",
-            "inspect_package",
             "ls",
+            "read_file",
         ]
 
         raw = asyncio.run(get_config_store().get_agent_raw("test-patch-excluded-tools-agent"))
         assert raw is not None
-        assert raw["config"]["excluded_tools"] == ["glob", "grep", "inspect_package", "ls"]
+        assert raw["config"]["excluded_tools"] == ["glob", "grep", "ls", "read_file"]
 
     def test_patch_scoped_agent_persists_excluded_tools(self):
         scoped_settings = Settings(scoping_enabled=True, scope_keys=["tenant"])
@@ -735,15 +735,15 @@ class TestUpdateAgent:
 
             response = client.patch(
                 "/agents/test-scoped-excluded-tools-agent",
-                json={"excluded_tools": ["glob", "grep", "inspect_package", "ls"]},
+                json={"excluded_tools": ["glob", "grep", "ls", "read_file"]},
                 headers=headers,
             )
             assert response.status_code == 200
             assert response.json()["config"]["excluded_tools"] == [
                 "glob",
                 "grep",
-                "inspect_package",
                 "ls",
+                "read_file",
             ]
 
             get_resp = client.get(
@@ -754,8 +754,8 @@ class TestUpdateAgent:
             assert get_resp.json()["config"]["excluded_tools"] == [
                 "glob",
                 "grep",
-                "inspect_package",
                 "ls",
+                "read_file",
             ]
 
             raw = asyncio.run(
@@ -768,8 +768,8 @@ class TestUpdateAgent:
             assert raw["config"]["excluded_tools"] == [
                 "glob",
                 "grep",
-                "inspect_package",
                 "ls",
+                "read_file",
             ]
         finally:
             app.dependency_overrides.pop(get_settings_dep, None)

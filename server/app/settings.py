@@ -218,7 +218,7 @@ class Settings(BaseSettings):
     allow_host_tools: bool = Field(
         default=False,
         alias="COGNITION_ALLOW_HOST_TOOLS",
-        description="Explicitly inject Browser/Search/package host tools in development.",
+        description="Explicitly permit configured host-side MCP tools in development.",
     )
     allow_api_python_tools: bool = Field(
         default=False,

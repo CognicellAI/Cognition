@@ -178,7 +178,6 @@ config:
   excluded_tools:
     - grep
     - ls
-    - websearch
   blocked_tools:
     - execute
 ```
