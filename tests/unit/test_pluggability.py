@@ -86,27 +86,6 @@ async def test_create_cognition_agent_pluggability():
 
 
 @pytest.mark.asyncio
-async def test_cognition_does_not_inject_non_deep_agents_default_tools():
-    """Only explicit tools are forwarded to Deep Agents by Cognition."""
-    clear_agent_cache()
-    with patch("server.app.agent.cognition_agent.create_deep_agent") as mock_create:
-        mock_create.return_value = AsyncMock()
-        await create_cognition_agent(
-            CognitionAgentParams(
-                project_path=".",
-                settings=Settings(
-                    allow_host_tools=True,
-                    unsafe_local_execution=True,
-                ),
-            )
-        )
-
-        _, kwargs = mock_create.call_args
-        assert kwargs["tools"] == []
-    clear_agent_cache()
-
-
-@pytest.mark.asyncio
 async def test_string_model_change_recompiles_agent_graph():
     """Changing a string model ID should produce a fresh Deep Agents graph."""
     clear_agent_cache()

@@ -114,6 +114,7 @@ config:
   excluded_tools:
     - grep
     - ls
+    - websearch
   blocked_tools:
     - execute
 ---
@@ -143,7 +144,7 @@ config:
   model: gpt-4o
   temperature: 0.2
   excluded_tools:
-    - grep
+    - websearch
   blocked_tools:
     - execute
 ```
@@ -175,6 +176,7 @@ config:
     - glob
     - grep
     - ls
+    - websearch
   blocked_tools:
     - execute
 ```

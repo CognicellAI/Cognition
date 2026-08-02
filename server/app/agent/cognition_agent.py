@@ -46,6 +46,7 @@ from server.app.agent.middleware import (  # noqa: E402
 )
 from server.app.agent.prompts import SYSTEM_PROMPT  # noqa: E402
 from server.app.agent.sandbox_backend import create_sandbox_backend  # noqa: E402
+from server.app.agent.tools import BrowserTool, InspectPackageTool, SearchTool  # noqa: E402
 from server.app.observability import (  # noqa: E402
     RUNTIME_CACHE_EVICTIONS_TOTAL,
     RUNTIME_CACHE_LOOKUPS_TOTAL,
@@ -833,6 +834,10 @@ async def create_cognition_agent(params: CognitionAgentParams) -> CognitionAgent
             "Use sandboxed skills/scripts or explicitly enable development tool loading."
         )
     agent_tools = list(params.tools) if params.tools else []
+    if settings.allow_host_tools:
+        logger.warning("Unsafe host tools enabled for development")
+        agent_tools.extend([BrowserTool(), SearchTool(), InspectPackageTool()])
+
     if params.mcp_configs:
         from server.app.agent.mcp_client import (
             _build_mcp_callbacks,

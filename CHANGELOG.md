@@ -11,12 +11,6 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [0.13.1] — 2026-07-29
 
-### Breaking Changes
-
-- Removed Cognition's implicit `webfetch`, `websearch`, and `inspect_package`
-  tools and their Python exports. Agents now receive only Deep Agents defaults
-  unless builders explicitly attach API-registered or MCP tools.
-
 ### Added
 
 - Added release-bound A2A v1 compatibility evidence: one pinned, unchanged

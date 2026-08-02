@@ -708,7 +708,7 @@ The two fields are intentionally separate:
 
 | Field | Runtime effect | When to use |
 |---|---|---|
-| `excluded_tools` | Removes matching tool names from the model-visible tool schema before the model can select them. | Hide inherited Deep Agents harness tools for a specific agent, such as a customer-facing concierge that should not see `grep`, `ls`, or `execute`. |
+| `excluded_tools` | Removes matching tool names from the model-visible tool schema before the model can select them. | Hide inherited Deep Agents harness tools for a specific agent, such as a customer-facing concierge that should not see `grep`, `ls`, `execute`, or `websearch`. |
 | `blocked_tools` | Denies matching tool calls at execution time through `ToolSecurityMiddleware`. The tool may still be visible unless it is also excluded. | Enforce a call-time safety guard. Per-agent values are merged with deployment-wide `COGNITION_BLOCKED_TOOLS`. |
 
 Use both fields for the same tool name when you want no model affordance plus a runtime guard. Tool names must match the runtime tool name exactly.
@@ -937,7 +937,7 @@ List all registered tools from both file discovery (AgentRegistry) and API regis
       "name": "bash",
       "source_type": "file",
       "source": "file",
-      "module": "builder_tools.search",
+      "module": "server.app.agent.tools",
       "description": null,
       "enabled": true,
       "interrupt_on": false
