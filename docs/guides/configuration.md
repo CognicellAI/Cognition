@@ -515,35 +515,39 @@ If no provider is found at any tier, `LLMProviderConfigError` is raised with an 
 
 ---
 
-## MCP Remote Servers
+## Agent MCP Servers
 
-MCP servers can be configured via YAML or managed at runtime via `POST /mcp-servers`.
+MCP servers belong to an Agent definition and are pinned with its active
+configuration revision. Cognition has no global MCP-server registry or
+`/mcp-servers` CRUD API.
 
 ```yaml
-# .cognition/config.yaml
-mcp:
-  servers:
-    - name: my-tools
-      url: https://tools.example.com/sse
-      transport: sse        # or "streamable_http" (default: "sse")
-      enabled: true
-      headers:              # optional auth headers
-        Authorization: "Bearer ..."
+mcp_servers:
+  - alias: github
+    url: https://mcp.github.example.com/mcp
+    transport: streamable_http
+    required: true
+    auth:
+      type: outbound_auth_provider
+      profile: production-egress
 ```
 
-| Field | Required | Default | Description |
-|---|---|---|---|
-| `name` | Yes | — | Unique identifier (1–100 chars) |
-| `url` | Yes | — | HTTP/HTTPS URL (stdio not supported) |
-| `transport` | No | `sse` | `sse` or `streamable_http` |
-| `enabled` | No | `true` | Whether to connect at startup |
-| `headers` | No | `{}` | HTTP headers sent with every request |
+Only remote HTTP/HTTPS Streamable HTTP endpoints are supported. The
+configuration cannot contain raw headers, credentials, callback code, or a
+model-controlled endpoint. Tools have the canonical identity
+`(server_alias, provider_tool_name)`; the model-visible name is derived from it.
 
-Each server must be an HTTP/HTTPS SSE endpoint. Stdio-based MCP servers are not supported for security reasons.
+| Authentication type | Use |
+|---|---|
+| `none` | A server that requires no transport authentication. |
+| `mcp_oauth` | Standard MCP OAuth for a direct provider endpoint. |
+| `outbound_auth_provider` | Optional builder-installed authentication or egress policy using an opaque profile. |
+| `static_bearer` | Local/development only; reads a token from a named environment variable. |
 
-Tools are namespaced by server name (e.g. `github-tools/create_pr`) to prevent collisions. The `tool_name_prefix=True` setting on `MultiServerMCPClient` is always active.
-
-MCP servers can also be managed at runtime via `POST/GET/PATCH/DELETE /mcp-servers`. See [Extending Agents](./extending-agents.md#6-mcp-tool-servers) for details.
+`outbound_auth_provider` is not required for direct endpoints. It is the
+extension point for builders that need gateway authorization, token exchange,
+or credential brokering without making Cognition a credential vault. See the
+[v0.14 MCP runtime contract](../proposals/v0.14.0-mcp-runtime-contract.md).
 
 ---
 

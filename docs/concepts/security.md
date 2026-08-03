@@ -199,10 +199,11 @@ def validate_url(cls, v: str) -> str:
 This policy ensures MCP tool servers cannot be used to execute arbitrary local processes.
 
 Additional MCP security measures:
-- **Header redaction** — `GET /mcp-servers` returns empty `headers` dicts to prevent credential leakage
-- **File-managed immutability** — servers from `.cognition/config.yaml` cannot be modified via API (409 on mutation)
-- **Scope injection** — `X-Cognition-Scope-*` headers are automatically added to MCP requests via `ToolCallInterceptor`
-- **Tool name prefixing** — `tool_name_prefix=True` on `MultiServerMCPClient` prevents tool name collisions
+- **Agent-owned configuration** — MCP servers are declared per Agent revision; no global server registry or CRUD endpoint exists
+- **No raw transport credentials** — definitions cannot contain headers, bearer values, provider callbacks, or URL credentials
+- **Bounded authentication** — native MCP OAuth, an optional builder-installed `OutboundAuthProvider`, or local-only environment bearer tokens apply to both discovery and invocation
+- **No arbitrary scope projection** — trusted runtime context is available to an authorization provider but is never turned into arbitrary outbound headers
+- **Canonical tool identity** — duplicate `(server_alias, provider_tool_name)` identities fail discovery
 
 ---
 
@@ -298,4 +299,4 @@ These prevent MIME sniffing, clickjacking, and reflected XSS attacks in browser 
 - [ ] Run the sandbox image from a minimal, audited base image
 - [ ] Set `COGNITION_PROTECTED_PATHS` to include any sensitive directories
 - [ ] Review which agents have `a2a_exposed: true` — only expose agents intended for external A2A access
-- [ ] Restrict `/mcp-servers` CRUD to authorized administrators (MCP server headers contain credentials)
+- [ ] Review each Agent's declared MCP endpoints and required/optional status
