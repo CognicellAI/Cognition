@@ -363,14 +363,20 @@ class CognitionDockerSandboxBackend(FilesystemBackend, SandboxBackendProtocol):
         pattern: str,
         path: str | None = None,
         glob: str | None = None,
+        *,
+        max_count: int | None = None,
+        context_lines: int = 0,
     ) -> GrepResult:
         """Search text only through the assigned Docker sandbox."""
+        del context_lines  # Docker's adapter does not expose surrounding-line search.
         try:
             matches = self._get_docker_backend().grep_files(
                 pattern,
                 self._relative_path(path),
                 glob,
             )
+            if max_count is not None:
+                matches = matches[:max_count]
             return GrepResult(matches=cast(list[Any], matches))
         except Exception as exc:
             return GrepResult(error=f"Error searching sandbox: {exc}", matches=[])
