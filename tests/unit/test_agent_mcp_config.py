@@ -6,16 +6,22 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from cryptography.fernet import Fernet
 from pydantic import ValidationError
 
 from server.app.agent.definition import AgentDefinition
-from server.app.agent.mcp_client import McpServerUnavailableError, load_agent_mcp_tools
+from server.app.agent.mcp_client import (
+    McpServerUnavailableError,
+    create_agent_mcp_client,
+    load_agent_mcp_tools,
+)
 from server.app.agent.mcp_config import AgentMcpServer, McpAuthConfig, canonical_mcp_tool_identity
 from server.app.agent.outbound_auth import (
     OutboundAuthProviderRegistry,
     OutboundAuthRequest,
     OutboundAuthResult,
 )
+from server.app.settings import Settings
 
 
 def test_agent_owns_a_streamable_http_mcp_server() -> None:
@@ -63,6 +69,36 @@ def test_static_bearer_never_accepts_a_raw_token() -> None:
 
     with pytest.raises(ValidationError):
         McpAuthConfig(type="static_bearer", env="Bearer secret")
+
+
+def test_mcp_oauth_uses_the_mcp_sdk_with_encrypted_database_storage(tmp_path) -> None:
+    server = AgentMcpServer(
+        alias="github",
+        url="https://mcp.example.test/github",
+        auth=McpAuthConfig(type="mcp_oauth"),
+    )
+    settings = Settings.model_validate(
+        {
+            "persistence_backend": "sqlite",
+            "persistence_uri": "oauth.db",
+            "workspace_root": tmp_path,
+            "mcp_oauth_encryption_key": Fernet.generate_key().decode(),
+        }
+    )
+
+    with patch("server.app.agent.mcp_client.MultiServerMCPClient") as client_type:
+        create_agent_mcp_client(
+            server,
+            agent_identity="agent-1",
+            runtime_snapshot="snapshot-1",
+            trusted_context={"tenant": "acme"},
+            settings=settings,
+        )
+
+    connection = client_type.call_args.kwargs["connections"]["github"]
+    assert connection["transport"] == "streamable_http"
+    assert connection["auth"].__class__.__name__ == "OAuthClientProvider"
+    assert "headers" not in connection
 
 
 def test_agent_rejects_duplicate_mcp_aliases() -> None:

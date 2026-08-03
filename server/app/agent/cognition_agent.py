@@ -728,6 +728,7 @@ async def create_cognition_agent(params: CognitionAgentParams) -> CognitionAgent
             agent_identity=params.agent_identity or "",
             runtime_snapshot=params.runtime_snapshot or "",
             trusted_context=params.scope or {},
+            settings=settings,
         )
         agent_tools.extend(mcp_tools)
         logger.info("agent_mcp_tools_loaded", count=len(mcp_tools))

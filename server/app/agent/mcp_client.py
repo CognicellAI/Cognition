@@ -20,9 +20,16 @@ from langchain_mcp_adapters.callbacks import CallbackContext, Callbacks
 from langchain_mcp_adapters.client import MultiServerMCPClient
 from langchain_mcp_adapters.interceptors import ToolCallInterceptor
 from langchain_mcp_adapters.sessions import StreamableHttpConnection
+from mcp.client.auth import OAuthClientProvider
+from mcp.shared.auth import OAuthClientMetadata
 from mcp.types import LoggingMessageNotificationParams
 
 from server.app.agent.mcp_config import AgentMcpServer
+from server.app.agent.mcp_oauth import (
+    EncryptedMcpOAuthTokenStorage,
+    McpOAuthPartition,
+    McpOAuthStorageError,
+)
 from server.app.agent.outbound_auth import (
     OutboundAuthError,
     OutboundAuthProviderRegistry,
@@ -30,6 +37,7 @@ from server.app.agent.outbound_auth import (
     OutboundAuthResult,
     get_outbound_auth_provider_registry,
 )
+from server.app.settings import Settings, get_settings
 
 logger = structlog.get_logger(__name__)
 
@@ -49,6 +57,10 @@ def create_agent_mcp_client(
     callbacks: Callbacks | None = None,
     tool_interceptors: list[ToolCallInterceptor] | None = None,
     outbound_auth: OutboundAuthResult | None = None,
+    agent_identity: str = "",
+    runtime_snapshot: str = "",
+    trusted_context: dict[str, str] | None = None,
+    settings: Settings | None = None,
 ) -> MultiServerMCPClient:
     """Create a client for exactly one validated Agent MCP server.
 
@@ -64,14 +76,35 @@ def create_agent_mcp_client(
             raise McpServerUnavailableError(config.alias, "auth_unavailable")
         headers = {"Authorization": f"Bearer {token}"}
     elif config.auth.type == "mcp_oauth":
-        # These modes require the v0.14 transport-security provider. Do not
-        # downgrade a protected endpoint to anonymous transport while wiring is
-        # incomplete.
-        raise McpServerUnavailableError(config.alias, "auth_provider_unavailable")
+        resolved_settings = settings or get_settings()
+        if resolved_settings.mcp_oauth_encryption_key is None:
+            raise McpServerUnavailableError(config.alias, "oauth_storage_unavailable")
+        try:
+            storage = EncryptedMcpOAuthTokenStorage(
+                persistence_backend=resolved_settings.persistence_backend,
+                persistence_uri=resolved_settings.persistence_uri,
+                encryption_key=resolved_settings.mcp_oauth_encryption_key.get_secret_value(),
+                partition=McpOAuthPartition(
+                    agent_identity=agent_identity,
+                    runtime_snapshot=runtime_snapshot,
+                    effective_scope=trusted_context or {},
+                    server_url=config.url,
+                ),
+                workspace_path=resolved_settings.workspace_path,
+            )
+            oauth_auth = OAuthClientProvider(
+                server_url=config.url,
+                client_metadata=OAuthClientMetadata(redirect_uris=None),
+                storage=storage,
+            )
+        except McpOAuthStorageError as exc:
+            raise McpServerUnavailableError(config.alias, "oauth_storage_unavailable") from exc
 
     connection: StreamableHttpConnection = {"transport": "streamable_http", "url": config.url}
     if headers:
         connection["headers"] = headers
+    if config.auth.type == "mcp_oauth":
+        connection["auth"] = oauth_auth
     if outbound_auth is not None:
         if outbound_auth.headers:
             connection["headers"] = dict(outbound_auth.headers)
@@ -95,6 +128,7 @@ async def load_agent_mcp_tools(
     trusted_context: dict[str, str] | None = None,
     deadline: datetime | None = None,
     auth_providers: OutboundAuthProviderRegistry | None = None,
+    settings: Settings | None = None,
 ) -> list[Any]:
     """Discover agent MCP tools one server at a time with fail-closed semantics."""
     tools: list[Any] = []
@@ -115,6 +149,10 @@ async def load_agent_mcp_tools(
                 callbacks=callbacks,
                 tool_interceptors=tool_interceptors,
                 outbound_auth=outbound_auth,
+                agent_identity=agent_identity,
+                runtime_snapshot=runtime_snapshot,
+                trusted_context=trusted_context,
+                settings=settings,
             ).get_tools()
             for tool in discovered:
                 provider_name = str(getattr(tool, "name", ""))
