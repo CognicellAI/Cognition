@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, patch
 
@@ -137,7 +136,7 @@ async def test_strict_agent_does_not_inject_host_browser_search_or_inspection(
 
 
 @pytest.mark.asyncio
-async def test_cached_graph_resolves_each_runs_current_sandbox_dynamically(
+async def test_deep_agents_v07_graph_is_not_cached_across_sandboxed_runs(
     tmp_path,
 ) -> None:
     clear_agent_cache()
@@ -176,15 +175,11 @@ async def test_cached_graph_resolves_each_runs_current_sandbox_dynamically(
             )
         )
 
-    assert create.call_count == 1
-    assert first.agent is second.agent is graph
-    backend_factory = create.call_args.kwargs["backend"]
-    first_context = SimpleNamespace(sandbox_backend=first.sandbox_backend)
-    second_context = SimpleNamespace(sandbox_backend=second.sandbox_backend)
-    assert backend_factory(SimpleNamespace(context=first_context)) is first_sandbox
-    assert backend_factory(SimpleNamespace(context=second_context)) is second_sandbox
-    with pytest.raises(RuntimeError, match="no assigned sandbox"):
-        backend_factory(SimpleNamespace(context=SimpleNamespace()))
+    assert create.call_count == 2
+    assert first.agent is graph
+    assert second.agent is graph
+    assert create.call_args_list[0].kwargs["backend"] is first_sandbox
+    assert create.call_args_list[1].kwargs["backend"] is second_sandbox
     clear_agent_cache()
 
 
