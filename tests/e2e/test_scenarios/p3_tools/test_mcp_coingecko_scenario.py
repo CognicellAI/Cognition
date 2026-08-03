@@ -1,4 +1,4 @@
-"""Docker Compose e2e scenarios for remote MCP server configuration.
+"""Docker Compose e2e scenarios for Agent-owned remote MCP configuration.
 
 These tests target the running Cognition API (usually docker-compose at
 ``COGNITION_E2E_URL=http://localhost:8000``) and the public CoinGecko MCP
@@ -73,14 +73,23 @@ async def _collect_events(
     return events
 
 
-async def _register_coingecko(api_client: ScenarioTestClient, name: str) -> None:
+async def _create_coingecko_agent(api_client: ScenarioTestClient, name: str) -> None:
     response = await api_client.post(
-        "/mcp-servers",
+        "/agents",
         json={
             "name": name,
-            "url": COINGECKO_MCP_URL,
-            "enabled": True,
-            "transport": "sse",
+            "system_prompt": "You are a concise agent that may use configured MCP tools.",
+            "mode": "primary",
+            "mcp": {
+                "servers": {
+                    "coingecko": {
+                        "url": COINGECKO_MCP_URL,
+                        "enabled": True,
+                        "required": True,
+                        "transport": "sse",
+                    }
+                }
+            },
         },
     )
     assert response.status_code == 201, response.text
@@ -93,32 +102,35 @@ class TestCoinGeckoMcpScenario:
     async def test_builder_can_configure_remote_mcp_server(
         self, api_client: ScenarioTestClient
     ) -> None:
-        server_name = _unique("coingecko")
+        agent_name = _unique("coingecko-agent")
         try:
-            await _register_coingecko(api_client, server_name)
+            await _create_coingecko_agent(api_client, agent_name)
 
-            list_response = await api_client.get("/mcp-servers")
+            list_response = await api_client.get("/agents")
             assert list_response.status_code == 200, list_response.text
-            servers = list_response.json()["servers"]
-            configured = next(server for server in servers if server["name"] == server_name)
+            agents = list_response.json()["agents"]
+            assert any(agent["name"] == agent_name for agent in agents)
+
+            get_response = await api_client.get(f"/agents/{agent_name}")
+            assert get_response.status_code == 200, get_response.text
+            configured = get_response.json()["mcp"]["servers"]["coingecko"]
             assert configured["url"] == COINGECKO_MCP_URL
             assert configured["enabled"] is True
             assert configured["transport"] == "sse"
-
-            get_response = await api_client.get(f"/mcp-servers/{server_name}")
-            assert get_response.status_code == 200, get_response.text
-            assert get_response.json()["name"] == server_name
         finally:
-            await api_client.delete(f"/mcp-servers/{server_name}")
+            await api_client.delete(f"/agents/{agent_name}")
 
     async def test_agent_can_call_coingecko_mcp_tool(
         self, api_client: ScenarioTestClient
     ) -> None:
-        server_name = "coingecko"
-        session_id = await api_client.create_session(_unique("coingecko-mcp"))
+        agent_name = _unique("coingecko-agent")
+        session_id: str | None = None
         try:
-            await api_client.delete(f"/mcp-servers/{server_name}")
-            await _register_coingecko(api_client, server_name)
+            await _create_coingecko_agent(api_client, agent_name)
+            session_id = await api_client.create_session(
+                _unique("coingecko-mcp"),
+                agent_name=agent_name,
+            )
 
             events = await _collect_events(
                 api_client,
@@ -138,5 +150,6 @@ class TestCoinGeckoMcpScenario:
                 f"Events: {[event.get('event') for event in events]}"
             )
         finally:
-            await api_client.delete(f"/sessions/{session_id}")
-            await api_client.delete(f"/mcp-servers/{server_name}")
+            if session_id is not None:
+                await api_client.delete(f"/sessions/{session_id}")
+            await api_client.delete(f"/agents/{agent_name}")

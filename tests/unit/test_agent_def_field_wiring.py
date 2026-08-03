@@ -143,7 +143,6 @@ async def _run(
     mock_config_store.get_agent_definition = AsyncMock(return_value=None)
     mock_config_store.list_agent_definitions = AsyncMock(return_value=[])
     mock_config_store.list_tools = AsyncMock(return_value=[])
-    mock_config_store.list_mcp_servers = AsyncMock(return_value=[])
 
     service._config_store = mock_config_store
 
@@ -805,7 +804,6 @@ class TestToolsWiring:
         mock_config_store.get_agent_definition = AsyncMock(return_value=agent_def)
         mock_config_store.list_agent_definitions = AsyncMock(return_value=[])
         mock_config_store.list_tools = AsyncMock(return_value=[])
-        mock_config_store.list_mcp_servers = AsyncMock(return_value=[])
         service._config_store = mock_config_store
 
         mock_storage = MagicMock()
@@ -892,7 +890,6 @@ class TestToolsWiring:
         mock_config_store.get_agent_definition = AsyncMock(return_value=primary)
         mock_config_store.list_agent_definitions = AsyncMock(return_value=[])
         mock_config_store.list_tools = AsyncMock(return_value=[])
-        mock_config_store.list_mcp_servers = AsyncMock(return_value=[])
         service._config_store = mock_config_store
 
         mock_storage = MagicMock()

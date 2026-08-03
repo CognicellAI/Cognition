@@ -244,6 +244,7 @@ class ResolvedAgentConfig:
     blocked_tools: list[str] = field(default_factory=list)
     subagents: list[Any] = field(default_factory=list)
     async_subagents: list[Any] = field(default_factory=list)
+    mcp_configs: list[Any] = field(default_factory=list)
     agent_def: Any = None
 
 
@@ -505,6 +506,15 @@ class DeepAgentStreamingService:
         if agent_def.middleware:
             resolved.middleware = _resolve_middleware(agent_def.middleware)
 
+        if agent_def.mcp.servers:
+            from server.app.agent.mcp_client import McpServerConfig
+
+            resolved.mcp_configs = [
+                McpServerConfig.from_agent_config(alias, config)
+                for alias, config in agent_def.mcp.servers.items()
+                if config.enabled
+            ]
+
         return resolved, custom_tools
 
     async def stream_response(
@@ -582,7 +592,6 @@ class DeepAgentStreamingService:
                 metadata=session.metadata if session else None,
             )
 
-            mcp_configs = await self._resolve_mcp_configs(scope=effective_scope)
             context_policy = _effective_context_policy(
                 agent_cfg.context_policy,
                 agent_cfg.tool_token_limit_before_evict,
@@ -624,7 +633,7 @@ class DeepAgentStreamingService:
                 excluded_tools=agent_cfg.excluded_tools,
                 blocked_tools=agent_cfg.blocked_tools,
                 middleware=agent_cfg.middleware,
-                mcp_configs=mcp_configs or None,
+                mcp_configs=agent_cfg.mcp_configs or None,
                 scope=effective_scope,
                 config_store=self._get_config_store(),
                 sandbox_profile=agent_cfg.sandbox_profile,
@@ -860,7 +869,6 @@ class DeepAgentStreamingService:
                 agent_name=session.agent_name,
                 metadata=session.metadata,
             )
-            mcp_configs = await self._resolve_mcp_configs(scope=effective_scope)
             context_policy = _effective_context_policy(
                 agent_cfg.context_policy,
                 agent_cfg.tool_token_limit_before_evict,
@@ -900,7 +908,7 @@ class DeepAgentStreamingService:
                 excluded_tools=agent_cfg.excluded_tools,
                 blocked_tools=agent_cfg.blocked_tools,
                 middleware=agent_cfg.middleware,
-                mcp_configs=mcp_configs or None,
+                mcp_configs=agent_cfg.mcp_configs or None,
                 scope=effective_scope,
                 config_store=self._get_config_store(),
                 sandbox_profile=agent_cfg.sandbox_profile,
@@ -1053,13 +1061,6 @@ class DeepAgentStreamingService:
         return await self._get_runtime_resolver().resolve_runtime_model_for_session(
             session=session, scope=scope, agent_def=agent_def
         )
-
-    async def _resolve_mcp_configs(self, scope: dict[str, str] | None) -> list[Any]:
-        """Load MCP server registrations from ConfigStore.
-
-        Delegates to RuntimeResolver.resolve_mcp_configs().
-        """
-        return await self._get_runtime_resolver().resolve_mcp_configs(scope=scope)
 
     def _build_messages(self, user_content: str, custom_system_prompt: str | None = None) -> list:
         """Build message list with optional system prompt.
