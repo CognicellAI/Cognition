@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from typing import get_args
 
@@ -18,6 +19,10 @@ from server.app.settings import Settings
 from server.app.storage.config_models import EntityType
 from server.app.storage.config_registry import MemoryConfigRegistry
 from server.app.storage.config_store import DefaultConfigStore
+from server.app.storage.mcp_readiness import (
+    McpReadinessObservation,
+    MemoryMcpReadinessRepository,
+)
 
 
 def test_agent_definition_carries_agent_owned_mcp_config() -> None:
@@ -369,3 +374,61 @@ def test_global_mcp_registry_contract_is_removed() -> None:
         assert not hasattr(target, "list_mcp_servers")
         assert not hasattr(target, "upsert_mcp_server")
         assert not hasattr(target, "delete_mcp_server")
+
+
+@pytest.mark.asyncio
+async def test_discovery_records_exact_scope_readiness(monkeypatch) -> None:
+    class FakeClient:
+        async def get_tools(self, *, server_name: str | None = None):
+            return [SimpleNamespace(name=f"{server_name}__search", args_schema={"type": "object"})]
+
+    monkeypatch.setattr(
+        "server.app.agent.mcp_client.create_mcp_client",
+        lambda configs, settings, callbacks=None, tool_interceptors=None: FakeClient(),
+    )
+    repository = MemoryMcpReadinessRepository()
+    config = McpServerConfig(
+        name="github",
+        url="https://github.test/mcp",
+        agent_name="support",
+        agent_revision=3,
+        effective_scope={"tenant": "alpha"},
+    )
+
+    await load_mcp_tools_per_server(
+        [config],
+        Settings(),
+        readiness_repository=repository,
+    )
+
+    alpha = await repository.list_for_agent(
+        agent_name="support",
+        agent_revision=3,
+        effective_scope={"tenant": "alpha"},
+    )
+    beta = await repository.list_for_agent(
+        agent_name="support",
+        agent_revision=3,
+        effective_scope={"tenant": "beta"},
+    )
+    assert len(alpha) == 1
+    assert alpha[0].status == "ready"
+    assert alpha[0].tool_count == 1
+    assert alpha[0].schema_digest is not None
+    assert beta == []
+
+
+def test_stale_readiness_is_unknown_not_authorization_truth() -> None:
+    now = datetime.now(UTC)
+    observation = McpReadinessObservation(
+        agent_name="support",
+        agent_revision=1,
+        server_alias="github",
+        required=True,
+        status="ready",
+        tool_count=1,
+        observed_at=now - timedelta(minutes=10),
+        fresh_until=now - timedelta(minutes=5),
+    )
+
+    assert observation.public_status(now) == "unknown"

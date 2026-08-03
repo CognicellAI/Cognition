@@ -32,6 +32,7 @@ async def setup_storage_backend():
     from server.app.api.dependencies import (
         set_artifact_store,
         set_config_store,
+        set_mcp_readiness_repository,
         set_session_agent_manager_dep,
         set_storage_backend_dep,
     )
@@ -42,6 +43,7 @@ async def setup_storage_backend():
         DefaultConfigStore,
         set_default_config_store,
     )
+    from server.app.storage.mcp_readiness import MemoryMcpReadinessRepository
 
     with tempfile.TemporaryDirectory() as tmpdir:
         storage = SqliteStorageBackend(
@@ -52,6 +54,7 @@ async def setup_storage_backend():
 
         set_storage_backend_dep(storage)
         set_artifact_store(MemoryArtifactStore())
+        set_mcp_readiness_repository(MemoryMcpReadinessRepository())
 
         settings = get_settings()
         previous_runtime_settings = (

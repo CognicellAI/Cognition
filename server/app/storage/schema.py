@@ -82,6 +82,37 @@ mcp_oauth_state_table = Table(
     ),
 )
 
+# Freshness-qualified MCP discovery observations. Scope values are represented
+# only by the same canonical digest used by other exact-scope runtime tables.
+mcp_readiness_table = Table(
+    "mcp_readiness",
+    metadata,
+    Column("scope_key", String(64), nullable=False),
+    Column("agent_name", String(200), nullable=False),
+    Column("agent_revision", Integer, nullable=False),
+    Column("server_alias", String(200), nullable=False),
+    Column("required", Boolean, nullable=False),
+    Column("status", String(20), nullable=False),
+    Column("tool_count", Integer, nullable=False, default=0),
+    Column("schema_digest", String(64)),
+    Column("failure_category", String(100)),
+    Column("observed_at", DateTime(timezone=True), nullable=False),
+    Column("fresh_until", DateTime(timezone=True), nullable=False),
+    UniqueConstraint(
+        "scope_key",
+        "agent_name",
+        "agent_revision",
+        "server_alias",
+        name="uq_mcp_readiness_identity",
+    ),
+)
+Index(
+    "idx_mcp_readiness_lookup",
+    mcp_readiness_table.c.scope_key,
+    mcp_readiness_table.c.agent_name,
+    mcp_readiness_table.c.agent_revision,
+)
+
 # Sessions table - stores conversation session metadata
 sessions_table = Table(
     "sessions",

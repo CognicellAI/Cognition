@@ -15,6 +15,10 @@ from server.app.api.dependencies import get_config_store, get_settings_dep, set_
 from server.app.main import app
 from server.app.settings import Settings, get_settings
 from server.app.storage.config_store import DefaultConfigStore
+from server.app.storage.mcp_readiness import (
+    McpReadinessObservation,
+    MemoryMcpReadinessRepository,
+)
 
 client = TestClient(app)
 
@@ -102,6 +106,67 @@ class TestGetAgent:
         """Hidden Agents cannot be retrieved via GET /agents/{name}."""
         response = client.get("/agents/hidden-agent")
         assert response.status_code == 404
+
+    def test_mcp_readiness_is_scoped_and_freshness_qualified(self):
+        from datetime import UTC, datetime, timedelta
+
+        from server.app.api.dependencies import set_mcp_readiness_repository
+
+        store = get_config_store()
+        asyncio.run(
+            store.upsert_agent(
+                "readiness-agent",
+                {},
+                {
+                    "name": "readiness-agent",
+                    "system_prompt": "Use MCP.",
+                    "mcp": {
+                        "servers": {
+                            "github": {
+                                "url": "https://github.test/mcp",
+                                "required": True,
+                            },
+                            "docs": {
+                                "url": "https://docs.test/mcp",
+                                "required": False,
+                            },
+                        }
+                    },
+                },
+                "api",
+            )
+        )
+        record = asyncio.run(store.get_agent_record("readiness-agent", {}))
+        assert record is not None
+        now = datetime.now(UTC)
+        repository = MemoryMcpReadinessRepository()
+        asyncio.run(
+            repository.record(
+                McpReadinessObservation(
+                    agent_name="readiness-agent",
+                    agent_revision=record.revision,
+                    server_alias="github",
+                    required=True,
+                    status="ready",
+                    tool_count=2,
+                    schema_digest="a" * 64,
+                    observed_at=now - timedelta(minutes=10),
+                    fresh_until=now - timedelta(minutes=5),
+                ),
+                {},
+            )
+        )
+        set_mcp_readiness_repository(repository)
+
+        response = client.get("/agents/readiness-agent/mcp/readiness")
+
+        assert response.status_code == 200
+        servers = {item["server_alias"]: item for item in response.json()["servers"]}
+        assert servers["github"]["status"] == "unknown"
+        assert servers["github"]["failure_category"] == "observation_stale"
+        assert servers["github"]["authorization_truth"] is False
+        assert servers["docs"]["status"] == "unknown"
+        assert servers["docs"]["failure_category"] == "not_observed"
 
 
 class TestCreateAgent:

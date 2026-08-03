@@ -385,6 +385,12 @@ class Settings(BaseSettings):
         gt=0,
         alias="COGNITION_AGENT_CACHE_TTL_SECONDS",
     )
+    mcp_readiness_ttl_seconds: float = Field(
+        default=300.0,
+        gt=0,
+        alias="COGNITION_MCP_READINESS_TTL_SECONDS",
+        description="Freshness window for MCP discovery observations.",
+    )
     session_service_cache_max_entries: int = Field(
         default=256,
         ge=1,

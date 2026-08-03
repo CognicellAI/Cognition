@@ -33,6 +33,7 @@ if TYPE_CHECKING:
     from server.app.storage.artifact_store import ArtifactStore
     from server.app.storage.backend import StorageBackend
     from server.app.storage.mcp_oauth import McpOAuthStateRepository
+    from server.app.storage.mcp_readiness import McpReadinessRepository
 
 # ---------------------------------------------------------------------------
 # Global references — set once during lifespan, read via Depends()
@@ -46,6 +47,7 @@ _model_catalog: ModelCatalog | None = None
 _artifact_store: ArtifactStore | None = None
 _mcp_oauth_state_repository: McpOAuthStateRepository | None = None
 _mcp_oauth_flow_coordinator: McpOAuthFlowCoordinator | None = None
+_mcp_readiness_repository: McpReadinessRepository | None = None
 
 
 def set_config_store(store: ConfigStore) -> None:
@@ -86,6 +88,11 @@ def set_mcp_oauth_state_repository(repository: McpOAuthStateRepository) -> None:
 def set_mcp_oauth_flow_coordinator(coordinator: McpOAuthFlowCoordinator) -> None:
     global _mcp_oauth_flow_coordinator
     _mcp_oauth_flow_coordinator = coordinator
+
+
+def set_mcp_readiness_repository(repository: McpReadinessRepository) -> None:
+    global _mcp_readiness_repository
+    _mcp_readiness_repository = repository
 
 
 # ---------------------------------------------------------------------------
@@ -155,6 +162,12 @@ def get_mcp_oauth_flow_coordinator() -> McpOAuthFlowCoordinator:
     return _mcp_oauth_flow_coordinator
 
 
+def get_mcp_readiness_repository() -> McpReadinessRepository:
+    if _mcp_readiness_repository is None:
+        raise RuntimeError("MCP readiness repository not initialized during startup.")
+    return _mcp_readiness_repository
+
+
 def get_rate_limiter_dep() -> RateLimiter:
     return get_rate_limiter()
 
@@ -176,6 +189,7 @@ __all__ = [
     "get_artifact_store",
     "get_mcp_oauth_state_repository",
     "get_mcp_oauth_flow_coordinator",
+    "get_mcp_readiness_repository",
     "get_config_store",
     "get_model_catalog_dep",
     "get_rate_limiter_dep",
@@ -192,4 +206,5 @@ __all__ = [
     "set_storage_backend_dep",
     "set_mcp_oauth_state_repository",
     "set_mcp_oauth_flow_coordinator",
+    "set_mcp_readiness_repository",
 ]

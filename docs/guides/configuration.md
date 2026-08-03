@@ -627,6 +627,7 @@ Direct MCP OAuth uses deployment-owned client settings:
 | `COGNITION_MCP_OAUTH_CLIENT_NAME` | OAuth client display name; defaults to `Cognition` |
 | `COGNITION_MCP_OAUTH_CLIENT_METADATA_URL` | Optional HTTPS client metadata document URL |
 | `COGNITION_MCP_OAUTH_TIMEOUT_SECONDS` | Short-lived authorization transaction timeout; defaults to 300 seconds |
+| `COGNITION_MCP_READINESS_TTL_SECONDS` | Freshness window for scoped MCP discovery observations; defaults to 300 seconds |
 
 Generate a key with `Fernet.generate_key()` from Python's `cryptography`
 package and inject it as a secret environment value. Rotating the key makes

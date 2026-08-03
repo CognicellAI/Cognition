@@ -331,12 +331,14 @@ class DeepAgentStreamingService:
         runtime_resolver: RuntimeResolver | None = None,
         config_store: ConfigStore | None = None,
         mcp_oauth_repository: Any | None = None,
+        mcp_readiness_repository: Any | None = None,
     ) -> None:
         self.settings = settings
         self.storage_backend = create_storage_backend(settings)
         self._runtime_resolver = runtime_resolver
         self._config_store = config_store
         self._mcp_oauth_repository = mcp_oauth_repository
+        self._mcp_readiness_repository = mcp_readiness_repository
 
     def _get_runtime_resolver(self) -> RuntimeResolver:
         if self._runtime_resolver is None:
@@ -658,6 +660,7 @@ class DeepAgentStreamingService:
                 middleware=agent_cfg.middleware,
                 mcp_configs=agent_cfg.mcp_configs or None,
                 mcp_oauth_repository=self._mcp_oauth_repository,
+                mcp_readiness_repository=self._mcp_readiness_repository,
                 scope=effective_scope,
                 config_store=self._get_config_store(),
                 sandbox_profile=agent_cfg.sandbox_profile,
@@ -928,6 +931,7 @@ class DeepAgentStreamingService:
                 middleware=agent_cfg.middleware,
                 mcp_configs=agent_cfg.mcp_configs or None,
                 mcp_oauth_repository=self._mcp_oauth_repository,
+                mcp_readiness_repository=self._mcp_readiness_repository,
                 scope=effective_scope,
                 config_store=self._get_config_store(),
                 sandbox_profile=agent_cfg.sandbox_profile,
@@ -1116,6 +1120,7 @@ class SessionAgentManager:
         runtime_resolver: RuntimeResolver | None = None,
         config_store: ConfigStore | None = None,
         mcp_oauth_repository: Any | None = None,
+        mcp_readiness_repository: Any | None = None,
     ) -> None:
         """Initialize the session manager.
 
@@ -1130,6 +1135,7 @@ class SessionAgentManager:
         self._runtime_resolver = runtime_resolver
         self._config_store = config_store
         self._mcp_oauth_repository = mcp_oauth_repository
+        self._mcp_readiness_repository = mcp_readiness_repository
         self._services: dict[str, DeepAgentStreamingService] = {}
         self._project_paths: dict[str, str] = {}
         self._service_access: dict[str, float] = {}
@@ -1166,6 +1172,7 @@ class SessionAgentManager:
             runtime_resolver=self._runtime_resolver,
             config_store=self._config_store,
             mcp_oauth_repository=self._mcp_oauth_repository,
+            mcp_readiness_repository=self._mcp_readiness_repository,
         )
         if self._storage_backend is not None:
             service.storage_backend = self._storage_backend

@@ -1932,6 +1932,22 @@ The result is visible only from the exact effective scope that began the flow.
 Pending authorization transactions expire and are non-durable; encrypted OAuth
 tokens are durable in SQLite/PostgreSQL and process-local in the memory backend.
 
+### Observe MCP readiness
+
+```http
+GET /agents/{agent_name}/mcp/readiness
+```
+
+This exact-scope endpoint reports discovery observations for the Agent's current
+revision. Each server includes its required/optional policy, observation and
+freshness timestamps, discovered tool count, schema digest, and a typed redacted
+failure category. A missing or expired observation reports `unknown`.
+
+Readiness is not authorization truth. In particular, a `ready` observation does
+not bypass live authorization at a builder-controlled gateway on the next MCP
+operation. Credentials, authorization headers, raw scope values, tool arguments,
+and tool results are never included in this projection.
+
 ---
 
 ## Builder-Defined Runtime Scoping

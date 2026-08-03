@@ -10,7 +10,10 @@ Security stance:
 
 from __future__ import annotations
 
+import hashlib
+import json
 from collections.abc import Mapping, Sequence
+from datetime import UTC, datetime, timedelta
 from typing import Any, Literal
 from urllib.parse import urlsplit
 
@@ -44,6 +47,10 @@ from server.app.agent.mcp_auth import (
 )
 from server.app.settings import McpWorkloadTokenExchangeProfile, Settings
 from server.app.storage.mcp_oauth import McpOAuthStateRepository
+from server.app.storage.mcp_readiness import (
+    McpReadinessObservation,
+    McpReadinessRepository,
+)
 
 logger = structlog.get_logger(__name__)
 
@@ -242,11 +249,13 @@ async def load_mcp_tools_per_server(
     tool_interceptors: list[ToolCallInterceptor] | None = None,
     *,
     oauth_repository: McpOAuthStateRepository | None = None,
+    readiness_repository: McpReadinessRepository | None = None,
 ) -> list[BaseTool]:
     """Load MCP tools server-by-server and enforce canonical identity uniqueness."""
 
     tools: list[BaseTool] = []
-    seen: set[str] = set()
+    seen_canonical: set[tuple[str, str]] = set()
+    seen_visible: set[str] = set()
     for config in configs:
         try:
             client_kwargs: dict[str, Any] = {
@@ -270,17 +279,112 @@ async def load_mcp_tools_per_server(
                 category=category,
                 error_type=type(exc).__name__,
             )
+            await _record_readiness(
+                readiness_repository,
+                config,
+                settings,
+                status="unavailable",
+                failure_category=category,
+            )
             if config.required:
                 raise McpServerDiscoveryError(config.name, category) from exc
             continue
 
+        server_identities: list[tuple[tuple[str, str], str, BaseTool]] = []
         for tool in server_tools:
-            canonical_name = str(getattr(tool, "name", ""))
-            if canonical_name in seen:
+            visible_name = str(getattr(tool, "name", ""))
+            prefix = f"{config.name}__"
+            provider_name = (
+                visible_name.removeprefix(prefix)
+                if visible_name.startswith(prefix)
+                else visible_name
+            )
+            canonical_identity = (config.name, provider_name)
+            if canonical_identity in seen_canonical or visible_name in seen_visible:
+                await _record_readiness(
+                    readiness_repository,
+                    config,
+                    settings,
+                    status="unavailable",
+                    failure_category="duplicate_tool_identity",
+                )
                 raise McpServerDiscoveryError(config.name, "duplicate_tool_identity")
-            seen.add(canonical_name)
+            server_identities.append((canonical_identity, visible_name, tool))
+
+        for canonical_identity, visible_name, tool in server_identities:
+            seen_canonical.add(canonical_identity)
+            seen_visible.add(visible_name)
             tools.append(tool)
+        await _record_readiness(
+            readiness_repository,
+            config,
+            settings,
+            status="ready",
+            tools=server_tools,
+        )
     return tools
+
+
+async def _record_readiness(
+    repository: McpReadinessRepository | None,
+    config: McpServerConfig,
+    settings: Settings,
+    *,
+    status: Literal["ready", "unavailable"],
+    tools: Sequence[BaseTool] = (),
+    failure_category: str | None = None,
+) -> None:
+    """Persist a redacted observation without making telemetry a runtime dependency."""
+    observed_at = datetime.now(UTC)
+    observation = McpReadinessObservation(
+        agent_name=config.agent_name,
+        agent_revision=config.agent_revision,
+        server_alias=config.name,
+        required=config.required,
+        status=status,
+        tool_count=len(tools),
+        schema_digest=_tool_schema_digest(tools) if status == "ready" else None,
+        failure_category=failure_category,
+        observed_at=observed_at,
+        fresh_until=observed_at + timedelta(seconds=settings.mcp_readiness_ttl_seconds),
+    )
+    logger.info(
+        "mcp_readiness_observed",
+        required=config.required,
+        status=status,
+        tool_count=len(tools),
+        failure_category=failure_category,
+    )
+    if repository is None:
+        return
+    try:
+        await repository.record(observation, config.effective_scope)
+    except Exception as exc:
+        logger.warning(
+            "mcp_readiness_persistence_failed",
+            error_type=type(exc).__name__,
+        )
+
+
+def _tool_schema_digest(tools: Sequence[BaseTool]) -> str:
+    schemas: list[dict[str, Any]] = []
+    for tool in tools:
+        args_schema = getattr(tool, "args_schema", None)
+        model_json_schema = getattr(args_schema, "model_json_schema", None)
+        if callable(model_json_schema):
+            input_schema = model_json_schema()
+        elif isinstance(args_schema, dict):
+            input_schema = args_schema
+        else:
+            input_schema = {}
+        schemas.append(
+            {
+                "name": str(getattr(tool, "name", "")),
+                "input_schema": input_schema,
+            }
+        )
+    payload = json.dumps(schemas, sort_keys=True, separators=(",", ":"), default=str)
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
 def _trusted_context_kwargs(config: McpServerConfig) -> dict[str, Any]:
