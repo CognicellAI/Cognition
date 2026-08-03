@@ -40,13 +40,6 @@ All request and response bodies are JSON unless noted. Streaming endpoints retur
   - [`PUT /agents/{name}`](#put-agentsname)
   - [`PATCH /agents/{name}`](#patch-agentsname)
   - [`DELETE /agents/{name}`](#delete-agentsname)
-- [Skills](#skills)
-  - [`GET /skills`](#get-skills)
-  - [`GET /skills/{name}`](#get-skillsname)
-  - [`POST /skills`](#post-skills)
-  - [`PUT /skills/{name}`](#put-skillsname)
-  - [`PATCH /skills/{name}`](#patch-skillsname)
-  - [`DELETE /skills/{name}`](#delete-skillsname)
 - [Tools](#tools)
   - [`GET /tools`](#get-tools)
   - [`GET /tools/{name}`](#get-toolsname)
@@ -720,7 +713,13 @@ Create or replace an agent definition in the ConfigRegistry.
   "description": "Audits code for security issues",
   "mode": "subagent",
   "tools": ["run_semgrep"],
-  "skills": ["python-review"],
+  "skills": [
+    {
+      "name": "python-review",
+      "content": "---\nname: python-review\ndescription: Review Python changes\n---\n\n# Python review",
+      "files": {"references/checklist.md": "# Checklist"}
+    }
+  ],
   "memory": ["AGENTS.md"],
   "interrupt_on": {},
   "a2a": {
@@ -752,7 +751,7 @@ Create or replace an agent definition in the ConfigRegistry.
 | `hidden` | boolean | Hide the agent from `GET /agents` list results |
 | `a2a` | object | A2A exposure and public Agent Card presentation. See the [A2A Builder Guide](a2a.md). |
 | `tools` | list[string] | Registry tool names to attach to this agent |
-| `skills` | list[string] | Registry skill names to attach to this agent |
+| `skills` | list[object] | Complete `{name, content, files}` bundles owned by this Agent revision |
 | `memory` | list[string] | Paths to instruction files (e.g. AGENTS.md) |
 | `interrupt_on` | dict | Tool names mapped to `true` for HITL confirmation |
 | `permissions` | list[object] | Deep Agents filesystem permission rules |
@@ -815,106 +814,6 @@ Delete an agent definition from the ConfigRegistry.
 - **Response `204 No Content`**
 - **Response `404 Not Found`:** Agent not found in the exact request scope
 - **Response `412 Precondition Failed`:** Stale `If-Match` revision
-
----
-
-## Skills
-
-Skills are SKILL.md files stored in the ConfigRegistry. When an agent loads, its configured skills are injected progressively as the context window fills.
-
-File-managed skills (seeded from `skill_sources` directories at startup) have `source: "file"` and cannot be modified or deleted via the API (returns `409 Conflict`). API-created skills have `source: "api"`.
-
-### `GET /skills`
-
-List all registered skills.
-
-**Query parameters:**
-
-| Parameter | Type | Description |
-|---|---|---|
-| `scope` | dict (via headers) | Filtered by scope when scoping is enabled |
-
-**Response `200 OK`:**
-```json
-{
-  "skills": [
-    {
-      "name": "python-testing",
-      "path": "/skills/api/python-testing",
-      "enabled": true,
-      "description": "pytest patterns and fixtures",
-      "content": "# Python Testing\n\n...",
-      "scope": {},
-      "source": "api"
-    }
-  ],
-  "count": 1
-}
-```
-
-### `GET /skills/{name}`
-
-Get a specific skill by name, including full content.
-
-**Response `200 OK`:** Skill object  
-**Response `404 Not Found`**
-
-### `POST /skills`
-
-Create or replace a skill in the ConfigRegistry.
-
-**Request body:**
-```json
-{
-  "name": "python-testing",
-  "content": "# Python Testing\n\nUse pytest. Write tests in tests/. Run with `pytest`.",
-  "description": "pytest patterns for this project",
-  "enabled": true,
-  "scope": {}
-}
-```
-
-| Field | Type | Description |
-|---|---|---|
-| `name` | string | Skill identifier (1–100 chars) |
-| `content` | string | Full SKILL.md content (YAML frontmatter + Markdown body) |
-| `path` | string | Filesystem path alternative to inline content |
-| `description` | string | Short description |
-| `enabled` | bool | Whether this skill is active (default `true`) |
-| `scope` | dict | Scope restriction; empty `{}` = global |
-
-**Response `201 Created`:** Skill object  
-**Response `422 Unprocessable Entity`:** Validation error
-
-### `PUT /skills/{name}`
-
-Replace a skill entirely.
-
-**Request body:** Same as `POST /skills`  
-**Response `200 OK`:** Updated skill object  
-**Response `404 Not Found`**
-
-### `PATCH /skills/{name}`
-
-Partially update a skill. Only provided fields are changed.
-
-**Request body (all fields optional):**
-```json
-{
-  "content": "# Updated content...",
-  "enabled": false
-}
-```
-
-**Response `200 OK`:** Updated skill object  
-**Response `404 Not Found`**
-
-### `DELETE /skills/{name}`
-
-Delete a skill from the ConfigRegistry.
-
-**Response `204 No Content`**  
-**Response `404 Not Found`**
 
 ---
 

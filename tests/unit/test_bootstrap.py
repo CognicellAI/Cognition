@@ -13,7 +13,6 @@ import pytest
 from server.app.bootstrap import (
     _infer_api_key_env,
     seed_providers_from_config,
-    seed_skills_from_sources,
     seed_tools_from_sources,
 )
 from server.app.storage.config_registry import MemoryConfigRegistry
@@ -187,67 +186,6 @@ class TestSeedProvidersFromConfig:
     @pytest.mark.asyncio
     async def test_empty_config(self) -> None:
         assert await seed_providers_from_config({}, self._store()) is False
-
-
-class TestSeedSkillsFromSources:
-    @pytest.mark.asyncio
-    async def test_seeds_skill_from_configured_source(self, tmp_path: Path) -> None:
-        source_dir = tmp_path / ".cognition" / "skills" / "clean-code"
-        source_dir.mkdir(parents=True)
-        (source_dir / "SKILL.md").write_text(
-            "---\nname: clean-code\ndescription: Use this skill for clean code.\n---\n\n# Clean Code\n",
-            encoding="utf-8",
-        )
-        (source_dir / "references").mkdir()
-        (source_dir / "references" / "guide.md").write_text("Supporting guide", encoding="utf-8")
-
-        store = DefaultConfigStore(MemoryConfigRegistry(), workspace_path=tmp_path)
-        inserted = await seed_skills_from_sources(
-            {"skill_sources": [".cognition/skills/"]},
-            store,
-            tmp_path,
-        )
-
-        assert inserted == 1
-        skill = await store.get_skill("clean-code", scope={})
-        assert skill is not None
-        assert skill.source == "file"
-        assert skill.description == "Use this skill for clean code."
-        assert skill.files == {"references/guide.md": "Supporting guide"}
-
-    @pytest.mark.asyncio
-    async def test_does_not_override_api_skill(self, tmp_path: Path) -> None:
-        source_dir = tmp_path / ".cognition" / "skills" / "clean-code"
-        source_dir.mkdir(parents=True)
-        (source_dir / "SKILL.md").write_text(
-            "---\nname: clean-code\ndescription: File description\n---\n\n# Clean Code\n",
-            encoding="utf-8",
-        )
-
-        store = DefaultConfigStore(MemoryConfigRegistry(), workspace_path=tmp_path)
-        await store.upsert_skill_from_dict(
-            {
-                "name": "clean-code",
-                "path": "/skills/api/clean-code/SKILL.md",
-                "enabled": True,
-                "description": "API description",
-                "content": "# API skill",
-                "scope": {},
-                "source": "api",
-            }
-        )
-
-        inserted = await seed_skills_from_sources(
-            {"skill_sources": [".cognition/skills/"]},
-            store,
-            tmp_path,
-        )
-
-        assert inserted == 0
-        skill = await store.get_skill("clean-code", scope={})
-        assert skill is not None
-        assert skill.source == "api"
-        assert skill.description == "API description"
 
 
 class TestSeedToolsFromSources:

@@ -21,7 +21,7 @@ C4Component
         Component(storage_port, "StorageBackend", "Protocol", "Sessions, messages, tasks, runs, events, checkpointer, and Store")
         Component(message_projection, "Message projection", "Projection adapter", "REST-oriented messages rebuilt from checkpoints")
         Component(config_store, "DefaultConfigStore", "Configuration facade", "Combines native, file, and registry definitions")
-        Component(config_registry, "ConfigRegistry", "Scoped configuration store", "Providers, tools, skills, Agents, MCP, profiles, defaults")
+        Component(config_registry, "ConfigRegistry", "Scoped configuration store", "Providers, tools, Agents, profiles, and defaults")
         Component(dispatcher, "ConfigChangeDispatcher", "Invalidation bus", "In-process or PostgreSQL LISTEN/NOTIFY delivery")
         Component(artifact_port, "ArtifactStore", "Versioned content store", "Exact-scope artifact CRUD")
         Component(schema, "Schema and migration tooling", "SQLAlchemy + Alembic", "Declares Cognition tables and explicit upgrades")
@@ -31,7 +31,7 @@ C4Component
     ContainerDb(graph_db, "LangGraph tables", "SQLite/PostgreSQL", "Checkpoints, writes, and cross-thread Store")
     ContainerDb(config_db, "Configuration tables", "SQLite/PostgreSQL", "config_entities and config_changes")
     ContainerDb(artifact_db, "Artifact table", "SQLite/PostgreSQL", "Versioned scoped content")
-    Container(workspace, "Workspace definitions", "YAML/Markdown/Python", "Bootstrap Agents, tools, skills, middleware, and defaults")
+    Container(workspace, "Workspace definitions", "YAML/Markdown/Python", "Bootstrap Agents, tools, middleware, and defaults")
 
     Rel(task_service, storage_port, "Creates and queries lifecycle state")
     Rel(task_service, runtime_projection, "Requests transitions")
@@ -154,7 +154,7 @@ multiple server replicas.
 
 ## Dynamic configuration
 
-`ConfigRegistry` stores providers, tools, skills, Agents, sandbox profiles, and
+`ConfigRegistry` stores providers, tools, Agents, sandbox profiles, and
 global defaults as `(entity_type, name, scope, definition, source)` rows. MCP
 servers exist only inside immutable Agent definitions.
 

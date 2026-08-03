@@ -5,7 +5,7 @@ Cognition uses a convention-over-configuration model. Most extensions require ze
 | Level | Mechanism | Code Required | Hot-Reload |
 |---|---|---|---|
 | Memory | `AGENTS.md` | No | Yes |
-| Skills | `.cognition/skills/` SKILL.md files | No | Yes |
+| Skills | Complete bundles in an Agent definition | No | Yes, with the Agent revision |
 | Agents | `.cognition/agents/` YAML or Markdown | No | Yes |
 | Tools | Python functions | Yes | Yes |
 | Middleware | Python classes | Yes | No |
@@ -53,18 +53,6 @@ agent:
 
 Skills are modular instruction sets for domain-specific tasks. The agent sees a skill's name and description and loads the full content only when it is relevant to the current task (progressive disclosure).
 
-### Directory Structure
-
-```
-.cognition/skills/
-  deploy-app/
-    SKILL.md           # instructions for deploying the application
-    references/        # optional supporting files
-      checklist.md
-  run-migrations/
-    SKILL.md
-```
-
 ### SKILL.md Format
 
 ```markdown
@@ -83,12 +71,26 @@ Use this skill when the user asks to deploy the application or push changes to p
 4. Update the ECS service: `aws ecs update-service --cluster prod --service myapp --force-new-deployment`
 ```
 
-Attach skills by registry name (seeded from `skill_sources` directories):
+Skills are complete bundles inside the Agent definition. `content` is the
+bundle's `SKILL.md`; `files` carries progressive-disclosure supporting files:
 
 ```yaml
 agent:
   skills:
-    - "my-skill-name"
+    - name: my-skill
+      content: |
+        ---
+        name: my-skill
+        description: Apply the project review workflow
+        ---
+
+        # Review workflow
+
+        Read `references/checklist.md` before reviewing.
+      files:
+        references/checklist.md: |
+          - Verify tests
+          - Check tenant isolation
 ```
 
 ---
@@ -222,9 +224,6 @@ The docstring becomes the tool description shown to the agent. Type annotations 
 
 ```yaml
 # .cognition/config.yaml
-skill_sources:
-  - .cognition/skills/
-
 tool_sources:
   - .cognition/tools/
 

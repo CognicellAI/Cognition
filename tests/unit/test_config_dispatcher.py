@@ -15,8 +15,8 @@ from server.app.storage.config_dispatcher import InProcessDispatcher
 from server.app.storage.config_models import ConfigChangeEvent
 
 
-def _event(name: str = "myskill") -> ConfigChangeEvent:
-    return ConfigChangeEvent(entity_type="skill", name=name, scope={}, operation="upsert")
+def _event(name: str = "mytool") -> ConfigChangeEvent:
+    return ConfigChangeEvent(entity_type="tool", name=name, scope={}, operation="upsert")
 
 
 # ---------------------------------------------------------------------------

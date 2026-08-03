@@ -121,7 +121,7 @@ class AgentDefinition(BaseModel):
     display_name: str | None = None # Optional public presentation name
     system_prompt: str | PromptConfig | None = None
     tools: list[str] = []           # registry tool names
-    skills: list[str] = []          # registry skill names
+    skills: list[AgentSkillBundle] = []  # complete revision-owned bundles
     memory: list[str] = []          # paths to instruction files (AGENTS.md)
     subagents: list[SubagentDefinition] = []
     interrupt_on: dict[str, bool] = {}

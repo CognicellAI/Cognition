@@ -1,10 +1,13 @@
 # Sandboxed Skill Package Registry
 
-**Status:** Draft proposal; not implemented or scheduled  
+**Status:** Superseded by ADR-0003 and the Agent-owned skill bundle model
 **Audience:** Maintainers, deployment operators, and builders  
 **Last updated:** 2026-07-23
 
-This proposal makes Cognition a bounded registry and runtime for executable
+> This document is retained as rejected design history. v0.14 does not provide
+> a standalone skill registry or name-based skill attachment.
+
+This proposal would have made Cognition a bounded registry and runtime for executable
 skill packages. A builder publishes scope-bound skills and attaches their names
 to an Agent. Cognition stores immutable revisions, pins the revisions selected
 for each run, and transfers only those packages into that run's sandbox.

@@ -9,7 +9,6 @@ from server.app.api.routes import (
     models,
     sandbox_profiles,
     sessions,
-    skills,
     tools,
 )
 
@@ -22,6 +21,5 @@ __all__ = [
     "models",
     "sandbox_profiles",
     "sessions",
-    "skills",
     "tools",
 ]

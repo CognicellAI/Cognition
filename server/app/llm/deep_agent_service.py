@@ -25,7 +25,7 @@ import structlog
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from server.app.agent.cognition_agent import CognitionAgentParams, create_cognition_agent
-from server.app.agent.definition import AgentDefinition
+from server.app.agent.definition import AgentDefinition, AgentSkillBundle
 from server.app.agent.resolver import ResolvedRuntimeModel, RuntimeResolver
 from server.app.agent.runtime import (
     ArtifactEvent,  # noqa: F401 — re-exported for custom runtimes
@@ -66,7 +66,7 @@ from server.app.observability import (
 )
 from server.app.settings import Settings
 from server.app.storage.common import canonical_json_digest
-from server.app.storage.config_models import SandboxProfile, SkillDefinition
+from server.app.storage.config_models import SandboxProfile
 from server.app.storage.config_store import ConfigStore
 from server.app.storage.factory import create_storage_backend
 
@@ -108,29 +108,6 @@ def _effective_context_policy(
     if tool_token_limit_before_evict is not None:
         effective.setdefault("tool_token_limit_before_evict", tool_token_limit_before_evict)
     return effective
-
-
-def _pinned_skills(
-    runtime_manifest: Mapping[str, Any] | None,
-) -> dict[str, SkillDefinition] | None:
-    """Return validated immutable skill snapshots from a run manifest."""
-    if not isinstance(runtime_manifest, Mapping):
-        return None
-    dependencies = runtime_manifest.get("dependencies")
-    skills = dependencies.get("skills") if isinstance(dependencies, Mapping) else None
-    if not isinstance(skills, Mapping):
-        return None
-    snapshots: dict[str, SkillDefinition] = {}
-    for name, identity in skills.items():
-        definition = identity.get("definition") if isinstance(identity, Mapping) else None
-        expected_digest = identity.get("digest") if isinstance(identity, Mapping) else None
-        if not isinstance(name, str) or not isinstance(definition, Mapping):
-            continue
-        skill = SkillDefinition.model_validate(dict(definition))
-        if canonical_json_digest(skill.model_dump(mode="json")) != expected_digest:
-            raise RuntimeError(f"Pinned skill manifest is invalid: {name}")
-        snapshots[name] = skill
-    return snapshots
 
 
 def _pinned_sandbox_profile(
@@ -230,7 +207,7 @@ class ResolvedAgentConfig:
     """Fields resolved from an AgentDefinition, ready for CognitionAgentParams."""
 
     system_prompt: str | None = None
-    skills: list[str] = field(default_factory=list)
+    skills: list[AgentSkillBundle] = field(default_factory=list)
     memory: list[str] | None = None
     interrupt_on: dict[str, Any] | None = None
     permissions: list[Any] | None = None
@@ -637,7 +614,6 @@ class DeepAgentStreamingService:
                 model=model,
                 model_cache_key=model_cache_key,
                 manifest_digest=manifest_digest,
-                pinned_skills=_pinned_skills(pinned_manifest),
                 store=store,
                 checkpointer=checkpointer,
                 settings=self.settings,
@@ -910,7 +886,6 @@ class DeepAgentStreamingService:
                 model=model,
                 model_cache_key=model_cache_key,
                 manifest_digest=active_run.manifest_digest,
-                pinned_skills=_pinned_skills(active_run.runtime_manifest),
                 store=store,
                 checkpointer=checkpointer,
                 settings=self.settings,

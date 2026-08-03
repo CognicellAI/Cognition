@@ -50,10 +50,12 @@ async def test_create_cognition_agent_pluggability():
     clear_agent_cache()
     with patch("server.app.agent.cognition_agent.create_deep_agent") as mock_create:
         mock_create.return_value = AsyncMock()
+        from server.app.agent.definition import AgentSkillBundle
+
         params = CognitionAgentParams(
             project_path=".",
             memory=["TEST_MEMORY.md"],
-            skills=["clean-code"],
+            skills=[AgentSkillBundle(name="clean-code", content="# Clean code")],
             subagents=[{"name": "test-subagent", "system_prompt": "..."}],
             interrupt_on={"execute": {"allowed_decisions": ["approve", "reject"]}},
             permissions=[

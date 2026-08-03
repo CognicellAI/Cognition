@@ -214,7 +214,7 @@ class TestNoAgentDef:
         agent_def = AgentDefinition(
             name="scoped-agent",
             system_prompt="scoped prompt",
-            skills=["scoped-skill"],
+            skills=[{"name": "scoped-skill", "content": "# Scoped skill"}],
         )
 
         class ScopedRegistry:
@@ -238,7 +238,7 @@ class TestNoAgentDef:
 
         params = _get_params(create_agent_mock)
         assert params.system_prompt == "scoped prompt"
-        assert params.skills == ["scoped-skill"]
+        assert [skill.name for skill in params.skills] == ["scoped-skill"]
         assert registry.get_calls == [("scoped-agent", scope)]
         assert registry.subagent_scopes == []
 

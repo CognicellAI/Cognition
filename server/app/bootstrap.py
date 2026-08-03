@@ -19,7 +19,7 @@ from typing import Any
 import structlog
 from langchain_core.tools import BaseTool
 
-from server.app.storage.config_models import SandboxProfile, SkillDefinition, ToolRegistration
+from server.app.storage.config_models import SandboxProfile, ToolRegistration
 
 logger = structlog.get_logger(__name__)
 
@@ -227,72 +227,6 @@ def _load_tool_file(tool_file: Path) -> list[BaseTool]:
         if isinstance(obj, BaseTool):
             resolved_tools.append(obj)
     return resolved_tools
-
-
-async def seed_skills_from_sources(
-    config: dict[str, Any],
-    config_store: Any,
-    workspace_root: Path,
-) -> int:
-    """Seed file-managed skills from configured skill source directories."""
-    from server.app.config_loader import get_skill_sources
-
-    inserted = 0
-    for source in get_skill_sources(config):
-        source_dir = _resolve_source_dir(source, workspace_root)
-        if not source_dir.exists() or not source_dir.is_dir():
-            logger.warning("Skill source directory missing", source=source, resolved=str(source_dir))
-            continue
-
-        for skill_dir in sorted(path for path in source_dir.iterdir() if path.is_dir()):
-            skill_md = skill_dir / "SKILL.md"
-            if not skill_md.exists() or not skill_md.is_file():
-                continue
-
-            content = skill_md.read_text(encoding="utf-8")
-            files: dict[str, str] = {}
-            for candidate in skill_dir.rglob("*"):
-                if not candidate.is_file() or candidate == skill_md:
-                    continue
-                relative_path = candidate.relative_to(skill_dir).as_posix()
-                try:
-                    files[relative_path] = candidate.read_text(encoding="utf-8")
-                except UnicodeDecodeError:
-                    logger.warning("Skipping non-text skill bundle file", path=str(candidate))
-            name = skill_dir.name
-            description: str | None = None
-            try:
-                import yaml
-
-                if content.startswith("---\n"):
-                    _, frontmatter, _ = content.split("---", 2)
-                    metadata = yaml.safe_load(frontmatter)
-                    if isinstance(metadata, dict):
-                        name = metadata.get("name") or name
-                        description = metadata.get("description")
-            except Exception:
-                logger.warning("Failed to parse skill frontmatter", path=str(skill_md), exc_info=True)
-
-            definition = SkillDefinition(
-                name=name,
-                path=str(skill_md.relative_to(workspace_root)) if skill_md.is_relative_to(workspace_root) else str(skill_md),
-                enabled=True,
-                description=description,
-                content=content,
-                files=files,
-                scope={},
-                source="file",
-            )
-
-            existing = await config_store.get_skill(name, scope={})
-            if existing and existing.source == "api":
-                logger.warning("Skipping file skill seed because API-managed skill exists", name=name)
-                continue
-
-            await config_store.upsert_skill(definition)
-            inserted += 1
-
-    return inserted
 
 
 async def seed_tools_from_sources(

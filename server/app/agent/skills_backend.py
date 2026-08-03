@@ -1,10 +1,10 @@
-"""Backend implementation for serving skills from ConfigRegistry DB."""
+"""Read-only Deep Agents backend for Agent-owned skill bundles."""
 
 from __future__ import annotations
 
-from typing import Any, cast
+import asyncio
+from typing import Any
 
-import structlog
 from deepagents.backends.protocol import (
     BackendProtocol,
     FileData,
@@ -13,245 +13,101 @@ from deepagents.backends.protocol import (
     ReadResult,
 )
 
-from server.app.storage.config_models import SkillDefinition
-from server.app.storage.config_registry import ConfigRegistry
-
-logger = structlog.get_logger(__name__)
+from server.app.agent.definition import AgentSkillBundle
 
 
-class ConfigRegistrySkillsBackend(BackendProtocol):
-    """Backend that serves skill content from ConfigRegistry DB.
+class AgentSkillsBackend(BackendProtocol):
+    """Expose immutable skill bundles from one pinned Agent definition."""
 
-    This backend is used by SkillsMiddleware to discover and load skills.
-    It maps virtual skill paths (e.g., /skills/api/web-research/SKILL.md)
-    to content stored in the ConfigRegistry.
-    """
-
-    def __init__(
-        self,
-        registry: ConfigRegistry,
-        scope: dict[str, str] | None = None,
-        allowed_skill_names: list[str] | None = None,
-        pinned_skills: dict[str, SkillDefinition] | None = None,
-    ):
-        """Initialize the backend.
-
-        Args:
-            registry: The ConfigRegistry instance to query for skills.
-            scope: The scope to use for skill lookups (e.g., {"user": "alice"}).
-        """
-        self._registry = registry
-        self._scope = scope or {}
-        self._allowed_skill_names = (
-            None
-            if allowed_skill_names is None
-            else set(allowed_skill_names)
-        )
-        self._pinned_skills = (
-            {name: skill.model_copy(deep=True) for name, skill in pinned_skills.items()}
-            if pinned_skills is not None
-            else None
-        )
-
-    async def _list_skills(self) -> list[SkillDefinition]:
-        if self._pinned_skills is not None:
-            return [
-                skill.model_copy(deep=True)
-                for skill in self._pinned_skills.values()
-            ]
-        return await self._registry.list_skills(scope=self._scope)
-
-    async def _get_skill(self, name: str) -> SkillDefinition | None:
-        if (
-            self._allowed_skill_names is not None
-            and name not in self._allowed_skill_names
-        ):
-            return None
-        if self._pinned_skills is not None:
-            skill = self._pinned_skills.get(name)
-            return skill.model_copy(deep=True) if skill is not None else None
-        return await self._registry.get_skill(name, scope=self._scope)
+    def __init__(self, skills: list[AgentSkillBundle]) -> None:
+        self._skills = {skill.name: skill.model_copy(deep=True) for skill in skills}
 
     async def als_info(self, path: str) -> list[FileInfo]:
-        """List skill directories for SkillsMiddleware discovery.
-
-        SkillsMiddleware calls this to find skill directories under each source path.
-        For our /skills/api/ source, we return each skill as a directory.
-
-        Args:
-            path: The source path (typically "/" after CompositeBackend stripping).
-
-        Returns:
-            List of FileInfo dicts representing skill directories.
-        """
-        skills = await self._list_skills()
-
-        file_infos: list[FileInfo] = []
-        for skill in skills:
-            if not skill.enabled:
-                continue
-            if (
-                self._allowed_skill_names is not None
-                and skill.name not in self._allowed_skill_names
-            ):
-                continue
-
-            # Each skill appears as a directory under the source path.
-            # Return "/{skill.name}/" so CompositeBackend can re-prefix it
-            # to the full virtual path (e.g. /skills/api/web-research/).
-            skill_dir = f"/{skill.name}/"
-            file_infos.append(
-                FileInfo(
-                    path=skill_dir,
-                    is_dir=True,
-                    size=0,
-                    modified_at="",
-                )
-            )
-
-        return file_infos
+        """List the Agent's skill directories for progressive disclosure."""
+        del path
+        return [
+            FileInfo(path=f"/{name}/", is_dir=True, size=0, modified_at="")
+            for name in sorted(self._skills)
+        ]
 
     async def adownload_files(self, paths: list[str]) -> list[FileDownloadResponse]:
-        """Download bundle file content for SkillsMiddleware and file tools.
-
-        SkillsMiddleware calls this to get the actual skill content for parsing
-        YAML frontmatter.
-
-        Args:
-            paths: List of SKILL.md file paths to download.
-
-        Returns:
-            List of FileDownloadResponse with content as bytes.
-        """
+        """Download primary or supporting skill files."""
         responses: list[FileDownloadResponse] = []
-
         for file_path in paths:
             parsed = _parse_bundle_path(file_path)
             if parsed is None:
                 responses.append(FileDownloadResponse(path=file_path, error="invalid_path"))
                 continue
             skill_name, relative_path = parsed
-
-            try:
-                skill = await self._get_skill(skill_name)
-                if skill is None or not skill.enabled:
-                    responses.append(FileDownloadResponse(path=file_path, error="file_not_found"))
-                else:
-                    content = _bundle_content(skill, relative_path)
-                    if content is None:
-                        responses.append(FileDownloadResponse(path=file_path, error="file_not_found"))
-                        continue
-                    responses.append(
-                        FileDownloadResponse(
-                            path=file_path,
-                            content=content.encode("utf-8"),
-                            error=None,
-                        )
-                    )
-            except Exception as e:
-                logger.error("skill_download_failed", path=file_path, error=str(e))
-                responses.append(FileDownloadResponse(path=file_path, error="invalid_path"))
-
+            skill = self._skills.get(skill_name)
+            content = _bundle_content(skill, relative_path) if skill is not None else None
+            if content is None:
+                responses.append(FileDownloadResponse(path=file_path, error="file_not_found"))
+                continue
+            responses.append(
+                FileDownloadResponse(
+                    path=file_path,
+                    content=content.encode("utf-8"),
+                    error=None,
+                )
+            )
         return responses
 
-    def read(self, file_path: str, offset: int = 0, limit: int = 2000) -> ReadResult:
-        """Read SKILL.md content for progressive disclosure (sync version).
-
-        Note: This backend primarily serves async workloads. Use aread() instead.
-
-        Args:
-            file_path: The SKILL.md file path to read.
-            offset: Line offset to start reading from (0-indexed).
-            limit: Maximum number of lines to read.
-
-        Returns:
-            Error result directing callers to use the async path.
-        """
-        return ReadResult(error="Use aread() for ConfigRegistrySkillsBackend")
-
     async def aread(self, file_path: str, offset: int = 0, limit: int = 2000) -> ReadResult:
-        """Read SKILL.md content for progressive disclosure (async version).
-
-        Called when LLM uses file tools to read the full skill content
-        after seeing the progressive disclosure hint in system prompt.
-
-        Args:
-            file_path: The SKILL.md file path to read.
-            offset: Line offset to start reading from (0-indexed).
-            limit: Maximum number of lines to read.
-
-        Returns:
-            Formatted file content with line numbers, or an error result.
-        """
+        """Read a skill file with Deep Agents-compatible line numbering."""
         parsed = _parse_bundle_path(file_path)
         if parsed is None:
             return ReadResult(error=f"Invalid path {file_path}")
         skill_name, relative_path = parsed
+        skill = self._skills.get(skill_name)
+        content = _bundle_content(skill, relative_path) if skill is not None else None
+        if content is None:
+            return ReadResult(error="Skill bundle file not found")
+        lines = content.splitlines()
+        if limit <= 0:
+            selected: list[str] = []
+        else:
+            selected = lines[offset : offset + limit]
+        numbered = [f"{offset + index + 1:6}\t{line}" for index, line in enumerate(selected)]
+        return ReadResult(
+            file_data=FileData(content="\n".join(numbered), encoding="utf-8"),
+            total_lines=len(lines),
+            start_line=offset + 1 if selected else None,
+            end_line=offset + len(selected) if selected else None,
+            next_offset=offset + len(selected) if offset + len(selected) < len(lines) else None,
+            no_lines_requested=limit <= 0,
+        )
 
+    def read(self, file_path: str, offset: int = 0, limit: int = 2000) -> ReadResult:
+        """Provide the synchronous protocol surface outside an active event loop."""
         try:
-            skill = await self._get_skill(skill_name)
-            if skill is None or not skill.enabled:
-                return ReadResult(error=f"Skill not found: {skill_name}")
-
-            content = _bundle_content(skill, relative_path)
-            if content is None:
-                return ReadResult(error=f"Skill bundle file not found: {relative_path}")
-            lines = content.splitlines()
-
-            # Apply offset and limit
-            start = offset
-            end = min(offset + limit, len(lines))
-            selected_lines = lines[start:end]
-
-            # Format with line numbers (1-indexed, offset-adjusted)
-            formatted_lines = []
-            for i, line in enumerate(selected_lines):
-                line_num = start + i + 1  # 1-indexed line numbers
-                formatted_lines.append(f"{line_num:6}\t{line}")
-
-            return ReadResult(
-                file_data=FileData(content="\n".join(formatted_lines), encoding="utf-8")
-            )
-
-        except Exception as e:
-            return ReadResult(error=f"Error reading skill {skill_name}: {str(e)}")
+            asyncio.get_running_loop()
+        except RuntimeError:
+            return asyncio.run(self.aread(file_path, offset, limit))
+        return ReadResult(error="AgentSkillsBackend requires async file access")
 
     def ls_info(self, path: str) -> list[FileInfo]:
-        """Synchronous wrapper for skill directory listing.
-
-        CompositeBackend uses synchronous file tool methods. Provide a sync wrapper
-        around the async implementation so routed skill paths participate cleanly
-        in mixed backend operations.
-        """
-        import asyncio
-
-        return asyncio.run(self.als_info(path))
+        """Provide the synchronous protocol surface outside an active event loop."""
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            return asyncio.run(self.als_info(path))
+        return []
 
     def glob_info(self, pattern: str, path: str = "/") -> list[FileInfo]:
-        """Return no matches for glob over skill routes.
-
-        Skills are only exposed as concrete directories and SKILL.md files. Globbing
-        across the routed skill backend should not raise NotImplementedError because
-        CompositeBackend queries all backends during default-path glob operations.
-        """
+        """Avoid CompositeBackend fan-out failures for unrelated glob calls."""
+        del pattern, path
         return []
 
-    def grep_raw(self, pattern: str, path: str | None = None, glob: str | None = None) -> list[Any]:
-        """Return no matches for grep over skill routes.
-
-        This keeps mixed backend grep operations from failing when CompositeBackend
-        fans out across routes that are unrelated to the repo filesystem search.
-        """
+    def grep_raw(
+        self, pattern: str, path: str | None = None, glob: str | None = None
+    ) -> list[Any]:
+        """Avoid CompositeBackend fan-out failures for unrelated grep calls."""
+        del pattern, path, glob
         return []
-
-    # Remaining BackendProtocol methods (glob_info, write, edit, upload_files, etc.)
-    # are intentionally not implemented. SkillsMiddleware only needs als_info,
-    # adownload_files, and aread. All other paths are handled by the default
-    # sandbox backend via CompositeBackend routing.
 
 
 def _parse_bundle_path(path: str) -> tuple[str, str] | None:
-    """Parse a route-relative skill bundle path without allowing traversal."""
     if not path.startswith("/"):
         return None
     parts = path.lstrip("/").split("/")
@@ -260,8 +116,12 @@ def _parse_bundle_path(path: str) -> tuple[str, str] | None:
     return parts[0], "/".join(parts[1:])
 
 
-def _bundle_content(skill: Any, relative_path: str) -> str | None:
-    """Return the primary document or a declared supporting bundle file."""
+def _bundle_content(skill: AgentSkillBundle | None, relative_path: str) -> str | None:
+    if skill is None:
+        return None
     if relative_path == "SKILL.md":
-        return skill.content or ""
-    return cast(dict[str, str], skill.files).get(relative_path)
+        return skill.content
+    return skill.files.get(relative_path)
+
+
+__all__ = ["AgentSkillsBackend"]

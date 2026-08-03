@@ -188,7 +188,7 @@ immutable after creation.
 | Durable task application service | `server/app/agent/task_runtime.py` |
 | Run/task/session projection | `server/app/runtime_projection.py` |
 | Middleware and trusted injection | `server/app/agent/middleware.py` |
-| Registry-backed skills | `server/app/agent/skills_backend.py` |
+| Agent-owned skills | `server/app/agent/skills_backend.py` |
 | Remote MCP tools | `server/app/agent/mcp_client.py` |
 
 ## Related views

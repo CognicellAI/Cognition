@@ -386,6 +386,44 @@ class SubagentDefinition(BaseModel):
         return v
 
 
+class AgentSkillBundle(BaseModel):
+    """Complete Deep Agents skill bundle owned by one Agent definition."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    name: str = Field(..., min_length=1, max_length=100)
+    content: str = Field(
+        ...,
+        min_length=1,
+        description="Complete SKILL.md content, including YAML frontmatter.",
+    )
+    files: dict[str, str] = Field(
+        default_factory=dict,
+        description="Supporting text files keyed by safe relative POSIX paths.",
+    )
+
+    @field_validator("name")
+    @classmethod
+    def validate_name(cls, value: str) -> str:
+        if not value.replace("-", "").replace("_", "").isalnum():
+            raise ValueError("Skill name must be alphanumeric with hyphens/underscores only")
+        return value
+
+    @field_validator("files")
+    @classmethod
+    def validate_files(cls, value: dict[str, str]) -> dict[str, str]:
+        for path in value:
+            parts = path.split("/")
+            if (
+                not path
+                or path == "SKILL.md"
+                or path.startswith("/")
+                or any(part in {"", ".", ".."} for part in parts)
+            ):
+                raise ValueError("Skill bundle file paths must be safe relative POSIX paths")
+        return value
+
+
 class AgentDefinition(BaseModel):
     """Declarative agent definition.
 
@@ -399,7 +437,7 @@ class AgentDefinition(BaseModel):
         a2a: A2A exposure and public Agent Card presentation configuration.
         system_prompt: System prompt that defines agent behavior.
         tools: List of attached tool names.
-        skills: List of attached skill names.
+        skills: Complete skill bundles owned by this Agent revision.
         memory: List of memory file paths.
         subagents: Nested subagent definitions.
         interrupt_on: Tool-name to HITL policy map.
@@ -412,7 +450,7 @@ class AgentDefinition(BaseModel):
     display_name: str | None = Field(default=None, min_length=1, max_length=200)
     system_prompt: str = Field(..., min_length=1)
     tools: list[str] = Field(default_factory=list)
-    skills: list[str] = Field(default_factory=list)
+    skills: list[AgentSkillBundle] = Field(default_factory=list)
     memory: list[str] = Field(default_factory=list)
     subagents: list[SubagentDefinition] = Field(default_factory=list)
     async_subagents: list[AsyncSubagentConfig] = Field(default_factory=list)
@@ -458,16 +496,11 @@ class AgentDefinition(BaseModel):
 
     @field_validator("skills")
     @classmethod
-    def validate_skills(cls, v: list[str]) -> list[str]:
-        """Validate attached skill names."""
-        for skill_name in v:
-            if not skill_name:
-                raise ValueError("Skill path cannot be empty")
-            if "/" in skill_name or skill_name.endswith(".md"):
-                raise ValueError(
-                    "Agent skills must be registry skill names, not file or directory paths"
-                )
-        return v
+    def validate_skills(cls, value: list[AgentSkillBundle]) -> list[AgentSkillBundle]:
+        names = [skill.name for skill in value]
+        if len(names) != len(set(names)):
+            raise ValueError("Agent skill bundle names must be unique")
+        return value
 
     @field_validator("memory")
     @classmethod
@@ -604,7 +637,7 @@ class AgentDefinition(BaseModel):
             - system_prompt: str (required)
             - model: str | None (optional, format: "provider:model" or just "model")
             - tools: list[Any] | None (optional)
-            - skills: list[str] | None (optional)
+            - skills: list[str] | None (optional source paths)
             - middleware: list[Any] | None (optional)
             - interrupt_on: dict[str, InterruptOnConfig] | None (optional)
             - permissions: list[FilesystemPermission] | None (optional)
@@ -629,7 +662,7 @@ class AgentDefinition(BaseModel):
             spec["tools"] = resolved_tools
 
         if self.skills:
-            spec["skills"] = self.skills
+            spec["skills"] = ["/skills/api/"]
 
         if self.interrupt_on:
             spec["interrupt_on"] = {
@@ -819,6 +852,7 @@ __all__ = [
     "AgentDefinition",
     "AgentMcpConfig",
     "AgentMcpServerConfig",
+    "AgentSkillBundle",
     "AsyncSubagentConfig",
     "McpAuthConfig",
     "MCPAuthType",

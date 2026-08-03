@@ -19,7 +19,6 @@ from server.app.storage.config_models import (
     GlobalProviderDefaults,
     ProviderConfig,
     SandboxProfile,
-    SkillDefinition,
     ToolRegistration,
 )
 from server.app.storage.config_registry import (
@@ -44,15 +43,6 @@ def _provider(id: str = "prov-1", scope: dict | None = None) -> ProviderConfig:
         id=id,
         provider="openai",
         model="gpt-4o",
-        scope=scope or {},
-        source="api",
-    )
-
-
-def _skill(name: str = "myskill", scope: dict | None = None) -> SkillDefinition:
-    return SkillDefinition(
-        name=name,
-        path=f".cognition/skills/{name}.md",
         scope=scope or {},
         source="api",
     )
@@ -192,32 +182,6 @@ class TestMemoryProviderCRUD:
 
 
 # ---------------------------------------------------------------------------
-# MemoryConfigRegistry — Skill CRUD
-# ---------------------------------------------------------------------------
-
-
-class TestMemorySkillCRUD:
-    @pytest.mark.asyncio
-    async def test_upsert_and_get(self, mem_reg: MemoryConfigRegistry):
-        await mem_reg.upsert_skill(_skill())
-        result = await mem_reg.get_skill("myskill")
-        assert result is not None
-        assert result.name == "myskill"
-
-    @pytest.mark.asyncio
-    async def test_delete_skill(self, mem_reg: MemoryConfigRegistry):
-        await mem_reg.upsert_skill(_skill())
-        deleted = await mem_reg.delete_skill("myskill")
-        assert deleted is True
-        assert await mem_reg.get_skill("myskill") is None
-
-    @pytest.mark.asyncio
-    async def test_list_skills_empty(self, mem_reg: MemoryConfigRegistry):
-        skills = await mem_reg.list_skills()
-        assert skills == []
-
-
-# ---------------------------------------------------------------------------
 # MemoryConfigRegistry — Tool CRUD
 # ---------------------------------------------------------------------------
 
@@ -292,63 +256,40 @@ class TestMemoryScopeResolution:
     @pytest.mark.asyncio
     async def test_global_row_matches_any_scope(self, mem_reg: MemoryConfigRegistry):
         """A row with scope={} should be returned for any scope query."""
-        await mem_reg.upsert_skill(_skill("global-skill", scope={}))
-        result = await mem_reg.get_skill("global-skill", scope={"user": "alice"})
+        await mem_reg.upsert_tool(_tool("global-tool", scope={}))
+        result = await mem_reg.get_tool("global-tool", scope={"user": "alice"})
         assert result is not None
 
     @pytest.mark.asyncio
     async def test_scoped_row_wins_over_global(self, mem_reg: MemoryConfigRegistry):
         """More-specific scope wins over global row for the same name."""
-        global_skill = SkillDefinition(
-            name="typed-skill", path="global.md", description="global", scope={}, source="api"
+        await mem_reg.upsert_tool(_tool("typed-tool", scope={}))
+        scoped_tool = _tool("typed-tool", scope={"user": "alice"}).model_copy(
+            update={"path": "server.app.tools.scoped"}
         )
-        scoped_skill = SkillDefinition(
-            name="typed-skill",
-            path="scoped.md",
-            description="scoped",
-            scope={"user": "alice"},
-            source="api",
-        )
-        await mem_reg.upsert_skill(global_skill)
-        await mem_reg.upsert_skill(scoped_skill)
+        await mem_reg.upsert_tool(scoped_tool)
 
-        result = await mem_reg.get_skill("typed-skill", scope={"user": "alice"})
+        result = await mem_reg.get_tool("typed-tool", scope={"user": "alice"})
         assert result is not None
-        assert result.path == "scoped.md"
+        assert result.path == "server.app.tools.scoped"
 
     @pytest.mark.asyncio
     async def test_scoped_row_invisible_to_other_users(self, mem_reg: MemoryConfigRegistry):
         """A user-scoped row is not visible when querying a different user's scope."""
-        scoped = SkillDefinition(
-            name="private-skill",
-            path="private.md",
-            scope={"user": "alice"},
-            source="api",
-        )
-        await mem_reg.upsert_skill(scoped)
-
-        result = await mem_reg.get_skill("private-skill", scope={"user": "bob"})
+        await mem_reg.upsert_tool(_tool("private-tool", scope={"user": "alice"}))
+        result = await mem_reg.get_tool("private-tool", scope={"user": "bob"})
         assert result is None
 
     @pytest.mark.asyncio
     async def test_list_only_returns_visible_rows(self, mem_reg: MemoryConfigRegistry):
-        """list_skills respects scope — only visible rows returned."""
-        await mem_reg.upsert_skill(
-            SkillDefinition(name="global-s", path="g.md", scope={}, source="api")
-        )
-        await mem_reg.upsert_skill(
-            SkillDefinition(name="alice-s", path="a.md", scope={"user": "alice"}, source="api")
-        )
-        # Bob should see only global
-        bob_skills = await mem_reg.list_skills(scope={"user": "bob"})
-        assert len(bob_skills) == 1
-        assert bob_skills[0].name == "global-s"
-
-        # Alice should see both (global + her own)
-        alice_skills = await mem_reg.list_skills(scope={"user": "alice"})
-        names = {s.name for s in alice_skills}
-        assert "global-s" in names
-        assert "alice-s" in names
+        """list_tools respects scope — only visible rows returned."""
+        await mem_reg.upsert_tool(_tool("global-tool", scope={}))
+        await mem_reg.upsert_tool(_tool("alice-tool", scope={"user": "alice"}))
+        assert [tool.name for tool in await mem_reg.list_tools(scope={"user": "bob"})] == [
+            "global-tool"
+        ]
+        names = {tool.name for tool in await mem_reg.list_tools(scope={"user": "alice"})}
+        assert names == {"global-tool", "alice-tool"}
 
 
 # ---------------------------------------------------------------------------
@@ -388,29 +329,31 @@ class TestMemorySeeding:
     @pytest.mark.asyncio
     async def test_seed_if_absent_inserts_when_missing(self, mem_reg: MemoryConfigRegistry):
         inserted = await mem_reg.seed_if_absent(
-            "skill", "seed-skill", {}, {"name": "seed-skill", "path": "x.md"}, "file"
+            "tool",
+            "seed-tool",
+            {},
+            {"name": "seed-tool", "path": "server.app.tools.seed"},
+            "file",
         )
         assert inserted is True
-        result = await mem_reg.get_skill("seed-skill")
+        result = await mem_reg.get_tool("seed-tool")
         assert result is not None
 
     @pytest.mark.asyncio
     async def test_seed_if_absent_does_not_overwrite(self, mem_reg: MemoryConfigRegistry):
         """Seeding should not overwrite an existing row."""
-        await mem_reg.upsert_skill(
-            SkillDefinition(name="existing", path="original.md", source="api")
-        )
+        await mem_reg.upsert_tool(_tool("existing"))
         inserted = await mem_reg.seed_if_absent(
-            "skill",
+            "tool",
             "existing",
             {},
-            {"name": "existing", "path": "override.md"},
+            {"name": "existing", "path": "server.app.tools.override"},
             "file",
         )
         assert inserted is False
-        result = await mem_reg.get_skill("existing")
+        result = await mem_reg.get_tool("existing")
         assert result is not None
-        assert result.path == "original.md"
+        assert result.path == "server.app.tools.existing"
 
 
 # ---------------------------------------------------------------------------
@@ -422,30 +365,30 @@ class TestMemoryChangeLog:
     @pytest.mark.asyncio
     async def test_changes_recorded_on_upsert(self, mem_reg: MemoryConfigRegistry):
         before = datetime.now(UTC) - timedelta(seconds=1)
-        await mem_reg.upsert_skill(_skill())
+        await mem_reg.upsert_tool(_tool())
         changes = await mem_reg.get_changes_since(before)
         assert len(changes) >= 1
-        assert any(c.name == "myskill" for c in changes)
+        assert any(c.name == "mytool" for c in changes)
 
     @pytest.mark.asyncio
     async def test_changes_recorded_on_delete(self, mem_reg: MemoryConfigRegistry):
-        await mem_reg.upsert_skill(_skill())
+        await mem_reg.upsert_tool(_tool())
         before = datetime.now(UTC) - timedelta(seconds=1)
-        await mem_reg.delete_skill("myskill")
+        await mem_reg.delete_tool("mytool")
         changes = await mem_reg.get_changes_since(before)
         delete_changes = [c for c in changes if c.operation == "delete"]
         assert len(delete_changes) >= 1
 
     @pytest.mark.asyncio
     async def test_get_changes_since_filters_by_time(self, mem_reg: MemoryConfigRegistry):
-        await mem_reg.upsert_skill(_skill("old-skill"))
+        await mem_reg.upsert_tool(_tool("old-tool"))
         cutoff = datetime.now(UTC)
-        await mem_reg.upsert_skill(_skill("new-skill"))
+        await mem_reg.upsert_tool(_tool("new-tool"))
 
         changes = await mem_reg.get_changes_since(cutoff)
         names = {c.name for c in changes}
-        assert "new-skill" in names
-        assert "old-skill" not in names
+        assert "new-tool" in names
+        assert "old-tool" not in names
 
 
 # ---------------------------------------------------------------------------
@@ -515,15 +458,13 @@ class TestSqliteConfigRegistry:
             await reg.close()
 
     @pytest.mark.asyncio
-    async def test_upsert_and_list_skills(self, tmp_path: Path):
+    async def test_upsert_and_list_tools(self, tmp_path: Path):
         reg = _make_sqlite_reg(tmp_path)
         try:
-            await reg.upsert_skill(_skill("s1"))
-            await reg.upsert_skill(_skill("s2"))
-            skills = await reg.list_skills()
-            names = {s.name for s in skills}
-            assert "s1" in names
-            assert "s2" in names
+            await reg.upsert_tool(_tool("t1"))
+            await reg.upsert_tool(_tool("t2"))
+            names = {tool.name for tool in await reg.list_tools()}
+            assert {"t1", "t2"} <= names
         finally:
             await reg.close()
 
@@ -559,46 +500,24 @@ class TestSqliteConfigRegistry:
         ]
         placeholders = ",".join("?" for _ in candidate_keys)
         try:
-            await reg.upsert_skill(
-                SkillDefinition(
-                    name="shared",
-                    path="global.md",
-                    scope={},
-                    source="api",
-                )
-            )
-            await reg.upsert_skill(
-                SkillDefinition(
-                    name="tenant-only",
-                    path="tenant.md",
-                    scope={"tenant": "acme"},
-                    source="api",
-                )
-            )
-            await reg.upsert_skill(
-                SkillDefinition(
-                    name="shared",
-                    path="exact.md",
-                    scope=target_scope,
-                    source="api",
+            await reg.upsert_tool(_tool("shared", scope={}))
+            await reg.upsert_tool(_tool("tenant-only", scope={"tenant": "acme"}))
+            await reg.upsert_tool(
+                _tool("shared", scope=target_scope).model_copy(
+                    update={"path": "server.app.tools.exact"}
                 )
             )
             for index in range(150):
-                await reg.upsert_skill(
-                    SkillDefinition(
-                        name=f"noise-{index}",
-                        path=f"noise-{index}.md",
-                        scope={"tenant": f"other-{index}"},
-                        source="api",
-                    )
+                await reg.upsert_tool(
+                    _tool(f"noise-{index}", scope={"tenant": f"other-{index}"})
                 )
 
-            result = await reg.get_skill("shared", target_scope)
+            result = await reg.get_tool("shared", target_scope)
             assert result is not None
-            assert result.path == "exact.md"
+            assert result.path == "server.app.tools.exact"
 
-            visible = await reg.list_skills(target_scope)
-            visible_names = {skill.name for skill in visible}
+            visible = await reg.list_tools(target_scope)
+            visible_names = {tool.name for tool in visible}
             assert {"shared", "tenant-only"} <= visible_names
             assert all(not name.startswith("noise-") for name in visible_names)
 
@@ -610,7 +529,7 @@ class TestSqliteConfigRegistry:
                     FROM config_entities
                     WHERE entity_type=? AND name=? AND scope_key IN ({placeholders})
                     """,
-                    ("skill", "shared", *candidate_keys),
+                    ("tool", "shared", *candidate_keys),
                 ).fetchall()
                 list_plan = conn.execute(
                     f"""
@@ -619,7 +538,7 @@ class TestSqliteConfigRegistry:
                     FROM config_entities
                     WHERE entity_type=? AND scope_key IN ({placeholders})
                     """,
-                    ("skill", *candidate_keys),
+                    ("tool", *candidate_keys),
                 ).fetchall()
 
             exact_plan_text = " ".join(str(row) for row in exact_plan)
@@ -638,7 +557,7 @@ class TestSqliteConfigRegistry:
     async def test_delete_returns_false_for_missing(self, tmp_path: Path):
         reg = _make_sqlite_reg(tmp_path)
         try:
-            deleted = await reg.delete_skill("no-such-skill")
+            deleted = await reg.delete_tool("no-such-tool")
             assert deleted is False
         finally:
             await reg.close()
@@ -647,9 +566,13 @@ class TestSqliteConfigRegistry:
     async def test_seed_if_absent_does_not_overwrite(self, tmp_path: Path):
         reg = _make_sqlite_reg(tmp_path)
         try:
-            await reg.upsert_skill(SkillDefinition(name="sk", path="orig.md", source="api"))
+            await reg.upsert_tool(_tool("existing"))
             inserted = await reg.seed_if_absent(
-                "skill", "sk", {}, {"name": "sk", "path": "new.md"}, "file"
+                "tool",
+                "existing",
+                {},
+                {"name": "existing", "path": "server.app.tools.new"},
+                "file",
             )
             assert inserted is False
         finally:
