@@ -12,20 +12,24 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from typing import Any, Literal
+from urllib.parse import urlsplit
 
 import structlog
 from langchain_core.tools import BaseTool
 from langchain_mcp_adapters.callbacks import CallbackContext, Callbacks
 from langchain_mcp_adapters.client import MultiServerMCPClient
 from langchain_mcp_adapters.interceptors import ToolCallInterceptor
-from langchain_mcp_adapters.sessions import (
-    SSEConnection,
-    StreamableHttpConnection,
-)
+from langchain_mcp_adapters.sessions import StreamableHttpConnection
 from mcp.types import LoggingMessageNotificationParams
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from server.app.agent.definition import AgentMcpServerConfig
+from server.app.agent.definition import (
+    AgentMcpServerConfig,
+    McpAuthConfig,
+    McpNoAuthConfig,
+    McpWorkloadTokenExchangeAuthConfig,
+)
+from server.app.settings import McpWorkloadTokenExchangeProfile, Settings
 
 logger = structlog.get_logger(__name__)
 
@@ -39,18 +43,32 @@ class McpServerDiscoveryError(RuntimeError):
         super().__init__(f"MCP server '{server_alias}' failed: {category}")
 
 
+class McpTransportAuthenticationError(RuntimeError):
+    """Raised when selected MCP transport authentication cannot be applied."""
+
+    def __init__(self, server_alias: str, category: str = "auth_unavailable") -> None:
+        self.server_alias = server_alias
+        self.category = category
+        super().__init__(f"MCP server '{server_alias}' failed: {category}")
+
+
 class McpServerConfig(BaseModel):
     """Configuration for a remote MCP server connection."""
 
+    model_config = ConfigDict(extra="forbid")
+
     name: str = Field(..., description="Unique name for this MCP server")
-    url: str = Field(..., description="MCP server URL (must be HTTP/SSE endpoint)")
-    headers: dict[str, str] = Field(
-        default_factory=dict, description="Headers to include in requests"
-    )
-    enabled: bool = Field(default=True, description="Whether this server is enabled")
+    url: str = Field(..., description="MCP Streamable HTTP endpoint")
     required: bool = Field(default=True, description="Whether discovery failure is fatal")
-    transport: Literal["sse", "streamable_http"] = Field(
-        default="streamable_http", description="Transport protocol"
+    transport: Literal["streamable_http"] = Field(
+        default="streamable_http", description="MCP transport protocol"
+    )
+    auth: McpAuthConfig = Field(default_factory=McpNoAuthConfig)
+    workload_profile: McpWorkloadTokenExchangeProfile | None = Field(
+        default=None,
+        exclude=True,
+        repr=False,
+        description="Resolved deployment profile; never an Agent/API projection",
     )
 
     @classmethod
@@ -58,28 +76,41 @@ class McpServerConfig(BaseModel):
         cls,
         alias: str,
         config: AgentMcpServerConfig,
+        settings: Settings,
     ) -> McpServerConfig:
-        transport: Literal["sse", "streamable_http"] = (
-            "streamable_http" if config.transport == "http" else config.transport
-        )
+        workload_profile = None
+        if isinstance(config.auth, McpWorkloadTokenExchangeAuthConfig):
+            workload_profile = settings.get_mcp_auth_profile(config.auth.profile)
         return cls(
             name=alias,
             url=config.url,
-            headers={},
-            enabled=config.enabled,
             required=config.required,
-            transport=transport,
+            transport=config.transport,
+            auth=config.auth,
+            workload_profile=workload_profile,
         )
 
     @field_validator("url")
     @classmethod
     def validate_url(cls, v: str, info: Any) -> str:
-        if not v.startswith(("http://", "https://")):
+        if not v or any(character.isspace() for character in v):
+            raise ValueError("MCP server URL must not be empty or contain whitespace")
+        try:
+            parsed = urlsplit(v)
+            hostname = parsed.hostname
+            _ = parsed.port
+        except ValueError as exc:
+            raise ValueError("MCP server URL is malformed") from exc
+        if parsed.scheme not in {"http", "https"} or not parsed.netloc or not hostname:
             raise ValueError(
                 f"MCP server '{info.data.get('name', 'unknown')}' has invalid URL: {v}. "
                 "Only HTTP/HTTPS URLs are supported. "
                 "Local (stdio) MCP servers are not supported for security reasons."
             )
+        if parsed.username is not None or parsed.password is not None:
+            raise ValueError("MCP server URLs must not contain credentials")
+        if parsed.fragment:
+            raise ValueError("MCP server URLs must not contain fragments")
         return v
 
 
@@ -94,11 +125,10 @@ class McpToolInfo(BaseModel):
     task_support: str | None = None
 
 
-def mcp_config_to_connection(config: McpServerConfig) -> SSEConnection | StreamableHttpConnection:
-    transport: Literal["sse", "streamable_http"] = config.transport
-    if transport == "sse":
-        return {"transport": "sse", "url": config.url, "headers": dict(config.headers)}
-    return {"transport": "streamable_http", "url": config.url, "headers": dict(config.headers)}
+def mcp_config_to_connection(config: McpServerConfig) -> StreamableHttpConnection:
+    if not isinstance(config.auth, McpNoAuthConfig):
+        raise McpTransportAuthenticationError(config.name)
+    return {"transport": "streamable_http", "url": config.url}
 
 
 def create_mcp_client(
@@ -106,9 +136,7 @@ def create_mcp_client(
     callbacks: Callbacks | None = None,
     tool_interceptors: list[ToolCallInterceptor] | None = None,
 ) -> MultiServerMCPClient:
-    connections: dict[str, Any] = {
-        c.name: mcp_config_to_connection(c) for c in configs if c.enabled
-    }
+    connections: dict[str, Any] = {c.name: mcp_config_to_connection(c) for c in configs}
     return MultiServerMCPClient(
         connections=connections or None,
         callbacks=callbacks,
@@ -127,8 +155,6 @@ async def load_mcp_tools_per_server(
     tools: list[BaseTool] = []
     seen: set[str] = set()
     for config in configs:
-        if not config.enabled:
-            continue
         client = create_mcp_client(
             [config],
             callbacks=callbacks,

@@ -215,6 +215,25 @@ def _get_settings_schema() -> list[dict[str, Any]]:
             "test": "test",
         }
 
+        # Deployment-owned MCP auth profiles are intentionally top-level so
+        # Agent definitions can reference them without embedding identity
+        # system configuration.
+        if field_name == "mcp_auth_profiles":
+            yaml_path = ["mcp_auth_profiles"]
+            default_factory = getattr(field_info, "default_factory", None)
+            default = default_factory() if callable(default_factory) else {}
+            schema.append(
+                {
+                    "field_name": field_name,
+                    "env_var": env_var,
+                    "yaml_path": yaml_path,
+                    "default": default,
+                    "annotation": str(field_info.annotation),
+                    "is_secret": False,
+                }
+            )
+            continue
+
         # Find which section this field belongs to
         parts = field_name.split("_")
         section = None

@@ -5,8 +5,49 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Literal
 
-from pydantic import AliasChoices, Field, SecretStr, field_validator
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class McpWorkloadTokenExchangeProfile(BaseModel):
+    """Deployment-owned OAuth token-exchange profile for MCP transport."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    type: Literal["oauth_token_exchange"] = "oauth_token_exchange"
+    token_endpoint: str
+    subject_token_source: Literal["workload_identity"] = "workload_identity"
+    audience: str = Field(min_length=1)
+
+    @field_validator("token_endpoint")
+    @classmethod
+    def validate_token_endpoint(cls, value: str) -> str:
+        """Require an absolute HTTP(S) token endpoint without URL credentials."""
+        from urllib.parse import urlsplit
+
+        if not value or any(character.isspace() for character in value):
+            raise ValueError("MCP token endpoint must not be empty or contain whitespace")
+        try:
+            parsed = urlsplit(value)
+            hostname = parsed.hostname
+            _ = parsed.port
+        except ValueError as exc:
+            raise ValueError("MCP token endpoint is malformed") from exc
+        if parsed.scheme not in {"http", "https"} or not parsed.netloc or not hostname:
+            raise ValueError("MCP token endpoint must be an absolute HTTP(S) URL")
+        if parsed.username is not None or parsed.password is not None:
+            raise ValueError("MCP token endpoint must not contain credentials")
+        if parsed.fragment:
+            raise ValueError("MCP token endpoint must not contain a fragment")
+        return value
+
+    @field_validator("audience")
+    @classmethod
+    def validate_audience(cls, value: str) -> str:
+        """Reject ambiguous audience values while allowing URI-shaped identifiers."""
+        if value != value.strip() or any(character.isspace() for character in value):
+            raise ValueError("MCP token-exchange audience must not contain whitespace")
+        return value
 
 
 class Settings(BaseSettings):
@@ -40,7 +81,18 @@ class Settings(BaseSettings):
     deployment_mode: Literal["local", "development", "production"] = Field(
         default="development",
         alias="COGNITION_DEPLOYMENT_MODE",
-        description="Deployment safety profile. Production rejects host-backed runtime state.",
+        description=(
+            "Builder-defined deployment label for operational metadata. Cognition does not "
+            "infer storage or MCP authentication policy from this value."
+        ),
+    )
+
+    # MCP transport identity is deployment configuration. Profiles contain no
+    # subject token or provider credential and are referenced opaquely by Agent
+    # definitions using workload_token_exchange authentication.
+    mcp_auth_profiles: dict[str, McpWorkloadTokenExchangeProfile] = Field(
+        default_factory=dict,
+        alias="COGNITION_MCP_AUTH_PROFILES",
     )
 
     # Workspace settings
@@ -210,9 +262,9 @@ class Settings(BaseSettings):
         alias="COGNITION_PERSISTENCE_URI",
     )
 
-    # Durable Deep Agents file backend. SQLite/in-memory/local remain supported
-    # only for local and development profiles; production uses S3-compatible
-    # object storage for durable file-shaped runtime data.
+    # Durable Deep Agents file backend. Builders select local or S3-compatible
+    # placement explicitly; Cognition never changes backends based on a
+    # deployment label or after a selected-backend failure.
     durable_file_backend: Literal["local", "s3"] = Field(
         default="local",
         alias="COGNITION_DURABLE_FILE_BACKEND",
@@ -500,27 +552,18 @@ class Settings(BaseSettings):
         return self.durable_file_backend == "s3"
 
     def validate_deployment_storage_policy(self) -> None:
-        """Reject production settings that could persist runtime data on the host.
-
-        Local and development modes intentionally retain SQLite, memory, and
-        local files for a frictionless developer experience.  Production must
-        explicitly select durable infrastructure instead of silently falling
-        back to a workspace path.
-        """
+        """Validate the builder-selected storage backend without classifying it."""
         if self.s3_enabled and not self.s3_bucket:
             raise ValueError("COGNITION_S3_BUCKET is required when durable_file_backend=s3")
         if self.s3_enabled and self.s3_scope_hmac_key is None:
-            raise ValueError(
-                "COGNITION_S3_SCOPE_HMAC_KEY is required when durable_file_backend=s3"
-            )
-        if self.deployment_mode != "production":
-            return
-        if self.persistence_backend != "postgres":
-            raise ValueError("production requires COGNITION_PERSISTENCE_BACKEND=postgres")
-        if not self.s3_enabled:
-            raise ValueError("production requires COGNITION_DURABLE_FILE_BACKEND=s3")
-        if self.sandbox_backend == "local":
-            raise ValueError("production cannot use COGNITION_SANDBOX_BACKEND=local")
+            raise ValueError("COGNITION_S3_SCOPE_HMAC_KEY is required when durable_file_backend=s3")
+
+    def get_mcp_auth_profile(self, name: str) -> McpWorkloadTokenExchangeProfile:
+        """Resolve one deployment-owned MCP auth profile by opaque name."""
+        try:
+            return self.mcp_auth_profiles[name]
+        except KeyError as exc:
+            raise ValueError(f"Unknown MCP authentication profile: {name}") from exc
 
 
 # Global settings instance
