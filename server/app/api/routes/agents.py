@@ -5,13 +5,19 @@ from typing import Any
 from fastapi import APIRouter, Depends, Header, HTTPException, Response
 
 from server.app.agent.definition import A2AConfig, AgentDefinition
-from server.app.api.dependencies import get_config_store, get_scope_dep
+from server.app.api.dependencies import (
+    get_config_store,
+    get_mcp_readiness_repository,
+    get_scope_dep,
+)
 from server.app.api.models import (
     AgentConfigResponse,
     AgentCreate,
     AgentList,
     AgentResponse,
     AgentUpdate,
+    McpReadinessResponse,
+    McpServerReadinessResponse,
 )
 from server.app.api.scoping import SessionScope
 from server.app.observability import SCOPE_ACCESS_DENIED_TOTAL
@@ -19,6 +25,7 @@ from server.app.storage.common import canonical_json_digest
 from server.app.storage.config_models import AgentConfigRecord
 from server.app.storage.config_registry import ConfigRevisionConflictError
 from server.app.storage.config_store import ConfigStore
+from server.app.storage.mcp_readiness import McpReadinessRepository
 
 router = APIRouter(prefix="/agents", tags=["agents"])
 
@@ -175,6 +182,67 @@ async def get_agent(
     result = _agent_to_response(agent, record)
     response.headers["ETag"] = _etag(result.revision, result.definition_digest)
     return result
+
+
+@router.get("/{name}/mcp/readiness", response_model=McpReadinessResponse)
+async def get_agent_mcp_readiness(
+    name: str,
+    scope: SessionScope = Depends(get_scope_dep),  # noqa: B008
+    config_store: ConfigStore = Depends(get_config_store),  # noqa: B008
+    repository: McpReadinessRepository = Depends(  # noqa: B008
+        get_mcp_readiness_repository
+    ),
+) -> McpReadinessResponse:
+    """Return scoped runtime observations, never live authorization truth."""
+    effective_scope = scope.get_all()
+    agent = await config_store.get_agent_definition(name, effective_scope or None)
+    if agent is None or agent.hidden:
+        raise HTTPException(status_code=404, detail=f"Agent '{name}' not found")
+    record = await config_store.get_agent_record(name, effective_scope or None)
+    revision = record.revision if record else 1
+    observations = {
+        item.server_alias: item
+        for item in await repository.list_for_agent(
+            agent_name=name,
+            agent_revision=revision,
+            effective_scope=effective_scope,
+        )
+    }
+    servers: list[McpServerReadinessResponse] = []
+    for alias, config in sorted(agent.mcp.servers.items()):
+        observation = observations.get(alias)
+        if observation is None:
+            servers.append(
+                McpServerReadinessResponse(
+                    server_alias=alias,
+                    required=config.required,
+                    status="unknown",
+                    failure_category="not_observed",
+                )
+            )
+            continue
+        status = observation.public_status()
+        servers.append(
+            McpServerReadinessResponse(
+                server_alias=alias,
+                required=config.required,
+                status=status,
+                observed_at=observation.observed_at,
+                fresh_until=observation.fresh_until,
+                tool_count=observation.tool_count,
+                schema_digest=observation.schema_digest,
+                failure_category=(
+                    "observation_stale"
+                    if status == "unknown"
+                    else observation.failure_category
+                ),
+            )
+        )
+    return McpReadinessResponse(
+        agent_name=name,
+        agent_revision=revision,
+        servers=servers,
+    )
 
 
 @router.post("", response_model=AgentResponse, status_code=201)

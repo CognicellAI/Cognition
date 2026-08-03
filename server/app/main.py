@@ -18,6 +18,7 @@ from server.app.api.dependencies import (
     set_config_store,
     set_mcp_oauth_flow_coordinator,
     set_mcp_oauth_state_repository,
+    set_mcp_readiness_repository,
     set_model_catalog_dep,
     set_runtime_resolver,
     set_session_agent_manager_dep,
@@ -85,6 +86,13 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     await mcp_oauth_state_repository.initialize()
     set_mcp_oauth_state_repository(mcp_oauth_state_repository)
     logger.info("MCP OAuth state repository initialized")
+
+    from server.app.storage.factory import create_mcp_readiness_repository
+
+    mcp_readiness_repository = create_mcp_readiness_repository(settings)
+    await mcp_readiness_repository.initialize()
+    set_mcp_readiness_repository(mcp_readiness_repository)
+    logger.info("MCP readiness repository initialized")
 
     from server.app.agent.mcp_oauth_flow import McpOAuthFlowCoordinator
 
@@ -172,6 +180,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         runtime_resolver=runtime_resolver,
         config_store=config_store,
         mcp_oauth_repository=mcp_oauth_state_repository,
+        mcp_readiness_repository=mcp_readiness_repository,
     )
     set_session_agent_manager_dep(session_agent_manager)
     logger.info("SessionAgentManager initialized")
@@ -297,6 +306,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         await storage_backend.close()
     await mcp_oauth_flow_coordinator.close()
     await mcp_oauth_state_repository.close()
+    await mcp_readiness_repository.close()
     logger.info("Server shutdown complete")
 
 

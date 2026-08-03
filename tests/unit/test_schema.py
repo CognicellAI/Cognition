@@ -32,7 +32,8 @@ class TestSchemaDefinitions:
         assert "session_events" in table_names
         assert "runtime_tasks" in table_names
         assert "mcp_oauth_state" in table_names
-        assert len(table_names) == 9
+        assert "mcp_readiness" in table_names
+        assert len(table_names) == 10
 
     def test_sessions_table_columns(self) -> None:
         """Test sessions table has expected columns."""

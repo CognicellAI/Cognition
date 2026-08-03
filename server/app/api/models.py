@@ -929,6 +929,28 @@ class AgentList(BaseModel):
     next_offset: int | None = None
 
 
+class McpServerReadinessResponse(BaseModel):
+    """Freshness-qualified MCP discovery observation."""
+
+    server_alias: str
+    required: bool
+    status: Literal["ready", "unavailable", "unknown"]
+    observed_at: datetime | None = None
+    fresh_until: datetime | None = None
+    tool_count: int = 0
+    schema_digest: str | None = None
+    failure_category: str | None = None
+    authorization_truth: Literal[False] = False
+
+
+class McpReadinessResponse(BaseModel):
+    """Scoped MCP readiness for the current Agent revision."""
+
+    agent_name: str
+    agent_revision: int = Field(ge=1)
+    servers: list[McpServerReadinessResponse] = Field(default_factory=list)
+
+
 # ============================================================================
 # Tool Models
 # ============================================================================
