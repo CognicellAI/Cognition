@@ -621,34 +621,6 @@ async def create_cognition_agent(params: CognitionAgentParams) -> CognitionAgent
         except RuntimeError:
             config_store = None
 
-    runtime_ctx = RuntimeContext.from_params(
-        project_path=project_path,
-        model=getattr(params.model, "model_name", None)
-        or getattr(params.model, "model_id", None)
-        or getattr(params.model, "model", None)
-        or str(params.model),
-        store=params.store,
-        system_prompt=params.system_prompt,
-        memory=params.memory,
-        skills=params.skills,
-        subagents=params.subagents,
-        async_subagents=params.async_subagents,
-        interrupt_on=params.interrupt_on,
-        permissions=params.permissions,
-        response_format=params.response_format,
-        tool_token_limit_before_evict=params.tool_token_limit_before_evict,
-        context_policy=params.context_policy,
-        excluded_tools=params.excluded_tools,
-        blocked_tools=params.blocked_tools,
-        middleware=params.middleware,
-        tools=params.tools,
-        settings=settings,
-        scope=params.scope,
-        sandbox_profile=params.sandbox_profile,
-        sandbox_execution_role_arn=params.sandbox_execution_role_arn,
-        model_cache_key=params.model_cache_key,
-        manifest_digest=params.manifest_digest,
-    )
     resolved_sandbox_profile = params.sandbox_profile or settings.aws_lambda_microvm_default_profile
     sandbox_profile_config = params.pinned_sandbox_profile_config
     if sandbox_profile_config is None:
@@ -658,19 +630,6 @@ async def create_cognition_agent(params: CognitionAgentParams) -> CognitionAgent
             profile_name=resolved_sandbox_profile,
             scope=params.scope,
         )
-
-    cached_agent = get_cached_agent(runtime_ctx)
-    if cached_agent is not None:
-        sandbox_backend = _create_sandbox(
-            project_path,
-            sandbox_id,
-            settings,
-            k8s_labels,
-            sandbox_profile=resolved_sandbox_profile,
-            sandbox_execution_role_arn=params.sandbox_execution_role_arn,
-            sandbox_profile_config=sandbox_profile_config,
-        )
-        return CognitionAgentResult(agent=cached_agent, sandbox_backend=sandbox_backend)
 
     sandbox_backend = _create_sandbox(
         project_path,
@@ -742,23 +701,16 @@ async def create_cognition_agent(params: CognitionAgentParams) -> CognitionAgent
                     }
                 )
 
-    def runtime_backend(tool_runtime: Any) -> Any:
-        """Resolve only the current invocation's assigned sandbox."""
-        context = getattr(tool_runtime, "context", None)
-        selected = getattr(context, "sandbox_backend", None)
-        if selected is None:
-            STRICT_EXECUTION_REJECTIONS_TOTAL.labels(reason="missing_sandbox").inc()
-            raise RuntimeError(
-                "The current run has no assigned sandbox backend; refusing "
-                "host or stale-sandbox fallback"
-            )
-        if routes:
-            from deepagents.backends.composite import CompositeBackend
+    # Deep Agents 0.7 deliberately accepts only initialized backend instances,
+    # not runtime factories. A compiled graph therefore captures its sandbox;
+    # caching that graph would cross a session's execution boundary. Build each
+    # run with its assigned sandbox instead of retaining a stale graph.
+    if routes:
+        from deepagents.backends.composite import CompositeBackend
 
-            return CompositeBackend(default=selected, routes=routes)
-        return selected
-
-    backend = runtime_backend
+        backend = CompositeBackend(default=sandbox_backend, routes=routes)
+    else:
+        backend = sandbox_backend
 
     if params.subagents is not None:
         raw_subagents = list(params.subagents)
@@ -949,7 +901,6 @@ async def create_cognition_agent(params: CognitionAgentParams) -> CognitionAgent
     agent = cast(Any, create_deep_agent)(**create_kwargs)
 
     result = CognitionAgentResult(agent=agent, sandbox_backend=sandbox_backend)
-    cache_agent(runtime_ctx, agent)
 
     return result
 
