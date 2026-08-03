@@ -42,7 +42,6 @@ from server.app.storage.config_models import (
     EntityType,
     GlobalAgentDefaults,
     GlobalProviderDefaults,
-    McpServerRegistration,
     ProviderConfig,
     SandboxProfile,
     SkillDefinition,
@@ -163,24 +162,6 @@ class ConfigRegistry(Protocol):
 
     async def delete_agent(self, name: str, scope: dict[str, str] | None = None) -> bool:
         """Delete an agent definition row. Returns True if row existed."""
-        ...
-
-    # ------------------------------------------------------------------
-    # MCP server CRUD
-    # ------------------------------------------------------------------
-
-    async def list_mcp_servers(
-        self, scope: dict[str, str] | None = None
-    ) -> list[McpServerRegistration]:
-        """List all MCP server registrations visible in the given scope."""
-        ...
-
-    async def upsert_mcp_server(self, server: McpServerRegistration) -> None:
-        """Create or replace an MCP server registration."""
-        ...
-
-    async def delete_mcp_server(self, name: str, scope: dict[str, str] | None = None) -> bool:
-        """Delete an MCP server registration. Returns True if row existed."""
         ...
 
     # ------------------------------------------------------------------
@@ -657,23 +638,6 @@ class SqliteConfigRegistry:
         return await self._delete_entity("agent", name, scope)
 
     # ------------------------------------------------------------------
-    # MCP server CRUD (SqliteConfigRegistry)
-    # ------------------------------------------------------------------
-
-    async def list_mcp_servers(
-        self, scope: dict[str, str] | None = None
-    ) -> list[McpServerRegistration]:
-        rows = await self._list_entities("mcp_server", scope)
-        return [McpServerRegistration.model_validate(r) for r in rows]
-
-    async def upsert_mcp_server(self, server: McpServerRegistration) -> None:
-        data = server.model_dump()
-        await self._upsert_entity("mcp_server", server.name, server.scope, data, server.source)
-
-    async def delete_mcp_server(self, name: str, scope: dict[str, str] | None = None) -> bool:
-        return await self._delete_entity("mcp_server", name, scope)
-
-    # ------------------------------------------------------------------
     # Sandbox profile CRUD (SqliteConfigRegistry)
     # ------------------------------------------------------------------
 
@@ -1128,24 +1092,6 @@ class PostgresConfigRegistry:
         return await self._delete_entity("agent", name, scope)
 
     # ------------------------------------------------------------------
-    # MCP server CRUD
-    # ------------------------------------------------------------------
-
-    async def list_mcp_servers(
-        self, scope: dict[str, str] | None = None
-    ) -> list[McpServerRegistration]:
-        rows = await self._list_entities("mcp_server", scope)
-        return [McpServerRegistration.model_validate(r) for r in rows]
-
-    async def upsert_mcp_server(self, server: McpServerRegistration) -> None:
-        await self._upsert_entity(
-            "mcp_server", server.name, server.scope, server.model_dump(), server.source
-        )
-
-    async def delete_mcp_server(self, name: str, scope: dict[str, str] | None = None) -> bool:
-        return await self._delete_entity("mcp_server", name, scope)
-
-    # ------------------------------------------------------------------
     # Sandbox profile CRUD
     # ------------------------------------------------------------------
 
@@ -1455,21 +1401,6 @@ class MemoryConfigRegistry:
 
     async def delete_agent(self, name: str, scope: dict[str, str] | None = None) -> bool:
         return self._delete("agent", name, scope)
-
-    # MCP
-    async def list_mcp_servers(
-        self, scope: dict[str, str] | None = None
-    ) -> list[McpServerRegistration]:
-        return [
-            McpServerRegistration.model_validate(r)
-            for r in self._list_entities("mcp_server", scope)
-        ]
-
-    async def upsert_mcp_server(self, server: McpServerRegistration) -> None:
-        self._upsert("mcp_server", server.name, server.scope, server.model_dump(), server.source)
-
-    async def delete_mcp_server(self, name: str, scope: dict[str, str] | None = None) -> bool:
-        return self._delete("mcp_server", name, scope)
 
     # Sandbox profile
     async def get_sandbox_profile(
