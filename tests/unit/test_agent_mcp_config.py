@@ -101,6 +101,18 @@ def test_mcp_oauth_uses_the_mcp_sdk_with_encrypted_database_storage(tmp_path) ->
     assert "headers" not in connection
 
 
+def test_mcp_oauth_fails_closed_without_encrypted_storage() -> None:
+    server = AgentMcpServer(
+        alias="github",
+        url="https://mcp.example.test/github",
+        auth=McpAuthConfig(type="mcp_oauth"),
+    )
+    settings = Settings.model_validate({"persistence_backend": "sqlite"})
+
+    with pytest.raises(McpServerUnavailableError, match="oauth_storage_unavailable"):
+        create_agent_mcp_client(server, settings=settings)
+
+
 def test_agent_rejects_duplicate_mcp_aliases() -> None:
     with pytest.raises(ValidationError, match="aliases must be unique"):
         AgentDefinition(

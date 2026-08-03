@@ -225,3 +225,8 @@ class EncryptedMcpOAuthTokenStorage(TokenStorage):
     async def set_client_info(self, client_info: OAuthClientInformationFull) -> None:
         """Encrypt and save dynamic client-registration metadata."""
         await self._set("client_ciphertext", self._encrypt(client_info.model_dump_json()))
+
+    @property
+    def partition_id(self) -> str:
+        """Return the opaque durable partition identifier for trusted callers."""
+        return self._partition_id
