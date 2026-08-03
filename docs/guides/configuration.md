@@ -618,6 +618,46 @@ Token endpoints that require confidential-client authentication may add
 deployment profile. `client_secret_env` names an environment variable; its
 value never enters YAML, Agent configuration, persistence, or telemetry.
 
+Direct MCP OAuth uses deployment-owned client settings:
+
+| Environment variable | Purpose |
+|---|---|
+| `COGNITION_MCP_OAUTH_ENCRYPTION_KEY` | Fernet key for encrypted token and dynamic-client state |
+| `COGNITION_MCP_OAUTH_REDIRECT_URI` | Builder callback URI registered with the authorization server |
+| `COGNITION_MCP_OAUTH_CLIENT_NAME` | OAuth client display name; defaults to `Cognition` |
+| `COGNITION_MCP_OAUTH_CLIENT_METADATA_URL` | Optional HTTPS client metadata document URL |
+| `COGNITION_MCP_OAUTH_TIMEOUT_SECONDS` | Short-lived authorization transaction timeout; defaults to 300 seconds |
+
+Generate a key with `Fernet.generate_key()` from Python's `cryptography`
+package and inject it as a secret environment value. Rotating the key makes
+existing encrypted OAuth state inaccessible and requires reauthorization.
+
+The builder starts authorization with:
+
+```text
+POST /mcp/oauth/agents/{agent_name}/servers/{server_alias}/authorizations
+```
+
+Cognition returns the SDK-generated authorization URL and an opaque flow ID.
+The configured redirect URI belongs to the builder's user-facing callback. It
+relays the authorization response to Cognition using the same authoritative
+scope headers:
+
+```http
+POST /mcp/oauth/callback
+Content-Type: application/json
+
+{"code":"...","state":"..."}
+```
+
+The code is deliberately accepted only in the POST body, not a Cognition URL,
+so it is not exposed through normal access-log query strings. Pending PKCE
+transactions are expiry-bounded process memory; tokens and dynamically
+registered client secrets are encrypted in the configured database. Builders
+running multiple Cognition replicas must keep the three short-lived handoff
+operations for a flow on the initiating replica. Normal authenticated MCP use
+does not require affinity because token state is durable and shared.
+
 ---
 
 ## Model Catalog

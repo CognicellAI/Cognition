@@ -27,6 +27,7 @@ from server.app.settings import Settings, get_settings
 from server.app.storage.config_store import ConfigStore
 
 if TYPE_CHECKING:
+    from server.app.agent.mcp_oauth_flow import McpOAuthFlowCoordinator
     from server.app.llm.deep_agent_service import SessionAgentManager
     from server.app.llm.model_catalog import ModelCatalog
     from server.app.storage.artifact_store import ArtifactStore
@@ -44,6 +45,7 @@ _session_agent_manager: SessionAgentManager | None = None
 _model_catalog: ModelCatalog | None = None
 _artifact_store: ArtifactStore | None = None
 _mcp_oauth_state_repository: McpOAuthStateRepository | None = None
+_mcp_oauth_flow_coordinator: McpOAuthFlowCoordinator | None = None
 
 
 def set_config_store(store: ConfigStore) -> None:
@@ -79,6 +81,11 @@ def set_artifact_store(store: ArtifactStore) -> None:
 def set_mcp_oauth_state_repository(repository: McpOAuthStateRepository) -> None:
     global _mcp_oauth_state_repository
     _mcp_oauth_state_repository = repository
+
+
+def set_mcp_oauth_flow_coordinator(coordinator: McpOAuthFlowCoordinator) -> None:
+    global _mcp_oauth_flow_coordinator
+    _mcp_oauth_flow_coordinator = coordinator
 
 
 # ---------------------------------------------------------------------------
@@ -142,6 +149,12 @@ def get_mcp_oauth_state_repository() -> McpOAuthStateRepository:
     return _mcp_oauth_state_repository
 
 
+def get_mcp_oauth_flow_coordinator() -> McpOAuthFlowCoordinator:
+    if _mcp_oauth_flow_coordinator is None:
+        raise RuntimeError("MCP OAuth flow coordinator not initialized during startup.")
+    return _mcp_oauth_flow_coordinator
+
+
 def get_rate_limiter_dep() -> RateLimiter:
     return get_rate_limiter()
 
@@ -162,6 +175,7 @@ __all__ = [
     "RuntimeResolver",
     "get_artifact_store",
     "get_mcp_oauth_state_repository",
+    "get_mcp_oauth_flow_coordinator",
     "get_config_store",
     "get_model_catalog_dep",
     "get_rate_limiter_dep",
@@ -177,4 +191,5 @@ __all__ = [
     "set_session_agent_manager_dep",
     "set_storage_backend_dep",
     "set_mcp_oauth_state_repository",
+    "set_mcp_oauth_flow_coordinator",
 ]
