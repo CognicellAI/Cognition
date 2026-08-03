@@ -93,6 +93,23 @@ class TestA2ASecuritySettings:
         assert settings.a2a_security_schemes == schemes
         assert settings.a2a_security_requirements == requirements
 
+    def test_default_durable_file_backend_is_local(self):
+        """Local and development profiles retain an explicit local backend."""
+        settings = TestSettings()
+        assert settings.durable_file_backend == "local"
+        assert not settings.s3_enabled
+
+    def test_s3_compatible_durable_file_configuration(self):
+        """Garage-style endpoint settings select the generic S3 backend."""
+        settings = TestSettings(
+            durable_file_backend="s3",
+            s3_bucket="cognition",
+            s3_endpoint_url="http://garage:3900",
+            s3_force_path_style=True,
+        )
+        assert settings.s3_enabled
+        assert settings.s3_force_path_style
+
 
 class TestSettingsSecrets:
     """Test SecretStr handling in settings."""

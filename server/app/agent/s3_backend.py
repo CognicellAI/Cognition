@@ -43,6 +43,35 @@ class S3CompatibleBackend(BackendProtocol):
         self._bucket = bucket
         self._prefix = prefix.strip("/")
 
+    @classmethod
+    def from_boto3(
+        cls,
+        *,
+        bucket: str,
+        prefix: str = "",
+        endpoint_url: str | None = None,
+        region_name: str | None = None,
+        force_path_style: bool = False,
+    ) -> S3CompatibleBackend:
+        """Build a backend from boto3's standard AWS/S3-compatible client.
+
+        ``force_path_style`` is useful for Garage and other local object stores;
+        AWS S3 deployments can leave it disabled and use virtual-host addressing.
+        Credentials deliberately come from boto3's standard provider chain.
+        """
+        try:
+            import boto3
+            from botocore.config import Config
+        except ImportError as exc:  # pragma: no cover - guarded by the s3 extra
+            raise RuntimeError("Install Cognition with the 's3' extra to use S3 storage") from exc
+        client = boto3.client(
+            "s3",
+            endpoint_url=endpoint_url,
+            region_name=region_name,
+            config=Config(s3={"addressing_style": "path" if force_path_style else "virtual"}),
+        )
+        return cls(client, bucket=bucket, prefix=prefix)
+
     def _key(self, path: str) -> str:
         normalized = posixpath.normpath("/" + path.lstrip("/"))
         if normalized == "/.." or normalized.startswith("/../"):
