@@ -1881,6 +1881,59 @@ advertised. The JSON-RPC 1.0 MUST profile is checked with the official
 
 ---
 
+## MCP OAuth Authorization Handoff
+
+Direct `mcp_oauth` servers use a builder-facing, scope-bound authorization
+handoff. These endpoints never return access tokens, refresh tokens, dynamic
+client secrets, or authorization codes.
+
+### Start authorization
+
+```http
+POST /mcp/oauth/agents/{agent_name}/servers/{server_alias}/authorizations
+```
+
+The server must exist in the resolved Agent definition and select
+`auth.type: mcp_oauth`. The response is either already authorized or contains
+an SDK-generated URL:
+
+```json
+{
+  "flow_id": "opaque-flow-id",
+  "status": "authorization_required",
+  "authorization_url": "https://identity.example/authorize?...",
+  "expires_in_seconds": 300,
+  "failure_category": null
+}
+```
+
+### Relay callback
+
+The builder's registered redirect endpoint posts the provider response in the
+body, with the same authoritative scope headers used to start the flow:
+
+```http
+POST /mcp/oauth/callback
+Content-Type: application/json
+
+{"code":"provider-code","state":"provider-state"}
+```
+
+Do not place the code in the Cognition request URL. Unknown, cross-scope, or
+replayed state fails with a typed, redacted `400` response.
+
+### Observe flow
+
+```http
+GET /mcp/oauth/authorizations/{flow_id}
+```
+
+The result is visible only from the exact effective scope that began the flow.
+Pending authorization transactions expire and are non-durable; encrypted OAuth
+tokens are durable in SQLite/PostgreSQL and process-local in the memory backend.
+
+---
+
 ## Builder-Defined Runtime Scoping
 
 When `COGNITION_SCOPING_ENABLED=true`, all session endpoints require scope headers. The required headers are determined by `COGNITION_SCOPE_KEYS` — these are **builder-defined** key names. Cognition does not hardcode a vocabulary.

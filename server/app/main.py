@@ -16,6 +16,7 @@ from server.app.api.dependencies import (
     get_storage_backend_dep,
     set_artifact_store,
     set_config_store,
+    set_mcp_oauth_flow_coordinator,
     set_mcp_oauth_state_repository,
     set_model_catalog_dep,
     set_runtime_resolver,
@@ -33,6 +34,7 @@ from server.app.api.routes import (
     artifacts,
     capabilities,
     config,
+    mcp_oauth,
     messages,
     models,
     sandbox_profiles,
@@ -83,6 +85,14 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     await mcp_oauth_state_repository.initialize()
     set_mcp_oauth_state_repository(mcp_oauth_state_repository)
     logger.info("MCP OAuth state repository initialized")
+
+    from server.app.agent.mcp_oauth_flow import McpOAuthFlowCoordinator
+
+    mcp_oauth_flow_coordinator = McpOAuthFlowCoordinator(
+        settings=settings,
+        repository=mcp_oauth_state_repository,
+    )
+    set_mcp_oauth_flow_coordinator(mcp_oauth_flow_coordinator)
 
     # Initialize ConfigRegistry
     from server.app.storage.factory import create_config_dispatcher, create_config_registry
@@ -285,6 +295,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # Close storage backend connections
     if storage_backend:
         await storage_backend.close()
+    await mcp_oauth_flow_coordinator.close()
     await mcp_oauth_state_repository.close()
     logger.info("Server shutdown complete")
 
@@ -319,6 +330,7 @@ app.include_router(models.router)
 app.include_router(tools.router)
 app.include_router(artifacts.router)
 app.include_router(capabilities.router)
+app.include_router(mcp_oauth.router)
 
 
 @app.get("/health", response_model=HealthStatus, tags=["health"])

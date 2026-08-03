@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 import time
 from collections.abc import AsyncGenerator, Awaitable, Callable, Generator, Mapping
@@ -29,6 +30,27 @@ _CONTEXT_HEADER_PREFIX = "X-Cognition-"
 _MAX_SCOPE_HEADER_BYTES = 8 * 1024
 _MAX_CONTEXT_HEADER_BYTES = 16 * 1024
 _MAX_CONTEXT_VALUE_BYTES = 8 * 1024
+_oauth_log_filter_installed = False
+
+
+class _McpOAuthRedactionFilter(logging.Filter):
+    """Remove upstream OAuth response bodies and tracebacks before emission."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if record.levelno >= logging.WARNING:
+            record.msg = "MCP OAuth SDK operation failed (details redacted)"
+            record.args = ()
+            record.exc_info = None
+            record.exc_text = None
+        return True
+
+
+def _install_mcp_oauth_log_filter() -> None:
+    global _oauth_log_filter_installed
+    if _oauth_log_filter_installed:
+        return
+    logging.getLogger("mcp.client.auth.oauth2").addFilter(_McpOAuthRedactionFilter())
+    _oauth_log_filter_installed = True
 
 
 class McpAuthenticationError(RuntimeError):
@@ -226,6 +248,8 @@ def create_mcp_oauth_auth(
     agent_name: str,
     effective_scope: Mapping[str, str],
     canonical_server_uri: str,
+    redirect_handler: Callable[[str], Awaitable[None]] | None = None,
+    callback_handler: Callable[[], Awaitable[tuple[str, str | None]]] | None = None,
 ) -> OAuthClientProvider:
     """Create the upstream MCP OAuth provider with exact-scope encrypted state."""
     if (
@@ -235,6 +259,7 @@ def create_mcp_oauth_auth(
     ):
         raise McpAuthenticationError("oauth_configuration_unavailable")
     try:
+        _install_mcp_oauth_log_filter()
         storage = EncryptedMcpOAuthTokenStorage(
             repository=repository,
             encryption_key=settings.mcp_oauth_encryption_key,
@@ -255,6 +280,8 @@ def create_mcp_oauth_auth(
             server_url=canonical_server_uri,
             client_metadata=metadata,
             storage=storage,
+            redirect_handler=redirect_handler,
+            callback_handler=callback_handler,
             timeout=settings.mcp_oauth_timeout_seconds,
             client_metadata_url=settings.mcp_oauth_client_metadata_url,
         )

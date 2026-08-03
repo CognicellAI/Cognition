@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import logging
 from types import SimpleNamespace
 from urllib.parse import parse_qs
 
@@ -157,6 +158,34 @@ def test_mcp_oauth_missing_deployment_configuration_fails_redacted() -> None:
         match="oauth_configuration_unavailable",
     ):
         mcp_config_to_connection(config, Settings(), MemoryMcpOAuthStateRepository())
+
+
+def test_upstream_mcp_oauth_error_logging_is_redacted(caplog) -> None:
+    settings = Settings.model_validate(
+        {
+            "mcp_oauth_encryption_key": Fernet.generate_key().decode("ascii"),
+            "mcp_oauth_redirect_uri": "https://cognition.example.test/mcp/oauth/callback",
+        }
+    )
+    config = McpServerConfig.model_validate(
+        {
+            "name": "github",
+            "url": "https://mcp.example.test/github",
+            "auth": {"type": "mcp_oauth"},
+            "agent_name": "support-agent",
+        }
+    )
+    mcp_config_to_connection(config, settings, MemoryMcpOAuthStateRepository())
+    sdk_logger = logging.getLogger("mcp.client.auth.oauth2")
+
+    with caplog.at_level(logging.ERROR, logger=sdk_logger.name):
+        try:
+            raise RuntimeError("provider-token-response-secret")
+        except RuntimeError:
+            sdk_logger.exception("token exchange body: provider-token-response-secret")
+
+    assert "provider-token-response-secret" not in caplog.text
+    assert "details redacted" in caplog.text
 
 
 @pytest.mark.asyncio
