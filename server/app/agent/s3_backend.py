@@ -8,6 +8,9 @@ S3-compatible deployments such as Garage through an explicit endpoint URL.
 from __future__ import annotations
 
 import fnmatch
+import hashlib
+import hmac
+import json
 import posixpath
 from collections.abc import Iterable
 from datetime import UTC, datetime
@@ -42,6 +45,22 @@ class S3CompatibleBackend(BackendProtocol):
         self._client = client
         self._bucket = bucket
         self._prefix = prefix.strip("/")
+
+    @staticmethod
+    def scope_prefix(
+        *, base_prefix: str, effective_scope: dict[str, str], hmac_key: str
+    ) -> str:
+        """Derive an opaque namespace for one immutable effective scope.
+
+        Object keys must not reveal tenant, user, or project identifiers.  The
+        canonical JSON encoding makes equal scopes resolve to the same prefix
+        independent of mapping insertion order.
+        """
+        canonical_scope = json.dumps(
+            effective_scope, sort_keys=True, separators=(",", ":"), ensure_ascii=True
+        ).encode("utf-8")
+        digest = hmac.new(hmac_key.encode("utf-8"), canonical_scope, hashlib.sha256).hexdigest()
+        return "/".join(part for part in (base_prefix.strip("/"), "scopes", digest) if part)
 
     @classmethod
     def from_boto3(
