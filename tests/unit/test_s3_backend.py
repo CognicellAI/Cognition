@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from io import BytesIO
 
+import pytest
+
 from server.app.agent.s3_backend import S3CompatibleBackend
 
 
@@ -29,6 +31,9 @@ class FakeS3Client:
     def get_paginator(self, operation_name: str) -> FakePaginator:
         assert operation_name == "list_objects_v2"
         return FakePaginator(self.objects)
+
+    def head_bucket(self, *, Bucket: str) -> None:  # noqa: N803
+        assert Bucket == "test"
 
     def put_object(self, *, Bucket: str, Key: str, Body: bytes, **kwargs: object) -> None:  # noqa: N803
         del Bucket, kwargs
@@ -100,3 +105,17 @@ def test_scope_prefix_is_opaque_and_stable_for_an_exact_scope() -> None:
         effective_scope={"user": "ada", "tenant": "acme"},
         hmac_key="test-key",
     )
+
+
+def test_s3_backend_verifies_selected_bucket_without_fallback() -> None:
+    backend = S3CompatibleBackend(FakeS3Client(), bucket="test", prefix="tenant")
+    backend.verify_connection()
+
+    class FailingClient(FakeS3Client):
+        def head_bucket(self, *, Bucket: str) -> None:  # noqa: N803
+            del Bucket
+            raise ConnectionError("unavailable")
+
+    unavailable = S3CompatibleBackend(FailingClient(), bucket="test")
+    with pytest.raises(RuntimeError, match="S3-compatible storage is unavailable"):
+        unavailable.verify_connection()

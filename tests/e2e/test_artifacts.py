@@ -14,7 +14,7 @@ import pytest
 SSE_TIMEOUT = httpx.Timeout(30.0, connect=10.0)
 
 
-VALID_TYPES = {"scratch", "artifact", "contract", "eval", "memory", "policy"}
+VALID_TYPES = {"scratch", "artifact", "file", "contract", "eval", "memory", "policy"}
 
 
 class TestArtifactCRUD:

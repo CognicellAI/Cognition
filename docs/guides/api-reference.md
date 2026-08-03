@@ -1372,7 +1372,7 @@ Related: [Lambda MicroVM Sandbox Profiles](../concepts/sandboxes/aws-lambda-micr
 
 Artifacts are durable, scope-aware files that agents and builders can read, write, list, and diff. They provide explicit state outside the model context window for long-running agent handoffs.
 
-Artifact types: `scratch` (thread-scoped), `artifact` (user-visible), `contract` (done criteria), `eval` (evaluator results), `memory` (scoped memory), `policy` (read-only org policy).
+Artifact types: `scratch` (thread-scoped), `artifact` (user-visible), `file` (general durable file), `contract` (done criteria), `eval` (evaluator results), `memory` (scoped memory), `policy` (read-only org policy).
 
 Visibilities: `private` (session-scoped), `run` (run-scoped), `public` (scope-visible).
 
@@ -1434,7 +1434,7 @@ Create a new artifact.
 |---|---|---|---|
 | `id` | string | Yes | Unique identifier |
 | `name` | string | Yes | Human-readable name |
-| `artifact_type` | string | Yes | `scratch`, `artifact`, `contract`, `eval`, `memory`, `policy` |
+| `artifact_type` | string | Yes | `scratch`, `artifact`, `file`, `contract`, `eval`, `memory`, `policy` |
 | `content` | string | Yes | Artifact content |
 | `content_type` | string | No | MIME type (e.g. `text/markdown`, `application/json`) |
 | `path` | string | No | Logical path |
