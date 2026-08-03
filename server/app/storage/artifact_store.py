@@ -573,9 +573,120 @@ class MemoryArtifactStore:
         return versions
 
 
+class S3ArtifactStore:
+    """Persist artifact manifests in a database and immutable bodies in S3.
+
+    The wrapped store remains authoritative for identity, version, scope, and
+    lifecycle metadata.  Artifact content is never sent to that store when
+    this wrapper is enabled.
+    """
+
+    def __init__(
+        self,
+        manifest_store: ArtifactStore,
+        *,
+        bucket: str,
+        base_prefix: str,
+        hmac_key: str,
+        endpoint_url: str | None = None,
+        region_name: str | None = None,
+        force_path_style: bool = False,
+    ) -> None:
+        self._manifest_store = manifest_store
+        self._bucket = bucket
+        self._base_prefix = base_prefix
+        self._hmac_key = hmac_key
+        self._endpoint_url = endpoint_url
+        self._region_name = region_name
+        self._force_path_style = force_path_style
+
+    def _backend(self, scope: dict[str, str]) -> Any:
+        from server.app.agent.s3_backend import S3CompatibleBackend
+
+        return S3CompatibleBackend.from_boto3(
+            bucket=self._bucket,
+            prefix=S3CompatibleBackend.scope_prefix(
+                base_prefix=self._base_prefix,
+                effective_scope=scope,
+                hmac_key=self._hmac_key,
+            ),
+            endpoint_url=self._endpoint_url,
+            region_name=self._region_name,
+            force_path_style=self._force_path_style,
+        )
+
+    @staticmethod
+    def _path(artifact: ArtifactDefinition) -> str:
+        return f"/artifacts/{artifact.artifact_type}/{artifact.id}/{artifact.version}"
+
+    async def initialize(self) -> None:
+        initialize = getattr(self._manifest_store, "initialize", None)
+        if initialize is not None:
+            await initialize()
+
+    async def close(self) -> None:
+        close = getattr(self._manifest_store, "close", None)
+        if close is not None:
+            await close()
+
+    async def _hydrate(self, artifact: ArtifactDefinition | None) -> ArtifactDefinition | None:
+        if artifact is None:
+            return None
+        result = self._backend(artifact.scope).read(self._path(artifact), limit=2**31 - 1)
+        if result.error or result.file_data is None:
+            raise RuntimeError("Artifact body is unavailable from configured durable storage")
+        return artifact.model_copy(update={"content": result.file_data["content"]})
+
+    async def get_artifact(
+        self, artifact_id: str, scope: dict[str, str] | None = None
+    ) -> ArtifactDefinition | None:
+        return await self._hydrate(await self._manifest_store.get_artifact(artifact_id, scope))
+
+    async def list_artifacts(
+        self,
+        scope: dict[str, str] | None = None,
+        artifact_type: str | None = None,
+        run_id: str | None = None,
+    ) -> list[ArtifactDefinition]:
+        manifests = await self._manifest_store.list_artifacts(scope, artifact_type, run_id)
+        hydrated = [await self._hydrate(artifact) for artifact in manifests]
+        return [artifact for artifact in hydrated if artifact is not None]
+
+    async def upsert_artifact(self, artifact: ArtifactDefinition) -> None:
+        write = self._backend(artifact.scope).write(self._path(artifact), artifact.content)
+        if write.error:
+            raise RuntimeError("Artifact body could not be written to configured durable storage")
+        await self._manifest_store.upsert_artifact(artifact.model_copy(update={"content": ""}))
+
+    async def delete_artifact(
+        self, artifact_id: str, scope: dict[str, str] | None = None
+    ) -> bool:
+        versions = await self._manifest_store.list_artifact_versions(artifact_id, scope)
+        for artifact in versions:
+            deleted = self._backend(artifact.scope).delete(self._path(artifact))
+            if deleted.error:
+                raise RuntimeError("Artifact body could not be deleted from configured durable storage")
+        return await self._manifest_store.delete_artifact(artifact_id, scope)
+
+    async def get_artifact_version(
+        self, artifact_id: str, version: int, scope: dict[str, str] | None = None
+    ) -> ArtifactDefinition | None:
+        return await self._hydrate(
+            await self._manifest_store.get_artifact_version(artifact_id, version, scope)
+        )
+
+    async def list_artifact_versions(
+        self, artifact_id: str, scope: dict[str, str] | None = None
+    ) -> list[ArtifactDefinition]:
+        manifests = await self._manifest_store.list_artifact_versions(artifact_id, scope)
+        hydrated = [await self._hydrate(artifact) for artifact in manifests]
+        return [artifact for artifact in hydrated if artifact is not None]
+
+
 __all__ = [
     "ArtifactStore",
     "MemoryArtifactStore",
     "PostgresArtifactStore",
+    "S3ArtifactStore",
     "SqliteArtifactStore",
 ]
