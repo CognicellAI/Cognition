@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, cast
 
 import structlog
 from deepagents.backends.protocol import (
@@ -79,7 +79,7 @@ class ConfigRegistrySkillsBackend(BackendProtocol):
         return file_infos
 
     async def adownload_files(self, paths: list[str]) -> list[FileDownloadResponse]:
-        """Download SKILL.md file content for SkillsMiddleware.
+        """Download bundle file content for SkillsMiddleware and file tools.
 
         SkillsMiddleware calls this to get the actual skill content for parsing
         YAML frontmatter.
@@ -93,21 +93,21 @@ class ConfigRegistrySkillsBackend(BackendProtocol):
         responses: list[FileDownloadResponse] = []
 
         for file_path in paths:
-            # Extract skill name from path like "/web-research/SKILL.md"
-            # (CompositeBackend has already stripped the /skills/api/ prefix)
-            if not file_path.startswith("/") or not file_path.endswith("/SKILL.md"):
+            parsed = _parse_bundle_path(file_path)
+            if parsed is None:
                 responses.append(FileDownloadResponse(path=file_path, error="invalid_path"))
                 continue
-
-            # Remove leading slash and /SKILL.md suffix to get skill name
-            skill_name = file_path[1 : -len("/SKILL.md")]
+            skill_name, relative_path = parsed
 
             try:
                 skill = await self._registry.get_skill(skill_name, scope=self._scope)
                 if skill is None or not skill.enabled:
                     responses.append(FileDownloadResponse(path=file_path, error="file_not_found"))
                 else:
-                    content = skill.content or ""
+                    content = _bundle_content(skill, relative_path)
+                    if content is None:
+                        responses.append(FileDownloadResponse(path=file_path, error="file_not_found"))
+                        continue
                     responses.append(
                         FileDownloadResponse(
                             path=file_path,
@@ -150,18 +150,19 @@ class ConfigRegistrySkillsBackend(BackendProtocol):
         Returns:
             Formatted file content with line numbers, or an error result.
         """
-        # Reuse the same logic as adownload_files but return formatted string
-        if not file_path.startswith("/") or not file_path.endswith("/SKILL.md"):
+        parsed = _parse_bundle_path(file_path)
+        if parsed is None:
             return ReadResult(error=f"Invalid path {file_path}")
-
-        skill_name = file_path[1 : -len("/SKILL.md")]
+        skill_name, relative_path = parsed
 
         try:
             skill = await self._registry.get_skill(skill_name, scope=self._scope)
             if skill is None or not skill.enabled:
                 return ReadResult(error=f"Skill not found: {skill_name}")
 
-            content = skill.content or ""
+            content = _bundle_content(skill, relative_path)
+            if content is None:
+                return ReadResult(error=f"Skill bundle file not found: {relative_path}")
             lines = content.splitlines()
 
             # Apply offset and limit
@@ -214,3 +215,20 @@ class ConfigRegistrySkillsBackend(BackendProtocol):
     # are intentionally not implemented. SkillsMiddleware only needs als_info,
     # adownload_files, and aread. All other paths are handled by the default
     # sandbox backend via CompositeBackend routing.
+
+
+def _parse_bundle_path(path: str) -> tuple[str, str] | None:
+    """Parse a route-relative skill bundle path without allowing traversal."""
+    if not path.startswith("/"):
+        return None
+    parts = path.lstrip("/").split("/")
+    if len(parts) < 2 or any(part in {"", ".", ".."} for part in parts):
+        return None
+    return parts[0], "/".join(parts[1:])
+
+
+def _bundle_content(skill: Any, relative_path: str) -> str | None:
+    """Return the primary document or a declared supporting bundle file."""
+    if relative_path == "SKILL.md":
+        return skill.content or ""
+    return cast(dict[str, str], skill.files).get(relative_path)

@@ -250,6 +250,15 @@ async def seed_skills_from_sources(
                 continue
 
             content = skill_md.read_text(encoding="utf-8")
+            files: dict[str, str] = {}
+            for candidate in skill_dir.rglob("*"):
+                if not candidate.is_file() or candidate == skill_md:
+                    continue
+                relative_path = candidate.relative_to(skill_dir).as_posix()
+                try:
+                    files[relative_path] = candidate.read_text(encoding="utf-8")
+                except UnicodeDecodeError:
+                    logger.warning("Skipping non-text skill bundle file", path=str(candidate))
             name = skill_dir.name
             description: str | None = None
             try:
@@ -270,6 +279,7 @@ async def seed_skills_from_sources(
                 enabled=True,
                 description=description,
                 content=content,
+                files=files,
                 scope={},
                 source="file",
             )
