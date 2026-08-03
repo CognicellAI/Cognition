@@ -101,6 +101,11 @@ k8s = [
     "langchain-k8s-sandbox[k8s]",
 ]
 
+# Documentation site
+docs = [
+    "mkdocs-material>=9.6.0",
+]
+
 # AWS Lambda MicroVM sandbox backend
 aws-lambda-microvms = [
     "langchain-aws-lambda-microvms[aws]",
