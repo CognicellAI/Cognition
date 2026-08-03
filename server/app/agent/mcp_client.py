@@ -10,10 +10,12 @@ Security stance:
 
 from __future__ import annotations
 
+import asyncio
 import os
 from collections.abc import Sequence
 from datetime import datetime
 from typing import Any
+from urllib.parse import parse_qs, urlparse
 
 import structlog
 from langchain_mcp_adapters.callbacks import CallbackContext, Callbacks
@@ -23,10 +25,12 @@ from langchain_mcp_adapters.sessions import StreamableHttpConnection
 from mcp.client.auth import OAuthClientProvider
 from mcp.shared.auth import OAuthClientMetadata
 from mcp.types import LoggingMessageNotificationParams
+from pydantic import AnyUrl
 
 from server.app.agent.mcp_config import AgentMcpServer
 from server.app.agent.mcp_oauth import (
     EncryptedMcpOAuthTokenStorage,
+    McpOAuthAuthorizationStore,
     McpOAuthPartition,
     McpOAuthStorageError,
 )
@@ -40,6 +44,49 @@ from server.app.agent.outbound_auth import (
 from server.app.settings import Settings, get_settings
 
 logger = structlog.get_logger(__name__)
+
+
+class McpOAuthAuthorizationFlow:
+    """Bridge the MCP SDK's PKCE flow to Cognition's durable callback store."""
+
+    def __init__(self, storage: EncryptedMcpOAuthTokenStorage, *, timeout: float = 300.0) -> None:
+        self._store = McpOAuthAuthorizationStore(storage)
+        self._timeout = timeout
+        self._redirect_url: str | None = None
+        self._state: str | None = None
+        self._redirect_ready = asyncio.Event()
+
+    async def redirect_handler(self, authorization_url: str) -> None:
+        state = parse_qs(urlparse(authorization_url).query).get("state", [None])[0]
+        if not state:
+            raise McpServerUnavailableError("oauth", "oauth_authorization_unavailable")
+        await self._store.register(state, ttl_seconds=self._timeout)
+        self._state = state
+        self._redirect_url = authorization_url
+        self._redirect_ready.set()
+
+    async def callback_handler(self) -> tuple[str, str | None]:
+        if self._state is None:
+            raise McpServerUnavailableError("oauth", "oauth_authorization_unavailable")
+        deadline = asyncio.get_running_loop().time() + self._timeout
+        while asyncio.get_running_loop().time() < deadline:
+            code = await self._store.consume_callback(self._state)
+            if code is not None:
+                return code, self._state
+            await asyncio.sleep(0.2)
+        raise McpServerUnavailableError("oauth", "oauth_callback_timeout")
+
+    async def wait_for_redirect(self, *, timeout: float = 20.0) -> str:
+        try:
+            await asyncio.wait_for(self._redirect_ready.wait(), timeout=timeout)
+        except TimeoutError as exc:
+            raise McpServerUnavailableError("oauth", "oauth_authorization_unavailable") from exc
+        assert self._redirect_url is not None
+        return self._redirect_url
+
+    async def record_callback(self, state: str, code: str) -> bool:
+        """Save an OAuth callback only if it belongs to this exact partition."""
+        return await self._store.record_callback(state, code)
 
 
 class McpServerUnavailableError(RuntimeError):
@@ -61,6 +108,7 @@ def create_agent_mcp_client(
     runtime_snapshot: str = "",
     trusted_context: dict[str, str] | None = None,
     settings: Settings | None = None,
+    oauth_flow: McpOAuthAuthorizationFlow | None = None,
 ) -> MultiServerMCPClient:
     """Create a client for exactly one validated Agent MCP server.
 
@@ -70,6 +118,9 @@ def create_agent_mcp_client(
     """
     headers: dict[str, str] | None = None
     if config.auth.type == "static_bearer":
+        resolved_settings = settings or get_settings()
+        if resolved_settings.deployment_mode == "production":
+            raise McpServerUnavailableError(config.alias, "static_bearer_not_allowed")
         assert config.auth.env is not None
         token = os.environ.get(config.auth.env)
         if not token:
@@ -94,8 +145,14 @@ def create_agent_mcp_client(
             )
             oauth_auth = OAuthClientProvider(
                 server_url=config.url,
-                client_metadata=OAuthClientMetadata(redirect_uris=None),
+                client_metadata=OAuthClientMetadata(
+                    redirect_uris=[AnyUrl(resolved_settings.mcp_oauth_callback_url)]
+                    if resolved_settings.mcp_oauth_callback_url
+                    else None
+                ),
                 storage=storage,
+                redirect_handler=oauth_flow.redirect_handler if oauth_flow else None,
+                callback_handler=oauth_flow.callback_handler if oauth_flow else None,
             )
         except McpOAuthStorageError as exc:
             raise McpServerUnavailableError(config.alias, "oauth_storage_unavailable") from exc
@@ -116,6 +173,37 @@ def create_agent_mcp_client(
         tool_interceptors=tool_interceptors,
         tool_name_prefix=True,
     )
+
+
+def create_mcp_oauth_flow(
+    config: AgentMcpServer,
+    *,
+    agent_identity: str,
+    runtime_snapshot: str,
+    trusted_context: dict[str, str],
+    settings: Settings,
+) -> McpOAuthAuthorizationFlow:
+    """Create a durable interactive OAuth flow for one trusted MCP binding."""
+    if config.auth.type != "mcp_oauth" or settings.mcp_oauth_encryption_key is None:
+        raise McpServerUnavailableError(config.alias, "oauth_storage_unavailable")
+    if not settings.mcp_oauth_callback_url:
+        raise McpServerUnavailableError(config.alias, "oauth_callback_unavailable")
+    try:
+        storage = EncryptedMcpOAuthTokenStorage(
+            persistence_backend=settings.persistence_backend,
+            persistence_uri=settings.persistence_uri,
+            encryption_key=settings.mcp_oauth_encryption_key.get_secret_value(),
+            partition=McpOAuthPartition(
+                agent_identity=agent_identity,
+                runtime_snapshot=runtime_snapshot,
+                effective_scope=trusted_context,
+                server_url=config.url,
+            ),
+            workspace_path=settings.workspace_path,
+        )
+        return McpOAuthAuthorizationFlow(storage)
+    except McpOAuthStorageError as exc:
+        raise McpServerUnavailableError(config.alias, "oauth_storage_unavailable") from exc
 
 
 async def load_agent_mcp_tools(

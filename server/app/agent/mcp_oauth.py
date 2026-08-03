@@ -12,6 +12,7 @@ import base64
 import hashlib
 import hmac
 import json
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import urlparse, urlunparse
@@ -83,6 +84,7 @@ class EncryptedMcpOAuthTokenStorage(TokenStorage):
             separators=(",", ":"),
         ).encode()
         self._partition_id = hmac.new(key_material, b"cognition-mcp-oauth-v1\0" + payload, hashlib.sha256).hexdigest()
+        self._state_key = key_material
         self._backend = persistence_backend
         self._uri = self._resolve_uri(persistence_uri, workspace_path)
 
@@ -225,3 +227,196 @@ class EncryptedMcpOAuthTokenStorage(TokenStorage):
     async def set_client_info(self, client_info: OAuthClientInformationFull) -> None:
         """Encrypt and save dynamic client-registration metadata."""
         await self._set("client_ciphertext", self._encrypt(client_info.model_dump_json()))
+
+    @property
+    def partition_id(self) -> str:
+        """Return the opaque durable partition identifier for trusted callers."""
+        return self._partition_id
+
+
+class McpOAuthAuthorizationStore:
+    """Durable, encrypted hand-off for an interactive OAuth callback.
+
+    The MCP SDK owns PKCE and validates the provider's OAuth ``state`` value.
+    This store only lets the worker which started that SDK flow retrieve a
+    one-time callback from another Cognition replica.  It never records an
+    agent name, scope, provider URL, authorization URL, or plaintext code.
+    """
+
+    def __init__(self, storage: EncryptedMcpOAuthTokenStorage) -> None:
+        self._storage = storage
+
+    def _state_id(self, state: str) -> str:
+        return hmac.new(
+            self._storage._state_key,
+            b"cognition-mcp-oauth-state-v1\0" + state.encode(),
+            hashlib.sha256,
+        ).hexdigest()
+
+    async def _sqlite_connect(self) -> aiosqlite.Connection:
+        db = await aiosqlite.connect(self._storage._uri)
+        await db.execute(
+            """
+            CREATE TABLE IF NOT EXISTS mcp_oauth_authorizations (
+                state_id TEXT PRIMARY KEY,
+                partition_id TEXT NOT NULL,
+                code_ciphertext TEXT,
+                expires_at REAL NOT NULL,
+                consumed_at REAL
+            )
+            """
+        )
+        await db.commit()
+        return db
+
+    async def register(self, state: str, *, ttl_seconds: float) -> None:
+        """Register an opaque, one-time authorization state before redirecting."""
+        state_id = self._state_id(state)
+        expires_at = time.time() + ttl_seconds
+        if self._storage._backend == "sqlite":
+            db = await self._sqlite_connect()
+            try:
+                await db.execute("DELETE FROM mcp_oauth_authorizations WHERE expires_at < ?", (time.time(),))
+                await db.execute(
+                    """INSERT INTO mcp_oauth_authorizations
+                    (state_id, partition_id, expires_at) VALUES (?, ?, ?)""",
+                    (state_id, self._storage.partition_id, expires_at),
+                )
+                await db.commit()
+            finally:
+                await db.close()
+            return
+        import psycopg
+
+        async with await psycopg.AsyncConnection.connect(self._storage._uri) as conn:
+            await conn.execute(
+                """CREATE TABLE IF NOT EXISTS mcp_oauth_authorizations (
+                state_id TEXT PRIMARY KEY, partition_id TEXT NOT NULL,
+                code_ciphertext TEXT, expires_at DOUBLE PRECISION NOT NULL,
+                consumed_at DOUBLE PRECISION)"""
+            )
+            await conn.execute("DELETE FROM mcp_oauth_authorizations WHERE expires_at < %s", (time.time(),))
+            await conn.execute(
+                "INSERT INTO mcp_oauth_authorizations (state_id, partition_id, expires_at) VALUES (%s, %s, %s)",
+                (state_id, self._storage.partition_id, expires_at),
+            )
+
+    async def record_callback(self, state: str, code: str) -> bool:
+        """Record a callback once; unknown, expired, and replayed states fail closed."""
+        state_id = self._state_id(state)
+        ciphertext = self._storage._encrypt(code)
+        now = time.time()
+        if self._storage._backend == "sqlite":
+            db = await self._sqlite_connect()
+            try:
+                cursor = await db.execute(
+                    """UPDATE mcp_oauth_authorizations SET code_ciphertext = ?
+                    WHERE state_id = ? AND partition_id = ? AND expires_at > ?
+                    AND code_ciphertext IS NULL AND consumed_at IS NULL""",
+                    (ciphertext, state_id, self._storage.partition_id, now),
+                )
+                await db.commit()
+                return cursor.rowcount == 1
+            finally:
+                await db.close()
+        import psycopg
+
+        async with await psycopg.AsyncConnection.connect(self._storage._uri) as conn:
+            pg_cursor = await conn.execute(
+                """UPDATE mcp_oauth_authorizations SET code_ciphertext = %s
+                WHERE state_id = %s AND partition_id = %s AND expires_at > %s
+                AND code_ciphertext IS NULL AND consumed_at IS NULL""",
+                (ciphertext, state_id, self._storage.partition_id, now),
+            )
+            return pg_cursor.rowcount == 1
+
+    async def consume_callback(self, state: str) -> str | None:
+        """Consume and decrypt a callback code exactly once."""
+        state_id = self._state_id(state)
+        now = time.time()
+        if self._storage._backend == "sqlite":
+            db = await self._sqlite_connect()
+            try:
+                cursor = await db.execute(
+                    """SELECT code_ciphertext FROM mcp_oauth_authorizations
+                    WHERE state_id = ? AND partition_id = ? AND expires_at > ?
+                    AND consumed_at IS NULL""",
+                    (state_id, self._storage.partition_id, now),
+                )
+                row = await cursor.fetchone()
+                if not row or row[0] is None:
+                    return None
+                updated = await db.execute(
+                    "UPDATE mcp_oauth_authorizations SET consumed_at = ? WHERE state_id = ? AND consumed_at IS NULL",
+                    (now, state_id),
+                )
+                await db.commit()
+                return self._storage._decrypt(str(row[0])) if updated.rowcount == 1 else None
+            finally:
+                await db.close()
+        import psycopg
+
+        async with await psycopg.AsyncConnection.connect(self._storage._uri) as conn:
+            async with conn.cursor() as pg_cursor:
+                await pg_cursor.execute(
+                    """SELECT code_ciphertext FROM mcp_oauth_authorizations
+                    WHERE state_id = %s AND partition_id = %s AND expires_at > %s
+                    AND consumed_at IS NULL FOR UPDATE""",
+                    (state_id, self._storage.partition_id, now),
+                )
+                pg_row = await pg_cursor.fetchone()
+                if not pg_row or pg_row[0] is None:
+                    return None
+                await pg_cursor.execute(
+                    "UPDATE mcp_oauth_authorizations SET consumed_at = %s WHERE state_id = %s", (now, state_id)
+                )
+                return self._storage._decrypt(str(pg_row[0]))
+
+
+async def record_mcp_oauth_callback(
+    *,
+    persistence_backend: str,
+    persistence_uri: str,
+    encryption_key: str,
+    workspace_path: Path | None,
+    state: str,
+    code: str,
+) -> bool:
+    """Record a callback using only its opaque state handle.
+
+    The callback endpoint intentionally cannot receive agent or tenant
+    identifiers from the browser.  The state row was created before redirect
+    and already carries the non-reversible partition binding.
+    """
+    if persistence_backend not in {"sqlite", "postgres"}:
+        raise McpOAuthStorageError("oauth_storage_unavailable")
+    try:
+        fernet = Fernet(encryption_key.encode())
+        key = base64.urlsafe_b64decode(encryption_key.encode())
+    except Exception as exc:
+        raise McpOAuthStorageError("oauth_storage_unavailable") from exc
+    state_id = hmac.new(key, b"cognition-mcp-oauth-state-v1\0" + state.encode(), hashlib.sha256).hexdigest()
+    ciphertext = fernet.encrypt(code.encode()).decode()
+    uri = EncryptedMcpOAuthTokenStorage._resolve_uri(persistence_uri, workspace_path)
+    now = time.time()
+    if persistence_backend == "sqlite":
+        db = await aiosqlite.connect(uri)
+        try:
+            cursor = await db.execute(
+                """UPDATE mcp_oauth_authorizations SET code_ciphertext = ?
+                WHERE state_id = ? AND expires_at > ? AND code_ciphertext IS NULL AND consumed_at IS NULL""",
+                (ciphertext, state_id, now),
+            )
+            await db.commit()
+            return cursor.rowcount == 1
+        finally:
+            await db.close()
+    import psycopg
+
+    async with await psycopg.AsyncConnection.connect(uri) as conn:
+        pg_cursor = await conn.execute(
+            """UPDATE mcp_oauth_authorizations SET code_ciphertext = %s
+            WHERE state_id = %s AND expires_at > %s AND code_ciphertext IS NULL AND consumed_at IS NULL""",
+            (ciphertext, state_id, now),
+        )
+        return pg_cursor.rowcount == 1

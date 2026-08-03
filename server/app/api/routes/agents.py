@@ -57,6 +57,7 @@ def _agent_to_response(agent: AgentDefinition) -> AgentResponse:
         ],
         tools=agent.tools or [],
         skills=agent.skills or [],
+        mcp_servers=agent.mcp_servers or [],
         system_prompt=agent.system_prompt,
         subagents=[
             {
@@ -129,6 +130,7 @@ async def create_agent(
             "native": False,
             "tools": body.tools,
             "skills": body.skills,
+            "mcp_servers": [server.model_dump(mode="json") for server in body.mcp_servers],
             "memory": body.memory,
             "subagents": body.subagents,
             "async_subagents": [
