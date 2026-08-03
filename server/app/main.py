@@ -29,6 +29,7 @@ from server.app.api.routes import (
     capabilities,
     config,
     messages,
+    mcp_oauth,
     models,
     sandbox_profiles,
     sessions,
@@ -278,6 +279,7 @@ app.include_router(messages.router)
 app.include_router(config.router)
 app.include_router(sandbox_profiles.router)
 app.include_router(agents.router)
+app.include_router(mcp_oauth.router)
 app.include_router(skills.router)
 app.include_router(models.router)
 app.include_router(tools.router)

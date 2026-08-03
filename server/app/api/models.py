@@ -17,6 +17,7 @@ from server.app.agent.definition import (
     FilesystemPermissionConfig,
     HumanInTheLoopConfig,
 )
+from server.app.agent.mcp_config import AgentMcpServer
 from server.app.models import Session as CoreSession
 from server.app.models import SessionConfig
 from server.app.models import SessionEvent as CoreSessionEvent
@@ -902,6 +903,10 @@ class AgentResponse(BaseModel):
     skills: list[str] = Field(
         default_factory=list, description="Skill directories this agent can use"
     )
+    mcp_servers: list[AgentMcpServer] = Field(
+        default_factory=list,
+        description="Trusted remote MCP bindings attached to this agent",
+    )
     system_prompt: str | None = Field(None, description="Agent's system prompt")
 
 
@@ -1237,6 +1242,7 @@ class AgentCreate(BaseModel):
     a2a_exposed: bool = Field(default=False, description="Expose agent via A2A protocol")
     tools: list[str] = Field(default_factory=list)
     skills: list[str] = Field(default_factory=list)
+    mcp_servers: list[AgentMcpServer] = Field(default_factory=list)
     memory: list[str] = Field(default_factory=list)
     interrupt_on: dict[str, HumanInTheLoopConfig] = Field(default_factory=dict)
     permissions: list[FilesystemPermissionConfig] = Field(default_factory=list)
@@ -1277,6 +1283,7 @@ class AgentUpdate(BaseModel):
     a2a_exposed: bool | None = None
     tools: list[str] | None = None
     skills: list[str] | None = None
+    mcp_servers: list[AgentMcpServer] | None = None
     memory: list[str] | None = None
     interrupt_on: dict[str, HumanInTheLoopConfig] | None = None
     permissions: list[FilesystemPermissionConfig] | None = None

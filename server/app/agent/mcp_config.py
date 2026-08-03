@@ -7,6 +7,8 @@ model-controlled endpoint selection.
 
 from __future__ import annotations
 
+import hashlib
+import json
 from typing import Literal
 from urllib.parse import urlparse
 
@@ -84,3 +86,19 @@ class AgentMcpServer(BaseModel):
 def canonical_mcp_tool_identity(server_alias: str, provider_tool_name: str) -> tuple[str, str]:
     """Return the canonical, model-independent identity for an MCP tool."""
     return (server_alias, provider_tool_name)
+
+
+def agent_mcp_runtime_snapshot(agent_definition: object) -> str:
+    """Return a stable revision identity for MCP credential partitioning.
+
+    Agent definitions contain no raw MCP credentials.  Hashing their canonical
+    validated representation means replacing a binding, endpoint, or policy
+    cannot reuse an authorization granted to an earlier Agent revision.
+    """
+    model_dump = getattr(agent_definition, "model_dump", None)
+    if not callable(model_dump):
+        raise TypeError("agent_definition must be a validated Pydantic model")
+    payload = json.dumps(
+        model_dump(mode="json"), sort_keys=True, separators=(",", ":"), default=str
+    ).encode()
+    return hashlib.sha256(payload).hexdigest()

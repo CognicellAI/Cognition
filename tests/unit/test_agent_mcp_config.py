@@ -15,12 +15,18 @@ from server.app.agent.mcp_client import (
     create_agent_mcp_client,
     load_agent_mcp_tools,
 )
-from server.app.agent.mcp_config import AgentMcpServer, McpAuthConfig, canonical_mcp_tool_identity
+from server.app.agent.mcp_config import (
+    AgentMcpServer,
+    McpAuthConfig,
+    agent_mcp_runtime_snapshot,
+    canonical_mcp_tool_identity,
+)
 from server.app.agent.outbound_auth import (
     OutboundAuthProviderRegistry,
     OutboundAuthRequest,
     OutboundAuthResult,
 )
+from server.app.api.models import AgentCreate
 from server.app.settings import Settings
 
 
@@ -40,6 +46,28 @@ def test_agent_owns_a_streamable_http_mcp_server() -> None:
     assert agent.mcp_servers[0].alias == "github"
     assert agent.mcp_servers[0].required
     assert canonical_mcp_tool_identity("github", "search_issues") == ("github", "search_issues")
+
+
+def test_agent_api_accepts_per_agent_mcp_configuration() -> None:
+    request = AgentCreate.model_validate(
+        {
+            "name": "release-agent",
+            "mcp_servers": [{"alias": "github", "url": "https://mcp.example.test/github"}],
+        }
+    )
+    assert request.mcp_servers[0].alias == "github"
+
+
+def test_mcp_runtime_snapshot_changes_when_agent_binding_changes() -> None:
+    first = AgentDefinition(
+        name="release-agent",
+        system_prompt="Use configured tools.",
+        mcp_servers=[AgentMcpServer(alias="github", url="https://mcp.example.test/v1")],
+    )
+    second = first.model_copy(
+        update={"mcp_servers": [AgentMcpServer(alias="github", url="https://mcp.example.test/v2")]}
+    )
+    assert agent_mcp_runtime_snapshot(first) != agent_mcp_runtime_snapshot(second)
 
 
 def test_outbound_auth_provider_uses_an_opaque_profile_not_a_credential() -> None:
@@ -110,6 +138,19 @@ def test_mcp_oauth_fails_closed_without_encrypted_storage() -> None:
     settings = Settings.model_validate({"persistence_backend": "sqlite"})
 
     with pytest.raises(McpServerUnavailableError, match="oauth_storage_unavailable"):
+        create_agent_mcp_client(server, settings=settings)
+
+
+def test_static_bearer_is_rejected_by_production_runtime() -> None:
+    server = AgentMcpServer(
+        alias="local-tool",
+        url="https://mcp.example.test/local",
+        auth=McpAuthConfig(type="static_bearer", env="LOCAL_MCP_TOKEN"),
+    )
+    settings = Settings.model_validate(
+        {"deployment_mode": "production", "persistence_backend": "postgres"}
+    )
+    with pytest.raises(McpServerUnavailableError, match="static_bearer_not_allowed"):
         create_agent_mcp_client(server, settings=settings)
 
 

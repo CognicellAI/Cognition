@@ -25,6 +25,7 @@ import structlog
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from server.app.agent.cognition_agent import CognitionAgentParams, create_cognition_agent
+from server.app.agent.mcp_config import agent_mcp_runtime_snapshot
 from server.app.agent.resolver import ResolvedRuntimeModel, RuntimeResolver
 from server.app.agent.runtime import (
     CallbackEvent,  # noqa: F401 — re-exported for consumers of this module
@@ -510,7 +511,11 @@ class DeepAgentStreamingService:
                 ),
                 scope=effective_scope,
                 agent_identity=session.agent_name if session else None,
-                runtime_snapshot=model_cache_key,
+                runtime_snapshot=(
+                    agent_mcp_runtime_snapshot(agent_cfg.agent_def)
+                    if agent_cfg.agent_def
+                    else model_cache_key
+                ),
                 config_store=self._get_config_store(),
                 sandbox_profile=agent_cfg.sandbox_profile,
                 sandbox_execution_role_arn=agent_cfg.sandbox_execution_role_arn,
@@ -758,7 +763,11 @@ class DeepAgentStreamingService:
                 ),
                 scope=effective_scope,
                 agent_identity=session.agent_name,
-                runtime_snapshot=model_cache_key,
+                runtime_snapshot=(
+                    agent_mcp_runtime_snapshot(agent_cfg.agent_def)
+                    if agent_cfg.agent_def
+                    else model_cache_key
+                ),
                 config_store=self._get_config_store(),
                 sandbox_profile=agent_cfg.sandbox_profile,
                 sandbox_execution_role_arn=agent_cfg.sandbox_execution_role_arn,
