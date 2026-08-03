@@ -29,12 +29,12 @@ def test_agent_owns_a_streamable_http_mcp_server() -> None:
     assert canonical_mcp_tool_identity("github", "search_issues") == ("github", "search_issues")
 
 
-def test_workload_exchange_uses_an_opaque_profile_not_a_credential() -> None:
-    config = McpAuthConfig(type="workload_token_exchange", profile="runtime-gateway")
+def test_outbound_auth_provider_uses_an_opaque_profile_not_a_credential() -> None:
+    config = McpAuthConfig(type="outbound_auth_provider", profile="runtime-gateway")
     assert config.profile == "runtime-gateway"
 
     with pytest.raises(ValidationError, match="requires an opaque auth profile"):
-        McpAuthConfig(type="workload_token_exchange")
+        McpAuthConfig(type="outbound_auth_provider")
 
 
 @pytest.mark.parametrize(
@@ -56,3 +56,15 @@ def test_static_bearer_never_accepts_a_raw_token() -> None:
 
     with pytest.raises(ValidationError):
         McpAuthConfig(type="static_bearer", env="Bearer secret")
+
+
+def test_agent_rejects_duplicate_mcp_aliases() -> None:
+    with pytest.raises(ValidationError, match="aliases must be unique"):
+        AgentDefinition(
+            name="release-agent",
+            system_prompt="Use configured tools.",
+            mcp_servers=[
+                AgentMcpServer(alias="github", url="https://one.example.test/mcp"),
+                AgentMcpServer(alias="github", url="https://two.example.test/mcp"),
+            ],
+        )

@@ -21,7 +21,7 @@ class McpAuthConfig(BaseModel):
     in an Agent definition.
     """
 
-    type: Literal["none", "mcp_oauth", "workload_token_exchange", "static_bearer"] = "none"
+    type: Literal["none", "mcp_oauth", "outbound_auth_provider", "static_bearer"] = "none"
     profile: str | None = Field(default=None, min_length=1, max_length=100)
     env: str | None = Field(default=None, min_length=1, max_length=200)
 
@@ -34,11 +34,11 @@ class McpAuthConfig(BaseModel):
 
     @model_validator(mode="after")
     def validate_mode(self) -> McpAuthConfig:
-        if self.type == "workload_token_exchange":
+        if self.type == "outbound_auth_provider":
             if self.profile is None:
-                raise ValueError("workload_token_exchange requires an opaque auth profile")
+                raise ValueError("outbound_auth_provider requires an opaque auth profile")
             if self.env is not None:
-                raise ValueError("workload_token_exchange cannot use an environment token")
+                raise ValueError("outbound_auth_provider cannot use an environment token")
         elif self.type == "static_bearer":
             if self.env is None:
                 raise ValueError("static_bearer requires an environment-variable name")
