@@ -33,7 +33,14 @@ from deepagents import create_deep_agent as _create_deep_agent
 
 logger = structlog.get_logger(__name__)
 
-from server.app.agent.mcp_client import McpServerConfig, create_mcp_client  # noqa: E402
+from server.app.agent.mcp_client import (  # noqa: E402
+    McpServerConfig,
+    _build_mcp_callbacks,
+    _build_mcp_interceptors,
+    create_mcp_client,
+    load_agent_mcp_tools,
+)
+from server.app.agent.mcp_config import AgentMcpServer  # noqa: E402
 from server.app.agent.middleware import (  # noqa: E402
     CognitionObservabilityMiddleware,
     CognitionStreamingMiddleware,
@@ -112,6 +119,7 @@ class RuntimeContext:
     system_prompt: str
     memory: tuple[str, ...]
     skills: tuple[str, ...]
+    mcp_server_aliases: tuple[str, ...]
     subagent_count: int
     async_subagents: tuple[tuple[str, str, str, str], ...]
     interrupt_on: tuple[tuple[str, str], ...]
@@ -137,6 +145,7 @@ class RuntimeContext:
         system_prompt: str | None,
         memory: Sequence[str] | None,
         skills: Sequence[str] | None,
+        agent_mcp_servers: Sequence[AgentMcpServer] | None,
         subagents: Sequence[Any] | None,
         async_subagents: Sequence[Any] | None,
         interrupt_on: Mapping[str, Any] | None,
@@ -161,6 +170,7 @@ class RuntimeContext:
             system_prompt=system_prompt or "default",
             memory=tuple(sorted(memory)) if memory else (),
             skills=tuple(sorted(skills)) if skills else (),
+            mcp_server_aliases=tuple(sorted(server.alias for server in (agent_mcp_servers or []))),
             subagent_count=len(subagents) if subagents else 0,
             async_subagents=_async_subagents_cache_key(async_subagents),
             interrupt_on=_mapping_cache_key(interrupt_on),
@@ -320,10 +330,7 @@ def _resolve_filesystem_permissions(permissions: Sequence[Any] | None) -> list[A
 
     from deepagents.middleware.filesystem import FilesystemPermission
 
-    return [
-        FilesystemPermission(**_permission_dict(permission))
-        for permission in permissions
-    ]
+    return [FilesystemPermission(**_permission_dict(permission)) for permission in permissions]
 
 
 def get_cached_agent(ctx: RuntimeContext) -> Any | None:
@@ -389,6 +396,7 @@ class CognitionAgentParams:
     tools: Sequence[Any] | None = None
     settings: Settings | None = None
     mcp_configs: Sequence[McpServerConfig] | None = None
+    agent_mcp_servers: Sequence[AgentMcpServer] | None = None
     scope: dict[str, str] | None = None
     config_store: ConfigStore | None = None
     sandbox_profile: str | None = None
@@ -523,6 +531,7 @@ async def create_cognition_agent(params: CognitionAgentParams) -> CognitionAgent
         system_prompt=params.system_prompt,
         memory=params.memory,
         skills=params.skills,
+        agent_mcp_servers=params.agent_mcp_servers,
         subagents=params.subagents,
         async_subagents=params.async_subagents,
         interrupt_on=params.interrupt_on,
@@ -623,14 +632,16 @@ async def create_cognition_agent(params: CognitionAgentParams) -> CognitionAgent
                     artifact_store=artifact_store,
                     scope=params.scope,
                 )
-                routes.update({
-                    "/scratch/": artifact_backend,
-                    "/artifacts/": artifact_backend,
-                    "/contracts/": artifact_backend,
-                    "/evals/": artifact_backend,
-                    "/memories/": artifact_backend,
-                    "/policies/": artifact_backend,
-                })
+                routes.update(
+                    {
+                        "/scratch/": artifact_backend,
+                        "/artifacts/": artifact_backend,
+                        "/contracts/": artifact_backend,
+                        "/evals/": artifact_backend,
+                        "/memories/": artifact_backend,
+                        "/policies/": artifact_backend,
+                    }
+                )
             backend = CompositeBackend(
                 default=sandbox_backend,
                 routes=routes,
@@ -661,7 +672,9 @@ async def create_cognition_agent(params: CognitionAgentParams) -> CognitionAgent
         agent_permissions = list(params.permissions)
     else:
         defaults = await _defaults()
-        agent_permissions = list(defaults.permissions) if defaults and defaults.permissions else None
+        agent_permissions = (
+            list(defaults.permissions) if defaults and defaults.permissions else None
+        )
 
     if params.interrupt_on is not None:
         agent_interrupt_on = dict(params.interrupt_on)
@@ -709,12 +722,17 @@ async def create_cognition_agent(params: CognitionAgentParams) -> CognitionAgent
     agent_tools = list(params.tools) if params.tools else []
     agent_tools.extend(built_in_tools)
 
-    if params.mcp_configs:
-        from server.app.agent.mcp_client import (
-            _build_mcp_callbacks,
-            _build_mcp_interceptors,
+    if params.agent_mcp_servers:
+        mcp_callbacks = _build_mcp_callbacks()
+        mcp_interceptors = _build_mcp_interceptors(params.scope)
+        mcp_tools = await load_agent_mcp_tools(
+            params.agent_mcp_servers,
+            callbacks=mcp_callbacks,
+            tool_interceptors=mcp_interceptors,
         )
-
+        agent_tools.extend(mcp_tools)
+        logger.info("agent_mcp_tools_loaded", count=len(mcp_tools))
+    elif params.mcp_configs:
         enabled_configs = [c for c in params.mcp_configs if c.enabled]
         if enabled_configs:
             try:
@@ -737,9 +755,7 @@ async def create_cognition_agent(params: CognitionAgentParams) -> CognitionAgent
                 create_summarization_tool_middleware,
             )
 
-            agent_middleware.append(
-                create_summarization_tool_middleware(params.model, backend)
-            )
+            agent_middleware.append(create_summarization_tool_middleware(params.model, backend))
         except Exception as e:
             logger.warning("Failed to add Deep Agents summarization tool", error=str(e))
 
