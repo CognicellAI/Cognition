@@ -162,6 +162,19 @@ class Settings(BaseSettings):
             "It is never persisted or exposed to agent runtime data."
         ),
     )
+    mcp_oauth_encryption_key: SecretStr | None = Field(
+        default=None,
+        alias="COGNITION_MCP_OAUTH_ENCRYPTION_KEY",
+        description=(
+            "Fernet key used only to encrypt direct MCP OAuth tokens and dynamic "
+            "client registrations in the configured database."
+        ),
+    )
+    mcp_oauth_callback_url: str | None = Field(
+        default=None,
+        alias="COGNITION_MCP_OAUTH_CALLBACK_URL",
+        description="Public HTTPS callback URL for Cognition direct MCP OAuth authorization.",
+    )
 
     # Sandbox / Execution backend settings
     sandbox_backend: Literal["local", "docker", "kubernetes", "aws_lambda_microvm"] = Field(
