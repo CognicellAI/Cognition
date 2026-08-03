@@ -136,7 +136,6 @@ def _agent_defaults_response(defaults: Any) -> GlobalAgentDefaultsResponse:
         tool_token_limit_before_evict=defaults.tool_token_limit_before_evict,
         context_policy=defaults.context_policy,
         recursion_limit=defaults.recursion_limit,
-        mcp_servers=dict(defaults.mcp_servers),
     )
 
 
