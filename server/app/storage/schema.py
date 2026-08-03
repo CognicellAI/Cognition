@@ -315,7 +315,7 @@ Index("idx_session_events_type_created", session_events_table.c.event_type, sess
 # ---------------------------------------------------------------------------
 
 # config_entities — single source of truth for all hot-reloadable config.
-# entity_type: "provider" | "tool" | "skill" | "agent" | "mcp_server"
+# entity_type: "provider" | "tool" | "skill" | "agent" | "sandbox_profile"
 # name:        entity identifier (e.g. "openai-gpt4o", "default")
 # scope:       JSON dict of scope key-values (empty = global)
 # definition:  JSON blob of the entity's Pydantic model fields

@@ -280,41 +280,6 @@ class SkillDefinition(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# MCP Server
-# ---------------------------------------------------------------------------
-
-
-class McpServerRegistration(BaseModel):
-    """An MCP (Model Context Protocol) server registered in the config registry.
-
-    Attributes:
-        name: Server identifier.
-        url: HTTP/HTTPS URL for the MCP server.
-        headers: Optional request headers (e.g. auth tokens).
-        enabled: Whether this server is active.
-        scope: Scope this entry applies to.
-        source: "file" or "api".
-        transport: Transport protocol ("sse" or "streamable_http").
-    """
-
-    name: str = Field(..., min_length=1, max_length=100)
-    url: str = Field(..., min_length=1)
-    headers: dict[str, str] = Field(default_factory=dict)
-    enabled: bool = Field(default=True)
-    scope: dict[str, str] = Field(default_factory=dict)
-    source: Literal["file", "api"] = Field(default="file")
-    transport: Literal["sse", "streamable_http"] = Field(default="sse")
-
-    @field_validator("url")
-    @classmethod
-    def validate_url(cls, v: str) -> str:
-        """Ensure URL uses HTTP/HTTPS only."""
-        if not v.startswith(("http://", "https://")):
-            raise ValueError(f"MCP server URL must start with http:// or https://, got: {v!r}")
-        return v
-
-
-# ---------------------------------------------------------------------------
 # Sandbox Profile
 # ---------------------------------------------------------------------------
 
@@ -533,7 +498,6 @@ EntityType = Literal[
     "tool",
     "skill",
     "agent",
-    "mcp_server",
     "sandbox_profile",
 ]
 OperationType = Literal["upsert", "delete"]
@@ -646,7 +610,6 @@ __all__ = [
     "GlobalAgentDefaults",
     "GlobalProviderDefaults",
     "LambdaMicroVmCloudWatchLogging",
-    "McpServerRegistration",
     "OperationType",
     "ProviderConfig",
     "LambdaMicroVmIdlePolicy",

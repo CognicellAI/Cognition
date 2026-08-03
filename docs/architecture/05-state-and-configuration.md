@@ -154,9 +154,9 @@ multiple server replicas.
 
 ## Dynamic configuration
 
-`ConfigRegistry` stores providers, tools, skills, Agents, MCP servers, sandbox
-profiles, and global defaults as `(entity_type, name, scope, definition,
-source)` rows.
+`ConfigRegistry` stores providers, tools, skills, Agents, sandbox profiles, and
+global defaults as `(entity_type, name, scope, definition, source)` rows. MCP
+servers exist only inside immutable Agent definitions.
 
 Configuration resolution remains hierarchical for configuration entities:
 

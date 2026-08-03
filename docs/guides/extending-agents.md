@@ -9,7 +9,7 @@ Cognition uses a convention-over-configuration model. Most extensions require ze
 | Agents | `.cognition/agents/` YAML or Markdown | No | Yes |
 | Tools | Python functions | Yes | Yes |
 | Middleware | Python classes | Yes | No |
-| MCP servers | Remote HTTP/SSE endpoints | No | Yes |
+| MCP servers | Agent-owned remote Streamable HTTP endpoints | No | Yes |
 | A2A exposure | `a2a.exposed: true` on agent definition | No | Yes |
 | Custom LLM providers | Python factories | Yes | No |
 

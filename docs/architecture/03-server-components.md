@@ -81,7 +81,8 @@ per-request factories.
 
 FastAPI routers provide CRUD and discovery for:
 
-- Agents, tools, skills, MCP servers, providers/models, and sandbox profiles
+- Agents, tools, skills, providers/models, and sandbox profiles
+- Agent-owned MCP authorization handoff and scoped status
 - Sessions, runs, events, messages, artifacts, and runtime context
 - Deployment configuration, capabilities, health, and readiness
 
@@ -162,4 +163,3 @@ stream and cancellation state cannot be assumed to migrate.
 - [State and configuration](05-state-and-configuration.md)
 - [Runtime flows](07-runtime-flows.md)
 - [System context](01-system-context.md)
-
