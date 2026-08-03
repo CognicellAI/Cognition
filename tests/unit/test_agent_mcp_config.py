@@ -9,6 +9,7 @@ from server.app.agent.mcp_client import (
     McpServerConfig,
     McpServerDiscoveryError,
     McpTransportAuthenticationError,
+    create_mcp_client,
     load_mcp_tools_per_server,
     mcp_config_to_connection,
 )
@@ -161,7 +162,14 @@ def test_workload_profile_resolves_from_deployment_configuration_only() -> None:
         }
     )
 
-    resolved = McpServerConfig.from_agent_config("github", agent.mcp.servers["github"], settings)
+    resolved = McpServerConfig.from_agent_config(
+        "github",
+        agent.mcp.servers["github"],
+        settings,
+        agent_name=agent.name,
+        agent_revision=3,
+        effective_scope={"tenant": "acme"},
+    )
 
     assert resolved.workload_profile is not None
     assert resolved.workload_profile.token_endpoint == "https://identity.internal/token"
@@ -188,7 +196,14 @@ def test_unknown_workload_profile_fails_resolution() -> None:
     )
 
     with pytest.raises(ValueError, match="Unknown MCP authentication profile"):
-        McpServerConfig.from_agent_config("github", agent.mcp.servers["github"], Settings())
+        McpServerConfig.from_agent_config(
+            "github",
+            agent.mcp.servers["github"],
+            Settings(),
+            agent_name=agent.name,
+            agent_revision=1,
+            effective_scope={"tenant": "acme"},
+        )
 
 
 def test_protected_auth_never_silently_builds_anonymous_transport() -> None:
@@ -201,7 +216,7 @@ def test_protected_auth_never_silently_builds_anonymous_transport() -> None:
     )
 
     with pytest.raises(McpTransportAuthenticationError, match="auth_unavailable"):
-        mcp_config_to_connection(config)
+        mcp_config_to_connection(config, Settings())
 
 
 @pytest.mark.asyncio
@@ -215,7 +230,7 @@ async def test_optional_mcp_server_failure_preserves_healthy_tools(monkeypatch) 
                 raise RuntimeError("connection refused")
             return [SimpleNamespace(name=f"{server_name}__search")]
 
-    def fake_create_client(configs, callbacks=None, tool_interceptors=None):
+    def fake_create_client(configs, settings, callbacks=None, tool_interceptors=None):
         return FakeClient(list(configs)[0])
 
     monkeypatch.setattr("server.app.agent.mcp_client.create_mcp_client", fake_create_client)
@@ -224,7 +239,46 @@ async def test_optional_mcp_server_failure_preserves_healthy_tools(monkeypatch) 
         [
             McpServerConfig(name="optional", url="https://optional.test/mcp", required=False),
             McpServerConfig(name="healthy", url="https://healthy.test/mcp", required=True),
-        ]
+        ],
+        Settings(),
+    )
+
+    assert [tool.name for tool in tools] == ["healthy__search"]
+
+
+@pytest.mark.asyncio
+async def test_optional_auth_failure_preserves_healthy_server(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FakeClient:
+        async def get_tools(self, *, server_name: str | None = None):
+            return [SimpleNamespace(name=f"{server_name}__search")]
+
+    def create_client(configs, settings, callbacks=None, tool_interceptors=None):
+        config = list(configs)[0]
+        if config.name == "optional-auth":
+            return create_mcp_client(
+                [config],
+                settings,
+                callbacks=callbacks,
+                tool_interceptors=tool_interceptors,
+            )
+        return FakeClient()
+
+    monkeypatch.setattr("server.app.agent.mcp_client.create_mcp_client", create_client)
+    tools = await load_mcp_tools_per_server(
+        [
+            McpServerConfig.model_validate(
+                {
+                    "name": "optional-auth",
+                    "url": "https://optional.test/mcp",
+                    "required": False,
+                    "auth": {"type": "static_bearer", "env": "MISSING_OPTIONAL_TOKEN"},
+                }
+            ),
+            McpServerConfig(name="healthy", url="https://healthy.test/mcp"),
+        ],
+        Settings(),
     )
 
     assert [tool.name for tool in tools] == ["healthy__search"]
@@ -238,16 +292,38 @@ async def test_required_mcp_server_failure_is_typed_and_redacted(monkeypatch) ->
 
     monkeypatch.setattr(
         "server.app.agent.mcp_client.create_mcp_client",
-        lambda configs, callbacks=None, tool_interceptors=None: FakeClient(),
+        lambda configs, settings, callbacks=None, tool_interceptors=None: FakeClient(),
     )
 
     with pytest.raises(McpServerDiscoveryError) as exc_info:
         await load_mcp_tools_per_server(
-            [McpServerConfig(name="github", url="https://github.test/mcp", required=True)]
+            [McpServerConfig(name="github", url="https://github.test/mcp", required=True)],
+            Settings(),
         )
 
     assert exc_info.value.server_alias == "github"
     assert "secret-value" not in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+async def test_required_auth_failure_is_typed_and_redacted() -> None:
+    with pytest.raises(McpServerDiscoveryError) as exc_info:
+        await load_mcp_tools_per_server(
+            [
+                McpServerConfig.model_validate(
+                    {
+                        "name": "github",
+                        "url": "https://github.test/mcp",
+                        "required": True,
+                        "auth": {"type": "mcp_oauth"},
+                    }
+                )
+            ],
+            Settings(),
+        )
+
+    assert exc_info.value.category == "auth_unavailable"
+    assert str(exc_info.value) == "MCP server 'github' failed: auth_unavailable"
 
 
 @pytest.mark.asyncio
@@ -258,7 +334,7 @@ async def test_duplicate_mcp_tool_identity_fails_discovery(monkeypatch) -> None:
 
     monkeypatch.setattr(
         "server.app.agent.mcp_client.create_mcp_client",
-        lambda configs, callbacks=None, tool_interceptors=None: FakeClient(),
+        lambda configs, settings, callbacks=None, tool_interceptors=None: FakeClient(),
     )
 
     with pytest.raises(McpServerDiscoveryError, match="duplicate_tool_identity"):
@@ -266,7 +342,8 @@ async def test_duplicate_mcp_tool_identity_fails_discovery(monkeypatch) -> None:
             [
                 McpServerConfig(name="one", url="https://one.test/mcp"),
                 McpServerConfig(name="two", url="https://two.test/mcp"),
-            ]
+            ],
+            Settings(),
         )
 
 

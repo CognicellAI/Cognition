@@ -12,6 +12,7 @@ from server.app.agent.mcp_client import (
     McpServerDiscoveryError,
     load_mcp_tools_per_server,
 )
+from server.app.settings import Settings
 
 
 def test_agent_owned_mcp_config_round_trips_through_definition() -> None:
@@ -65,14 +66,17 @@ async def test_per_server_discovery_keeps_optional_failure_isolated(monkeypatch)
 
     monkeypatch.setattr(
         "server.app.agent.mcp_client.create_mcp_client",
-        lambda configs, callbacks=None, tool_interceptors=None: FakeClient(list(configs)[0]),
+        lambda configs, settings, callbacks=None, tool_interceptors=None: FakeClient(
+            list(configs)[0]
+        ),
     )
 
     tools = await load_mcp_tools_per_server(
         [
             McpServerConfig(name="optional", url="https://optional.test/mcp", required=False),
             McpServerConfig(name="required", url="https://required.test/mcp", required=True),
-        ]
+        ],
+        Settings(),
     )
 
     assert [tool.name for tool in tools] == ["required__lookup"]
@@ -86,12 +90,13 @@ async def test_required_discovery_failure_is_redacted(monkeypatch) -> None:
 
     monkeypatch.setattr(
         "server.app.agent.mcp_client.create_mcp_client",
-        lambda configs, callbacks=None, tool_interceptors=None: FakeClient(),
+        lambda configs, settings, callbacks=None, tool_interceptors=None: FakeClient(),
     )
 
     with pytest.raises(McpServerDiscoveryError) as exc_info:
         await load_mcp_tools_per_server(
-            [McpServerConfig(name="github", url="https://github.test/mcp", required=True)]
+            [McpServerConfig(name="github", url="https://github.test/mcp", required=True)],
+            Settings(),
         )
 
     assert exc_info.value.category == "discovery_failed"

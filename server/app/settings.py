@@ -5,7 +5,15 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Literal
 
-from pydantic import AliasChoices, BaseModel, ConfigDict, Field, SecretStr, field_validator
+from pydantic import (
+    AliasChoices,
+    BaseModel,
+    ConfigDict,
+    Field,
+    SecretStr,
+    field_validator,
+    model_validator,
+)
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -17,7 +25,15 @@ class McpWorkloadTokenExchangeProfile(BaseModel):
     type: Literal["oauth_token_exchange"] = "oauth_token_exchange"
     token_endpoint: str
     subject_token_source: Literal["workload_identity"] = "workload_identity"
+    subject_token_type: str = "urn:ietf:params:oauth:token-type:access_token"
     audience: str = Field(min_length=1)
+    client_auth: Literal["none", "client_secret_basic"] = "none"
+    client_id: str | None = None
+    client_secret_env: str | None = Field(
+        default=None,
+        pattern=r"^[A-Za-z_][A-Za-z0-9_]*$",
+    )
+    timeout_seconds: float = Field(default=10.0, gt=0, le=60)
 
     @field_validator("token_endpoint")
     @classmethod
@@ -48,6 +64,16 @@ class McpWorkloadTokenExchangeProfile(BaseModel):
         if value != value.strip() or any(character.isspace() for character in value):
             raise ValueError("MCP token-exchange audience must not contain whitespace")
         return value
+
+    @model_validator(mode="after")
+    def validate_client_auth(self) -> McpWorkloadTokenExchangeProfile:
+        """Require bounded environment client auth fields as one complete unit."""
+        if self.client_auth == "client_secret_basic":
+            if not self.client_id or self.client_secret_env is None:
+                raise ValueError("client_secret_basic requires client_id and client_secret_env")
+        elif self.client_id is not None or self.client_secret_env is not None:
+            raise ValueError("client_id/client_secret_env require client_secret_basic")
+        return self
 
 
 class Settings(BaseSettings):
@@ -93,6 +119,16 @@ class Settings(BaseSettings):
     mcp_auth_profiles: dict[str, McpWorkloadTokenExchangeProfile] = Field(
         default_factory=dict,
         alias="COGNITION_MCP_AUTH_PROFILES",
+    )
+    mcp_workload_identity_token_file: Path | None = Field(
+        default=None,
+        alias="COGNITION_MCP_WORKLOAD_IDENTITY_TOKEN_FILE",
+        description="Projected, rotating workload subject-token file.",
+    )
+    mcp_workload_identity_token: SecretStr | None = Field(
+        default=None,
+        alias="COGNITION_MCP_WORKLOAD_IDENTITY_TOKEN",
+        description="Environment fallback for the ambient workload subject token.",
     )
 
     # Workspace settings

@@ -79,6 +79,7 @@ class CognitionContext:
         thread_id: LangGraph checkpoint thread id, when available.
         agent_name: Agent definition bound to the session, when available.
         metadata: Builder-provided session metadata. This is not a secret channel.
+        request_deadline: Absolute Unix-millisecond execution deadline, when configured.
     """
 
     effective_scope: dict[str, str] = field(default_factory=dict)
@@ -86,6 +87,7 @@ class CognitionContext:
     thread_id: str | None = None
     agent_name: str | None = None
     metadata: dict[str, str] = field(default_factory=dict)
+    request_deadline: int | None = None
     # Process-local invocation state. This field is supplied for every run and
     # is intentionally absent from durable checkpoints and manifests.
     sandbox_backend: Any | None = field(default=None, repr=False)
@@ -99,6 +101,7 @@ class CognitionContext:
         thread_id: str | None = None,
         agent_name: str | None = None,
         metadata: dict[str, str] | None = None,
+        request_deadline: int | None = None,
         sandbox_backend: Any | None = None,
     ) -> CognitionContext:
         return cls(
@@ -107,6 +110,7 @@ class CognitionContext:
             thread_id=thread_id,
             agent_name=agent_name,
             metadata=dict(metadata or {}),
+            request_deadline=request_deadline,
             sandbox_backend=sandbox_backend,
         )
 
@@ -807,6 +811,7 @@ async def create_cognition_agent(params: CognitionAgentParams) -> CognitionAgent
                 mcp_callbacks = _build_mcp_callbacks()
                 mcp_tools = await load_mcp_tools_per_server(
                     params.mcp_configs,
+                    settings,
                     callbacks=mcp_callbacks,
                 )
                 agent_tools.extend(mcp_tools)
