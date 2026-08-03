@@ -435,36 +435,6 @@ class RuntimeResolver:
 
         return cast(BaseChatModel, ChatBedrock(**kwargs))
 
-    async def resolve_mcp_configs(self, scope: dict[str, str] | None = None) -> list[Any]:
-        """Load MCP server registrations from ConfigStore as McpServerConfig objects.
-
-        Args:
-            scope: Scope dict for ConfigStore lookup.
-
-        Returns:
-            List of McpServerConfig instances for enabled servers.
-        """
-        if self._store is None:
-            return []
-        try:
-            from server.app.agent.mcp_client import McpServerConfig
-
-            servers = await self._store.list_mcp_servers(scope)
-            return [
-                McpServerConfig(
-                    name=s.name,
-                    url=s.url,
-                    headers=s.headers,
-                    enabled=s.enabled,
-                    transport=s.transport,
-                )
-                for s in servers
-                if s.enabled
-            ]
-        except RuntimeError:
-            logger.warning("ConfigStore not initialized — MCP servers will not be available")
-            return []
-
     async def resolve_runtime_model_for_session(
         self,
         session: Any,

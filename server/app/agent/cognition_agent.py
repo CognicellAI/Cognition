@@ -34,10 +34,7 @@ from deepagents import create_deep_agent as _create_deep_agent
 logger = structlog.get_logger(__name__)
 
 from server.app.agent.mcp_client import (  # noqa: E402
-    McpServerConfig,
     _build_mcp_callbacks,
-    _build_mcp_interceptors,
-    create_mcp_client,
     load_agent_mcp_tools,
 )
 from server.app.agent.mcp_config import AgentMcpServer  # noqa: E402
@@ -395,7 +392,6 @@ class CognitionAgentParams:
     middleware: Sequence[Any] | None = None
     tools: Sequence[Any] | None = None
     settings: Settings | None = None
-    mcp_configs: Sequence[McpServerConfig] | None = None
     agent_mcp_servers: Sequence[AgentMcpServer] | None = None
     scope: dict[str, str] | None = None
     agent_identity: str | None = None
@@ -735,23 +731,6 @@ async def create_cognition_agent(params: CognitionAgentParams) -> CognitionAgent
         )
         agent_tools.extend(mcp_tools)
         logger.info("agent_mcp_tools_loaded", count=len(mcp_tools))
-    elif params.mcp_configs:
-        enabled_configs = [c for c in params.mcp_configs if c.enabled]
-        if enabled_configs:
-            try:
-                mcp_callbacks = _build_mcp_callbacks()
-                mcp_interceptors = _build_mcp_interceptors(params.scope)
-                mcp_client = create_mcp_client(
-                    enabled_configs,
-                    callbacks=mcp_callbacks,
-                    tool_interceptors=mcp_interceptors,
-                )
-                mcp_tools = await mcp_client.get_tools()
-                agent_tools.extend(mcp_tools)
-                logger.info("MCP tools loaded", count=len(mcp_tools))
-            except Exception as e:
-                logger.error("Failed to initialize MCP tools", error=str(e))
-
     if _context_policy_enables_summarization_tool(agent_context_policy):
         try:
             from deepagents.middleware.summarization import (
