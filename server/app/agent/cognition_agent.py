@@ -466,6 +466,7 @@ class CognitionAgentParams:
     tools: Sequence[Any] | None = None
     settings: Settings | None = None
     mcp_configs: Sequence[McpServerConfig] | None = None
+    mcp_oauth_repository: Any | None = None
     scope: dict[str, str] | None = None
     config_store: ConfigStore | None = None
     sandbox_profile: str | None = None
@@ -813,6 +814,7 @@ async def create_cognition_agent(params: CognitionAgentParams) -> CognitionAgent
                     params.mcp_configs,
                     settings,
                     callbacks=mcp_callbacks,
+                    oauth_repository=params.mcp_oauth_repository,
                 )
                 agent_tools.extend(mcp_tools)
                 logger.info("MCP tools loaded", count=len(mcp_tools))

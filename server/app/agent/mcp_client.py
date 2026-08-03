@@ -38,10 +38,12 @@ from server.app.agent.mcp_auth import (
     McpTrustedContextInterceptor,
     StaticBearerAuth,
     WorkloadTokenExchangeAuth,
+    create_mcp_oauth_auth,
     resolve_workload_client_secret,
     trusted_context_headers,
 )
 from server.app.settings import McpWorkloadTokenExchangeProfile, Settings
+from server.app.storage.mcp_oauth import McpOAuthStateRepository
 
 logger = structlog.get_logger(__name__)
 
@@ -150,6 +152,7 @@ class McpToolInfo(BaseModel):
 def mcp_config_to_connection(
     config: McpServerConfig,
     settings: Settings,
+    oauth_repository: McpOAuthStateRepository | None = None,
 ) -> StreamableHttpConnection:
     if isinstance(config.auth, McpNoAuthConfig):
         return {"transport": "streamable_http", "url": config.url}
@@ -185,7 +188,21 @@ def mcp_config_to_connection(
             "auth": workload_auth,
         }
     if isinstance(config.auth, McpOAuthConfig):
-        raise McpTransportAuthenticationError(config.name)
+        try:
+            oauth_auth = create_mcp_oauth_auth(
+                settings=settings,
+                repository=oauth_repository,
+                agent_name=config.agent_name,
+                effective_scope=config.effective_scope,
+                canonical_server_uri=config.url,
+            )
+        except McpAuthenticationError as exc:
+            raise McpTransportAuthenticationError(config.name, exc.category) from exc
+        return {
+            "transport": "streamable_http",
+            "url": config.url,
+            "auth": oauth_auth,
+        }
     raise McpTransportAuthenticationError(config.name, "auth_invalid")
 
 
@@ -194,8 +211,12 @@ def create_mcp_client(
     settings: Settings,
     callbacks: Callbacks | None = None,
     tool_interceptors: list[ToolCallInterceptor] | None = None,
+    *,
+    oauth_repository: McpOAuthStateRepository | None = None,
 ) -> MultiServerMCPClient:
-    connections: dict[str, Any] = {c.name: mcp_config_to_connection(c, settings) for c in configs}
+    connections: dict[str, Any] = {
+        c.name: mcp_config_to_connection(c, settings, oauth_repository) for c in configs
+    }
     workload_contexts = {
         config.name: _trusted_context_kwargs(config)
         for config in configs
@@ -219,6 +240,8 @@ async def load_mcp_tools_per_server(
     settings: Settings,
     callbacks: Callbacks | None = None,
     tool_interceptors: list[ToolCallInterceptor] | None = None,
+    *,
+    oauth_repository: McpOAuthStateRepository | None = None,
 ) -> list[BaseTool]:
     """Load MCP tools server-by-server and enforce canonical identity uniqueness."""
 
@@ -226,12 +249,13 @@ async def load_mcp_tools_per_server(
     seen: set[str] = set()
     for config in configs:
         try:
-            client = create_mcp_client(
-                [config],
-                settings,
-                callbacks=callbacks,
-                tool_interceptors=tool_interceptors,
-            )
+            client_kwargs: dict[str, Any] = {
+                "callbacks": callbacks,
+                "tool_interceptors": tool_interceptors,
+            }
+            if oauth_repository is not None:
+                client_kwargs["oauth_repository"] = oauth_repository
+            client = create_mcp_client([config], settings, **client_kwargs)
             server_tools = await client.get_tools(server_name=config.name)
         except Exception as exc:
             category = (

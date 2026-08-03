@@ -130,6 +130,33 @@ class Settings(BaseSettings):
         alias="COGNITION_MCP_WORKLOAD_IDENTITY_TOKEN",
         description="Environment fallback for the ambient workload subject token.",
     )
+    mcp_oauth_encryption_key: SecretStr | None = Field(
+        default=None,
+        alias="COGNITION_MCP_OAUTH_ENCRYPTION_KEY",
+        description="Fernet key for exact-scope MCP OAuth SDK state.",
+    )
+    mcp_oauth_redirect_uri: str | None = Field(
+        default=None,
+        alias="COGNITION_MCP_OAUTH_REDIRECT_URI",
+        description="Builder-routable OAuth callback URI registered by the MCP client.",
+    )
+    mcp_oauth_client_name: str = Field(
+        default="Cognition",
+        alias="COGNITION_MCP_OAUTH_CLIENT_NAME",
+        min_length=1,
+        max_length=100,
+    )
+    mcp_oauth_client_metadata_url: str | None = Field(
+        default=None,
+        alias="COGNITION_MCP_OAUTH_CLIENT_METADATA_URL",
+        description="Optional HTTPS client metadata document URL supported by the MCP SDK.",
+    )
+    mcp_oauth_timeout_seconds: float = Field(
+        default=300.0,
+        alias="COGNITION_MCP_OAUTH_TIMEOUT_SECONDS",
+        gt=0,
+        le=900,
+    )
 
     # Workspace settings
     workspace_root: Path = Field(

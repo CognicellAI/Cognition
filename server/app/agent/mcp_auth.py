@@ -12,9 +12,16 @@ from typing import Any
 
 import httpx
 from langchain_mcp_adapters.interceptors import MCPToolCallRequest, MCPToolCallResult
+from mcp.client.auth import OAuthClientProvider
+from mcp.shared.auth import OAuthClientMetadata
 from pydantic import SecretStr
 
 from server.app.settings import McpWorkloadTokenExchangeProfile, Settings
+from server.app.storage.mcp_oauth import (
+    EncryptedMcpOAuthTokenStorage,
+    McpOAuthStateRepository,
+    McpOAuthStorageError,
+)
 
 _TOKEN_EXCHANGE_GRANT = "urn:ietf:params:oauth:grant-type:token-exchange"
 _ACCESS_TOKEN_TYPE = "urn:ietf:params:oauth:token-type:access_token"
@@ -212,6 +219,52 @@ def resolve_workload_client_secret(
     return SecretStr(value)
 
 
+def create_mcp_oauth_auth(
+    *,
+    settings: Settings,
+    repository: McpOAuthStateRepository | None,
+    agent_name: str,
+    effective_scope: Mapping[str, str],
+    canonical_server_uri: str,
+) -> OAuthClientProvider:
+    """Create the upstream MCP OAuth provider with exact-scope encrypted state."""
+    if (
+        repository is None
+        or settings.mcp_oauth_encryption_key is None
+        or settings.mcp_oauth_redirect_uri is None
+    ):
+        raise McpAuthenticationError("oauth_configuration_unavailable")
+    try:
+        storage = EncryptedMcpOAuthTokenStorage(
+            repository=repository,
+            encryption_key=settings.mcp_oauth_encryption_key,
+            agent_name=agent_name,
+            effective_scope=effective_scope,
+            canonical_server_uri=canonical_server_uri,
+        )
+        metadata = OAuthClientMetadata.model_validate(
+            {
+                "redirect_uris": [settings.mcp_oauth_redirect_uri],
+                "token_endpoint_auth_method": "none",
+                "grant_types": ["authorization_code", "refresh_token"],
+                "response_types": ["code"],
+                "client_name": settings.mcp_oauth_client_name,
+            }
+        )
+        return OAuthClientProvider(
+            server_url=canonical_server_uri,
+            client_metadata=metadata,
+            storage=storage,
+            timeout=settings.mcp_oauth_timeout_seconds,
+            client_metadata_url=settings.mcp_oauth_client_metadata_url,
+        )
+    except (McpOAuthStorageError, ValueError) as exc:
+        category = (
+            exc.category if isinstance(exc, McpOAuthStorageError) else "oauth_configuration_invalid"
+        )
+        raise McpAuthenticationError(category) from exc
+
+
 def trusted_context_headers(
     *,
     agent_name: str,
@@ -302,6 +355,7 @@ __all__ = [
     "McpTrustedContextInterceptor",
     "StaticBearerAuth",
     "WorkloadTokenExchangeAuth",
+    "create_mcp_oauth_auth",
     "resolve_workload_client_secret",
     "trusted_context_headers",
 ]
