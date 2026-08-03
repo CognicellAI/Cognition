@@ -19,6 +19,7 @@ if TYPE_CHECKING:
     from server.app.storage.backend import StorageBackend
     from server.app.storage.config_dispatcher import ConfigChangeDispatcher
     from server.app.storage.config_registry import ConfigRegistry
+    from server.app.storage.mcp_oauth import McpOAuthStateRepository
 
 
 class StorageBackendError(CognitionError):
@@ -60,7 +61,6 @@ def create_storage_backend(settings: Settings) -> StorageBackend:
             connection_string=uri,
             workspace_path=workspace_path,
         )
-
     elif backend_type == "postgres":
         from server.app.storage.postgres import PostgresStorageBackend
 
@@ -81,6 +81,41 @@ def create_storage_backend(settings: Settings) -> StorageBackend:
             f"Supported types: sqlite, postgres, memory",
             backend_type=backend_type,
         )
+
+
+def create_mcp_oauth_state_repository(settings: Settings) -> McpOAuthStateRepository:
+    """Create the deployment-matched opaque MCP OAuth state repository."""
+    backend_type = getattr(settings, "persistence_backend", "sqlite")
+    uri = getattr(settings, "persistence_uri", ".cognition/state.db")
+
+    if backend_type == "memory":
+        from server.app.storage.mcp_oauth import MemoryMcpOAuthStateRepository
+
+        return MemoryMcpOAuthStateRepository()
+
+    from sqlalchemy.ext.asyncio import create_async_engine
+
+    from server.app.storage.mcp_oauth import SqlMcpOAuthStateRepository
+
+    if backend_type == "sqlite":
+        normalized_uri = uri.removeprefix("sqlite:///")
+        db_path = Path(normalized_uri)
+        if not db_path.is_absolute():
+            db_path = Path(str(settings.workspace_path)) / db_path
+        db_path.parent.mkdir(parents=True, exist_ok=True)
+        engine = create_async_engine(f"sqlite+aiosqlite:///{db_path}")
+        return SqlMcpOAuthStateRepository(engine)
+
+    if backend_type == "postgres":
+        sqlalchemy_dsn = uri.replace("postgresql://", "postgresql+asyncpg://", 1)
+        engine = create_async_engine(sqlalchemy_dsn)
+        return SqlMcpOAuthStateRepository(engine)
+
+    raise StorageBackendError(
+        f"Unknown storage backend type: '{backend_type}'. "
+        "Supported types: sqlite, postgres, memory",
+        backend_type=backend_type,
+    )
 
 
 def create_config_registry(settings: Settings) -> ConfigRegistry:

@@ -31,6 +31,7 @@ if TYPE_CHECKING:
     from server.app.llm.model_catalog import ModelCatalog
     from server.app.storage.artifact_store import ArtifactStore
     from server.app.storage.backend import StorageBackend
+    from server.app.storage.mcp_oauth import McpOAuthStateRepository
 
 # ---------------------------------------------------------------------------
 # Global references — set once during lifespan, read via Depends()
@@ -42,6 +43,7 @@ _storage_backend: StorageBackend | None = None
 _session_agent_manager: SessionAgentManager | None = None
 _model_catalog: ModelCatalog | None = None
 _artifact_store: ArtifactStore | None = None
+_mcp_oauth_state_repository: McpOAuthStateRepository | None = None
 
 
 def set_config_store(store: ConfigStore) -> None:
@@ -72,6 +74,11 @@ def set_model_catalog_dep(catalog: ModelCatalog) -> None:
 def set_artifact_store(store: ArtifactStore) -> None:
     global _artifact_store
     _artifact_store = store
+
+
+def set_mcp_oauth_state_repository(repository: McpOAuthStateRepository) -> None:
+    global _mcp_oauth_state_repository
+    _mcp_oauth_state_repository = repository
 
 
 # ---------------------------------------------------------------------------
@@ -129,6 +136,12 @@ def get_artifact_store() -> ArtifactStore:
     return _artifact_store
 
 
+def get_mcp_oauth_state_repository() -> McpOAuthStateRepository:
+    if _mcp_oauth_state_repository is None:
+        raise RuntimeError("MCP OAuth state repository not initialized during startup.")
+    return _mcp_oauth_state_repository
+
+
 def get_rate_limiter_dep() -> RateLimiter:
     return get_rate_limiter()
 
@@ -148,6 +161,7 @@ __all__ = [
     "ConfigStore",
     "RuntimeResolver",
     "get_artifact_store",
+    "get_mcp_oauth_state_repository",
     "get_config_store",
     "get_model_catalog_dep",
     "get_rate_limiter_dep",
@@ -162,4 +176,5 @@ __all__ = [
     "set_runtime_resolver",
     "set_session_agent_manager_dep",
     "set_storage_backend_dep",
+    "set_mcp_oauth_state_repository",
 ]

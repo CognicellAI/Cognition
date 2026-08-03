@@ -609,6 +609,7 @@ source = { editable = "." }
 dependencies = [
     { name = "a2a-sdk" },
     { name = "alembic" },
+    { name = "cryptography" },
     { name = "deepagents" },
     { name = "fastapi" },
     { name = "httpx" },
@@ -720,6 +721,7 @@ requires-dist = [
     { name = "boto3", marker = "extra == 'all'", specifier = ">=1.35.0" },
     { name = "boto3", marker = "extra == 'bedrock'", specifier = ">=1.35.0" },
     { name = "boto3", marker = "extra == 's3'", specifier = ">=1.35.0" },
+    { name = "cryptography", specifier = ">=48.0.1" },
     { name = "deepagents", specifier = ">=0.7.1" },
     { name = "docker", marker = "extra == 'all'", specifier = ">=7.0.0" },
     { name = "docker", marker = "extra == 'deploy'", specifier = ">=7.0.0" },
