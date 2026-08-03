@@ -36,7 +36,6 @@ from server.app.storage.config_models import (
     EntityType,
     GlobalAgentDefaults,
     GlobalProviderDefaults,
-    McpServerRegistration,
     ProviderConfig,
     SandboxProfile,
     SkillDefinition,
@@ -176,18 +175,6 @@ class ConfigStore(Protocol):
     async def is_valid_primary(self, name: str, scope: dict[str, str] | None = None) -> bool:
         """Check if an agent name is a valid primary agent."""
         ...
-
-    # ------------------------------------------------------------------
-    # MCP server CRUD
-    # ------------------------------------------------------------------
-
-    async def list_mcp_servers(
-        self, scope: dict[str, str] | None = None
-    ) -> list[McpServerRegistration]: ...
-
-    async def upsert_mcp_server(self, server: McpServerRegistration) -> None: ...
-
-    async def delete_mcp_server(self, name: str, scope: dict[str, str] | None = None) -> bool: ...
 
     # ------------------------------------------------------------------
     # Sandbox profile CRUD
@@ -509,23 +496,6 @@ class DefaultConfigStore:
         if agent is None or agent.hidden:
             return False
         return agent.mode in ("primary", "all")
-
-    # ------------------------------------------------------------------
-    # MCP server CRUD
-    # ------------------------------------------------------------------
-
-    async def list_mcp_servers(
-        self, scope: dict[str, str] | None = None
-    ) -> list[McpServerRegistration]:
-        return cast(
-            list[McpServerRegistration], await self._config_registry.list_mcp_servers(scope)
-        )
-
-    async def upsert_mcp_server(self, server: McpServerRegistration) -> None:
-        await self._config_registry.upsert_mcp_server(server)
-
-    async def delete_mcp_server(self, name: str, scope: dict[str, str] | None = None) -> bool:
-        return bool(await self._config_registry.delete_mcp_server(name, scope))
 
     # ------------------------------------------------------------------
     # Sandbox profile CRUD

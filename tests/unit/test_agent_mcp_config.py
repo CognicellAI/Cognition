@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
+from typing import get_args
 
 import pytest
 
@@ -14,6 +15,9 @@ from server.app.agent.mcp_client import (
     mcp_config_to_connection,
 )
 from server.app.settings import Settings
+from server.app.storage.config_models import EntityType
+from server.app.storage.config_registry import MemoryConfigRegistry
+from server.app.storage.config_store import DefaultConfigStore
 
 
 def test_agent_definition_carries_agent_owned_mcp_config() -> None:
@@ -357,3 +361,11 @@ def test_global_mcp_servers_route_is_not_registered() -> None:
 
     paths = {str(getattr(route, "path", "")) for route in app.routes}
     assert "/mcp-servers" not in paths
+
+
+def test_global_mcp_registry_contract_is_removed() -> None:
+    assert "mcp_server" not in get_args(EntityType)
+    for target in (MemoryConfigRegistry, DefaultConfigStore):
+        assert not hasattr(target, "list_mcp_servers")
+        assert not hasattr(target, "upsert_mcp_server")
+        assert not hasattr(target, "delete_mcp_server")
