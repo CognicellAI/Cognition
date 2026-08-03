@@ -7,6 +7,44 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [0.14.0] — 2026-08-03
+
+### Changed
+
+- Upgraded Cognition to Deep Agents 0.7 and aligned durable file backends with
+  its current protocol.
+- Made skills and remote MCP connections part of complete, scoped Agent
+  definitions. The legacy global MCP registry, endpoints, persistence, SSE
+  transport, and runtime fallback have been removed as a breaking change.
+- Added S3-compatible durable backends for production file and artifact bodies,
+  using standard AWS credentials and optional endpoint/path-style settings for
+  Garage and other S3-compatible services. Local and development deployments
+  retain SQLite, in-memory, local files, and local sandboxes.
+
+### Added
+
+- Deep Agents skill bundles with `SKILL.md`, `scripts/`, `references/`, and
+  `assets/` materialized through scoped storage.
+- Per-agent Streamable HTTP MCP configuration with independent discovery,
+  required/optional failure handling, canonical tool identities, and secure
+  direct MCP OAuth.
+- Encrypted, database-backed, scope-and-agent-revision-bound direct MCP OAuth
+  token persistence and a one-time browser authorization callback flow.
+- Optional builder-installed `OutboundAuthProvider` support for bounded
+  transport authentication without Cognition-managed credentials.
+- Garage-backed S3 end-to-end coverage for Deep Agents files and artifact
+  bodies, alongside AWS-compatible configuration.
+
+### Security
+
+- Production now rejects host-backed persistence, local durable files, local
+  sandbox execution, and static bearer MCP authentication. No failed database
+  or object-store operation falls back to local state.
+- MCP transport endpoint, server alias, scope, and authentication are derived
+  exclusively from validated Agent configuration and trusted runtime context.
+
+---
+
 ## [0.11.0] — 2026-07-10
 
 ### Highlights
