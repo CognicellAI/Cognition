@@ -213,6 +213,10 @@ class SkillDefinition(BaseModel):
     enabled: bool = Field(default=True)
     description: str | None = Field(default=None)
     content: str | None = Field(default=None)
+    files: dict[str, str] = Field(
+        default_factory=dict,
+        description="Supporting bundle files keyed by safe, relative POSIX paths.",
+    )
     scope: dict[str, str] = Field(default_factory=dict)
     source: Literal["file", "api"] = Field(default="file")
 
@@ -223,6 +227,18 @@ class SkillDefinition(BaseModel):
         if not v.replace("-", "").replace("_", "").isalnum():
             raise ValueError(f"Skill name must be alphanumeric with hyphens/underscores only: {v}")
         return v
+
+    @field_validator("files")
+    @classmethod
+    def validate_bundle_files(cls, value: dict[str, str]) -> dict[str, str]:
+        """Reject absolute, traversal, and non-text bundle entries."""
+        for path, content in value.items():
+            parts = path.split("/")
+            if not path or path.startswith("/") or any(part in {"", ".", ".."} for part in parts):
+                raise ValueError("Skill bundle file paths must be safe relative POSIX paths")
+            if not isinstance(content, str):
+                raise ValueError("Skill bundle file contents must be text")
+        return value
 
 
 # ---------------------------------------------------------------------------
