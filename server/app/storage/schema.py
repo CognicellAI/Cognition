@@ -64,6 +64,24 @@ class _JsonbOrJson(TypeDecorator):
 # Central metadata object that holds all table definitions
 metadata = MetaData()
 
+# Encrypted MCP OAuth SDK state. Partition keys are deployment-keyed digests of
+# exact effective scope + Agent identity + canonical server URI; no raw scope or
+# OAuth material is stored in indexable columns.
+mcp_oauth_state_table = Table(
+    "mcp_oauth_state",
+    metadata,
+    Column("partition_key", String(64), primary_key=True),
+    Column("tokens_ciphertext", Text),
+    Column("client_info_ciphertext", Text),
+    Column(
+        "updated_at",
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    ),
+)
+
 # Sessions table - stores conversation session metadata
 sessions_table = Table(
     "sessions",

@@ -16,6 +16,7 @@ from server.app.api.dependencies import (
     get_storage_backend_dep,
     set_artifact_store,
     set_config_store,
+    set_mcp_oauth_state_repository,
     set_model_catalog_dep,
     set_runtime_resolver,
     set_session_agent_manager_dep,
@@ -75,6 +76,13 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     await storage_backend.initialize()
     set_storage_backend_dep(storage_backend)
     logger.info("Storage backend initialized")
+
+    from server.app.storage.factory import create_mcp_oauth_state_repository
+
+    mcp_oauth_state_repository = create_mcp_oauth_state_repository(settings)
+    await mcp_oauth_state_repository.initialize()
+    set_mcp_oauth_state_repository(mcp_oauth_state_repository)
+    logger.info("MCP OAuth state repository initialized")
 
     # Initialize ConfigRegistry
     from server.app.storage.factory import create_config_dispatcher, create_config_registry
@@ -276,6 +284,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # Close storage backend connections
     if storage_backend:
         await storage_backend.close()
+    await mcp_oauth_state_repository.close()
     logger.info("Server shutdown complete")
 
 
