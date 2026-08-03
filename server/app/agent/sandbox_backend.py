@@ -535,7 +535,10 @@ class CognitionAwsLambdaMicroVmSandboxBackend(SandboxBackendProtocol):
     ) -> GrepResult:
         """Search files in the AWS Lambda MicroVM sandbox."""
         backend = self._get_backend()
-        result: GrepResult = backend.grep(pattern, path=path, glob=glob, max_count=max_count)
+        kwargs: dict[str, Any] = {"path": path, "glob": glob}
+        if max_count is not None:
+            kwargs["max_count"] = max_count
+        result: GrepResult = backend.grep(pattern, **kwargs)
         return result
 
     def glob(self, pattern: str, path: str | None = "/") -> GlobResult:
@@ -849,7 +852,10 @@ class CognitionKubernetesSandboxBackend(SandboxBackendProtocol):
     ) -> GrepResult:
         """Search files using Deep Agents' current result API."""
         backend = self._get_backend()
-        result: GrepResult = backend.grep(pattern, path=path, glob=glob, max_count=max_count)
+        kwargs: dict[str, Any] = {"path": path, "glob": glob}
+        if max_count is not None:
+            kwargs["max_count"] = max_count
+        result: GrepResult = backend.grep(pattern, **kwargs)
         return result
 
     def grep_raw(
