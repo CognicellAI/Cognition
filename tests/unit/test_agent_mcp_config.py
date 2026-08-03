@@ -8,8 +8,11 @@ from server.app.agent.definition import AgentDefinition
 from server.app.agent.mcp_client import (
     McpServerConfig,
     McpServerDiscoveryError,
+    McpTransportAuthenticationError,
     load_mcp_tools_per_server,
+    mcp_config_to_connection,
 )
+from server.app.settings import Settings
 
 
 def test_agent_definition_carries_agent_owned_mcp_config() -> None:
@@ -18,26 +21,81 @@ def test_agent_definition_carries_agent_owned_mcp_config() -> None:
             "name": "tenant-agent",
             "system_prompt": "Use configured tools.",
             "mcp": {
-            "servers": {
-                "github": {
-                    "url": "https://mcp.example.test/github",
-                    "transport": "http",
-                    "required": True,
-                    "auth": {
-                        "type": "outbound_provider",
-                        "auth_profile": "agent-machine",
-                        "header_allowlist": ["Authorization"],
-                    },
+                "servers": {
+                    "github": {
+                        "url": "https://mcp.example.test/github",
+                        "transport": "streamable_http",
+                        "required": True,
+                        "auth": {
+                            "type": "workload_token_exchange",
+                            "profile": "agent-machine",
+                        },
+                    }
                 }
-            }
-        },
+            },
         }
     )
 
     server = agent.mcp.servers["github"]
     assert server.transport == "streamable_http"
-    assert server.auth.type == "outbound_provider"
-    assert server.auth.header_allowlist == ["authorization"]
+    assert server.auth.type == "workload_token_exchange"
+    assert server.auth.profile == "agent-machine"
+
+
+@pytest.mark.parametrize(
+    "auth",
+    [
+        {"type": "none"},
+        {"type": "mcp_oauth"},
+        {"type": "workload_token_exchange", "profile": "internal-egress"},
+        {"type": "static_bearer", "env": "MCP_ACCESS_TOKEN"},
+    ],
+)
+def test_agent_definition_accepts_each_standard_mcp_auth_type(auth) -> None:
+    agent = AgentDefinition.model_validate(
+        {
+            "name": "auth-agent",
+            "system_prompt": "Use configured tools.",
+            "mcp": {
+                "servers": {
+                    "remote": {
+                        "url": "https://mcp.example.test/tools",
+                        "auth": auth,
+                    }
+                }
+            },
+        }
+    )
+
+    assert agent.mcp.servers["remote"].auth.model_dump(exclude_none=True) == auth
+
+
+@pytest.mark.parametrize(
+    "auth",
+    [
+        {"type": "oauth"},
+        {"type": "outbound_provider", "auth_profile": "legacy"},
+        {"type": "static_bearer", "env": "invalid-name"},
+        {"type": "workload_token_exchange"},
+        {"type": "none", "headers": {"Authorization": "Bearer secret"}},
+    ],
+)
+def test_agent_mcp_config_rejects_legacy_or_unbounded_auth(auth) -> None:
+    with pytest.raises(ValueError):
+        AgentDefinition.model_validate(
+            {
+                "name": "bad-auth-agent",
+                "system_prompt": "Do not accept transport secrets.",
+                "mcp": {
+                    "servers": {
+                        "remote": {
+                            "url": "https://mcp.example.test/tools",
+                            "auth": auth,
+                        }
+                    }
+                },
+            }
+        )
 
 
 def test_agent_mcp_config_rejects_local_servers() -> None:
@@ -49,6 +107,101 @@ def test_agent_mcp_config_rejects_local_servers() -> None:
                 "mcp": {"servers": {"local": {"url": "stdio://filesystem"}}},
             }
         )
+
+
+@pytest.mark.parametrize(
+    "server",
+    [
+        {"url": "https://user:password@mcp.example.test/tools"},
+        {"url": "https://mcp.example.test/tools#fragment"},
+        {"url": "https://mcp.example.test/tools", "headers": {"X-Token": "secret"}},
+        {"url": "https://mcp.example.test/sse", "transport": "sse"},
+        {"url": "https://mcp.example.test/tools", "enabled": False},
+    ],
+)
+def test_agent_mcp_config_rejects_unbounded_server_transport_fields(server) -> None:
+    with pytest.raises(ValueError):
+        AgentDefinition.model_validate(
+            {
+                "name": "bad-server-agent",
+                "system_prompt": "Use only bounded remote MCP.",
+                "mcp": {"servers": {"remote": server}},
+            }
+        )
+
+
+def test_workload_profile_resolves_from_deployment_configuration_only() -> None:
+    agent = AgentDefinition.model_validate(
+        {
+            "name": "gateway-agent",
+            "system_prompt": "Use the approved gateway.",
+            "mcp": {
+                "servers": {
+                    "github": {
+                        "url": "https://mcp-egress.internal/mcp/github",
+                        "auth": {
+                            "type": "workload_token_exchange",
+                            "profile": "egress",
+                        },
+                    }
+                }
+            },
+        }
+    )
+    settings = Settings.model_validate(
+        {
+            "mcp_auth_profiles": {
+                "egress": {
+                    "type": "oauth_token_exchange",
+                    "token_endpoint": "https://identity.internal/token",
+                    "subject_token_source": "workload_identity",
+                    "audience": "canonical_server_uri",
+                }
+            }
+        }
+    )
+
+    resolved = McpServerConfig.from_agent_config("github", agent.mcp.servers["github"], settings)
+
+    assert resolved.workload_profile is not None
+    assert resolved.workload_profile.token_endpoint == "https://identity.internal/token"
+    assert "workload_profile" not in resolved.model_dump(mode="json")
+
+
+def test_unknown_workload_profile_fails_resolution() -> None:
+    agent = AgentDefinition.model_validate(
+        {
+            "name": "gateway-agent",
+            "system_prompt": "Fail closed when deployment config is absent.",
+            "mcp": {
+                "servers": {
+                    "github": {
+                        "url": "https://mcp-egress.internal/mcp/github",
+                        "auth": {
+                            "type": "workload_token_exchange",
+                            "profile": "missing",
+                        },
+                    }
+                }
+            },
+        }
+    )
+
+    with pytest.raises(ValueError, match="Unknown MCP authentication profile"):
+        McpServerConfig.from_agent_config("github", agent.mcp.servers["github"], Settings())
+
+
+def test_protected_auth_never_silently_builds_anonymous_transport() -> None:
+    config = McpServerConfig.model_validate(
+        {
+            "name": "github",
+            "url": "https://mcp.example.test/github",
+            "auth": {"type": "mcp_oauth"},
+        }
+    )
+
+    with pytest.raises(McpTransportAuthenticationError, match="auth_unavailable"):
+        mcp_config_to_connection(config)
 
 
 @pytest.mark.asyncio

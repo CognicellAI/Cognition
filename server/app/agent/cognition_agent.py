@@ -795,8 +795,7 @@ async def create_cognition_agent(params: CognitionAgentParams) -> CognitionAgent
             _build_mcp_callbacks,
         )
 
-        enabled_configs = [c for c in params.mcp_configs if c.enabled]
-        if enabled_configs:
+        if params.mcp_configs:
             if not settings.allow_host_tools:
                 STRICT_EXECUTION_REJECTIONS_TOTAL.labels(reason="host_mcp_tools").inc()
                 raise RuntimeError(
@@ -807,7 +806,7 @@ async def create_cognition_agent(params: CognitionAgentParams) -> CognitionAgent
             try:
                 mcp_callbacks = _build_mcp_callbacks()
                 mcp_tools = await load_mcp_tools_per_server(
-                    enabled_configs,
+                    params.mcp_configs,
                     callbacks=mcp_callbacks,
                 )
                 agent_tools.extend(mcp_tools)

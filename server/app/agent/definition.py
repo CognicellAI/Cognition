@@ -212,49 +212,94 @@ class AgentConfig(BaseModel):
     sandbox_execution_role_arn: str | None = Field(default=None)
 
 
-class McpAuthConfig(BaseModel):
-    """Outbound authentication policy for one Agent-scoped MCP server."""
+MCPAuthType = Literal[
+    "none",
+    "mcp_oauth",
+    "workload_token_exchange",
+    "static_bearer",
+]
 
-    type: Literal["none", "oauth", "outbound_provider"] = Field(default="none")
-    header_allowlist: list[str] = Field(default_factory=list)
-    auth_profile: str | None = Field(default=None)
-    oauth_provider: str | None = Field(default=None)
-    scopes: list[str] = Field(default_factory=list)
 
-    @field_validator("header_allowlist", mode="before")
-    @classmethod
-    def normalize_header_allowlist(cls, value: Any) -> list[str]:
-        if value is None:
-            return []
-        return [str(item).lower() for item in value]
+class McpNoAuthConfig(BaseModel):
+    """Anonymous MCP transport with no Cognition-provided authentication."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    type: Literal["none"] = "none"
+
+
+class McpOAuthConfig(BaseModel):
+    """Standard MCP OAuth authorization handled by the upstream MCP SDK."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    type: Literal["mcp_oauth"] = "mcp_oauth"
+
+
+class McpWorkloadTokenExchangeAuthConfig(BaseModel):
+    """Deployment-profile selection for workload OAuth token exchange."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    type: Literal["workload_token_exchange"] = "workload_token_exchange"
+    profile: str = Field(min_length=1, pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+
+
+class McpStaticBearerAuthConfig(BaseModel):
+    """Environment-backed static bearer transport authentication."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    type: Literal["static_bearer"] = "static_bearer"
+    env: str = Field(min_length=1, pattern=r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+
+McpAuthConfig = Annotated[
+    McpNoAuthConfig
+    | McpOAuthConfig
+    | McpWorkloadTokenExchangeAuthConfig
+    | McpStaticBearerAuthConfig,
+    Field(discriminator="type"),
+]
+
 
 class AgentMcpServerConfig(BaseModel):
     """Agent-scoped MCP server definition."""
 
+    model_config = ConfigDict(extra="forbid")
+
     url: str = Field(..., min_length=1)
-    transport: Literal["sse", "streamable_http", "http"] = Field(default="streamable_http")
-    enabled: bool = Field(default=True)
+    transport: Literal["streamable_http"] = Field(default="streamable_http")
     required: bool = Field(default=True)
-    auth: McpAuthConfig = Field(default_factory=McpAuthConfig)
+    auth: McpAuthConfig = Field(default_factory=McpNoAuthConfig)
 
     @field_validator("url")
     @classmethod
     def validate_url(cls, value: str) -> str:
-        if not value.startswith(("http://", "https://")):
+        if not value or any(character.isspace() for character in value):
+            raise ValueError("Agent MCP server URL must not be empty or contain whitespace")
+        try:
+            parsed = urlsplit(value)
+            hostname = parsed.hostname
+            _ = parsed.port
+        except ValueError as exc:
+            raise ValueError("Agent MCP server URL is malformed") from exc
+        if parsed.scheme not in {"http", "https"} or not parsed.netloc or not hostname:
             raise ValueError(
-                "Agent MCP servers must use HTTP/HTTPS URLs; local stdio MCP servers "
-                "are not supported"
+                "Agent MCP servers must use absolute HTTP/HTTPS URLs; local stdio "
+                "servers are not supported"
             )
+        if parsed.username is not None or parsed.password is not None:
+            raise ValueError("Agent MCP server URLs must not contain credentials")
+        if parsed.fragment:
+            raise ValueError("Agent MCP server URLs must not contain fragments")
         return value
-
-    @field_validator("transport")
-    @classmethod
-    def normalize_transport(cls, value: str) -> str:
-        return "streamable_http" if value == "http" else value
 
 
 class AgentMcpConfig(BaseModel):
     """Agent-owned MCP configuration."""
+
+    model_config = ConfigDict(extra="forbid")
 
     servers: dict[str, AgentMcpServerConfig] = Field(default_factory=dict)
 
@@ -776,6 +821,11 @@ __all__ = [
     "AgentMcpServerConfig",
     "AsyncSubagentConfig",
     "McpAuthConfig",
+    "MCPAuthType",
+    "McpNoAuthConfig",
+    "McpOAuthConfig",
+    "McpStaticBearerAuthConfig",
+    "McpWorkloadTokenExchangeAuthConfig",
     "SubagentDefinition",
     "load_agent_definition",
     "load_agent_definition_from_markdown",

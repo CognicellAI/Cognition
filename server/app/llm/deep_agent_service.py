@@ -510,9 +510,8 @@ class DeepAgentStreamingService:
             from server.app.agent.mcp_client import McpServerConfig
 
             resolved.mcp_configs = [
-                McpServerConfig.from_agent_config(alias, config)
+                McpServerConfig.from_agent_config(alias, config, self.settings)
                 for alias, config in agent_def.mcp.servers.items()
-                if config.enabled
             ]
 
         return resolved, custom_tools

@@ -24,11 +24,10 @@ def test_agent_owned_mcp_config_round_trips_through_definition() -> None:
                     "github": {
                         "url": "https://mcp.example.test/github",
                         "required": True,
-                        "transport": "http",
+                        "transport": "streamable_http",
                         "auth": {
-                            "type": "outbound_provider",
-                            "auth_profile": "agent-machine",
-                            "header_allowlist": ["Authorization"],
+                            "type": "workload_token_exchange",
+                            "profile": "agent-machine",
                         },
                     }
                 }
@@ -38,7 +37,7 @@ def test_agent_owned_mcp_config_round_trips_through_definition() -> None:
 
     dumped = definition.model_dump(mode="json")
     assert dumped["mcp"]["servers"]["github"]["transport"] == "streamable_http"
-    assert dumped["mcp"]["servers"]["github"]["auth"]["auth_profile"] == "agent-machine"
+    assert dumped["mcp"]["servers"]["github"]["auth"]["profile"] == "agent-machine"
     assert "headers" not in dumped["mcp"]["servers"]["github"]["auth"]
 
 

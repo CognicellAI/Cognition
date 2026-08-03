@@ -20,7 +20,7 @@ from tests.e2e.test_scenarios.conftest import (
     stream_completed,
 )
 
-COINGECKO_MCP_URL = "https://mcp.api.coingecko.com/sse"
+COINGECKO_MCP_URL = "https://mcp.api.coingecko.com/mcp"
 
 
 def _unique(prefix: str) -> str:
@@ -84,9 +84,8 @@ async def _create_coingecko_agent(api_client: ScenarioTestClient, name: str) -> 
                 "servers": {
                     "coingecko": {
                         "url": COINGECKO_MCP_URL,
-                        "enabled": True,
                         "required": True,
-                        "transport": "sse",
+                        "transport": "streamable_http",
                     }
                 }
             },
@@ -120,9 +119,7 @@ class TestCoinGeckoMcpScenario:
         finally:
             await api_client.delete(f"/agents/{agent_name}")
 
-    async def test_agent_can_call_coingecko_mcp_tool(
-        self, api_client: ScenarioTestClient
-    ) -> None:
+    async def test_agent_can_call_coingecko_mcp_tool(self, api_client: ScenarioTestClient) -> None:
         agent_name = _unique("coingecko-agent")
         session_id: str | None = None
         try:

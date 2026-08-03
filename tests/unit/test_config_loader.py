@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
-from server.app.config_loader import _resolve_env_vars, load_config
+from server.app.config_loader import ConfigLoader, _resolve_env_vars, load_config
 
 
 class TestResolveEnvVars:
@@ -64,3 +65,28 @@ class TestLoadConfig:
 
         assert config["llm"]["provider"] == "bedrock"
         assert missing == {}
+
+    def test_mcp_auth_profiles_map_from_top_level_yaml(self, tmp_path: Path) -> None:
+        workspace = tmp_path / "workspace"
+        (workspace / ".cognition").mkdir(parents=True)
+        (workspace / ".cognition" / "config.yaml").write_text(
+            """mcp_auth_profiles:
+  egress:
+    type: oauth_token_exchange
+    token_endpoint: https://identity.internal/token
+    subject_token_source: workload_identity
+    audience: canonical_server_uri
+""",
+            encoding="utf-8",
+        )
+
+        env_vars = ConfigLoader(cwd=workspace).to_env_vars()
+
+        assert json.loads(env_vars["COGNITION_MCP_AUTH_PROFILES"]) == {
+            "egress": {
+                "type": "oauth_token_exchange",
+                "token_endpoint": "https://identity.internal/token",
+                "subject_token_source": "workload_identity",
+                "audience": "canonical_server_uri",
+            }
+        }
