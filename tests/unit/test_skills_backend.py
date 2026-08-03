@@ -149,8 +149,8 @@ class TestAdownloadFiles:
         assert result[0].error == "file_not_found"
 
     async def test_returns_invalid_path_for_malformed_paths(self, backend):
-        """Should return invalid_path for non-SKILL.md paths."""
-        result = await backend.adownload_files(["/some/other/file.txt"])
+        """Should return invalid_path for paths outside a skill bundle."""
+        result = await backend.adownload_files(["/../file.txt"])
         assert result[0].error == "invalid_path"
 
     async def test_handles_empty_content(self, registry, backend):
@@ -189,6 +189,19 @@ class TestAdownloadFiles:
         assert result[0].content == b"# skill-a"
         assert result[1].content == b"# skill-b"
         assert result[2].error == "file_not_found"
+
+    async def test_downloads_skill_supporting_file(self, registry, backend):
+        await registry.upsert_skill(
+            SkillDefinition(
+                name="bundle-skill",
+                path="/skills/api/bundle-skill/SKILL.md",
+                content="# Bundle",
+                files={"references/guide.md": "Supporting guidance"},
+            )
+        )
+
+        result = await backend.adownload_files(["/bundle-skill/references/guide.md"])
+        assert result[0].content == b"Supporting guidance"
 
 
 class TestAread:
@@ -242,6 +255,19 @@ class TestAread:
         assert lines[0].startswith("     2")
         assert lines[1].startswith("     3")
 
+    async def test_reads_supporting_file(self, registry, backend):
+        await registry.upsert_skill(
+            SkillDefinition(
+                name="bundle-skill",
+                path="/skills/api/bundle-skill/SKILL.md",
+                content="# Bundle",
+                files={"examples/example.txt": "one\ntwo"},
+            )
+        )
+
+        result = await backend.aread("/bundle-skill/examples/example.txt")
+        assert "one" in self._content(result)
+
     async def test_returns_error_for_missing_skill(self, backend):
         """Should return error for non-existent skill."""
         result = await backend.aread("/missing/SKILL.md")
@@ -264,7 +290,7 @@ class TestAread:
 
     async def test_returns_error_for_invalid_path(self, backend):
         """Should return error for malformed path."""
-        result = await backend.aread("/invalid/path.txt")
+        result = await backend.aread("/invalid/../path.txt")
         assert result.error is not None
         assert "Invalid path" in result.error
 

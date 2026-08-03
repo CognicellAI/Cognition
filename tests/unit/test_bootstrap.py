@@ -198,6 +198,8 @@ class TestSeedSkillsFromSources:
             "---\nname: clean-code\ndescription: Use this skill for clean code.\n---\n\n# Clean Code\n",
             encoding="utf-8",
         )
+        (source_dir / "references").mkdir()
+        (source_dir / "references" / "guide.md").write_text("Supporting guide", encoding="utf-8")
 
         store = DefaultConfigStore(MemoryConfigRegistry(), workspace_path=tmp_path)
         inserted = await seed_skills_from_sources(
@@ -211,6 +213,7 @@ class TestSeedSkillsFromSources:
         assert skill is not None
         assert skill.source == "file"
         assert skill.description == "Use this skill for clean code."
+        assert skill.files == {"references/guide.md": "Supporting guide"}
 
     @pytest.mark.asyncio
     async def test_does_not_override_api_skill(self, tmp_path: Path) -> None:
