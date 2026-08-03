@@ -31,6 +31,7 @@ See AGENTS.md for category definitions, DoD requirements, and precedence rules.
 
 | Date | Description | Issue | Layer | Status |
 |------|-------------|-------|-------|--------|
+| 2026-08-03 | Keep generated A2A release evidence release-independent and exclude external consumer names from public release artifacts. | v0.14.0-rc.1 evidence review | 7 | In Review |
 | 2026-07-29 | Avoid duplicate CI runs for release branches by using pull-request validation for `release/**` and reserving push validation for long-lived branches. | PR #166 ran identical push and pull-request jobs | 7 | Implemented |
 | 2026-07-29 | Reject inbound A2A Parts whose declared `mediaType` is not advertised by the selected Agent Card, returning `ContentTypeNotSupportedError` before durable task creation or model execution for unary and streaming sends. | Official A2A v1 TCK `CORE-SEND-003` | 6 | Implemented; upstream TCK requirement metadata incorrectly treats the required error as an operation failure |
 | 2026-07-27 | Ensure release images install Cognition's project console scripts and migration assets so documented `cognition db upgrade/current/history` commands are available inside the container with required Alembic/PostgreSQL packages; fix async SQLite migration URLs for disposable migration smoke tests. | Kennel rc1 staging upgrade blocker: image lacks documented migration executable/package path | 1/2 | Implemented on `release/v0.13.0`; release validation pending |

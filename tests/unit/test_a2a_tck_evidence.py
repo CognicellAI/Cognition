@@ -112,7 +112,8 @@ def test_builds_versioned_bundle_manifest_explanation_and_checksum(tmp_path: Pat
     assert manifest["cognitionRevision"] == "cognition-sha"
     assert manifest["officialTckRevision"] == "tck-sha"
     assert manifest["conformancePassed"] is True
-    assert "Stock Guru was not identified as the cause" in explanation
+    assert "Production agents" in explanation
+    assert "v0.13.1" not in explanation
     assert "PASS — all applicable MUST requirements passed" in explanation
     assert "secret-token" not in log
     assert "eyJhbGci" not in log

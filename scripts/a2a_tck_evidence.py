@@ -149,12 +149,9 @@ def render_explanation(
         "## What this validates",
         "",
         "This report validates Cognition's A2A v1 adapter using Cognition's "
-        "deterministic, test-only TCK fixture. The earlier manual Kennel Stock "
-        "Guru run was the exploratory signal that prompted this runtime-level "
-        "investigation; Stock Guru was not identified as the cause of the "
-        "discrepancies. Production agents, model providers, gateways, and OAuth "
-        "deployments are outside this release report so it can isolate Cognition's "
-        "protocol runtime.",
+        "deterministic, test-only TCK fixture. Production agents, model providers, "
+        "gateways, and OAuth deployments are outside this release report so it "
+        "can isolate Cognition's protocol runtime.",
         "",
         "The official A2A TCK source was used unchanged at revision "
         f"`{manifest['officialTckRevision']}`. The fixture implements the TCK's "
@@ -233,10 +230,10 @@ def render_explanation(
             "",
             conclusion,
             "",
-            "For v0.13.1 this result is advisory: Cognition publishes the report "
-            "so users can assess protocol alignment, but compatibility findings "
-            "do not block the release. Failure to produce valid evidence remains "
-            "a release-pipeline error.",
+            "This result is advisory: Cognition publishes the report so users can "
+            "assess protocol alignment, but compatibility findings do not block "
+            "the release. Failure to produce valid evidence remains a "
+            "release-pipeline error.",
             "",
             "The release owner must review this explanation and record reviewer, "
             "date, and workflow URL in the release PR before tagging.",

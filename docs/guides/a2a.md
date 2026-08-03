@@ -216,7 +216,7 @@ Card, as recommended by the TCK, instead of forcing a transport on the command
 line.
 
 Pull requests run the applicable `MUST` suite. Pre-release and release
-workflows run the full suite. For v0.13.1 these results are non-blocking
+workflows run the full suite. These results are non-blocking
 compatibility disclosures: reports show users where Cognition aligns or
 diverges, while TCK findings do not prevent a release. Failure to produce a
 valid report remains a CI failure.
@@ -232,11 +232,9 @@ The system under test is `tests/support/a2a_tck_sut.py`, a deterministic,
 test-only Cognition agent definition. It exercises Cognition's real Agent Card,
 JSON-RPC, persistence, task lifecycle, artifact, and streaming paths without
 introducing model-provider or OAuth-gateway availability into protocol
-conformance. The manual Kennel Stock Guru TCK run was the exploratory signal
-that prompted investigation of the Cognition runtime; Stock Guru was not
-identified as the source of the discrepancies. The deterministic fixture is
-used for repeatable release reporting and is never mounted in the production
-application.
+conformance. Exploratory production-agent runs remain outside repeatable
+release reporting. The deterministic fixture is never mounted in the
+production application.
 
 Each run produces a versioned evidence archive containing the official HTML,
 JSON, and JUnit reports, a redacted fixture log, a machine-readable manifest,
