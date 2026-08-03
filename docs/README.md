@@ -2,7 +2,8 @@
 
 Cognition is a **headless agent orchestration backend**. Define your agent — get REST API, streaming, persistence, sandboxing, and observability automatically.
 
-The documentation is organized into two sections: **Concepts** explain how Cognition works internally; **Guides** are task-oriented and tell you how to do specific things.
+The documentation is organized into **Concepts**, task-oriented **Guides**,
+reference **Blueprints**, and forward-looking **Proposals**.
 
 ---
 
@@ -34,6 +35,15 @@ The documentation is organized into two sections: **Concepts** explain how Cogni
 | [Deployment](./guides/deployment.md) | Docker Compose stack, PostgreSQL, Alembic migrations, and production hardening |
 | [API Reference](./guides/api-reference.md) | Every REST endpoint, SSE event type, MCP servers, artifacts, A2A protocol, capabilities, and scoping headers |
 | [Release Checklist](./guides/release-checklist.md) | Standard release process for Cognition versions |
+
+---
+
+## Proposals
+
+| Document | Description |
+|---|---|
+| [v0.14.0 C4 Model: Agent Capabilities and Durable Storage](./proposals/v0.14.0-deep-agents-skills-mcp-storage.md) | C4 context, container, component, dynamic, and deployment views for agent-owned skills and MCP plus S3-compatible durable storage |
+| [v0.14.0 MCP Runtime and Authentication Contract](./proposals/v0.14.0-mcp-runtime-contract.md) | Per-server MCP discovery, authentication modes, trusted-context boundaries, failure semantics, and executable acceptance criteria |
 
 ---
 

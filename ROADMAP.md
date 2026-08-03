@@ -76,6 +76,7 @@ See AGENTS.md for category definitions, DoD requirements, and precedence rules.
 | 2026-04-09 | **Defer runtime-controlled repo bootstrap for strict git isolation** — current local backend now provides session-scoped sandbox roots, but successful agent runs can still choose a shared clone destination like `/workspace/Cognition-Gateway`. Future work should move repo bootstrap under runtime control or per-session Docker sandboxes so clone destination is enforced structurally instead of via prompt guidance. | 4, 3 | Follow-on change after local sandbox rollout: introduce runtime-managed clone/bootstrap into `<session.workspace_path>/<repo>` or migrate to per-session Docker sandboxes. Keep current prompt guidance as a temporary mitigation until structural enforcement exists. | Planned |
 | 2026-04-12 | **Refactor `create_cognition_agent()` into `CognitionAgentParams` + `RuntimeContext`** — replace the 17-arg agent construction path with a structured parameter object, use runtime-context cache keys instead of MD5, and ensure subagent security middleware is injected into nested agent specs. | 4 | Migrate all internal callers to `CognitionAgentParams`, keep a compatibility wrapper only until callers are updated, then remove the keyword-based entry point and validate with boundary tests. | In Progress |
 | 2026-05-01 | **Unify file/API skills and tools through ConfigRegistry** — introduce workspace-level `skill_sources` / `tool_sources` bootstrap config, seed file-managed skills/tools into ConfigRegistry at startup, lock file-managed records from API mutation, and make agent `skills` / `tools` attach registry names only. Runtime resolves selected names through registry-backed backends/loaders instead of direct filesystem paths from agent definitions. | 4, 2, 6 | Non-backward-compatible config cleanup: agent `skills` / `tools` now mean selected registry names only; file source directories move to workspace config. Existing path-based agent attachments must migrate to seeded names. | Completed |
+| 2026-08-03 | **v0.14.0: Deep Agents-native agent-owned skills and MCP with zero-host durable file storage** — replace standalone skills and global MCP resolution with complete, internally snapshotted per-agent configuration; add standards-based, per-server MCP transport authentication; route durable file bodies through an exact-scope S3-compatible Deep Agents backend; require database/S3 persistence in production while retaining SQLite, in-memory, local-file, and local-sandbox support for local/dev. | 1, 2, 3, 4, 6, 7 | Intentional breaking upgrade: no compatibility layer or automatic conversion for standalone skills, global MCP records, legacy MCP SSE, or removed endpoints. Builders back up v0.13 if needed and redeploy complete agents in the v0.14 schema. Architecture: [`docs/proposals/v0.14.0-deep-agents-skills-mcp-storage.md`](docs/proposals/v0.14.0-deep-agents-skills-mcp-storage.md). MCP contract: [`docs/proposals/v0.14.0-mcp-runtime-contract.md`](docs/proposals/v0.14.0-mcp-runtime-contract.md). | Proposed |
 
 ---
 
@@ -130,6 +131,7 @@ The following fallback patterns exist and are tracked for removal. They produce 
 | Core runtime and framework refresh | deepagents 0.4.12, fastapi 0.128.6, starlette 0.52.1, langgraph 1.1.3, langchain 1.2.13, langsmith 0.6.9, openai 2.17.0, typer 0.23.0, rich 14.3.2, uvicorn 0.40.0, websockets 15.0.1 | deepagents 0.5.2, fastapi 0.135.3, starlette 1.0.0, langgraph 1.1.6, langchain 1.2.15, langsmith 0.7.30, openai 2.31.0, typer 0.24.1, rich 15.0.0, uvicorn 0.44.0, websockets 16.0 | `deepagents` composite backend now expects routed backends to implement `ls()` in addition to legacy `ls_info()`; test shim updated. Verified with full unit suite after lock refresh. | Completed |
 | v0.11.0 RC2 runtime/security refresh | deepagents 0.6.3, fastapi 0.135.3, starlette 1.0.0, langchain 1.3.1, langgraph 1.2.0, langsmith 0.8.5, openai 2.31.0, opentelemetry 1.41.0, cryptography 46.0.7 | deepagents 0.6.12, fastapi 0.138.1, starlette 1.3.1, langchain 1.3.11, langgraph 1.2.6, langsmith 0.9.3, openai 2.44.0, opentelemetry 1.43.0, cryptography 48.0.1 | No intentional API changes; conservative resolver refresh to close Dependabot alerts and keep the v0.11 runtime family current. | Completed |
 | deepagents → 0.6.2 + LangChain family upgrade | deepagents 0.5.2, langchain-core >=0.3.0,<1.3.0 | deepagents 0.6.2, langchain-core >=1.4.0, langchain >=1.3.0 | deepagents 0.6.2 requires langchain-core>=1.4.0; removes current `<1.3.0` cap. Async subagents, v3 event streaming, ContextHubBackend, interpreter middleware. Blocked by: none → unblocks all v0.10.0 features. | Planned |
+| v0.14.0 Deep Agents and MCP adapter alignment | deepagents 0.6.12, langchain-mcp-adapters 0.3.0 (resolved) | deepagents 0.7.1, langchain-mcp-adapters 0.3.1 | Deep Agents 0.7 removes backend compatibility shims, changes `write` to overwrite, exposes `delete` when supported, requires explicit StoreBackend namespaces, and tightens file-result contracts. Cognition backends require protocol adaptation before the lock update. | Proposed |
 
 ### Post-RFC Cleanup Train
 
@@ -400,6 +402,79 @@ All write endpoints respect `X-Cognition-Scope-{key}` headers for multi-tenant s
 
 ---
 
+## v0.14.0 Release Proposal
+
+- **Category:** Architectural change and feature
+- **Priority:** P1 production readiness
+- **Layers:** 1/2/3/4/6/7
+- **Status:** Proposed
+- **Estimated effort:** 20–30 engineering days across five gated waves
+- **Dependencies:** `pyproject.toml` parser fix; approved C4 and MCP contracts;
+  PostgreSQL-compatible persistence and S3-compatible object storage for
+  production; SQLite, in-memory, local-file, and local-sandbox backends for
+  local/dev; Deep Agents 0.7.x and LangChain MCP adapters 0.3.x
+
+**Problem:** Cognition's standalone skill registry and global scoped MCP registry
+do not match Deep Agents' skill-directory and per-agent tool inputs. Durable
+file-shaped state can also land on the Cognition host, which is unsafe for a
+multi-tenant production backend.
+
+**Proposed outcome:** Complete agent revisions own skill bundles and remote MCP
+connections. Cognition materializes skills into exact-scope S3-backed Deep Agents
+paths, loads each selected agent's MCP servers independently, and binds transport
+authentication to validated configuration and trusted, model-invisible runtime
+context. Direct standard MCP OAuth and optional builder workload token exchange
+are supported without making Cognition a general credential vault or
+authorization service. Production durable state is stored in the configured
+database or S3-compatible object store; local/dev retains supported host-backed
+options. The standalone/global MCP subsystem is removed.
+
+**Acceptance criteria:**
+
+- Deep Agents 0.7.x and MCP adapters 0.3.x are adopted with current backend
+  protocol tests and no legacy compatibility shims.
+- One exact-scope agent update atomically versions its complete skills and MCP
+  configuration; same-named agents in other scopes are unaffected.
+- Agent Skills support `SKILL.md`, `scripts/`, `references/`, and `assets/`, and
+  custom subagents use explicit upstream-aligned skill selection.
+- Only per-agent remote MCP servers contribute tools. Each declares `none`,
+  standard `mcp_oauth`, `workload_token_exchange`, or local/dev-only
+  `static_bearer`; production rejects static bearer, raw headers, and raw-secret
+  injection.
+- Authentication covers discovery and invocation. Required failures fail closed,
+  optional failures preserve healthy tools and emit structured degraded status,
+  canonical tool identities are unique, and readiness becomes stale rather than
+  claiming authorization truth.
+- All executable acceptance criteria in the MCP runtime contract pass, including
+  cross-scope authorization, trusted-context integrity, live revocation,
+  redaction, and low-cardinality metrics.
+- `/mcp-servers`, global MCP registry records, global runtime resolution, and the
+  custom MCP connection translation layer are removed.
+- Standalone skill mutation, legacy MCP SSE, removed registry entities, and old
+  agent configuration shapes have no compatibility handler or automatic
+  conversion.
+- Production startup rejects SQLite, in-memory persistence, local durable-file
+  routes, local execution, workspace watchers, and any other host-persistent
+  runtime configuration. No database or S3 failure falls back locally.
+- Local/dev supports SQLite, in-memory persistence, local file backends, and
+  local sandbox execution without an unsafe override.
+- Exact-scope isolation tests cover agent CRUD, skill and file objects, caches,
+  checkpoints, MCP, list operations, and deletion for arbitrary
+  builder-defined scope keys.
+- Builders must redeploy complete agents using the v0.14 schema; returning to
+  v0.13 requires restoring the prior application and operator-created backup.
+- Storage, MCP, skill loading, revision activation, breaking-surface rejection,
+  and startup policy emit scope-safe logs, metrics, events, and traces.
+
+Architecture and breaking-upgrade boundary:
+[`docs/proposals/v0.14.0-deep-agents-skills-mcp-storage.md`](docs/proposals/v0.14.0-deep-agents-skills-mcp-storage.md).
+MCP runtime and authentication contract:
+[`docs/proposals/v0.14.0-mcp-runtime-contract.md`](docs/proposals/v0.14.0-mcp-runtime-contract.md).
+
+No implementation or release branch is authorized by this draft.
+
+---
+
 ## v0.10.0 Release Tracking
 
 This section tracks the v0.10.0 long-running agents release. See `localdocs/v0.10.0-plan.md` for the full branching strategy, wave schedule, and K8s cluster context.
@@ -451,4 +526,4 @@ Per AGENTS.md requirements:
    - Features/Architectural: Before starting work
    - Security/Bug/Performance/Dependency: As part of PR
 
-**Last Updated**: 2026-05-25 (v0.10.0 final release validation complete — `0.10.0-rc1` app and sandbox image gate passed)
+**Last Updated**: 2026-08-03 (v0.14.0 MCP runtime and authentication contract incorporated)
