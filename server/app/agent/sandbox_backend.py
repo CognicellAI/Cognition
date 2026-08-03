@@ -530,10 +530,12 @@ class CognitionAwsLambdaMicroVmSandboxBackend(SandboxBackendProtocol):
         pattern: str,
         path: str | None = None,
         glob: str | None = None,
+        *,
+        max_count: int | None = None,
     ) -> GrepResult:
         """Search files in the AWS Lambda MicroVM sandbox."""
         backend = self._get_backend()
-        result: GrepResult = backend.grep(pattern, path=path, glob=glob)
+        result: GrepResult = backend.grep(pattern, path=path, glob=glob, max_count=max_count)
         return result
 
     def glob(self, pattern: str, path: str | None = "/") -> GlobResult:
@@ -705,12 +707,16 @@ class CognitionKubernetesSandboxBackend(SandboxBackendProtocol):
 
         # Check workspace root
         expected_root = str(self._root_dir)
-        result = self._backend.execute(f'test -d {shlex.quote(expected_root)} && echo "ok" || echo "missing"')
+        result = self._backend.execute(
+            f'test -d {shlex.quote(expected_root)} && echo "ok" || echo "missing"'
+        )
         workspace_ok = result.exit_code == 0
         checks.append(("workspace_root", f"Expected {expected_root}", workspace_ok))
 
         # Check writable workspace
-        result = self._backend.execute(f'test -w {shlex.quote(expected_root)} && echo "ok" || echo "ro"')
+        result = self._backend.execute(
+            f'test -w {shlex.quote(expected_root)} && echo "ok" || echo "ro"'
+        )
         writable_ok = result.exit_code == 0
         checks.append(("workspace_writable", expected_root, writable_ok))
 
@@ -721,7 +727,11 @@ class CognitionKubernetesSandboxBackend(SandboxBackendProtocol):
 
         # Check env vars
         result = self._backend.execute("env | grep -c COGNITION_WORKSPACE_ROOT")
-        env_ok = result.exit_code == 0 and result.output.strip().isdigit() and int(result.output.strip()) > 0
+        env_ok = (
+            result.exit_code == 0
+            and result.output.strip().isdigit()
+            and int(result.output.strip()) > 0
+        )
         checks.append(("env_var", "COGNITION_WORKSPACE_ROOT", env_ok))
 
         # Check GitHub auth if token is expected
@@ -834,10 +844,12 @@ class CognitionKubernetesSandboxBackend(SandboxBackendProtocol):
         pattern: str,
         path: str | None = None,
         glob: str | None = None,
+        *,
+        max_count: int | None = None,
     ) -> GrepResult:
         """Search files using Deep Agents' current result API."""
         backend = self._get_backend()
-        result: GrepResult = backend.grep(pattern, path=path, glob=glob)
+        result: GrepResult = backend.grep(pattern, path=path, glob=glob, max_count=max_count)
         return result
 
     def grep_raw(
@@ -966,7 +978,9 @@ def create_sandbox_backend(
     aws_lambda_microvm_profile: str = "default",
     aws_lambda_microvm_execution_role_arn: str | None = None,
     aws_lambda_microvm_profile_config: SandboxProfile | None = None,
-) -> FilesystemBackend | CognitionKubernetesSandboxBackend | CognitionAwsLambdaMicroVmSandboxBackend:
+) -> (
+    FilesystemBackend | CognitionKubernetesSandboxBackend | CognitionAwsLambdaMicroVmSandboxBackend
+):
     """Factory for creating sandbox backends from settings.
 
     Args:
