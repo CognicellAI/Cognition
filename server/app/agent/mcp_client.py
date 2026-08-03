@@ -10,6 +10,7 @@ Security stance:
 
 from __future__ import annotations
 
+import os
 from collections.abc import Sequence
 from typing import Any, Literal
 
@@ -24,7 +25,18 @@ from langchain_mcp_adapters.sessions import (
 from mcp.types import LoggingMessageNotificationParams
 from pydantic import BaseModel, Field, field_validator
 
+from server.app.agent.mcp_config import AgentMcpServer
+
 logger = structlog.get_logger(__name__)
+
+
+class McpServerUnavailableError(RuntimeError):
+    """A required MCP server could not be discovered without exposing secrets."""
+
+    def __init__(self, alias: str, category: str) -> None:
+        super().__init__(f"Required MCP server '{alias}' is unavailable ({category})")
+        self.alias = alias
+        self.category = category
 
 
 class McpServerConfig(BaseModel):
@@ -84,6 +96,80 @@ def create_mcp_client(
         tool_interceptors=tool_interceptors,
         tool_name_prefix=True,
     )
+
+
+def create_agent_mcp_client(
+    config: AgentMcpServer,
+    *,
+    callbacks: Callbacks | None = None,
+    tool_interceptors: list[ToolCallInterceptor] | None = None,
+) -> MultiServerMCPClient:
+    """Create a client for exactly one validated Agent MCP server.
+
+    Discovery is deliberately isolated per server. The caller applies required
+    versus optional failure semantics without letting one unavailable optional
+    service remove tools from healthy services.
+    """
+    headers: dict[str, str] | None = None
+    if config.auth.type == "static_bearer":
+        assert config.auth.env is not None
+        token = os.environ.get(config.auth.env)
+        if not token:
+            raise McpServerUnavailableError(config.alias, "auth_unavailable")
+        headers = {"Authorization": f"Bearer {token}"}
+    elif config.auth.type in {"mcp_oauth", "workload_token_exchange"}:
+        # These modes require the v0.14 transport-security provider. Do not
+        # downgrade a protected endpoint to anonymous transport while wiring is
+        # incomplete.
+        raise McpServerUnavailableError(config.alias, "auth_provider_unavailable")
+
+    connection: StreamableHttpConnection = {"transport": "streamable_http", "url": config.url}
+    if headers:
+        connection["headers"] = headers
+    return MultiServerMCPClient(
+        connections={config.alias: connection},
+        callbacks=callbacks,
+        tool_interceptors=tool_interceptors,
+        tool_name_prefix=True,
+    )
+
+
+async def load_agent_mcp_tools(
+    configs: Sequence[AgentMcpServer],
+    *,
+    callbacks: Callbacks | None = None,
+    tool_interceptors: list[ToolCallInterceptor] | None = None,
+) -> list[Any]:
+    """Discover agent MCP tools one server at a time with fail-closed semantics."""
+    tools: list[Any] = []
+    identities: set[tuple[str, str]] = set()
+    for config in configs:
+        try:
+            discovered = await create_agent_mcp_client(
+                config,
+                callbacks=callbacks,
+                tool_interceptors=tool_interceptors,
+            ).get_tools()
+            for tool in discovered:
+                provider_name = str(getattr(tool, "name", ""))
+                identity = (config.alias, provider_name)
+                if identity in identities:
+                    raise McpServerUnavailableError(config.alias, "duplicate_tool_identity")
+                identities.add(identity)
+            tools.extend(discovered)
+        except McpServerUnavailableError:
+            if config.required:
+                raise
+            logger.warning("optional_mcp_server_unavailable", server=config.alias)
+        except Exception as exc:
+            if config.required:
+                raise McpServerUnavailableError(config.alias, "discovery_failed") from exc
+            logger.warning(
+                "optional_mcp_server_unavailable",
+                server=config.alias,
+                error_type=type(exc).__name__,
+            )
+    return tools
 
 
 def _build_mcp_callbacks() -> Callbacks:

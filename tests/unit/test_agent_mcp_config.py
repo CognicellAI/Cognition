@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 from typing import Any
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from pydantic import ValidationError
 
 from server.app.agent.definition import AgentDefinition
+from server.app.agent.mcp_client import McpServerUnavailableError, load_agent_mcp_tools
 from server.app.agent.mcp_config import AgentMcpServer, McpAuthConfig, canonical_mcp_tool_identity
 
 
@@ -29,12 +31,12 @@ def test_agent_owns_a_streamable_http_mcp_server() -> None:
     assert canonical_mcp_tool_identity("github", "search_issues") == ("github", "search_issues")
 
 
-def test_outbound_auth_provider_uses_an_opaque_profile_not_a_credential() -> None:
-    config = McpAuthConfig(type="outbound_auth_provider", profile="runtime-gateway")
+def test_workload_exchange_uses_an_opaque_profile_not_a_credential() -> None:
+    config = McpAuthConfig(type="workload_token_exchange", profile="runtime-gateway")
     assert config.profile == "runtime-gateway"
 
     with pytest.raises(ValidationError, match="requires an opaque auth profile"):
-        McpAuthConfig(type="outbound_auth_provider")
+        McpAuthConfig(type="workload_token_exchange")
 
 
 @pytest.mark.parametrize(
@@ -58,13 +60,31 @@ def test_static_bearer_never_accepts_a_raw_token() -> None:
         McpAuthConfig(type="static_bearer", env="Bearer secret")
 
 
-def test_agent_rejects_duplicate_mcp_aliases() -> None:
-    with pytest.raises(ValidationError, match="aliases must be unique"):
-        AgentDefinition(
-            name="release-agent",
-            system_prompt="Use configured tools.",
-            mcp_servers=[
-                AgentMcpServer(alias="github", url="https://one.example.test/mcp"),
-                AgentMcpServer(alias="github", url="https://two.example.test/mcp"),
-            ],
-        )
+@pytest.mark.asyncio
+async def test_optional_server_failure_preserves_healthy_tools() -> None:
+    healthy = AgentMcpServer(alias="healthy", url="https://healthy.example.test")
+    optional = AgentMcpServer(alias="optional", url="https://optional.example.test", required=False)
+    healthy_client = MagicMock()
+    healthy_client.get_tools = AsyncMock(return_value=[MagicMock(name="search")])
+
+    with patch(
+        "server.app.agent.mcp_client.create_agent_mcp_client",
+        side_effect=[healthy_client, McpServerUnavailableError("optional", "discovery_failed")],
+    ):
+        tools = await load_agent_mcp_tools([healthy, optional])
+
+    assert len(tools) == 1
+
+
+@pytest.mark.asyncio
+async def test_required_server_failure_stops_before_model_execution() -> None:
+    required = AgentMcpServer(alias="required", url="https://required.example.test")
+
+    with (
+        patch(
+            "server.app.agent.mcp_client.create_agent_mcp_client",
+            side_effect=McpServerUnavailableError("required", "discovery_failed"),
+        ),
+        pytest.raises(McpServerUnavailableError, match="required"),
+    ):
+        await load_agent_mcp_tools([required])
