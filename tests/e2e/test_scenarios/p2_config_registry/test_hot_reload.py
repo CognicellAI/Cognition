@@ -105,23 +105,24 @@ class TestHotReload:
             f"Deleted agent still usable: {session_resp.status_code}"
         )
 
-    async def test_new_skill_visible_immediately_in_list(self, api_client) -> None:
-        """A skill registered via POST /skills appears in GET /skills immediately."""
-        name = _unique("skill")
+    async def test_new_agent_skill_bundle_visible_immediately(self, api_client) -> None:
+        """An Agent-owned skill bundle is visible with the new Agent revision."""
+        name = _unique("agent-skill")
 
         await api_client.post(
-            "/skills",
-            json={"name": name, "path": f".cognition/skills/{name}.md"},
+            "/agents",
+            json={
+                "name": name,
+                "system_prompt": "Use the skill.",
+                "skills": [{"name": "review", "content": "# Review"}],
+            },
         )
 
-        # No reload — immediately list
-        list_resp = await api_client.get("/skills")
-        assert list_resp.status_code == 200
-        names = [s["name"] for s in list_resp.json()["skills"]]
-        assert name in names, f"Skill '{name}' not immediately visible in list"
+        response = await api_client.get(f"/agents/{name}")
+        assert response.status_code == 200
+        assert response.json()["skills"][0]["name"] == "review"
 
-        # Cleanup
-        await api_client.delete(f"/skills/{name}")
+        await api_client.delete(f"/agents/{name}")
 
     async def test_new_provider_visible_immediately_in_list(self, api_client) -> None:
         """A provider registered via POST /models/providers appears immediately."""
@@ -142,21 +143,20 @@ class TestHotReload:
 
     async def test_config_changes_survive_multiple_reads(self, api_client) -> None:
         """Config changes remain consistent across multiple sequential reads."""
-        name = _unique("skill")
+        name = _unique("agent")
 
         await api_client.post(
-            "/skills",
-            json={"name": name, "path": "consistent.md", "description": "v1"},
+            "/agents",
+            json={"name": name, "system_prompt": "v1"},
         )
 
-        # Update description
-        await api_client.patch(f"/skills/{name}", json={"description": "v2"})
+        await api_client.patch(f"/agents/{name}", json={"description": "v2"})
 
         # Read three times — all should return v2
         for _ in range(3):
-            resp = await api_client.get(f"/skills/{name}")
+            resp = await api_client.get(f"/agents/{name}")
             assert resp.status_code == 200
             assert resp.json()["description"] == "v2", "Config not consistent across reads"
 
         # Cleanup
-        await api_client.delete(f"/skills/{name}")
+        await api_client.delete(f"/agents/{name}")

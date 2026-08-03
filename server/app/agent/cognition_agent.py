@@ -35,6 +35,7 @@ from deepagents import create_deep_agent as _create_deep_agent
 
 logger = structlog.get_logger(__name__)
 
+from server.app.agent.definition import AgentSkillBundle  # noqa: E402
 from server.app.agent.mcp_client import McpServerConfig, load_mcp_tools_per_server  # noqa: E402
 from server.app.agent.middleware import (  # noqa: E402
     CognitionObservabilityMiddleware,
@@ -56,7 +57,7 @@ from server.app.observability import (  # noqa: E402
     STRICT_EXECUTION_REJECTIONS_TOTAL,
 )
 from server.app.settings import Settings, get_settings  # noqa: E402
-from server.app.storage.config_models import SandboxProfile, SkillDefinition  # noqa: E402
+from server.app.storage.config_models import SandboxProfile  # noqa: E402
 from server.app.storage.config_store import ConfigStore  # noqa: E402
 
 DeepAgentResponseFormat = Any
@@ -452,7 +453,7 @@ class CognitionAgentParams:
     checkpointer: Any = None
     system_prompt: str | None = None
     memory: Sequence[str] | None = None
-    skills: Sequence[str] | None = None
+    skills: Sequence[AgentSkillBundle] | None = None
     subagents: Sequence[Any] | None = None
     async_subagents: Sequence[Any] | None = None
     interrupt_on: Mapping[str, Any] | None = None
@@ -474,7 +475,6 @@ class CognitionAgentParams:
     sandbox_execution_role_arn: str | None = None
     model_cache_key: str | None = None
     manifest_digest: str | None = None
-    pinned_skills: dict[str, SkillDefinition] | None = None
     pinned_sandbox_profile_config: SandboxProfile | None = None
 
 
@@ -663,34 +663,25 @@ async def create_cognition_agent(params: CognitionAgentParams) -> CognitionAgent
         defaults = await _defaults()
         agent_memory = defaults.memory if defaults else ["AGENTS.md"]
 
-    if params.skills is not None:
-        attached_skill_names = list(params.skills)
-    else:
-        defaults = await _defaults()
-        attached_skill_names = defaults.skills if defaults else []
-
-    agent_skills = ["/skills/api/"] if attached_skill_names else []
+    attached_skills = list(params.skills or [])
+    agent_skills = ["/skills/api/"] if attached_skills else []
 
     routes: dict[str, Any] = {}
+    if attached_skills:
+        from server.app.agent.skills_backend import AgentSkillsBackend
+
+        routes["/skills/api/"] = AgentSkillsBackend(attached_skills)
     if config_store is not None:
         from server.app.agent.artifacts_backend import ArtifactBackend
-        from server.app.agent.skills_backend import ConfigRegistrySkillsBackend
         from server.app.api.dependencies import get_artifact_store
 
         reg = getattr(config_store, "config_registry", None)
         if reg is not None:
-            db_skills_backend = ConfigRegistrySkillsBackend(
-                registry=reg,
-                scope=params.scope,
-                allowed_skill_names=attached_skill_names,
-                pinned_skills=params.pinned_skills,
-            )
             try:
                 artifact_store = get_artifact_store()
             except RuntimeError:
                 artifact_store = None
 
-            routes = {"/skills/api/": db_skills_backend}
             if artifact_store is not None:
                 artifact_backend = ArtifactBackend(
                     artifact_store=artifact_store,

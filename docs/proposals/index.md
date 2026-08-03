@@ -14,7 +14,7 @@ and architecture decision process.
 | --- | --- | --- |
 | [v0.14.0 C4 Model: Agent Capabilities and Durable Storage](v0.14.0-deep-agents-skills-mcp-storage.md) | Implementing | Define the breaking Deep Agents 0.7, skill bundle, Agent-owned MCP, and durable storage architecture |
 | [v0.14.0 MCP Runtime and Authentication Contract](v0.14.0-mcp-runtime-contract.md) | Implementing | Specify Agent-owned MCP config, direct MCP OAuth, workload token exchange, per-server discovery, readiness, and executable security criteria |
-| [Sandboxed skill package registry](sandboxed-skill-registry.md) | Draft | Store scope-bound skill packages in a configurable backend and materialize immutable revisions into isolated sandboxes |
+| [Sandboxed skill package registry](sandboxed-skill-registry.md) | Superseded | Rejected name-based registry design retained as architectural history |
 | [Curated OpenTelemetry Agent tracing](curated-opentelemetry-tracing.md) | Implemented on v0.13 branch | Replace noisy, duplicative traces and estimated usage with a bounded Agent-run trace and provider-authoritative Usage Events |
 
 ## Status meanings

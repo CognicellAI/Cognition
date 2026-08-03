@@ -19,7 +19,7 @@ C4Component
         Component(factory, "create_cognition_agent", "Runtime factory", "Builds composite backend for one Agent runtime")
         Component(selector, "create_sandbox_backend", "Backend factory", "Selects one execution adapter")
         Component(composite, "CompositeBackend", "Deep Agents router", "Routes virtual paths or falls through to sandbox")
-        Component(skills, "ConfigRegistrySkillsBackend", "Virtual filesystem", "Exposes allowed registry skills under /skills/api/")
+        Component(skills, "AgentSkillsBackend", "Virtual filesystem", "Exposes pinned Agent skill bundles under /skills/api/")
         Component(artifacts, "ArtifactBackend", "Virtual filesystem", "Exposes versioned content routes")
         Component(local, "Local sandbox", "LocalShellBackend", "Runs under the server OS identity")
         Component(docker, "Docker sandbox adapter", "FilesystemBackend + DockerExecutionBackend", "Host file operations and container commands")
@@ -37,7 +37,7 @@ C4Component
     Rel(factory, composite, "Creates")
     Rel(composite, skills, "Routes /skills/api/")
     Rel(composite, artifacts, "Routes artifact namespaces")
-    Rel(skills, config, "Reads allowed skills")
+    Rel(factory, skills, "Supplies pinned Agent revision bundles")
     Rel(artifacts, config, "Reads/writes versions")
     Rel(composite, local, "Default when selected")
     Rel(composite, docker, "Default when selected")
@@ -59,7 +59,7 @@ artifact stores are available, the factory overlays these virtual routes:
 
 | Path | Backend | Meaning |
 | --- | --- | --- |
-| `/skills/api/` | `ConfigRegistrySkillsBackend` | Attached, scope-visible skills |
+| `/skills/api/` | `AgentSkillsBackend` | Immutable bundles from the pinned Agent revision |
 | `/scratch/` | `ArtifactBackend` | Versioned scratch content |
 | `/artifacts/` | `ArtifactBackend` | General artifacts |
 | `/contracts/` | `ArtifactBackend` | Structured contracts |
@@ -161,7 +161,7 @@ apply it to `exec_run`. This is a known operational constraint.
 | Docker container configuration | `server/app/execution/backend.py` |
 | Kubernetes adapter package | `packages/langchain-k8s-sandbox/langchain_k8s_sandbox/sandbox.py` |
 | Lambda MicroVM adapter package | `packages/langchain-aws-lambda-microvms/langchain_aws_lambda_microvms/sandbox.py` |
-| Registry skill filesystem | `server/app/agent/skills_backend.py` |
+| Agent skill filesystem | `server/app/agent/skills_backend.py` |
 | Artifact virtual filesystem | `server/app/agent/artifacts_backend.py` |
 | Sandbox lifecycle ownership | `server/app/llm/deep_agent_service.py` — `SessionAgentManager` |
 | Per-session workspace | `server/app/session_manager.py` |
@@ -172,4 +172,3 @@ apply it to `exec_run`. This is a known operational constraint.
 - [Agent runtime components](04-agent-runtime-components.md)
 - [Runtime flows](07-runtime-flows.md)
 - [Deployment and operations](08-deployment-and-operations.md)
-

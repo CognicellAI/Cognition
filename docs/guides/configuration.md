@@ -545,7 +545,6 @@ These settings configure the default agent behaviour when no `AgentDefinition` o
 | YAML key | Description |
 |---|---|
 | `agent.memory` | List of file paths injected into the system prompt (e.g. `["AGENTS.md"]`) |
-| `agent.skills` | List of attached skill names (registry names, not paths) |
 | `agent.subagents` | List of subagent definitions |
 | `agent.interrupt_on` | Map of tool names to `true`/`false` for human-in-the-loop confirmation |
 | `agent.middleware` | List of middleware names or `{name: ..., **kwargs}` dicts |
@@ -692,8 +691,6 @@ persistence:
 agent:
   memory:
     - "AGENTS.md"
-  skills:
-    - "my-skill-name"
 ```
 
 ```bash

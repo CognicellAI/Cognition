@@ -267,7 +267,7 @@ async def create_agent(
             "a2a": body.a2a.model_dump(mode="json"),
             "native": False,
             "tools": body.tools,
-            "skills": body.skills,
+            "skills": [skill.model_dump(mode="json") for skill in body.skills],
             "memory": body.memory,
             "mcp": body.mcp.model_dump(mode="json"),
             "subagents": body.subagents,

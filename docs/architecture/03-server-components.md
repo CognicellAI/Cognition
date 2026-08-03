@@ -18,7 +18,7 @@ C4Component
         Component(app, "Application lifecycle", "FastAPI lifespan", "Creates and closes process dependencies")
         Component(middleware, "HTTP middleware", "CORS, security headers, observability", "Applies transport policy and request telemetry")
         Component(scope, "Scope dependency", "FastAPI dependency", "Extracts configured effective-scope headers")
-        Component(rest, "Management and session routes", "FastAPI routers", "Agents, config, tools, skills, models, sandboxes, artifacts, sessions")
+        Component(rest, "Management and session routes", "FastAPI routers", "Agents, config, tools, models, sandboxes, artifacts, sessions")
         Component(native_stream, "Native message adapter", "REST + SSE", "Creates durable work and projects runtime events to SSE")
         Component(a2a, "A2A adapter", "A2A SDK + JSON-RPC 1.0", "Cards, send, stream, get, list, cancel, and subscribe")
         Component(task_runtime, "AgentTaskRuntime", "Application service", "Owns protocol-neutral task/session/run lifecycle")
@@ -81,7 +81,7 @@ per-request factories.
 
 FastAPI routers provide CRUD and discovery for:
 
-- Agents, tools, skills, providers/models, and sandbox profiles
+- Agents (including skill bundles), tools, providers/models, and sandbox profiles
 - Agent-owned MCP authorization handoff and scoped status
 - Sessions, runs, events, messages, artifacts, and runtime context
 - Deployment configuration, capabilities, health, and readiness

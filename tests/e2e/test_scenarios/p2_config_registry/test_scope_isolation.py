@@ -37,8 +37,8 @@ async def _scoping_enabled(api_client) -> bool:
 class TestScopeIsolation:
     """Verify that scope headers isolate config entities per user."""
 
-    async def test_unscoped_skill_create_rejected_when_scoping_enabled(self, api_client) -> None:
-        """A skill cannot be created without scope headers when scoping is enabled."""
+    async def test_unscoped_agent_create_rejected_when_scoping_enabled(self, api_client) -> None:
+        """An Agent cannot be created without scope headers when scoping is enabled."""
         if not await _scoping_enabled(api_client):
             pytest.skip("Scoping not enabled on this server")
 
@@ -47,14 +47,14 @@ class TestScopeIsolation:
         # Create WITHOUT scope header — use raw client to bypass the
         # api_client's default scope_header set by setup_scoping().
         create_resp = await api_client.client.post(
-            f"{api_client.base_url}/skills",
-            json={"name": name, "path": "global.md"},
+            f"{api_client.base_url}/agents",
+            json={"name": name, "system_prompt": "Scoped."},
             headers={"Content-Type": "application/json"},
         )
         assert create_resp.status_code == 403
 
-    async def test_user_scoped_skill_invisible_to_other_user(self, api_client) -> None:
-        """A skill created under Alice's scope is not visible when queried as Bob."""
+    async def test_user_scoped_agent_invisible_to_other_user(self, api_client) -> None:
+        """An Agent created under Alice's scope is not visible to Bob."""
         if not await _scoping_enabled(api_client):
             pytest.skip("Scoping not enabled on this server")
 
@@ -62,8 +62,8 @@ class TestScopeIsolation:
 
         # Create as Alice
         alice_create = await api_client.client.post(
-            f"{api_client.base_url}/skills",
-            json={"name": name, "path": "alice.md"},
+            f"{api_client.base_url}/agents",
+            json={"name": name, "system_prompt": "Alice only."},
             headers={
                 "X-Cognition-Scope-User": "alice-scope-test",
                 "Content-Type": "application/json",
@@ -73,21 +73,21 @@ class TestScopeIsolation:
 
         # Bob should NOT see it
         bob_get = await api_client.client.get(
-            f"{api_client.base_url}/skills/{name}",
+            f"{api_client.base_url}/agents/{name}",
             headers={"X-Cognition-Scope-User": "bob-scope-test"},
         )
         assert bob_get.status_code == 404
 
         # Alice can see her own
         alice_get = await api_client.client.get(
-            f"{api_client.base_url}/skills/{name}",
+            f"{api_client.base_url}/agents/{name}",
             headers={"X-Cognition-Scope-User": "alice-scope-test"},
         )
         assert alice_get.status_code == 200
 
         # Cleanup — delete as Alice
         await api_client.client.delete(
-            f"{api_client.base_url}/skills/{name}",
+            f"{api_client.base_url}/agents/{name}",
             headers={"X-Cognition-Scope-User": "alice-scope-test"},
         )
 
@@ -138,12 +138,12 @@ class TestScopeIsolation:
         if not await _scoping_enabled(api_client):
             pytest.skip("Scoping not enabled on this server")
 
-        name = _unique("scoped-skill")
+        name = _unique("scoped-agent")
 
         # Create as Alice
         await api_client.client.post(
-            f"{api_client.base_url}/skills",
-            json={"name": name, "path": "scoped.md"},
+            f"{api_client.base_url}/agents",
+            json={"name": name, "system_prompt": "Scoped."},
             headers={
                 "X-Cognition-Scope-User": "alice-scope-test",
                 "Content-Type": "application/json",
@@ -151,12 +151,12 @@ class TestScopeIsolation:
         )
 
         # Global list (no scope header) should not show it
-        global_list = await api_client.get("/skills")
-        global_names = [s["name"] for s in global_list.json()["skills"]]
+        global_list = await api_client.get("/agents")
+        global_names = [item["name"] for item in global_list.json()["agents"]]
         assert name not in global_names
 
         # Cleanup
         await api_client.client.delete(
-            f"{api_client.base_url}/skills/{name}",
+            f"{api_client.base_url}/agents/{name}",
             headers={"X-Cognition-Scope-User": "alice-scope-test"},
         )

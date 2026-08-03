@@ -14,6 +14,7 @@ from pydantic import AnyHttpUrl, BaseModel, ConfigDict, Field, model_validator
 from server.app.agent.definition import (
     A2AConfig,
     AgentMcpConfig,
+    AgentSkillBundle,
     AsyncSubagentConfig,
     ContextPolicy,
     FilesystemPermissionConfig,
@@ -699,7 +700,6 @@ class GlobalAgentDefaultsResponse(BaseModel):
     """Global agent defaults exposed by the ConfigRegistry API."""
 
     memory: list[str] = Field(default_factory=list)
-    skills: list[str] = Field(default_factory=list)
     subagents: list[dict[str, Any]] = Field(default_factory=list)
     async_subagents: list[AsyncSubagentConfig] = Field(default_factory=list)
     interrupt_on: dict[str, Any] = Field(default_factory=dict)
@@ -714,7 +714,6 @@ class GlobalAgentDefaultsUpdate(BaseModel):
     """Partial update model for global agent defaults."""
 
     memory: list[str] | None = None
-    skills: list[str] | None = None
     subagents: list[dict[str, Any]] | None = None
     async_subagents: list[AsyncSubagentConfig] | None = None
     interrupt_on: dict[str, HumanInTheLoopConfig] | None = None
@@ -895,8 +894,8 @@ class AgentResponse(BaseModel):
     tools: list[str] = Field(
         default_factory=list, description="Tool paths this agent has access to"
     )
-    skills: list[str] = Field(
-        default_factory=list, description="Skill directories this agent can use"
+    skills: list[AgentSkillBundle] = Field(
+        default_factory=list, description="Complete skill bundles owned by this Agent revision"
     )
     mcp: AgentMcpConfig = Field(default_factory=AgentMcpConfig)
     system_prompt: str | None = Field(None, description="Agent's system prompt")
@@ -1022,62 +1021,6 @@ class ModelList(BaseModel):
     """List of available models."""
 
     models: list[ModelInfo] = Field(default_factory=list, description="List of available models")
-
-
-# ============================================================================
-# Skill Models
-# ============================================================================
-
-
-class SkillCreate(BaseModel):
-    """Request to create or replace a skill."""
-
-    name: str = Field(..., min_length=1, max_length=100, description="Skill identifier")
-    path: str | None = Field(
-        default=None,
-        min_length=1,
-        description="Filesystem path to skill directory or SKILL.md. Auto-generated if content is provided.",
-    )
-    enabled: bool = Field(default=True, description="Whether this skill is active")
-    description: str | None = Field(default=None, description="Short description")
-    content: str | None = Field(
-        default=None,
-        description="Full SKILL.md content (YAML frontmatter + markdown body). If provided, path is auto-generated.",
-    )
-    scope: dict[str, str] = Field(default_factory=dict, description="Scope (empty = global)")
-
-
-class SkillUpdate(BaseModel):
-    """Request to partially update a skill."""
-
-    path: str | None = Field(default=None)
-    enabled: bool | None = Field(default=None)
-    description: str | None = Field(default=None)
-    content: str | None = Field(
-        default=None, description="Full SKILL.md content (YAML frontmatter + markdown body)"
-    )
-    scope: dict[str, str] | None = Field(default=None)
-
-
-class SkillResponse(BaseModel):
-    """Skill information for API responses."""
-
-    name: str
-    path: str
-    enabled: bool
-    description: str | None = None
-    content: str | None = Field(
-        default=None, description="Full SKILL.md content (YAML frontmatter + markdown body)"
-    )
-    scope: dict[str, str] = Field(default_factory=dict)
-    source: str = "api"
-
-
-class SkillList(BaseModel):
-    """List of skills response."""
-
-    skills: list[SkillResponse] = Field(default_factory=list)
-    count: int = 0
 
 
 # ============================================================================
@@ -1311,7 +1254,7 @@ class AgentCreate(BaseModel):
         description="A2A exposure and public Agent Card presentation",
     )
     tools: list[str] = Field(default_factory=list)
-    skills: list[str] = Field(default_factory=list)
+    skills: list[AgentSkillBundle] = Field(default_factory=list)
     memory: list[str] = Field(default_factory=list)
     interrupt_on: dict[str, HumanInTheLoopConfig] = Field(default_factory=dict)
     permissions: list[FilesystemPermissionConfig] = Field(default_factory=list)
@@ -1363,7 +1306,7 @@ class AgentUpdate(BaseModel):
         description="A2A exposure and public Agent Card presentation; null resets defaults",
     )
     tools: list[str] | None = None
-    skills: list[str] | None = None
+    skills: list[AgentSkillBundle] | None = None
     memory: list[str] | None = None
     interrupt_on: dict[str, HumanInTheLoopConfig] | None = None
     permissions: list[FilesystemPermissionConfig] | None = None

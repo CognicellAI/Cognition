@@ -142,7 +142,7 @@ Cognition uses a convention-over-configuration model. Most customizations requir
 | Level | Mechanism | Effort | Example |
 |---|---|---|---|
 | **Memory** | `AGENTS.md` | No Code | Project-specific rules & style |
-| **Skills** | `.cognition/skills/` | No Code | Reusable runbooks (e.g., "how to deploy") |
+| **Skills** | Agent-owned bundles | No Code | Reusable runbooks pinned with the Agent revision |
 | **Agents** | `.cognition/agents/` | Config | Delegated specialists (e.g., "security-expert") |
 | **Tools** | Python Functions | Code | Proprietary API integrations |
 | **Middleware** | Python Classes | Code | Approval gates, custom telemetry |

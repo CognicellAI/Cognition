@@ -922,7 +922,7 @@ class TestUpdateAgent:
         assert response.status_code == 500
 
     def test_patch_agent_skills(self):
-        """PATCH with attached skill names should persist correctly."""
+        """PATCH with Agent-owned skill bundles persists atomically."""
         client.post(
             "/agents",
             json={
@@ -933,12 +933,18 @@ class TestUpdateAgent:
         response = client.patch(
             "/agents/test-patch-skills-agent",
             json={
-                "skills": ["clean-code", "directorate-github-developer-workflow"],
+                "skills": [
+                    {"name": "clean-code", "content": "# Clean code"},
+                    {"name": "github-workflow", "content": "# GitHub workflow"},
+                ],
             },
         )
         assert response.status_code == 200
         data = response.json()
-        assert data["skills"] == ["clean-code", "directorate-github-developer-workflow"]
+        assert [skill["name"] for skill in data["skills"]] == [
+            "clean-code",
+            "github-workflow",
+        ]
 
     def test_patch_agent_empty_tool_name_rejected(self):
         """Empty tool names should still be rejected by the validator."""
@@ -963,13 +969,15 @@ class TestUpdateAgent:
                 "name": "test-create-with-tools",
                 "system_prompt": "create with tools test",
                 "tools": ["my_tool"],
-                "skills": ["clean-code"],
+                "skills": [{"name": "clean-code", "content": "# Clean code"}],
             },
         )
         assert response.status_code == 201
         data = response.json()
         assert data["tools"] == ["my_tool"]
-        assert data["skills"] == ["clean-code"]
+        assert data["skills"] == [
+            {"name": "clean-code", "content": "# Clean code", "files": {}}
+        ]
 
 
 class TestDeleteAgent:

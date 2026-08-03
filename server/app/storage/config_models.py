@@ -1,8 +1,8 @@
 """Pydantic models for the ConfigRegistry system.
 
 These models represent the runtime configuration entities that move out of
-Settings into the DB-backed ConfigRegistry: providers, agents (seeds from
-AgentDefinition), tools, skills, and config-change events.
+Settings into the DB-backed ConfigRegistry: providers, agents (including skill
+bundles), tools, sandbox profiles, and config-change events.
 
 Design notes:
 - Scope is a plain dict[str, str] (e.g. {"user": "alice", "project": "myapp"}).
@@ -226,60 +226,6 @@ class ToolRegistration(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# Skill
-# ---------------------------------------------------------------------------
-
-
-class SkillDefinition(BaseModel):
-    """A skill registered in the config registry.
-
-    Skills are Markdown files that inject domain-specific instructions into
-    an agent's context window via progressive disclosure.
-
-    Attributes:
-        name: Skill identifier (e.g. "typescript-best-practices").
-        path: Filesystem path to the skill directory or SKILL.md file.
-        enabled: Whether this skill is active.
-        description: Short description shown in skill listings.
-        content: Full SKILL.md content (YAML frontmatter + markdown body).
-        scope: Scope this entry applies to. Empty dict = global.
-        source: "file" or "api".
-    """
-
-    name: str = Field(..., min_length=1, max_length=100)
-    path: str = Field(..., min_length=1)
-    enabled: bool = Field(default=True)
-    description: str | None = Field(default=None)
-    content: str | None = Field(default=None)
-    files: dict[str, str] = Field(
-        default_factory=dict,
-        description="Supporting bundle files keyed by safe, relative POSIX paths.",
-    )
-    scope: dict[str, str] = Field(default_factory=dict)
-    source: Literal["file", "api"] = Field(default="file")
-
-    @field_validator("name")
-    @classmethod
-    def validate_name(cls, v: str) -> str:
-        """Validate skill name format."""
-        if not v.replace("-", "").replace("_", "").isalnum():
-            raise ValueError(f"Skill name must be alphanumeric with hyphens/underscores only: {v}")
-        return v
-
-    @field_validator("files")
-    @classmethod
-    def validate_bundle_files(cls, value: dict[str, str]) -> dict[str, str]:
-        """Reject absolute, traversal, and non-text bundle entries."""
-        for path, content in value.items():
-            parts = path.split("/")
-            if not path or path.startswith("/") or any(part in {"", ".", ".."} for part in parts):
-                raise ValueError("Skill bundle file paths must be safe relative POSIX paths")
-            if not isinstance(content, str):
-                raise ValueError("Skill bundle file contents must be text")
-        return value
-
-
-# ---------------------------------------------------------------------------
 # Sandbox Profile
 # ---------------------------------------------------------------------------
 
@@ -496,7 +442,6 @@ class ArtifactDefinition(BaseModel):
 EntityType = Literal[
     "provider",
     "tool",
-    "skill",
     "agent",
     "sandbox_profile",
 ]
@@ -582,7 +527,6 @@ class GlobalAgentDefaults(BaseModel):
 
     Attributes:
         memory: List of memory file paths.
-        skills: List of skill directory paths.
         subagents: Subagent specs (list of dicts).
         interrupt_on: Tool-name -> bool or rich human-in-the-loop config.
         permissions: Deep Agents filesystem permission rules.
@@ -590,7 +534,6 @@ class GlobalAgentDefaults(BaseModel):
     """
 
     memory: list[str] = Field(default_factory=lambda: ["AGENTS.md"])
-    skills: list[str] = Field(default_factory=list)
     subagents: list[dict[str, Any]] = Field(default_factory=list)
     async_subagents: list[AsyncSubagentConfig] = Field(default_factory=list)
     interrupt_on: dict[str, Any] = Field(default_factory=dict)
@@ -616,6 +559,5 @@ __all__ = [
     "LambdaMicroVmLogging",
     "LambdaMicroVmQuota",
     "SandboxProfile",
-    "SkillDefinition",
     "ToolRegistration",
 ]

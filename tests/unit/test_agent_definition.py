@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import os
 import tempfile
-from pathlib import Path
 
 import pytest
 import yaml
@@ -164,7 +163,12 @@ class TestAgentDefinition:
             name="security-analyzer",
             system_prompt="You are a security expert...",
             tools=["read_file", "execute"],
-            skills=["security"],
+            skills=[
+                {
+                    "name": "security",
+                    "content": "---\nname: security\ndescription: Security review\n---\n",
+                }
+            ],
             memory=["AGENTS.md", "SECURITY.md"],
             subagents=[
                 SubagentDefinition(
@@ -281,7 +285,7 @@ class TestAgentDefinition:
             )
 
     def test_skill_directory_rejected(self):
-        """Agent skill attachments must be names, not source directories."""
+        """Legacy source-directory skill attachments are rejected."""
         with pytest.raises(ValueError):
             AgentDefinition(
                 name="test-agent",
@@ -346,7 +350,7 @@ class TestAgentDefinition:
             name="test-agent",
             system_prompt="You are a test agent.",
             tools=["read_file"],
-            skills=["test-skill"],
+            skills=[{"name": "test-skill", "content": "# Test skill"}],
             memory=["TEST.md"],
             config=AgentConfig(temperature=0.5, max_tokens=1000),
         )
@@ -393,7 +397,12 @@ tools:
   - read_file
   - execute
 skills:
-  - security
+  - name: security
+    content: |
+      ---
+      name: security
+      description: Security review
+      ---
 memory:
   - AGENTS.md
   - SECURITY.md
@@ -508,18 +517,13 @@ class TestAgentDefinitionPathValidation:
         assert failed == []
 
     def test_validate_skill_paths(self):
-        """Test validating skill paths."""
-        with tempfile.TemporaryDirectory() as temp_dir:
-            skill_dir = Path(temp_dir) / "skills"
-            skill_dir.mkdir()
-
-            agent = AgentDefinition(
-                name="test-agent",
-                system_prompt="You are a test agent.",
-                skills=["skills"],
-            )
-            failed = agent.validate_skill_paths(temp_dir)
-            assert len(failed) == 0
+        """Agent-owned bundles do not depend on host filesystem paths."""
+        agent = AgentDefinition(
+            name="test-agent",
+            system_prompt="You are a test agent.",
+            skills=[{"name": "review", "content": "# Review"}],
+        )
+        assert agent.validate_skill_paths() == []
 
     def test_validate_memory_paths(self):
         """Test validating memory paths."""
@@ -544,10 +548,49 @@ class TestAgentDefinitionPathValidation:
             name="test-agent",
             system_prompt="You are a test agent.",
             tools=["read_file"],
-            skills=["clean-code"],
+            skills=[{"name": "clean-code", "content": "# Clean code"}],
             memory=["/fake/memory.md"],
         )
         results = agent.validate_all_paths()
         assert len(results["tools"]) == 0
         assert len(results["skills"]) == 0
         assert len(results["memory"]) == 1
+
+
+def test_agent_skills_reject_legacy_registry_names() -> None:
+    with pytest.raises(ValueError):
+        AgentDefinition.model_validate(
+            {
+                "name": "legacy-skill-agent",
+                "system_prompt": "Reject legacy skills.",
+                "skills": ["registry-skill"],
+            }
+        )
+
+
+def test_agent_skills_reject_duplicate_names_and_traversal() -> None:
+    with pytest.raises(ValueError, match="unique"):
+        AgentDefinition.model_validate(
+            {
+                "name": "duplicate-skills",
+                "system_prompt": "Reject duplicate skills.",
+                "skills": [
+                    {"name": "review", "content": "# One"},
+                    {"name": "review", "content": "# Two"},
+                ],
+            }
+        )
+    with pytest.raises(ValueError, match="safe relative POSIX"):
+        AgentDefinition.model_validate(
+            {
+                "name": "traversal-skill",
+                "system_prompt": "Reject traversal.",
+                "skills": [
+                    {
+                        "name": "review",
+                        "content": "# Review",
+                        "files": {"../secret.txt": "no"},
+                    }
+                ],
+            }
+        )
