@@ -23,6 +23,8 @@ logger = structlog.get_logger(__name__)
 from langchain_core.tools import BaseTool
 from pydantic import BaseModel, Field, field_validator
 
+from server.app.agent.mcp_config import AgentMcpServer
+
 try:
     import yaml
 
@@ -193,6 +195,7 @@ class AgentDefinition(BaseModel):
     system_prompt: str = Field(..., min_length=1)
     tools: list[str] = Field(default_factory=list)
     skills: list[str] = Field(default_factory=list)
+    mcp_servers: list[AgentMcpServer] = Field(default_factory=list)
     memory: list[str] = Field(default_factory=list)
     subagents: list[SubagentDefinition] = Field(default_factory=list)
     async_subagents: list[AsyncSubagentConfig] = Field(default_factory=list)
@@ -414,8 +417,7 @@ class AgentDefinition(BaseModel):
             from deepagents.middleware.filesystem import FilesystemPermission
 
             spec["permissions"] = [
-                FilesystemPermission(**permission.model_dump())
-                for permission in self.permissions
+                FilesystemPermission(**permission.model_dump()) for permission in self.permissions
             ]
 
         return spec
