@@ -11,6 +11,8 @@ import pytest
 from botocore.config import Config
 
 from server.app.agent.s3_backend import S3CompatibleBackend
+from server.app.storage.artifact_store import MemoryArtifactStore, S3ArtifactStore
+from server.app.storage.config_models import ArtifactDefinition
 
 pytestmark = pytest.mark.e2e
 
@@ -110,3 +112,56 @@ def test_s3_backend_against_garage(
         "encoding": "utf-8",
     }
     assert backend.download_files(["/skills/release/SKILL.md"])[0].content == b"garage e2e"
+
+
+@pytest.mark.asyncio
+async def test_s3_artifact_store_against_garage_keeps_scope_bodies_out_of_manifests(
+    garage_endpoint: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Artifact manifests stay in the database while Garage holds scoped bodies."""
+    monkeypatch.setenv("AWS_ACCESS_KEY_ID", _ACCESS_KEY)
+    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", _SECRET_KEY)
+    manifests = MemoryArtifactStore()
+    store = S3ArtifactStore(
+        manifests,
+        bucket=_BUCKET,
+        base_prefix="cognition",
+        hmac_key="test-hmac-key",
+        endpoint_url=garage_endpoint,
+        region_name="garage",
+        force_path_style=True,
+    )
+    acme = ArtifactDefinition(
+        id="report",
+        name="report",
+        artifact_type="artifact",
+        content="acme-only body",
+        scope={"tenant": "acme"},
+    )
+    globex = acme.model_copy(
+        update={"content": "globex-only body", "scope": {"tenant": "globex"}}
+    )
+
+    await store.upsert_artifact(acme)
+    await store.upsert_artifact(globex)
+
+    assert (await manifests.get_artifact("report", {"tenant": "acme"})).content == ""  # type: ignore[union-attr]
+    assert (await manifests.get_artifact("report", {"tenant": "globex"})).content == ""  # type: ignore[union-attr]
+    assert (await store.get_artifact("report", {"tenant": "acme"})).content == "acme-only body"  # type: ignore[union-attr]
+    assert (await store.get_artifact("report", {"tenant": "globex"})).content == "globex-only body"  # type: ignore[union-attr]
+
+    s3 = boto3.client(
+        "s3",
+        endpoint_url=garage_endpoint,
+        region_name="garage",
+        aws_access_key_id=_ACCESS_KEY,
+        aws_secret_access_key=_SECRET_KEY,
+        config=Config(s3={"addressing_style": "path"}),
+    )
+    keys = [item["Key"] for item in s3.list_objects_v2(Bucket=_BUCKET).get("Contents", [])]
+    assert len([key for key in keys if key.endswith("/artifacts/artifact/report/1")]) == 2
+    assert all("acme" not in key and "globex" not in key for key in keys)
+
+    assert await store.delete_artifact("report", {"tenant": "acme"})
+    assert await store.get_artifact("report", {"tenant": "acme"}) is None
+    assert (await store.get_artifact("report", {"tenant": "globex"})).content == "globex-only body"  # type: ignore[union-attr]
