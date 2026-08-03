@@ -3,12 +3,19 @@
 from __future__ import annotations
 
 from typing import Any
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from pydantic import ValidationError
 
 from server.app.agent.definition import AgentDefinition
+from server.app.agent.mcp_client import McpServerUnavailableError, load_agent_mcp_tools
 from server.app.agent.mcp_config import AgentMcpServer, McpAuthConfig, canonical_mcp_tool_identity
+from server.app.agent.outbound_auth import (
+    OutboundAuthProviderRegistry,
+    OutboundAuthRequest,
+    OutboundAuthResult,
+)
 
 
 def test_agent_owns_a_streamable_http_mcp_server() -> None:
@@ -68,3 +75,84 @@ def test_agent_rejects_duplicate_mcp_aliases() -> None:
                 AgentMcpServer(alias="github", url="https://two.example.test/mcp"),
             ],
         )
+
+
+class _AllowlistedProvider:
+    async def get_auth(self, request: OutboundAuthRequest) -> OutboundAuthResult:
+        assert request.agent_identity == "agent-1"
+        assert request.trusted_context == {"tenant": "acme"}
+        return OutboundAuthResult(headers={"X-Builder-Route": "github"})
+
+
+class _UnrestrictedHeaderProvider:
+    async def get_auth(self, request: OutboundAuthRequest) -> OutboundAuthResult:
+        del request
+        return OutboundAuthResult(headers={"X-Builder-Route": "github"})
+
+
+@pytest.mark.asyncio
+async def test_outbound_auth_provider_uses_only_allowlisted_headers() -> None:
+    server = AgentMcpServer(
+        alias="github",
+        url="https://mcp.example.test/github",
+        auth=McpAuthConfig(type="outbound_auth_provider", profile="gateway"),
+    )
+    registry = OutboundAuthProviderRegistry()
+    registry.register("gateway", _AllowlistedProvider(), allowed_headers=frozenset({"X-Builder-Route"}))
+    client = MagicMock()
+    client.get_tools = AsyncMock(return_value=[])
+
+    with patch("server.app.agent.mcp_client.create_agent_mcp_client", return_value=client) as factory:
+        await load_agent_mcp_tools(
+            [server],
+            agent_identity="agent-1",
+            runtime_snapshot="snapshot-1",
+            trusted_context={"tenant": "acme"},
+            auth_providers=registry,
+        )
+
+    assert factory.call_args.kwargs["outbound_auth"].headers == {"X-Builder-Route": "github"}
+
+
+@pytest.mark.asyncio
+async def test_outbound_auth_provider_rejects_non_allowlisted_headers() -> None:
+    server = AgentMcpServer(
+        alias="github",
+        url="https://mcp.example.test/github",
+        auth=McpAuthConfig(type="outbound_auth_provider", profile="gateway"),
+    )
+    registry = OutboundAuthProviderRegistry()
+    registry.register("gateway", _UnrestrictedHeaderProvider())
+
+    with pytest.raises(McpServerUnavailableError, match="auth_header_not_allowlisted"):
+        await load_agent_mcp_tools([server], auth_providers=registry)
+
+
+@pytest.mark.asyncio
+async def test_optional_server_failure_preserves_healthy_tools() -> None:
+    healthy = AgentMcpServer(alias="healthy", url="https://healthy.example.test")
+    optional = AgentMcpServer(alias="optional", url="https://optional.example.test", required=False)
+    healthy_client = MagicMock()
+    healthy_client.get_tools = AsyncMock(return_value=[MagicMock(name="search")])
+
+    with patch(
+        "server.app.agent.mcp_client.create_agent_mcp_client",
+        side_effect=[healthy_client, McpServerUnavailableError("optional", "discovery_failed")],
+    ):
+        tools = await load_agent_mcp_tools([healthy, optional])
+
+    assert len(tools) == 1
+
+
+@pytest.mark.asyncio
+async def test_required_server_failure_stops_before_model_execution() -> None:
+    required = AgentMcpServer(alias="required", url="https://required.example.test")
+
+    with (
+        patch(
+            "server.app.agent.mcp_client.create_agent_mcp_client",
+            side_effect=McpServerUnavailableError("required", "discovery_failed"),
+        ),
+        pytest.raises(McpServerUnavailableError, match="required"),
+    ):
+        await load_agent_mcp_tools([required])

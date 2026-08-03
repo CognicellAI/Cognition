@@ -354,9 +354,7 @@ class DeepAgentStreamingService:
         )
         workspace_base = str(self.settings.workspace_path)
         resolved.subagents = [
-            s.to_subagent(base_path=workspace_base)
-            for s in all_defs
-            if s.name != agent_def.name
+            s.to_subagent(base_path=workspace_base) for s in all_defs if s.name != agent_def.name
         ]
 
         if agent_def.async_subagents:
@@ -467,7 +465,6 @@ class DeepAgentStreamingService:
                 metadata=session.metadata if session else None,
             )
 
-            mcp_configs = await self._resolve_mcp_configs(scope=effective_scope)
             context_policy = _effective_context_policy(
                 agent_cfg.context_policy,
                 agent_cfg.tool_token_limit_before_evict,
@@ -508,8 +505,12 @@ class DeepAgentStreamingService:
                 excluded_tools=agent_cfg.excluded_tools,
                 blocked_tools=agent_cfg.blocked_tools,
                 middleware=agent_cfg.middleware,
-                mcp_configs=mcp_configs or None,
+                agent_mcp_servers=(
+                    agent_cfg.agent_def.mcp_servers if agent_cfg.agent_def else None
+                ),
                 scope=effective_scope,
+                agent_identity=session.agent_name if session else None,
+                runtime_snapshot=model_cache_key,
                 config_store=self._get_config_store(),
                 sandbox_profile=agent_cfg.sandbox_profile,
                 sandbox_execution_role_arn=agent_cfg.sandbox_execution_role_arn,
@@ -610,7 +611,9 @@ class DeepAgentStreamingService:
                 yield UsageEvent(
                     input_tokens=acc.input_tokens,
                     output_tokens=acc.output_tokens,
-                    estimated_cost=self._estimate_cost(acc.input_tokens, acc.output_tokens, provider),
+                    estimated_cost=self._estimate_cost(
+                        acc.input_tokens, acc.output_tokens, provider
+                    ),
                     provider=provider,
                     model=model_id,
                 )
@@ -712,7 +715,6 @@ class DeepAgentStreamingService:
                 agent_name=session.agent_name,
                 metadata=session.metadata,
             )
-            mcp_configs = await self._resolve_mcp_configs(scope=effective_scope)
             context_policy = _effective_context_policy(
                 agent_cfg.context_policy,
                 agent_cfg.tool_token_limit_before_evict,
@@ -751,8 +753,12 @@ class DeepAgentStreamingService:
                 excluded_tools=agent_cfg.excluded_tools,
                 blocked_tools=agent_cfg.blocked_tools,
                 middleware=agent_cfg.middleware,
-                mcp_configs=mcp_configs or None,
+                agent_mcp_servers=(
+                    agent_cfg.agent_def.mcp_servers if agent_cfg.agent_def else None
+                ),
                 scope=effective_scope,
+                agent_identity=session.agent_name,
+                runtime_snapshot=model_cache_key,
                 config_store=self._get_config_store(),
                 sandbox_profile=agent_cfg.sandbox_profile,
                 sandbox_execution_role_arn=agent_cfg.sandbox_execution_role_arn,
@@ -854,9 +860,7 @@ class DeepAgentStreamingService:
         if not isinstance(checkpoint_messages, list):
             return 0
         if not checkpoint_messages:
-            existing_messages = await self.storage_backend.list_messages_for_session(
-                session_id
-            )
+            existing_messages = await self.storage_backend.list_messages_for_session(session_id)
             return len(existing_messages)
 
         rebuilt_count = await self.storage_backend.rebuild_message_projection(
@@ -1318,9 +1322,7 @@ class SessionAgentManager:
                 metadata=self._sandbox_runtime_metadata(backend, session_id=session_id),
             ),
         )
-        self._sandbox_emitted_lifecycle_phases.setdefault(session_id, set()).add(
-            "teardown_started"
-        )
+        self._sandbox_emitted_lifecycle_phases.setdefault(session_id, set()).add("teardown_started")
         if hasattr(backend, "terminate"):
             try:
                 backend.terminate()
