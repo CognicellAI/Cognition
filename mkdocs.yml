@@ -91,6 +91,9 @@ nav:
       - Deployment: guides/deployment.md
       - API Reference: guides/api-reference.md
       - Release Checklist: guides/release-checklist.md
+  - Proposals:
+      - "v0.14.0 C4 Model: Agent Capabilities and Durable Storage": proposals/v0.14.0-deep-agents-skills-mcp-storage.md
+      - "v0.14.0 MCP Runtime and Authentication Contract": proposals/v0.14.0-mcp-runtime-contract.md
   - Blueprints:
       - Cognition CLI: blueprints/cognition-cli.md
       - BreachLens: blueprints/cyber-investigation.md
