@@ -436,63 +436,63 @@ String entries are imported directly; dict entries with a `name` key are treated
 
 ## 6. MCP Tool Servers
 
-Connect to any remote Model Context Protocol (MCP) server. MCP servers expose tools over HTTP.
+Connect an Agent to remote Model Context Protocol (MCP) servers. Servers are
+declared on the Agent and are part of its immutable configuration revision.
 
 ```yaml
-# .cognition/config.yaml
+name: deploy-agent
 mcp:
   servers:
-    - name: github-tools
-      url: https://mcp.github.example.com/sse
-      transport: sse  # or "streamable_http"
-    - name: internal-db
-      url: http://db-tools.internal:8080/sse
+    github:
+      url: https://mcp.github.example.com/mcp
+      transport: streamable_http
+      required: true
+      auth:
+        type: mcp_oauth
+    internal-db:
+      url: https://db-tools.internal/mcp
+      required: false
+      auth:
+        type: workload_token_exchange
+        profile: internal-egress
+    legacy-service:
+      url: https://legacy-tools.internal/mcp
+      required: false
+      auth:
+        type: static_bearer
+        env: LEGACY_MCP_TOKEN
 ```
 
-All tools exposed by the MCP server become available to the agent under the server name as a namespace prefix (e.g. `github-tools/create_pr`). The `tool_name_prefix=True` setting on `MultiServerMCPClient` prevents tool name collisions between servers.
+Each server is discovered independently. A required-server failure stops the
+run with a typed, redacted error; an optional-server failure leaves healthy
+servers available. Duplicate canonical tool identities
+`(server_alias, provider_tool_name)` fail discovery.
 
 ### How It Works
 
 Cognition uses [`langchain-mcp-adapters`](https://github.com/langchain-ai/langchain-mcp-adapters) to connect to MCP servers. The adapter:
 
-1. Connects to each configured remote server using SSE or Streamable HTTP transport
+1. Connects to each declared remote server using Streamable HTTP transport
 2. Converts MCP tools into LangChain `BaseTool` instances
-3. Applies a **scope injection interceptor** that adds `X-Cognition-Scope-*` headers to every MCP request
-4. Registers progress and logging callbacks for observability
-5. Returns tools that participate in the full Deep Agents middleware stack (tool safety, HITL, permissions)
+3. Applies transport authentication during discovery and invocation
+4. Returns tools that participate in the full Deep Agents middleware stack (tool safety, HITL, permissions)
 
-### Transport Options
+The supported authentication types are `none`, standard `mcp_oauth`, built-in
+`workload_token_exchange`, and environment-backed `static_bearer`. Workload
+exchange references an opaque deployment profile and authenticates the
+Cognition workload to a builder-controlled endpoint; that endpoint performs
+live Agent authorization and may inject its upstream provider credential.
+`static_bearer` is supported but not recommended. Cognition does not classify
+deployments or ban a mode on the builder's behalf.
 
-| Transport | Description |
-|---|---|
-| `sse` | Server-Sent Events (default). Best for long-lived connections. |
-| `streamable_http` | HTTP with streaming. Best for serverless or short-lived connections. |
+Raw headers, tokens, API keys, provider credentials, and Python authentication
+callbacks are invalid Agent configuration. Only workload token exchange sends a
+fixed trusted-runtime envelope; it is constructed from the pinned Agent and run
+context and cannot be altered by the model.
 
-### Managing MCP Servers via API
-
-MCP servers can also be managed at runtime via the REST API:
-
-```bash
-# List registered servers
-curl http://localhost:8000/mcp-servers
-
-# Register a new server
-curl -X POST http://localhost:8000/mcp-servers \
-  -H "Content-Type: application/json" \
-  -d '{"name": "my-tools", "url": "https://tools.example.com/sse", "transport": "sse"}'
-
-# Update a server
-curl -X PATCH http://localhost:8000/mcp-servers/my-tools \
-  -H "Content-Type: application/json" \
-  -d '{"enabled": false}'
-
-# Delete a server
-curl -X DELETE http://localhost:8000/mcp-servers/my-tools
-```
-
-> **Note:** MCP server `headers` (containing credentials) are redacted in API responses — `GET /mcp-servers` returns an empty `headers` dict to prevent credential leakage. File-managed servers (from `.cognition/config.yaml`) are read-only via the API — mutation attempts return `409 Conflict`.
-
-Only HTTP/HTTPS URLs are accepted — stdio-based MCP servers are not supported for security reasons.
+Only HTTP/HTTPS URLs are accepted — stdio-based MCP servers and raw configured
+headers are deliberately unsupported. The complete v0.14 contract is in
+[the MCP runtime proposal](../proposals/v0.14.0-mcp-runtime-contract.md).
 
 ---
 

@@ -580,35 +580,21 @@ If no provider is found at any tier, `LLMProviderConfigError` is raised with an 
 
 ---
 
-## MCP Remote Servers
+## Agent MCP Servers
 
-MCP servers can be configured via YAML or managed at runtime via `POST /mcp-servers`.
+Remote MCP servers are part of an Agent definition, are pinned with its
+configuration revision, and are not managed through a global server registry.
+Only remote HTTP/HTTPS endpoints are supported; raw transport headers and
+credentials are never stored in an Agent definition. See
+[Extending Agents](./extending-agents.md#6-mcp-tool-servers) for the complete
+configuration and authentication contract.
 
-```yaml
-# .cognition/config.yaml
-mcp:
-  servers:
-    - name: my-tools
-      url: https://tools.example.com/sse
-      transport: sse        # or "streamable_http" (default: "sse")
-      enabled: true
-      headers:              # optional auth headers
-        Authorization: "Bearer ..."
-```
-
-| Field | Required | Default | Description |
-|---|---|---|---|
-| `name` | Yes | — | Unique identifier (1–100 chars) |
-| `url` | Yes | — | HTTP/HTTPS URL (stdio not supported) |
-| `transport` | No | `sse` | `sse` or `streamable_http` |
-| `enabled` | No | `true` | Whether to connect at startup |
-| `headers` | No | `{}` | HTTP headers sent with every request |
-
-Each server must be an HTTP/HTTPS SSE endpoint. Stdio-based MCP servers are not supported for security reasons.
-
-Tools are namespaced by server name (e.g. `github-tools/create_pr`) to prevent collisions. The `tool_name_prefix=True` setting on `MultiServerMCPClient` is always active.
-
-MCP servers can also be managed at runtime via `POST/GET/PATCH/DELETE /mcp-servers`. See [Extending Agents](./extending-agents.md#6-mcp-tool-servers) for details.
+Each server declares one authentication type: `none`, `mcp_oauth`,
+`workload_token_exchange`, or `static_bearer`. Workload exchange references an
+opaque profile under deployment-owned `mcp_auth_profiles`; static bearer reads
+a named environment variable and is supported but not recommended. Cognition
+does not infer a production or multi-tenant mode or enforce the builder's
+authentication-mode policy.
 
 ---
 
