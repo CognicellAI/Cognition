@@ -133,6 +133,23 @@ class Settings(BaseSettings):
         alias="COGNITION_PERSISTENCE_URI",
     )
 
+    # Durable Deep Agents file backend. SQLite/in-memory/local remain supported
+    # only for local and development profiles; production uses S3-compatible
+    # object storage for durable file-shaped runtime data.
+    durable_file_backend: Literal["local", "s3"] = Field(
+        default="local",
+        alias="COGNITION_DURABLE_FILE_BACKEND",
+    )
+    s3_bucket: str | None = Field(default=None, alias="COGNITION_S3_BUCKET")
+    s3_prefix: str = Field(default="cognition", alias="COGNITION_S3_PREFIX")
+    s3_endpoint_url: str | None = Field(default=None, alias="COGNITION_S3_ENDPOINT_URL")
+    s3_region: str | None = Field(default=None, alias="COGNITION_S3_REGION")
+    s3_force_path_style: bool = Field(
+        default=False,
+        alias="COGNITION_S3_FORCE_PATH_STYLE",
+        description="Use path-style S3 requests for Garage and similar compatible stores.",
+    )
+
     # Sandbox / Execution backend settings
     sandbox_backend: Literal["local", "docker", "kubernetes", "aws_lambda_microvm"] = Field(
         default="local",
@@ -272,6 +289,11 @@ class Settings(BaseSettings):
         if not 1 <= v <= 65535:
             raise ValueError(f"Port must be between 1 and 65535, got {v}")
         return v
+
+    @property
+    def s3_enabled(self) -> bool:
+        """Return whether durable file data is configured for S3-compatible storage."""
+        return self.durable_file_backend == "s3"
 
 
 # Global settings instance
