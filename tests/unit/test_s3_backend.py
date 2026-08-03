@@ -83,3 +83,20 @@ def test_s3_backend_never_allows_path_to_escape_prefix() -> None:
     assert backend.write("/../../outside", "no").error is None
     # Normalization keeps every object below the assigned prefix.
     assert backend._key("/../../outside") == "tenant/outside"
+
+
+def test_scope_prefix_is_opaque_and_stable_for_an_exact_scope() -> None:
+    prefix = S3CompatibleBackend.scope_prefix(
+        base_prefix="cognition",
+        effective_scope={"tenant": "acme", "user": "ada"},
+        hmac_key="test-key",
+    )
+
+    assert prefix.startswith("cognition/scopes/")
+    assert "acme" not in prefix
+    assert "ada" not in prefix
+    assert prefix == S3CompatibleBackend.scope_prefix(
+        base_prefix="cognition",
+        effective_scope={"user": "ada", "tenant": "acme"},
+        hmac_key="test-key",
+    )

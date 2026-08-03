@@ -69,6 +69,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         json_format=settings.log_format == "json",
     )
     logger.info("Starting Cognition server")
+    settings.validate_deployment_storage_policy()
 
     # Initialize storage backend
     storage_backend = create_storage_backend(settings)
