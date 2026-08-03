@@ -186,18 +186,18 @@ def create_artifact_store(settings: Settings) -> ArtifactStore:
         if not db_path.is_absolute():
             db_path = Path(workspace_path) / normalized_uri
         db_path.parent.mkdir(parents=True, exist_ok=True)
-        return SqliteArtifactStore(db_path=str(db_path))
+        store: ArtifactStore = SqliteArtifactStore(db_path=str(db_path))
 
     elif backend_type == "postgres":
         from server.app.storage.artifact_store import PostgresArtifactStore
 
         asyncpg_dsn = uri.replace("postgresql+asyncpg://", "postgresql://", 1)
-        return PostgresArtifactStore(dsn=asyncpg_dsn)
+        store = PostgresArtifactStore(dsn=asyncpg_dsn)
 
     elif backend_type == "memory":
         from server.app.storage.artifact_store import MemoryArtifactStore
 
-        return MemoryArtifactStore()
+        store = MemoryArtifactStore()
 
     else:
         raise StorageBackendError(
@@ -205,3 +205,20 @@ def create_artifact_store(settings: Settings) -> ArtifactStore:
             f"Supported types: sqlite, postgres, memory",
             backend_type=backend_type,
         )
+
+    if not settings.s3_enabled:
+        return store
+
+    from server.app.storage.artifact_store import S3ArtifactStore
+
+    if settings.s3_bucket is None or settings.s3_scope_hmac_key is None:
+        raise StorageBackendError("S3 artifact storage is missing required configuration", "s3")
+    return S3ArtifactStore(
+        store,
+        bucket=settings.s3_bucket,
+        base_prefix=settings.s3_prefix,
+        hmac_key=settings.s3_scope_hmac_key.get_secret_value(),
+        endpoint_url=settings.s3_endpoint_url,
+        region_name=settings.s3_region,
+        force_path_style=settings.s3_force_path_style,
+    )
