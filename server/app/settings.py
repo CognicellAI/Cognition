@@ -32,6 +32,11 @@ class Settings(BaseSettings):
     host: str = Field(default="127.0.0.1", alias="COGNITION_HOST")
     port: int = Field(default=8000, alias="COGNITION_PORT")
     log_level: str = Field(default="info", alias="COGNITION_LOG_LEVEL")
+    deployment_mode: Literal["local", "development", "production"] = Field(
+        default="development",
+        alias="COGNITION_DEPLOYMENT_MODE",
+        description="Deployment safety profile. Production rejects host-backed runtime state.",
+    )
 
     # Workspace settings
     workspace_root: Path = Field(
@@ -148,6 +153,14 @@ class Settings(BaseSettings):
         default=False,
         alias="COGNITION_S3_FORCE_PATH_STYLE",
         description="Use path-style S3 requests for Garage and similar compatible stores.",
+    )
+    s3_scope_hmac_key: SecretStr | None = Field(
+        default=None,
+        alias="COGNITION_S3_SCOPE_HMAC_KEY",
+        description=(
+            "HMAC key used to derive opaque, exact-scope object prefixes. "
+            "It is never persisted or exposed to agent runtime data."
+        ),
     )
 
     # Sandbox / Execution backend settings
@@ -294,6 +307,29 @@ class Settings(BaseSettings):
     def s3_enabled(self) -> bool:
         """Return whether durable file data is configured for S3-compatible storage."""
         return self.durable_file_backend == "s3"
+
+    def validate_deployment_storage_policy(self) -> None:
+        """Reject production settings that could persist runtime data on the host.
+
+        Local and development modes intentionally retain SQLite, memory, and
+        local files for a frictionless developer experience.  Production must
+        explicitly select durable infrastructure instead of silently falling
+        back to a workspace path.
+        """
+        if self.s3_enabled and not self.s3_bucket:
+            raise ValueError("COGNITION_S3_BUCKET is required when durable_file_backend=s3")
+        if self.s3_enabled and self.s3_scope_hmac_key is None:
+            raise ValueError(
+                "COGNITION_S3_SCOPE_HMAC_KEY is required when durable_file_backend=s3"
+            )
+        if self.deployment_mode != "production":
+            return
+        if self.persistence_backend != "postgres":
+            raise ValueError("production requires COGNITION_PERSISTENCE_BACKEND=postgres")
+        if not self.s3_enabled:
+            raise ValueError("production requires COGNITION_DURABLE_FILE_BACKEND=s3")
+        if self.sandbox_backend == "local":
+            raise ValueError("production cannot use COGNITION_SANDBOX_BACKEND=local")
 
 
 # Global settings instance

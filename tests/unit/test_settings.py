@@ -58,6 +58,29 @@ class TestSettingsDefaults:
         assert settings.durable_file_backend == "local"
         assert not settings.s3_enabled
 
+    def test_s3_backend_requires_bucket_and_scope_key_at_startup(self):
+        with pytest.raises(ValueError, match="COGNITION_S3_BUCKET"):
+            TestSettings(durable_file_backend="s3").validate_deployment_storage_policy()
+
+        with pytest.raises(ValueError, match="COGNITION_S3_SCOPE_HMAC_KEY"):
+            TestSettings(
+                durable_file_backend="s3", s3_bucket="cognition"
+            ).validate_deployment_storage_policy()
+
+    def test_production_rejects_host_backed_runtime_storage(self):
+        with pytest.raises(ValueError, match="PERSISTENCE_BACKEND=postgres"):
+            TestSettings(deployment_mode="production").validate_deployment_storage_policy()
+
+        settings = TestSettings(
+            deployment_mode="production",
+            persistence_backend="postgres",
+            durable_file_backend="s3",
+            s3_bucket="cognition",
+            s3_scope_hmac_key="test-key",
+            sandbox_backend="docker",
+        )
+        settings.validate_deployment_storage_policy()
+
     def test_s3_compatible_durable_file_configuration(self):
         """Garage-style endpoint settings select the generic S3 backend."""
         settings = TestSettings(
