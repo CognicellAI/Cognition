@@ -880,13 +880,6 @@ class DeepAgentStreamingService:
             session=session, scope=scope, agent_def=agent_def
         )
 
-    async def _resolve_mcp_configs(self, scope: dict[str, str] | None) -> list[Any]:
-        """Load MCP server registrations from ConfigStore.
-
-        Delegates to RuntimeResolver.resolve_mcp_configs().
-        """
-        return await self._get_runtime_resolver().resolve_mcp_configs(scope=scope)
-
     def _build_messages(self, user_content: str, custom_system_prompt: str | None = None) -> list:
         """Build message list with optional system prompt.
 

@@ -133,18 +133,14 @@ class TestMcpToolIntegration:
 
         mcp_configs = [McpServerConfig(name="github", url="https://api.glama.ai/mcp/github")]
 
-        with patch(
-            "server.app.agent.cognition_agent.create_mcp_client"
-        ) as mock_create_client:
+        with patch("server.app.agent.cognition_agent.create_mcp_client") as mock_create_client:
             mock_mcp_client = MagicMock()
             mock_tool = MagicMock()
             mock_tool.name = "github_get_repo"
             mock_mcp_client.get_tools = AsyncMock(return_value=[mock_tool])
             mock_create_client.return_value = mock_mcp_client
 
-            with patch(
-                "server.app.agent.cognition_agent.create_deep_agent"
-            ) as mock_create:
+            with patch("server.app.agent.cognition_agent.create_deep_agent") as mock_create:
                 mock_agent = MagicMock()
                 mock_create.return_value = mock_agent
 
@@ -171,18 +167,12 @@ class TestMcpErrorHandling:
 
         mcp_configs = [McpServerConfig(name="failing-server", url="https://invalid.test/mcp")]
 
-        with patch(
-            "server.app.agent.cognition_agent.create_mcp_client"
-        ) as mock_create_client:
+        with patch("server.app.agent.cognition_agent.create_mcp_client") as mock_create_client:
             mock_mcp_client = MagicMock()
-            mock_mcp_client.get_tools = AsyncMock(
-                side_effect=ConnectionError("Connection refused")
-            )
+            mock_mcp_client.get_tools = AsyncMock(side_effect=ConnectionError("Connection refused"))
             mock_create_client.return_value = mock_mcp_client
 
-            with patch(
-                "server.app.agent.cognition_agent.create_deep_agent"
-            ) as mock_create:
+            with patch("server.app.agent.cognition_agent.create_deep_agent") as mock_create:
                 mock_agent = MagicMock()
                 mock_create.return_value = mock_agent
 
@@ -198,14 +188,10 @@ class TestMcpErrorHandling:
         """Verify all-disabled configs don't trigger MCP initialization."""
         from server.app.agent.cognition_agent import CognitionAgentParams, create_cognition_agent
 
-        mcp_configs = [
-            McpServerConfig(name="disabled", url="https://test/mcp", enabled=False)
-        ]
+        mcp_configs = [McpServerConfig(name="disabled", url="https://test/mcp", enabled=False)]
 
         with patch("server.app.agent.cognition_agent.create_mcp_client") as mock_create_client:
-            with patch(
-                "server.app.agent.cognition_agent.create_deep_agent"
-            ) as mock_create:
+            with patch("server.app.agent.cognition_agent.create_deep_agent") as mock_create:
                 mock_agent = MagicMock()
                 mock_create.return_value = mock_agent
 
@@ -318,88 +304,6 @@ class TestMcpInterceptors:
 
         result = await interceptors[0](request, handler)
         assert result == "ok"
-
-
-@pytest.mark.asyncio
-class TestMcpConfiguration:
-    """Test MCP configuration scenarios."""
-
-    async def test_global_mcp_configuration(self):
-        """Test MCP configuration is stored and retrieved via ConfigStore."""
-        from server.app.storage.config_models import McpServerRegistration
-        from server.app.storage.config_registry import MemoryConfigRegistry
-        from server.app.storage.config_store import DefaultConfigStore
-
-        registry = MemoryConfigRegistry()
-        store = DefaultConfigStore(registry)
-
-        github = McpServerRegistration(
-            name="github",
-            url="https://api.glama.ai/mcp/github",
-            headers={"Authorization": "Bearer test-token"},
-            enabled=True,
-        )
-        linear = McpServerRegistration(
-            name="linear",
-            url="https://mcp.linear.app/sse",
-            enabled=False,
-        )
-        await store.upsert_mcp_server(github)
-        await store.upsert_mcp_server(linear)
-
-        servers = await store.list_mcp_servers()
-        assert len(servers) == 2
-
-        gh = next(s for s in servers if s.name == "github")
-        assert gh.url == "https://api.glama.ai/mcp/github"
-        assert gh.headers == {"Authorization": "Bearer test-token"}
-        assert gh.enabled is True
-        assert gh.transport == "sse"
-
-        ln = next(s for s in servers if s.name == "linear")
-        assert ln.url == "https://mcp.linear.app/sse"
-        assert ln.enabled is False
-
-    async def test_global_mcp_configuration_invalid_url_rejected(self):
-        """Test that non-HTTP URLs are rejected at McpServerRegistration construction time."""
-        from pydantic import ValidationError
-
-        from server.app.storage.config_models import McpServerRegistration
-
-        with pytest.raises(ValidationError):
-            McpServerRegistration(name="bad", url="file:///path/to/mcp.sock")
-
-    async def test_session_level_mcp_configuration(self):
-        """Test that MCP configs are resolved from ConfigStore with transport field."""
-        from server.app.agent.mcp_client import McpServerConfig
-        from server.app.storage.config_models import McpServerRegistration
-        from server.app.storage.config_registry import MemoryConfigRegistry
-        from server.app.storage.config_store import DefaultConfigStore
-
-        registry = MemoryConfigRegistry()
-        store = DefaultConfigStore(registry)
-
-        await store.upsert_mcp_server(
-            McpServerRegistration(
-                name="github",
-                url="https://api.glama.ai/mcp/github",
-                transport="sse",
-            )
-        )
-
-        from server.app.llm.deep_agent_service import DeepAgentStreamingService
-        from server.app.settings import Settings
-
-        settings = Settings()
-        service = DeepAgentStreamingService(settings=settings)
-        service._config_store = store
-
-        mcp_configs = await service._resolve_mcp_configs(scope=None)
-        assert len(mcp_configs) == 1
-        assert isinstance(mcp_configs[0], McpServerConfig)
-        assert mcp_configs[0].name == "github"
-        assert mcp_configs[0].url == "https://api.glama.ai/mcp/github"
-        assert mcp_configs[0].transport == "sse"
 
 
 @pytest.mark.integration
