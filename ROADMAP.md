@@ -16,6 +16,7 @@ See AGENTS.md for category definitions, DoD requirements, and precedence rules.
 
 | Date | Description | Severity | Layer | Status |
 |------|-------------|----------|-------|--------|
+| 2026-08-03 | Resolve High Dependabot alerts in `uv.lock` by upgrading `mcp`, `GitPython`, `Pillow`, and `pyasn1` to patched versions before the v0.14.0 pre-release image. | High | 1 | In Review |
 | 2026-07-23 | Default per-message completion callbacks to denied and require operator-approved HTTPS origins so scoped callers cannot select arbitrary destinations from the shared Cognition runtime. | High | 1/6 | Implemented on `release/v0.13.0`; release validation pending |
 | 2026-06-26 | Resolve open Dependabot alerts in `uv.lock` by upgrading `pydantic-settings`, `langsmith`, `langchain`, `langchain-anthropic`, `starlette`, `cryptography`, `aiohttp`, `python-multipart`, and `pyjwt` to patched versions | High | 1 | Completed |
 | 2026-05-27 | Resolve open Dependabot alerts in `uv.lock` by upgrading `GitPython`, `Mako`, `urllib3`, `python-multipart`, `idna`, and `langchain-openai` to patched versions | High | 1 | Completed |
@@ -214,6 +215,10 @@ The following fallback patterns exist and are tracked for removal. They produce 
 
 | Package | From | To | Breaking Changes | Status |
 |---------|------|-----|------------------|--------|
+| `mcp` | 1.27.0 | 1.29.0 | None intentional; security patch refresh for High Dependabot alerts before v0.14.0 pre-release image. | In Review |
+| `GitPython` | 3.1.50 | 3.1.57 | None intentional; security patch refresh for High Dependabot alerts before v0.14.0 pre-release image. | In Review |
+| `Pillow` | 12.2.0 | 12.3.0 | None intentional; security patch refresh for High Dependabot alerts before v0.14.0 pre-release image. | In Review |
+| `pyasn1` | 0.6.3 | 0.6.4 | None intentional; security patch refresh for High Dependabot alerts before v0.14.0 pre-release image. | In Review |
 | CI/CD Docker Images | N/A | N/A | None | Completed |
 | `psycopg2-binary` → `psycopg[binary,pool]` | psycopg2-binary (any) | psycopg 3.x | API surface change (psycopg3 vs psycopg2); only affects import paths, not used directly | Completed |
 | `langgraph` + `langchain` | langgraph 1.0.8, langchain 1.2.9 | langgraph 1.1.3, langchain 1.2.13 | `astream()` now supports `version="v2"` unified StreamPart format; required for streaming rewrite (#34) | Completed |
