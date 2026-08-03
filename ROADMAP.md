@@ -16,7 +16,7 @@ See AGENTS.md for category definitions, DoD requirements, and precedence rules.
 
 | Date | Description | Severity | Layer | Status |
 |------|-------------|----------|-------|--------|
-| 2026-08-03 | Resolve High Dependabot alerts in `uv.lock` by upgrading `mcp`, `GitPython`, `Pillow`, and `pyasn1` to patched versions before the v0.14.0 pre-release image. | High | 1 | In Review |
+| 2026-08-03 | Resolve High-and-above dependency advisories before the v0.14.0 pre-release image: upgrade `mcp`, `GitPython`, `Pillow`, `pyasn1`, Click, and `langgraph-checkpoint` to patched versions and audit the installed release environment. | High | 1 | In Review |
 | 2026-07-23 | Default per-message completion callbacks to denied and require operator-approved HTTPS origins so scoped callers cannot select arbitrary destinations from the shared Cognition runtime. | High | 1/6 | Implemented on `release/v0.13.0`; release validation pending |
 | 2026-06-26 | Resolve open Dependabot alerts in `uv.lock` by upgrading `pydantic-settings`, `langsmith`, `langchain`, `langchain-anthropic`, `starlette`, `cryptography`, `aiohttp`, `python-multipart`, and `pyjwt` to patched versions | High | 1 | Completed |
 | 2026-05-27 | Resolve open Dependabot alerts in `uv.lock` by upgrading `GitPython`, `Mako`, `urllib3`, `python-multipart`, `idna`, and `langchain-openai` to patched versions | High | 1 | Completed |
@@ -218,6 +218,8 @@ The following fallback patterns exist and are tracked for removal. They produce 
 
 | Package | From | To | Breaking Changes | Status |
 |---------|------|-----|------------------|--------|
+| `click` | 8.3.2 | 8.4.2 | None intentional; fixes command injection in `click.edit()` before the v0.14.0 pre-release image. | In Review |
+| `langgraph-checkpoint` | 4.1.0 | 4.1.1 | None intentional; narrows unsafe checkpoint JSON object revival before the v0.14.0 pre-release image. | In Review |
 | `mcp` | 1.27.0 | 1.29.0 | None intentional; security patch refresh for High Dependabot alerts before v0.14.0 pre-release image. | In Review |
 | `GitPython` | 3.1.50 | 3.1.57 | None intentional; security patch refresh for High Dependabot alerts before v0.14.0 pre-release image. | In Review |
 | `Pillow` | 12.2.0 | 12.3.0 | None intentional; security patch refresh for High Dependabot alerts before v0.14.0 pre-release image. | In Review |
