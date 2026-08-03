@@ -207,10 +207,12 @@ def validate_url(cls, v: str) -> str:
 This policy ensures MCP tool servers cannot be used to execute arbitrary local processes.
 
 Additional MCP security measures:
-- **Header redaction** — `GET /mcp-servers` returns empty `headers` dicts to prevent credential leakage
-- **File-managed immutability** — servers from `.cognition/config.yaml` cannot be modified via API (409 on mutation)
-- **Scope injection** — `X-Cognition-Scope-*` headers are automatically added to MCP requests via `ToolCallInterceptor`
-- **Tool name prefixing** — `tool_name_prefix=True` on `MultiServerMCPClient` prevents tool name collisions
+- **Agent-owned configuration** — MCP servers are declared on an Agent revision; no global server registry or CRUD endpoint exists
+- **No raw transport credentials** — Agent definitions cannot contain headers, bearer values, or URL credentials
+- **Bounded authentication** — `none`, standard `mcp_oauth`, built-in `workload_token_exchange`, or environment-backed `static_bearer` applies consistently to discovery and invocation without exposing credentials to the model, API, persistence, or telemetry
+- **No arbitrary scope projection** — only workload token exchange sends a fixed, reserved trusted-runtime envelope; Agent or model content cannot define arbitrary outbound headers
+- **Builder-owned policy** — Cognition does not infer production or multi-tenant posture; builders admit endpoints and authentication modes, and `static_bearer` is supported but not recommended
+- **Canonical tool identity** — duplicate `(server_alias, provider_tool_name)` identities fail discovery
 
 ---
 
@@ -330,4 +332,4 @@ These prevent MIME sniffing, clickjacking, and reflected XSS attacks in browser 
 - [ ] Run the sandbox image from a minimal, audited base image
 - [ ] Set `COGNITION_PROTECTED_PATHS` to include any sensitive directories
 - [ ] Review which agents have `a2a.exposed: true` — only expose agents intended for external A2A access
-- [ ] Restrict `/mcp-servers` CRUD to authorized administrators (MCP server headers contain credentials)
+- [ ] Review each Agent's declared MCP endpoints and required/optional status
