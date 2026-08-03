@@ -14,9 +14,10 @@ from collections.abc import Sequence
 from typing import Any, Literal
 
 import structlog
+from langchain_core.tools import BaseTool
 from langchain_mcp_adapters.callbacks import CallbackContext, Callbacks
 from langchain_mcp_adapters.client import MultiServerMCPClient
-from langchain_mcp_adapters.interceptors import MCPToolCallRequest, ToolCallInterceptor
+from langchain_mcp_adapters.interceptors import ToolCallInterceptor
 from langchain_mcp_adapters.sessions import (
     SSEConnection,
     StreamableHttpConnection,
@@ -24,7 +25,18 @@ from langchain_mcp_adapters.sessions import (
 from mcp.types import LoggingMessageNotificationParams
 from pydantic import BaseModel, Field, field_validator
 
+from server.app.agent.definition import AgentMcpServerConfig
+
 logger = structlog.get_logger(__name__)
+
+
+class McpServerDiscoveryError(RuntimeError):
+    """Raised when a required MCP server cannot be discovered."""
+
+    def __init__(self, server_alias: str, category: str = "discovery_failed") -> None:
+        self.server_alias = server_alias
+        self.category = category
+        super().__init__(f"MCP server '{server_alias}' failed: {category}")
 
 
 class McpServerConfig(BaseModel):
@@ -36,9 +48,28 @@ class McpServerConfig(BaseModel):
         default_factory=dict, description="Headers to include in requests"
     )
     enabled: bool = Field(default=True, description="Whether this server is enabled")
+    required: bool = Field(default=True, description="Whether discovery failure is fatal")
     transport: Literal["sse", "streamable_http"] = Field(
-        default="sse", description="Transport protocol"
+        default="streamable_http", description="Transport protocol"
     )
+
+    @classmethod
+    def from_agent_config(
+        cls,
+        alias: str,
+        config: AgentMcpServerConfig,
+    ) -> McpServerConfig:
+        transport: Literal["sse", "streamable_http"] = (
+            "streamable_http" if config.transport == "http" else config.transport
+        )
+        return cls(
+            name=alias,
+            url=config.url,
+            headers={},
+            enabled=config.enabled,
+            required=config.required,
+            transport=transport,
+        )
 
     @field_validator("url")
     @classmethod
@@ -86,6 +117,45 @@ def create_mcp_client(
     )
 
 
+async def load_mcp_tools_per_server(
+    configs: Sequence[McpServerConfig],
+    callbacks: Callbacks | None = None,
+    tool_interceptors: list[ToolCallInterceptor] | None = None,
+) -> list[BaseTool]:
+    """Load MCP tools server-by-server and enforce canonical identity uniqueness."""
+
+    tools: list[BaseTool] = []
+    seen: set[str] = set()
+    for config in configs:
+        if not config.enabled:
+            continue
+        client = create_mcp_client(
+            [config],
+            callbacks=callbacks,
+            tool_interceptors=tool_interceptors,
+        )
+        try:
+            server_tools = await client.get_tools(server_name=config.name)
+        except Exception as exc:
+            logger.warning(
+                "mcp_server_discovery_failed",
+                server=config.name,
+                required=config.required,
+                error_type=type(exc).__name__,
+            )
+            if config.required:
+                raise McpServerDiscoveryError(config.name) from exc
+            continue
+
+        for tool in server_tools:
+            canonical_name = str(getattr(tool, "name", ""))
+            if canonical_name in seen:
+                raise McpServerDiscoveryError(config.name, "duplicate_tool_identity")
+            seen.add(canonical_name)
+            tools.append(tool)
+    return tools
+
+
 def _build_mcp_callbacks() -> Callbacks:
     async def on_progress(
         progress: float,
@@ -118,22 +188,3 @@ def _build_mcp_callbacks() -> Callbacks:
         on_progress=on_progress,
         on_logging_message=on_logging_message,
     )
-
-
-def _build_mcp_interceptors(
-    scope: dict[str, str] | None = None,
-) -> list[ToolCallInterceptor]:
-
-    async def inject_scope_context(
-        request: MCPToolCallRequest,
-        handler: Any,
-    ) -> Any:
-        if scope:
-            modified_args = {**request.args}
-            for key, value in scope.items():
-                if key not in modified_args:
-                    modified_args[key] = value
-            request = request.override(args=modified_args)
-        return await handler(request)
-
-    return [inject_scope_context]

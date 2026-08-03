@@ -70,6 +70,7 @@ def _agent_to_response(
         ],
         tools=agent.tools or [],
         skills=agent.skills or [],
+        mcp=agent.mcp,
         system_prompt=agent.system_prompt,
         subagents=[
             {
@@ -200,6 +201,7 @@ async def create_agent(
             "tools": body.tools,
             "skills": body.skills,
             "memory": body.memory,
+            "mcp": body.mcp.model_dump(mode="json"),
             "subagents": body.subagents,
             "async_subagents": [
                 spec.model_dump(exclude_none=True) for spec in body.async_subagents
@@ -323,6 +325,13 @@ async def update_agent(
             data["config"] = config
         if "response_format" in updates:
             data["response_format"] = updates.pop("response_format")
+        if "mcp" in updates:
+            mcp_value = updates.pop("mcp")
+            data["mcp"] = (
+                mcp_value.model_dump(mode="json")
+                if hasattr(mcp_value, "model_dump")
+                else mcp_value
+            )
         data.update(updates)
 
         record = await config_store.upsert_agent(

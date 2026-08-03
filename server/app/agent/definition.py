@@ -212,6 +212,65 @@ class AgentConfig(BaseModel):
     sandbox_execution_role_arn: str | None = Field(default=None)
 
 
+class McpAuthConfig(BaseModel):
+    """Outbound authentication policy for one Agent-scoped MCP server."""
+
+    type: Literal["none", "oauth", "outbound_provider"] = Field(default="none")
+    header_allowlist: list[str] = Field(default_factory=list)
+    auth_profile: str | None = Field(default=None)
+    oauth_provider: str | None = Field(default=None)
+    scopes: list[str] = Field(default_factory=list)
+
+    @field_validator("header_allowlist", mode="before")
+    @classmethod
+    def normalize_header_allowlist(cls, value: Any) -> list[str]:
+        if value is None:
+            return []
+        return [str(item).lower() for item in value]
+
+class AgentMcpServerConfig(BaseModel):
+    """Agent-scoped MCP server definition."""
+
+    url: str = Field(..., min_length=1)
+    transport: Literal["sse", "streamable_http", "http"] = Field(default="streamable_http")
+    enabled: bool = Field(default=True)
+    required: bool = Field(default=True)
+    auth: McpAuthConfig = Field(default_factory=McpAuthConfig)
+
+    @field_validator("url")
+    @classmethod
+    def validate_url(cls, value: str) -> str:
+        if not value.startswith(("http://", "https://")):
+            raise ValueError(
+                "Agent MCP servers must use HTTP/HTTPS URLs; local stdio MCP servers "
+                "are not supported"
+            )
+        return value
+
+    @field_validator("transport")
+    @classmethod
+    def normalize_transport(cls, value: str) -> str:
+        return "streamable_http" if value == "http" else value
+
+
+class AgentMcpConfig(BaseModel):
+    """Agent-owned MCP configuration."""
+
+    servers: dict[str, AgentMcpServerConfig] = Field(default_factory=dict)
+
+    @field_validator("servers")
+    @classmethod
+    def validate_server_aliases(
+        cls, value: dict[str, AgentMcpServerConfig]
+    ) -> dict[str, AgentMcpServerConfig]:
+        for alias in value:
+            if not alias.replace("-", "").replace("_", "").isalnum():
+                raise ValueError(
+                    "MCP server aliases must be alphanumeric with hyphens/underscores only"
+                )
+        return value
+
+
 class FilesystemPermissionConfig(BaseModel):
     """Deep Agents filesystem permission rule.
 
@@ -316,6 +375,7 @@ class AgentDefinition(BaseModel):
     permissions: list[FilesystemPermissionConfig] = Field(default_factory=list)
     response_format: str | None = Field(default=None)
     middleware: list[str | dict[str, Any]] = Field(default_factory=list)
+    mcp: AgentMcpConfig = Field(default_factory=AgentMcpConfig)
 
     config: AgentConfig = Field(default_factory=AgentConfig)
     # P3 Multi-Agent Registry additions
@@ -699,6 +759,7 @@ def load_agent_definition_from_markdown(path: str | Path) -> AgentDefinition:
         skills=frontmatter.get("skills", []),
         memory=frontmatter.get("memory", []),
         async_subagents=frontmatter.get("async_subagents", []),
+        mcp=frontmatter.get("mcp", {}),
         config=AgentConfig(**config_kwargs),
     )
 
@@ -711,7 +772,10 @@ __all__ = [
     "A2APublicSkill",
     "AgentConfig",
     "AgentDefinition",
+    "AgentMcpConfig",
+    "AgentMcpServerConfig",
     "AsyncSubagentConfig",
+    "McpAuthConfig",
     "SubagentDefinition",
     "load_agent_definition",
     "load_agent_definition_from_markdown",

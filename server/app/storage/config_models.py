@@ -623,7 +623,6 @@ class GlobalAgentDefaults(BaseModel):
         interrupt_on: Tool-name -> bool or rich human-in-the-loop config.
         permissions: Deep Agents filesystem permission rules.
         recursion_limit: Max ReAct recursion depth.
-        mcp_servers: MCP server config dicts keyed by name.
     """
 
     memory: list[str] = Field(default_factory=lambda: ["AGENTS.md"])
@@ -636,7 +635,6 @@ class GlobalAgentDefaults(BaseModel):
     tool_token_limit_before_evict: int | None = Field(default=None, gt=0)
     context_policy: ContextPolicy | None = Field(default=None)
     recursion_limit: int = Field(default=1000, gt=0)
-    mcp_servers: dict[str, Any] = Field(default_factory=dict)
 
 
 __all__ = [

@@ -32,7 +32,6 @@ from server.app.api.routes import (
     artifacts,
     capabilities,
     config,
-    mcp_servers,
     messages,
     models,
     sandbox_profiles,
@@ -303,7 +302,6 @@ app.add_middleware(ObservabilityMiddleware)
 app.include_router(sessions.router)
 app.include_router(messages.router)
 app.include_router(config.router)
-app.include_router(mcp_servers.router)
 app.include_router(sandbox_profiles.router)
 app.include_router(agents.router)
 app.include_router(skills.router)

@@ -13,6 +13,7 @@ from pydantic import AnyHttpUrl, BaseModel, ConfigDict, Field, model_validator
 
 from server.app.agent.definition import (
     A2AConfig,
+    AgentMcpConfig,
     AsyncSubagentConfig,
     ContextPolicy,
     FilesystemPermissionConfig,
@@ -707,7 +708,6 @@ class GlobalAgentDefaultsResponse(BaseModel):
     tool_token_limit_before_evict: int | None = None
     context_policy: ContextPolicy | None = None
     recursion_limit: int
-    mcp_servers: dict[str, Any] = Field(default_factory=dict)
 
 
 class GlobalAgentDefaultsUpdate(BaseModel):
@@ -723,51 +723,6 @@ class GlobalAgentDefaultsUpdate(BaseModel):
     tool_token_limit_before_evict: int | None = None
     context_policy: ContextPolicy | None = None
     recursion_limit: int | None = None
-    mcp_servers: dict[str, Any] | None = None
-
-
-class McpServerCreate(BaseModel):
-    """Request to register a remote MCP server."""
-
-    name: str = Field(..., min_length=1, max_length=100)
-    url: str = Field(..., min_length=1)
-    headers: dict[str, str] = Field(default_factory=dict)
-    enabled: bool = True
-    transport: Literal["sse", "streamable_http"] = "sse"
-    scope: dict[str, str] | None = None
-
-
-class McpServerUpdate(BaseModel):
-    """Partial update request for a remote MCP server."""
-
-    url: str | None = Field(default=None, min_length=1)
-    headers: dict[str, str] | None = None
-    enabled: bool | None = None
-    transport: Literal["sse", "streamable_http"] | None = None
-
-
-class McpServerResponse(BaseModel):
-    """Registered remote MCP server response.
-
-    Headers are intentionally redacted from responses — they may contain
-    bearer tokens or other sensitive values. Builders who need to view or
-    rotate header values should manage them through their own infrastructure.
-    """
-
-    name: str
-    url: str
-    headers: dict[str, str] = Field(default_factory=dict)
-    enabled: bool
-    transport: Literal["sse", "streamable_http"]
-    scope: dict[str, str] = Field(default_factory=dict)
-    source: Literal["file", "api"]
-
-
-class McpServerList(BaseModel):
-    """List of remote MCP servers visible in scope."""
-
-    servers: list[McpServerResponse]
-    count: int
 
 
 class SandboxProfileCreate(BaseModel):
@@ -943,6 +898,7 @@ class AgentResponse(BaseModel):
     skills: list[str] = Field(
         default_factory=list, description="Skill directories this agent can use"
     )
+    mcp: AgentMcpConfig = Field(default_factory=AgentMcpConfig)
     system_prompt: str | None = Field(None, description="Agent's system prompt")
 
 
@@ -1359,6 +1315,7 @@ class AgentCreate(BaseModel):
         description="Trusted IAM role ARN assigned to this agent's sandbox runtime.",
     )
     middleware: list[Any] = Field(default_factory=list)
+    mcp: AgentMcpConfig = Field(default_factory=AgentMcpConfig)
     subagents: list[dict[str, Any]] = Field(default_factory=list)
     async_subagents: list[AsyncSubagentConfig] = Field(default_factory=list)
     scope: dict[str, str] = Field(default_factory=dict)
@@ -1404,6 +1361,7 @@ class AgentUpdate(BaseModel):
     sandbox_profile: str | None = None
     sandbox_execution_role_arn: str | None = None
     middleware: list[Any] | None = None
+    mcp: AgentMcpConfig | None = None
 
 
 # ============================================================================
