@@ -205,3 +205,42 @@ continuation, listing, subscription, and cancellation.
 
 For complete JSON-RPC requests, responses, headers, and errors, see the
 [A2A API Reference](api-reference.md#a2a-protocol).
+
+## Conformance testing
+
+Cognition validates the A2A adapter against the official
+[`a2aproject/a2a-tck`](https://github.com/a2aproject/a2a-tck) at the revision
+pinned in `.github/workflows/a2a-conformance.yml`. The official TCK checkout is
+not patched. Transport selection is driven by the deterministic fixture's Agent
+Card, as recommended by the TCK, instead of forcing a transport on the command
+line.
+
+Pull requests run the applicable `MUST` suite. Pre-release and release
+workflows run the full suite. For v0.13.1 these results are non-blocking
+compatibility disclosures: reports show users where Cognition aligns or
+diverges, while TCK findings do not prevent a release. Failure to produce a
+valid report remains a CI failure.
+
+Each failed requirement receives a Cognition assessment in the manifest and
+explanation. A finding is classified as an upstream harness defect only for an
+explicit requirement and pinned TCK revision with a documented protocol
+conflict and upstream issue. Every other new failure is marked unassessed and
+requires Cognition-owner review; the reporting workflow does not automatically
+waive it.
+
+The system under test is `tests/support/a2a_tck_sut.py`, a deterministic,
+test-only Cognition agent definition. It exercises Cognition's real Agent Card,
+JSON-RPC, persistence, task lifecycle, artifact, and streaming paths without
+introducing model-provider or OAuth-gateway availability into protocol
+conformance. The manual Kennel Stock Guru TCK run was the exploratory signal
+that prompted investigation of the Cognition runtime; Stock Guru was not
+identified as the source of the discrepancies. The deterministic fixture is
+used for repeatable release reporting and is never mounted in the production
+application.
+
+Each run produces a versioned evidence archive containing the official HTML,
+JSON, and JUnit reports, a redacted fixture log, a machine-readable manifest,
+and `COGNITION-EXPLANATION.md`. Cognition's optional SendMessage idempotency
+extension remains enabled and independently tested in production code; only
+the deterministic TCK fixture disables it because official scenarios reuse
+message IDs as test data.

@@ -20,7 +20,11 @@ from a2a.helpers.proto_helpers import (
 from a2a.server.agent_execution import AgentExecutor, RequestContext
 from a2a.server.events import EventQueue
 from a2a.types import Role, TaskArtifactUpdateEvent, TaskState, TaskStatusUpdateEvent
-from a2a.utils.errors import InvalidParamsError, TaskNotFoundError
+from a2a.utils.errors import (
+    ContentTypeNotSupportedError,
+    InvalidParamsError,
+    TaskNotFoundError,
+)
 from google.protobuf.json_format import MessageToDict  # type: ignore[import-untyped]
 
 from server.app.agent.runtime import (
@@ -54,7 +58,12 @@ from server.app.observability import (
     agent_run_span,
     current_trace_context,
 )
-from server.app.protocols.a2a.inbound import InvalidA2APartError, normalize_a2a_parts
+from server.app.protocols.a2a.inbound import (
+    InvalidA2APartError,
+    UnsupportedA2AMediaTypeError,
+    normalize_a2a_parts,
+    validate_a2a_part_media_types,
+)
 from server.app.protocols.a2a.task_store import (
     CognitionTaskStore,
     effective_scope_from_context,
@@ -89,6 +98,7 @@ class CognitionA2AExecutor(AgentExecutor):
         session_agent_manager: SessionAgentManager,
         *,
         agent_name: str,
+        supported_input_modes: tuple[str, ...] = ("text/plain", "application/json"),
         message_id_idempotency: bool = True,
         max_raw_part_bytes: int = 10 * 1024 * 1024,
         max_parts: int = 64,
@@ -104,6 +114,7 @@ class CognitionA2AExecutor(AgentExecutor):
         self._task_store = task_store
         self._agent_manager = session_agent_manager
         self._agent_name = agent_name
+        self._supported_input_modes = supported_input_modes
         self._message_id_idempotency = message_id_idempotency
         self._max_raw_part_bytes = max_raw_part_bytes
         self._max_parts = max_parts
@@ -121,9 +132,14 @@ class CognitionA2AExecutor(AgentExecutor):
             raise InvalidParamsError(message="Task and context identifiers are required")
         scope = effective_scope_from_context(context.call_context)
         message_id = context.message.message_id if context.message else None
+        message_parts = tuple(context.message.parts if context.message else ())
         try:
+            validate_a2a_part_media_types(
+                message_parts,
+                self._supported_input_modes,
+            )
             normalized = normalize_a2a_parts(
-                context.message.parts if context.message else (),
+                message_parts,
                 task_id=context.task_id,
                 message_id=message_id,
                 max_raw_part_bytes=self._max_raw_part_bytes,
@@ -141,6 +157,8 @@ class CognitionA2AExecutor(AgentExecutor):
                     tuple(context.message.reference_task_ids) if context.message else ()
                 ),
             )
+        except UnsupportedA2AMediaTypeError as exc:
+            raise ContentTypeNotSupportedError(message=str(exc)) from exc
         except InvalidA2APartError as exc:
             from server.app.observability import A2A_LIMIT_REJECTIONS_TOTAL
 

@@ -595,7 +595,7 @@ async def mount_a2a_routes(
         artifact_store=artifact_store,
         config_store=config_store,
     )
-    handlers: dict[str, _ScopedRequestHandler] = {}
+    handlers: dict[tuple[str, tuple[str, ...]], _ScopedRequestHandler] = {}
     retention = A2ARetentionManager(
         runtime,
         store,
@@ -608,7 +608,9 @@ async def mount_a2a_routes(
     cards_last_modified = format_datetime(datetime.now(UTC), usegmt=True)
 
     def get_handler(agent_name: str, card: Any) -> _ScopedRequestHandler:
-        handler = handlers.get(agent_name)
+        input_modes = tuple(card.default_input_modes)
+        handler_key = (agent_name, input_modes)
+        handler = handlers.get(handler_key)
         if handler is None:
             task_store = CognitionTaskStore(
                 runtime,
@@ -621,6 +623,7 @@ async def mount_a2a_routes(
                 task_store=task_store,
                 session_agent_manager=session_agent_manager,
                 agent_name=agent_name,
+                supported_input_modes=input_modes,
                 message_id_idempotency=message_id_idempotency,
                 max_raw_part_bytes=getattr(
                     settings,
@@ -658,7 +661,7 @@ async def mount_a2a_routes(
                 agent_executor=executor,
                 agent_card=card,
             )
-            handlers[agent_name] = handler
+            handlers[handler_key] = handler
         return handler
 
     def card_response(card: Any) -> JSONResponse:

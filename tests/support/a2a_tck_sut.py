@@ -1,4 +1,9 @@
-"""In-process Cognition SUT used by the official A2A 1.0 TCK.
+"""Deterministic, test-only Cognition SUT for the official A2A 1.0 TCK.
+
+The message-ID prefix behaviors mirror the official TCK's Gherkin SUT
+scenarios. They validate Cognition's real adapter, persistence, and streaming
+paths without depending on a production LLM agent. They are never mounted by
+the Cognition application.
 
 Run with::
 
@@ -30,6 +35,7 @@ from server.app.storage.artifact_store import MemoryArtifactStore
 from server.app.storage.config_registry import MemoryConfigRegistry
 from server.app.storage.config_store import DefaultConfigStore
 from server.app.storage.memory import MemoryStorageBackend
+from server.version import VERSION
 
 
 class _TckService:
@@ -140,7 +146,7 @@ def create_app() -> FastAPI:
             config_store=config_store,
             session_agent_manager=cast(Any, _TckManager(store)),
             store=store,
-            version="0.10.0",
+            version=VERSION,
             artifact_store=artifact_store,
             # The A2A specification makes SendMessage idempotency optional and
             # the TCK intentionally reuses message IDs across independent tests.

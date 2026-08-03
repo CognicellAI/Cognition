@@ -18,6 +18,10 @@ class InvalidA2APartError(ValueError):
     """Raised when an inbound A2A Part cannot be safely normalized."""
 
 
+class UnsupportedA2AMediaTypeError(ValueError):
+    """Raised when an inbound Part declares a media type the agent does not support."""
+
+
 @dataclass(frozen=True)
 class NormalizedA2AMessage:
     """Model-visible rendering plus lossless canonical A2A Parts."""
@@ -107,6 +111,38 @@ def normalize_a2a_parts(
         extensions=context.extensions,
         reference_task_ids=context.reference_task_ids,
     )
+
+
+def validate_a2a_part_media_types(
+    parts: Iterable[Part],
+    supported_input_modes: Iterable[str],
+) -> None:
+    """Reject explicitly declared Part media types outside the Agent Card contract.
+
+    Media type names are case-insensitive and parameters do not change the
+    underlying representation, so ``Text/Plain; charset=utf-8`` matches an
+    advertised ``text/plain`` mode. Parts without ``mediaType`` retain the
+    protocol's implicit/default handling.
+    """
+    supported = {
+        normalized
+        for value in supported_input_modes
+        if (normalized := _base_media_type(value))
+    }
+    for index, part in enumerate(parts):
+        if not part.media_type:
+            continue
+        requested = _base_media_type(part.media_type)
+        if requested not in supported:
+            raise UnsupportedA2AMediaTypeError(
+                f"A2A message Part {index} declares unsupported media type "
+                f"{part.media_type!r}"
+            )
+
+
+def _base_media_type(value: str) -> str:
+    """Return a comparison-safe MIME type without parameters."""
+    return value.split(";", 1)[0].strip().lower()
 
 
 def _canonicalize_message_context(
@@ -309,5 +345,7 @@ def _annotated_text_part(
 __all__ = [
     "InvalidA2APartError",
     "NormalizedA2AMessage",
+    "UnsupportedA2AMediaTypeError",
     "normalize_a2a_parts",
+    "validate_a2a_part_media_types",
 ]
