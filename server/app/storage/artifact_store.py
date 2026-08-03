@@ -13,6 +13,7 @@ Design:
 
 from __future__ import annotations
 
+import hashlib
 import json
 from datetime import UTC, datetime
 from typing import Any, Protocol, runtime_checkable
@@ -24,7 +25,15 @@ from server.app.storage.config_models import ArtifactDefinition
 
 logger = structlog.get_logger(__name__)
 
-ARTIFACT_TYPE_VALUES = {"scratch", "artifact", "contract", "eval", "memory", "policy"}
+ARTIFACT_TYPE_VALUES = {
+    "scratch",
+    "artifact",
+    "file",
+    "contract",
+    "eval",
+    "memory",
+    "policy",
+}
 
 
 def _scope_to_json(scope: dict[str, str] | None) -> str:
@@ -49,8 +58,12 @@ def _row_to_artifact(row: dict[str, Any]) -> ArtifactDefinition:
         version=row["version"],
         name=row["name"],
         artifact_type=row["artifact_type"],
+        path=row.get("path") or "",
         content=row.get("content") or "",
         content_type=row.get("content_type") or "text/plain",
+        object_key=row.get("object_key"),
+        content_checksum=row.get("content_checksum"),
+        content_size=row.get("content_size"),
         parent_version=row.get("parent_version"),
         run_id=row.get("run_id"),
         checkpoint_id=row.get("checkpoint_id"),
@@ -86,6 +99,10 @@ class ArtifactStore(Protocol):
 
     async def upsert_artifact(self, artifact: ArtifactDefinition) -> None:
         """Insert or replace an artifact version."""
+        ...
+
+    async def health_check(self) -> None:
+        """Raise when the selected durable artifact storage is unavailable."""
         ...
 
     async def delete_artifact(
@@ -128,6 +145,11 @@ class SqliteArtifactStore:
     async def close(self) -> None:
         if self._db:
             await self._db.close()
+
+    async def health_check(self) -> None:
+        """Verify the configured SQLite artifact database."""
+        async with self._db.execute("SELECT 1") as cursor:
+            await cursor.fetchone()
 
     async def get_artifact(
         self, artifact_id: str, scope: dict[str, str] | None = None
@@ -182,17 +204,22 @@ class SqliteArtifactStore:
         now = datetime.now(UTC)
         await self._db.execute(
             """INSERT OR REPLACE INTO artifacts
-               (id, version, name, artifact_type, content, content_type,
+               (id, version, name, artifact_type, path, content, content_type,
+                object_key, content_checksum, content_size,
                 parent_version, run_id, checkpoint_id, visibility, scope,
                 scope_key, source, created_at, updated_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 artifact.id,
                 artifact.version,
                 artifact.name,
                 artifact.artifact_type,
+                artifact.path,
                 artifact.content,
                 artifact.content_type,
+                artifact.object_key,
+                artifact.content_checksum,
+                artifact.content_size,
                 artifact.parent_version,
                 artifact.run_id,
                 artifact.checkpoint_id,
@@ -283,6 +310,13 @@ class PostgresArtifactStore:
         if self._pool:
             await self._pool.close()
 
+    async def health_check(self) -> None:
+        """Verify the configured PostgreSQL artifact database."""
+        async with self._pool.connection() as conn:
+            async with conn.cursor() as cur:
+                await cur.execute("SELECT 1")
+                await cur.fetchone()
+
     async def get_artifact(
         self, artifact_id: str, scope: dict[str, str] | None = None
     ) -> ArtifactDefinition | None:
@@ -346,15 +380,20 @@ class PostgresArtifactStore:
             async with conn.cursor() as cur:
                 await cur.execute(
                     """INSERT INTO artifacts
-                       (id, version, name, artifact_type, content, content_type,
+                       (id, version, name, artifact_type, path, content, content_type,
+                        object_key, content_checksum, content_size,
                         parent_version, run_id, checkpoint_id, visibility, scope,
                         scope_key, source, created_at, updated_at)
-                       VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                       VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                        ON CONFLICT (id, scope_key, version) DO UPDATE SET
                         name = EXCLUDED.name,
                         artifact_type = EXCLUDED.artifact_type,
+                        path = EXCLUDED.path,
                         content = EXCLUDED.content,
                         content_type = EXCLUDED.content_type,
+                        object_key = EXCLUDED.object_key,
+                        content_checksum = EXCLUDED.content_checksum,
+                        content_size = EXCLUDED.content_size,
                         parent_version = EXCLUDED.parent_version,
                         run_id = EXCLUDED.run_id,
                         checkpoint_id = EXCLUDED.checkpoint_id,
@@ -366,8 +405,12 @@ class PostgresArtifactStore:
                         artifact.version,
                         artifact.name,
                         artifact.artifact_type,
+                        artifact.path,
                         artifact.content,
                         artifact.content_type,
+                        artifact.object_key,
+                        artifact.content_checksum,
+                        artifact.content_size,
                         artifact.parent_version,
                         artifact.run_id,
                         artifact.checkpoint_id,
@@ -459,6 +502,10 @@ class MemoryArtifactStore:
     async def close(self) -> None:
         pass
 
+    async def health_check(self) -> None:
+        """The in-memory local-development store is always available."""
+        return None
+
     def _key(self, artifact_id: str, scope: dict[str, str] | None) -> str:
         del artifact_id
         return effective_scope_key(scope)
@@ -514,8 +561,12 @@ class MemoryArtifactStore:
             "version": artifact.version,
             "name": artifact.name,
             "artifact_type": artifact.artifact_type,
+            "path": artifact.path,
             "content": artifact.content,
             "content_type": artifact.content_type,
+            "object_key": artifact.object_key,
+            "content_checksum": artifact.content_checksum,
+            "content_size": artifact.content_size,
             "parent_version": artifact.parent_version,
             "run_id": artifact.run_id,
             "checkpoint_id": artifact.checkpoint_id,
@@ -616,26 +667,85 @@ class S3ArtifactStore:
         )
 
     @staticmethod
-    def _path(artifact: ArtifactDefinition) -> str:
-        return f"/artifacts/{artifact.artifact_type}/{artifact.id}/{artifact.version}"
+    def _body_metadata(content: str) -> tuple[bytes, str, int]:
+        body = content.encode("utf-8")
+        return body, hashlib.sha256(body).hexdigest(), len(body)
+
+    @staticmethod
+    def _path(artifact: ArtifactDefinition, checksum: str | None = None) -> str:
+        digest = checksum or artifact.content_checksum
+        if digest is None:
+            raise RuntimeError("Artifact manifest is missing its durable-body checksum")
+        return f"/artifacts/{artifact.artifact_type}/{artifact.id}/{artifact.version}/{digest}"
+
+    @staticmethod
+    def _download(backend: Any, path: str) -> bytes:
+        responses = backend.download_files([path])
+        if len(responses) != 1 or responses[0].error or responses[0].content is None:
+            raise RuntimeError("Artifact body is unavailable from configured durable storage")
+        return bytes(responses[0].content)
 
     async def initialize(self) -> None:
         initialize = getattr(self._manifest_store, "initialize", None)
         if initialize is not None:
             await initialize()
+        try:
+            self._backend({}).verify_connection()
+        except Exception as exc:
+            logger.warning(
+                "S3 artifact storage initialization failed",
+                operation="health",
+                result="failure",
+                error_type=type(exc).__name__,
+            )
+            raise
+        logger.info("S3 artifact storage initialized", operation="health", result="success")
 
     async def close(self) -> None:
         close = getattr(self._manifest_store, "close", None)
         if close is not None:
             await close()
 
+    async def health_check(self) -> None:
+        """Verify both the authoritative manifest store and selected object store."""
+        health_check = getattr(self._manifest_store, "health_check", None)
+        if health_check is not None:
+            await health_check()
+        self._backend({}).verify_connection()
+
     async def _hydrate(self, artifact: ArtifactDefinition | None) -> ArtifactDefinition | None:
         if artifact is None:
             return None
-        result = self._backend(artifact.scope).read(self._path(artifact), limit=2**31 - 1)
-        if result.error or result.file_data is None:
-            raise RuntimeError("Artifact body is unavailable from configured durable storage")
-        return artifact.model_copy(update={"content": result.file_data["content"]})
+        if artifact.object_key is None or artifact.content_size is None:
+            raise RuntimeError("Artifact manifest is missing durable-body metadata")
+        backend = self._backend(artifact.scope)
+        path = self._path(artifact)
+        if backend.object_key(path) != artifact.object_key:
+            raise RuntimeError("Artifact manifest does not match its configured storage scope")
+        body = self._download(backend, path)
+        digest = hashlib.sha256(body).hexdigest()
+        if digest != artifact.content_checksum or len(body) != artifact.content_size:
+            logger.warning(
+                "Artifact body integrity verification failed",
+                artifact_type=artifact.artifact_type,
+                version=artifact.version,
+                operation="read",
+                result="checksum_failure",
+            )
+            raise RuntimeError("Artifact body failed durable-storage integrity verification")
+        try:
+            content = body.decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise RuntimeError("Artifact body is not valid UTF-8") from exc
+        logger.debug(
+            "Artifact body loaded from S3-compatible storage",
+            artifact_type=artifact.artifact_type,
+            version=artifact.version,
+            content_size=artifact.content_size,
+            operation="read",
+            result="success",
+        )
+        return artifact.model_copy(update={"content": content})
 
     async def get_artifact(
         self, artifact_id: str, scope: dict[str, str] | None = None
@@ -653,10 +763,39 @@ class S3ArtifactStore:
         return [artifact for artifact in hydrated if artifact is not None]
 
     async def upsert_artifact(self, artifact: ArtifactDefinition) -> None:
-        write = self._backend(artifact.scope).write(self._path(artifact), artifact.content)
+        body, checksum, content_size = self._body_metadata(artifact.content)
+        backend = self._backend(artifact.scope)
+        path = self._path(artifact, checksum)
+        write = backend.write(path, artifact.content)
         if write.error:
             raise RuntimeError("Artifact body could not be written to configured durable storage")
-        await self._manifest_store.upsert_artifact(artifact.model_copy(update={"content": ""}))
+        stored_body = self._download(backend, path)
+        if stored_body != body or hashlib.sha256(stored_body).hexdigest() != checksum:
+            logger.warning(
+                "Artifact upload integrity verification failed",
+                artifact_type=artifact.artifact_type,
+                version=artifact.version,
+                operation="write",
+                result="checksum_failure",
+            )
+            raise RuntimeError("Artifact body failed post-upload integrity verification")
+        manifest = artifact.model_copy(
+            update={
+                "content": "",
+                "object_key": backend.object_key(path),
+                "content_checksum": checksum,
+                "content_size": content_size,
+            }
+        )
+        await self._manifest_store.upsert_artifact(manifest)
+        logger.info(
+            "Artifact manifest activated",
+            artifact_type=artifact.artifact_type,
+            version=artifact.version,
+            content_size=content_size,
+            operation="write",
+            result="success",
+        )
 
     async def delete_artifact(
         self, artifact_id: str, scope: dict[str, str] | None = None

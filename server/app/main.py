@@ -7,12 +7,13 @@ from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 
 import structlog
-from fastapi import Depends, FastAPI, Request
+from fastapi import Depends, FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from server.app.agent.resolver import RuntimeResolver
 from server.app.api.dependencies import (
+    get_artifact_store,
     get_storage_backend_dep,
     set_artifact_store,
     set_config_store,
@@ -50,6 +51,7 @@ from server.app.rate_limiter import RateLimitConfig, get_rate_limiter
 from server.app.session_manager import initialize_session_manager
 from server.app.settings import get_settings
 from server.app.storage import create_storage_backend
+from server.app.storage.artifact_store import ArtifactStore
 from server.app.storage.backend import StorageBackend
 from server.app.storage.config_store import DefaultConfigStore, set_default_config_store
 from server.version import VERSION
@@ -358,8 +360,19 @@ async def health_check(
 
 
 @app.get("/ready", response_model=ReadyStatus, tags=["health"])
-async def ready_check() -> ReadyStatus:
-    """Readiness probe endpoint."""
+async def ready_check(
+    response: Response,
+    storage_backend: StorageBackend = Depends(get_storage_backend_dep),  # noqa: B008
+    artifact_store: ArtifactStore = Depends(get_artifact_store),  # noqa: B008
+) -> ReadyStatus:
+    """Report readiness only while the builder-selected durable stores respond."""
+    try:
+        await storage_backend.list_sessions(limit=1)
+        await artifact_store.health_check()
+    except Exception as exc:
+        logger.warning("Selected durable storage is not ready", error_type=type(exc).__name__)
+        response.status_code = 503
+        return ReadyStatus(ready=False)
     return ReadyStatus(ready=True)
 
 

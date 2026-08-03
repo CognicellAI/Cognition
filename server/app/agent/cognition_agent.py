@@ -691,6 +691,7 @@ async def create_cognition_agent(params: CognitionAgentParams) -> CognitionAgent
                     {
                         "/scratch/": artifact_backend,
                         "/artifacts/": artifact_backend,
+                        "/files/": artifact_backend,
                         "/contracts/": artifact_backend,
                         "/evals/": artifact_backend,
                         "/memories/": artifact_backend,

@@ -35,6 +35,55 @@ The workspace root is resolved to an absolute path at startup. The agent's tools
 
 ---
 
+## Durable Storage
+
+Builders select persistence and durable-file placement explicitly. Cognition
+does not infer a production mode or silently change backends after a failure.
+SQLite, in-memory state, and local files remain valid local/development choices.
+
+For a distributed topology, select PostgreSQL-compatible persistence and an
+S3-compatible durable-file backend:
+
+```bash
+COGNITION_PERSISTENCE_BACKEND=postgres
+COGNITION_PERSISTENCE_URI=postgresql+asyncpg://cognition@database/cognition
+COGNITION_DURABLE_FILE_BACKEND=s3
+COGNITION_S3_BUCKET=cognition
+COGNITION_S3_PREFIX=cognition
+COGNITION_S3_SCOPE_HMAC_KEY=replace-with-a-deployment-secret
+COGNITION_S3_REGION=us-east-1
+```
+
+Garage, MinIO, and similar deployments may also set:
+
+```bash
+COGNITION_S3_ENDPOINT_URL=http://garage:3900
+COGNITION_S3_FORCE_PATH_STYLE=true
+```
+
+S3 credentials come from boto3's standard workload, environment, shared-file,
+or instance-role provider chain. The scope HMAC key derives opaque object
+prefixes; it is not an S3 credential and must be stable for the lifetime of the
+stored data.
+
+| Environment variable | Default | Description |
+|---|---|---|
+| `COGNITION_DURABLE_FILE_BACKEND` | `local` | `local` or `s3` |
+| `COGNITION_S3_BUCKET` | — | Required when the selected backend is `s3` |
+| `COGNITION_S3_PREFIX` | `cognition` | Builder-owned bucket prefix |
+| `COGNITION_S3_SCOPE_HMAC_KEY` | — | Required key for opaque exact-scope prefixes |
+| `COGNITION_S3_ENDPOINT_URL` | AWS SDK default | Optional S3-compatible endpoint |
+| `COGNITION_S3_REGION` | AWS SDK default | Optional region |
+| `COGNITION_S3_FORCE_PATH_STYLE` | `false` | Enable for compatible stores that require path-style addressing |
+
+Agent-owned Skill bundles remain in the immutable Agent revision in the
+database. The `/artifacts/`, `/files/`, `/memories/`, `/contracts/`, `/evals/`,
+and `/policies/` routes use database manifests and, when selected, immutable
+digest-addressed S3 bodies. Startup and `/ready` fail explicitly when a selected
+database or object store is unavailable.
+
+---
+
 ## LLM Provider Configuration
 
 LLM provider and model settings are managed through the **ConfigRegistry**, a database-backed configuration store that supports hot-reloading. Provider configuration no longer lives in `Settings` or environment variables like `COGNITION_LLM_PROVIDER` / `COGNITION_LLM_MODEL`.

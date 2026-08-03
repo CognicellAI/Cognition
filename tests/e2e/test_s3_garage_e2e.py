@@ -131,6 +131,7 @@ async def test_s3_artifact_store_against_garage_keeps_scope_bodies_out_of_manife
         region_name="garage",
         force_path_style=True,
     )
+    await store.initialize()
     acme = ArtifactDefinition(
         id="report",
         name="report",
@@ -144,11 +145,24 @@ async def test_s3_artifact_store_against_garage_keeps_scope_bodies_out_of_manife
 
     await store.upsert_artifact(acme)
     await store.upsert_artifact(globex)
+    acme_v2 = acme.model_copy(
+        update={"content": "acme version two", "version": 2, "parent_version": 1}
+    )
+    await store.upsert_artifact(acme_v2)
 
-    assert (await manifests.get_artifact("report", {"tenant": "acme"})).content == ""  # type: ignore[union-attr]
-    assert (await manifests.get_artifact("report", {"tenant": "globex"})).content == ""  # type: ignore[union-attr]
-    assert (await store.get_artifact("report", {"tenant": "acme"})).content == "acme-only body"  # type: ignore[union-attr]
+    acme_manifest = await manifests.get_artifact("report", {"tenant": "acme"})
+    globex_manifest = await manifests.get_artifact("report", {"tenant": "globex"})
+    assert acme_manifest is not None and acme_manifest.content == ""
+    assert globex_manifest is not None and globex_manifest.content == ""
+    assert acme_manifest.content_checksum is not None
+    assert globex_manifest.content_checksum is not None
+    assert acme_manifest.object_key != globex_manifest.object_key
+    assert (await store.get_artifact("report", {"tenant": "acme"})).content == "acme version two"  # type: ignore[union-attr]
     assert (await store.get_artifact("report", {"tenant": "globex"})).content == "globex-only body"  # type: ignore[union-attr]
+    assert [
+        artifact.version
+        for artifact in await store.list_artifact_versions("report", {"tenant": "acme"})
+    ] == [2, 1]
 
     s3 = boto3.client(
         "s3",
@@ -159,8 +173,16 @@ async def test_s3_artifact_store_against_garage_keeps_scope_bodies_out_of_manife
         config=Config(s3={"addressing_style": "path"}),
     )
     keys = [item["Key"] for item in s3.list_objects_v2(Bucket=_BUCKET).get("Contents", [])]
-    assert len([key for key in keys if key.endswith("/artifacts/artifact/report/1")]) == 2
+    assert len([key for key in keys if "/artifacts/artifact/report/" in key]) == 3
     assert all("acme" not in key and "globex" not in key for key in keys)
+
+    acme_v2_manifest = await manifests.get_artifact_version(
+        "report", 2, {"tenant": "acme"}
+    )
+    assert acme_v2_manifest is not None and acme_v2_manifest.object_key is not None
+    s3.put_object(Bucket=_BUCKET, Key=acme_v2_manifest.object_key, Body=b"tampered")
+    with pytest.raises(RuntimeError, match="integrity verification"):
+        await store.get_artifact("report", {"tenant": "acme"})
 
     assert await store.delete_artifact("report", {"tenant": "acme"})
     assert await store.get_artifact("report", {"tenant": "acme"}) is None

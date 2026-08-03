@@ -369,7 +369,9 @@ class SandboxProfile(BaseModel):
 # Artifact
 # ---------------------------------------------------------------------------
 
-ARTIFACT_TYPES = Literal["scratch", "artifact", "contract", "eval", "memory", "policy"]
+ARTIFACT_TYPES = Literal[
+    "scratch", "artifact", "file", "contract", "eval", "memory", "policy"
+]
 
 
 class ArtifactDefinition(BaseModel):
@@ -382,11 +384,15 @@ class ArtifactDefinition(BaseModel):
     Attributes:
         id: Unique artifact identifier (UUID).
         name: Human-readable name (e.g. "feature-list", "progress").
-        artifact_type: Route category (scratch, artifact, contract, eval,
-            memory, policy).
+        artifact_type: Route category (scratch, artifact, file, contract,
+            eval, memory, policy).
         path: Virtual path within the type route (e.g. "feature_list.json").
         content: File content (JSON, Markdown, or plain text).
         content_type: MIME or type tag (e.g. "application/json").
+        object_key: Opaque durable-object key when the body is stored outside
+            the database.
+        content_checksum: SHA-256 hex digest of the durable body.
+        content_size: UTF-8 body size in bytes.
         version: Monotonic version number (incremented on update).
         parent_version: Version this artifact descends from (None for v1).
         run_id: Optional associated run identifier.
@@ -402,9 +408,12 @@ class ArtifactDefinition(BaseModel):
     id: str = Field(..., min_length=1, max_length=100)
     name: str = Field(..., min_length=1, max_length=100)
     artifact_type: ARTIFACT_TYPES = Field(default="scratch")
-    path: str = Field(default="")
+    path: str = Field(default="", max_length=1024)
     content: str = Field(default="")
     content_type: str = Field(default="text/plain")
+    object_key: str | None = Field(default=None, max_length=1024)
+    content_checksum: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    content_size: int | None = Field(default=None, ge=0)
     version: int = Field(default=1, ge=1)
     parent_version: int | None = Field(default=None, ge=1)
     run_id: str | None = Field(default=None)
@@ -425,11 +434,27 @@ class ArtifactDefinition(BaseModel):
             )
         return v
 
+    @field_validator("path")
+    @classmethod
+    def validate_artifact_path(cls, v: str) -> str:
+        """Require an empty or normalized relative POSIX manifest path."""
+        if not v:
+            return v
+        segments = v.split("/")
+        if (
+            v.startswith("/")
+            or "\\" in v
+            or "\x00" in v
+            or any(segment in {"", ".", ".."} for segment in segments)
+        ):
+            raise ValueError("Artifact path must be a normalized relative POSIX path")
+        return v
+
     @field_validator("artifact_type")
     @classmethod
     def validate_artifact_type(cls, v: str) -> str:
         """Ensure artifact type is one of the known route categories."""
-        allowed = {"scratch", "artifact", "contract", "eval", "memory", "policy"}
+        allowed = {"scratch", "artifact", "file", "contract", "eval", "memory", "policy"}
         if v not in allowed:
             raise ValueError(f"Artifact type must be one of {sorted(allowed)}, got: {v!r}")
         return v

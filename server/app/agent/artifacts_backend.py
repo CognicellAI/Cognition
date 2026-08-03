@@ -2,7 +2,7 @@
 
 This backend implements ``BackendProtocol`` and exposes artifacts stored in
 the ``ConfigStore`` as files on virtual paths under ``/artifacts/``,
-``/scratch/``, ``/contracts/``, ``/evals/``, ``/memories/``, and
+``/scratch/``, ``/files/``, ``/contracts/``, ``/evals/``, ``/memories/``, and
 ``/policies/``.
 
 When wired into the ``CompositeBackend``, Deep Agents file tools (read,
@@ -35,6 +35,7 @@ logger = structlog.get_logger(__name__)
 ARTIFACT_ROUTE_PREFIXES = {
     "scratch": "/scratch/",
     "artifact": "/artifacts/",
+    "file": "/files/",
     "contract": "/contracts/",
     "eval": "/evals/",
     "memory": "/memories/",

@@ -25,14 +25,17 @@ intent from an environment label.
 1. The configured database backend is authoritative for Agent identity/revisions,
    configuration manifests, sessions, runs, events, messages, checkpoints, and
    other transactional metadata.
-2. In the recommended distributed topology, S3-compatible object storage holds
-   durable file bodies: skills, artifacts, files, memories, contracts,
-   evaluations, and policy bodies. Database manifests carry canonical scope,
-   path, object key, checksum, version, and audit metadata; knowledge of an
-   object key is not authorization.
+2. Complete Agent-owned Skill bundles are immutable configuration revision data
+   and remain in the authoritative database with the rest of their Agent
+   definition. In the recommended distributed topology, S3-compatible object
+   storage holds independently mutable durable file bodies: artifacts, files,
+   memories, contracts, evaluations, and policy bodies. Database manifests carry
+   canonical scope, path, object key, checksum, version, and audit metadata;
+   knowledge of an object key is not authorization.
 3. A composite Deep Agents backend uses `StateBackend` for runtime state,
-   scoped S3-compatible routes for durable virtual files, and an isolated
-   sandbox backend for execution workspaces.
+   a read-only Agent-revision route for Skills, scoped S3-compatible routes for
+   independently mutable durable virtual files, and an isolated sandbox backend
+   for execution workspaces.
 4. Object publication verifies the body checksum and atomically advances the
    database manifest. Sandboxes are ephemeral and never a durable source of
    record.

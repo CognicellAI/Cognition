@@ -7,6 +7,7 @@ model context window for long-running agent handoffs.
 Route structure maps to the typed artifact categories:
 - /artifacts/scratch/    — thread-scoped scratch state
 - /artifacts/artifacts/  — user-visible outputs
+- /artifacts/files/      — general durable files
 - /artifacts/contracts/  — negotiated done criteria
 - /artifacts/evals/      — evaluator results
 - /artifacts/memories/   — scoped memory
@@ -37,7 +38,15 @@ router = APIRouter(prefix="/artifacts", tags=["artifacts"])
 
 logger = structlog.get_logger(__name__)
 
-VALID_ARTIFACT_TYPES = {"scratch", "artifact", "contract", "eval", "memory", "policy"}
+VALID_ARTIFACT_TYPES = {
+    "scratch",
+    "artifact",
+    "file",
+    "contract",
+    "eval",
+    "memory",
+    "policy",
+}
 VALID_VISIBILITIES = {"private", "run", "public"}
 
 

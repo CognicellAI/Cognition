@@ -98,6 +98,28 @@ class S3CompatibleBackend(BackendProtocol):
         relative = normalized.lstrip("/")
         return "/".join(part for part in (self._prefix, relative) if part)
 
+    def object_key(self, path: str) -> str:
+        """Return the exact configured-bucket key for a virtual path.
+
+        The caller may persist this opaque key in an authorization-bearing
+        database manifest. Possession of the key does not bypass the backend's
+        effective-scope prefix.
+        """
+        return self._key(path)
+
+    def verify_connection(self) -> None:
+        """Verify that the configured bucket is reachable and authorized.
+
+        Raises:
+            RuntimeError: If the selected S3-compatible backend is unavailable.
+        """
+        try:
+            self._client.head_bucket(Bucket=self._bucket)
+        except Exception as exc:
+            raise RuntimeError(
+                f"Configured S3-compatible storage is unavailable: {type(exc).__name__}"
+            ) from exc
+
     def _path(self, key: str) -> str:
         if self._prefix:
             if not key.startswith(f"{self._prefix}/"):
