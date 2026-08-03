@@ -398,6 +398,8 @@ class CognitionAgentParams:
     mcp_configs: Sequence[McpServerConfig] | None = None
     agent_mcp_servers: Sequence[AgentMcpServer] | None = None
     scope: dict[str, str] | None = None
+    agent_identity: str | None = None
+    runtime_snapshot: str | None = None
     config_store: ConfigStore | None = None
     sandbox_profile: str | None = None
     sandbox_execution_role_arn: str | None = None
@@ -724,11 +726,12 @@ async def create_cognition_agent(params: CognitionAgentParams) -> CognitionAgent
 
     if params.agent_mcp_servers:
         mcp_callbacks = _build_mcp_callbacks()
-        mcp_interceptors = _build_mcp_interceptors(params.scope)
         mcp_tools = await load_agent_mcp_tools(
             params.agent_mcp_servers,
             callbacks=mcp_callbacks,
-            tool_interceptors=mcp_interceptors,
+            agent_identity=params.agent_identity or "",
+            runtime_snapshot=params.runtime_snapshot or "",
+            trusted_context=params.scope or {},
         )
         agent_tools.extend(mcp_tools)
         logger.info("agent_mcp_tools_loaded", count=len(mcp_tools))

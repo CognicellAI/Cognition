@@ -509,6 +509,8 @@ class DeepAgentStreamingService:
                     agent_cfg.agent_def.mcp_servers if agent_cfg.agent_def else None
                 ),
                 scope=effective_scope,
+                agent_identity=session.agent_name if session else None,
+                runtime_snapshot=model_cache_key,
                 config_store=self._get_config_store(),
                 sandbox_profile=agent_cfg.sandbox_profile,
                 sandbox_execution_role_arn=agent_cfg.sandbox_execution_role_arn,
@@ -755,6 +757,8 @@ class DeepAgentStreamingService:
                     agent_cfg.agent_def.mcp_servers if agent_cfg.agent_def else None
                 ),
                 scope=effective_scope,
+                agent_identity=session.agent_name,
+                runtime_snapshot=model_cache_key,
                 config_store=self._get_config_store(),
                 sandbox_profile=agent_cfg.sandbox_profile,
                 sandbox_execution_role_arn=agent_cfg.sandbox_execution_role_arn,
