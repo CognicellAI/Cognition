@@ -684,7 +684,6 @@ class GlobalAgentDefaultsResponse(BaseModel):
     tool_token_limit_before_evict: int | None = None
     context_policy: ContextPolicy | None = None
     recursion_limit: int
-    mcp_servers: dict[str, Any] = Field(default_factory=dict)
 
 
 class GlobalAgentDefaultsUpdate(BaseModel):
@@ -700,7 +699,6 @@ class GlobalAgentDefaultsUpdate(BaseModel):
     tool_token_limit_before_evict: int | None = None
     context_policy: ContextPolicy | None = None
     recursion_limit: int | None = None
-    mcp_servers: dict[str, Any] | None = None
 
 
 class McpServerCreate(BaseModel):
