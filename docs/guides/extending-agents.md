@@ -436,63 +436,52 @@ String entries are imported directly; dict entries with a `name` key are treated
 
 ## 6. MCP Tool Servers
 
-Connect to any remote Model Context Protocol (MCP) server. MCP servers expose tools over HTTP.
+Connect an Agent to remote Model Context Protocol (MCP) servers. Servers are
+declared on the Agent and are part of its immutable configuration revision; the
+same agent definition therefore produces the same allowed MCP capability set
+for a pinned run.
 
 ```yaml
-# .cognition/config.yaml
-mcp:
-  servers:
-    - name: github-tools
-      url: https://mcp.github.example.com/sse
-      transport: sse  # or "streamable_http"
-    - name: internal-db
-      url: http://db-tools.internal:8080/sse
+name: deploy-agent
+mcp_servers:
+  - alias: github
+    url: https://mcp.github.example.com/mcp
+    transport: streamable_http
+    required: true
+    auth:
+      type: mcp_oauth
+  - alias: internal-db
+    url: https://db-tools.internal/mcp
+    required: false
+    auth:
+      type: outbound_auth_provider
+      profile: internal-egress
 ```
 
-All tools exposed by the MCP server become available to the agent under the server name as a namespace prefix (e.g. `github-tools/create_pr`). The `tool_name_prefix=True` setting on `MultiServerMCPClient` prevents tool name collisions between servers.
+Each server is discovered independently. A required-server failure stops the
+run with a typed, redacted error; an optional-server failure leaves healthy
+servers available and reports a degraded capability. Duplicate canonical tool
+identities `(server_alias, provider_tool_name)` fail discovery.
 
 ### How It Works
 
 Cognition uses [`langchain-mcp-adapters`](https://github.com/langchain-ai/langchain-mcp-adapters) to connect to MCP servers. The adapter:
 
-1. Connects to each configured remote server using SSE or Streamable HTTP transport
-2. Converts MCP tools into LangChain `BaseTool` instances
-3. Applies a **scope injection interceptor** that adds `X-Cognition-Scope-*` headers to every MCP request
-4. Registers progress and logging callbacks for observability
-5. Returns tools that participate in the full Deep Agents middleware stack (tool safety, HITL, permissions)
+1. Connects to each declared server using Streamable HTTP.
+2. Converts provider tools into LangChain tools and preserves their canonical identity.
+3. Applies transport authentication on discovery and invocation.
+4. Returns tools that participate in the Deep Agents middleware stack.
 
-### Transport Options
+The supported authentication types are `none`, native `mcp_oauth`, optional
+`outbound_auth_provider`, and local/development-only `static_bearer`.
+`outbound_auth_provider` references an opaque profile and may return only
+allowlisted headers or `httpx.Auth`; it never exposes credentials to the agent,
+configuration API, persistence, or telemetry. Trusted runtime context is not
+projected into arbitrary request headers.
 
-| Transport | Description |
-|---|---|
-| `sse` | Server-Sent Events (default). Best for long-lived connections. |
-| `streamable_http` | HTTP with streaming. Best for serverless or short-lived connections. |
-
-### Managing MCP Servers via API
-
-MCP servers can also be managed at runtime via the REST API:
-
-```bash
-# List registered servers
-curl http://localhost:8000/mcp-servers
-
-# Register a new server
-curl -X POST http://localhost:8000/mcp-servers \
-  -H "Content-Type: application/json" \
-  -d '{"name": "my-tools", "url": "https://tools.example.com/sse", "transport": "sse"}'
-
-# Update a server
-curl -X PATCH http://localhost:8000/mcp-servers/my-tools \
-  -H "Content-Type: application/json" \
-  -d '{"enabled": false}'
-
-# Delete a server
-curl -X DELETE http://localhost:8000/mcp-servers/my-tools
-```
-
-> **Note:** MCP server `headers` (containing credentials) are redacted in API responses — `GET /mcp-servers` returns an empty `headers` dict to prevent credential leakage. File-managed servers (from `.cognition/config.yaml`) are read-only via the API — mutation attempts return `409 Conflict`.
-
-Only HTTP/HTTPS URLs are accepted — stdio-based MCP servers are not supported for security reasons.
+Only HTTP/HTTPS URLs are accepted. Local `stdio` servers and raw configured
+headers are deliberately unsupported. The full v0.14 contract is in
+[the MCP runtime proposal](../proposals/v0.14.0-mcp-runtime-contract.md).
 
 ---
 

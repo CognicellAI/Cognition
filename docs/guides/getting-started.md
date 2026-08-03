@@ -487,7 +487,7 @@ You have a running Cognition instance, a connected LLM provider, streaming worki
 | Inject project-specific context into every session (AGENTS.md) | [Extending Agents → Memory](./extending-agents.md#1-memory-agentsmd) |
 | Add skills — progressive disclosure docs the agent reads on demand | [Extending Agents → Skills](./extending-agents.md#2-skills-skillmd) |
 | Add retry logic, PII redaction, or call limits to tools | [Configuration → Middleware](./configuration.md#agent-defaults) |
-| Connect remote MCP tool servers | [Extending Agents → MCP Tool Servers](./extending-agents.md#6-mcp-tool-servers) |
+| Connect an agent to remote MCP tool servers | [Extending Agents → MCP Tool Servers](./extending-agents.md#6-mcp-tool-servers) |
 | Expose agents via A2A for external system integration | [Extending Agents → A2A Exposure](./extending-agents.md#7-exposing-agents-via-a2a) |
 | Use artifacts for durable state outside the context window | [API Reference → Artifacts](./api-reference.md#artifacts) |
 | Discover deployment capabilities programmatically | [API Reference → Capabilities](./api-reference.md#capabilities) |
