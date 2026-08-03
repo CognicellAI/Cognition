@@ -509,8 +509,19 @@ class DeepAgentStreamingService:
         if agent_def.mcp.servers:
             from server.app.agent.mcp_client import McpServerConfig
 
+            pinned_revision = (
+                pinned_agent.get("revision") if isinstance(pinned_agent, Mapping) else None
+            )
+            agent_revision = pinned_revision if isinstance(pinned_revision, int) else 1
             resolved.mcp_configs = [
-                McpServerConfig.from_agent_config(alias, config, self.settings)
+                McpServerConfig.from_agent_config(
+                    alias,
+                    config,
+                    self.settings,
+                    agent_name=agent_def.name,
+                    agent_revision=agent_revision,
+                    effective_scope=effective_scope or {},
+                )
                 for alias, config in agent_def.mcp.servers.items()
             ]
 
@@ -583,12 +594,23 @@ class DeepAgentStreamingService:
 
             from server.app.agent.cognition_agent import CognitionContext
 
+            execution_timeout_seconds = (
+                agent_cfg.agent_def.config.timeout_seconds
+                if agent_cfg.agent_def is not None
+                else None
+            )
+            request_deadline = (
+                int((time.time() + execution_timeout_seconds) * 1000)
+                if execution_timeout_seconds is not None
+                else None
+            )
             invocation_context = CognitionContext.from_scope(
                 effective_scope,
                 session_id=session.id if session else session_id,
                 thread_id=session.thread_id if session else thread_id,
                 agent_name=session.agent_name if session else None,
                 metadata=session.metadata if session else None,
+                request_deadline=request_deadline,
             )
 
             context_policy = _effective_context_policy(
@@ -672,12 +694,6 @@ class DeepAgentStreamingService:
                 default_provider=provider,
                 default_model=model_id,
             )
-            execution_timeout_seconds = (
-                agent_cfg.agent_def.config.timeout_seconds
-                if agent_cfg.agent_def is not None
-                else None
-            )
-
             runtime_exception: Exception | None = None
 
             try:

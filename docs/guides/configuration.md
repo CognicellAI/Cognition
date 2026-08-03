@@ -596,6 +596,28 @@ a named environment variable and is supported but not recommended. Cognition
 does not infer a production or multi-tenant mode or enforce the builder's
 authentication-mode policy.
 
+Define workload exchange outside the Agent:
+
+```yaml
+mcp_auth_profiles:
+  production_egress:
+    type: oauth_token_exchange
+    token_endpoint: https://identity.internal/token
+    subject_token_source: workload_identity
+    audience: canonical_server_uri
+```
+
+Set `COGNITION_MCP_WORKLOAD_IDENTITY_TOKEN_FILE` to a projected, rotating
+workload token file. `COGNITION_MCP_WORKLOAD_IDENTITY_TOKEN` is an environment
+fallback when file projection is unavailable. Cognition rereads the projected
+file for each uncached exchange and caches only the short-lived exchanged token
+until its bounded expiry.
+
+Token endpoints that require confidential-client authentication may add
+`client_auth: client_secret_basic`, `client_id`, and `client_secret_env` to the
+deployment profile. `client_secret_env` names an environment variable; its
+value never enters YAML, Agent configuration, persistence, or telemetry.
+
 ---
 
 ## Model Catalog

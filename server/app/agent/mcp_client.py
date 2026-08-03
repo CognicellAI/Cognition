@@ -4,16 +4,17 @@ Wraps langchain-mcp-adapters for Cognition's remote-only MCP server integration.
 Replaces the previous custom McpSseClient / McpManager / McpAdapterTool layer.
 
 Security stance:
-- Remote MCP servers: Allowed (SSE transport, HTTP/HTTPS URLs only).
+- Remote MCP servers: Allowed (Streamable HTTP transport, HTTP/HTTPS URLs only).
 - Local (stdio) MCP servers: NOT supported for security reasons.
 """
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from typing import Any, Literal
 from urllib.parse import urlsplit
 
+import httpx
 import structlog
 from langchain_core.tools import BaseTool
 from langchain_mcp_adapters.callbacks import CallbackContext, Callbacks
@@ -27,7 +28,18 @@ from server.app.agent.definition import (
     AgentMcpServerConfig,
     McpAuthConfig,
     McpNoAuthConfig,
+    McpOAuthConfig,
+    McpStaticBearerAuthConfig,
     McpWorkloadTokenExchangeAuthConfig,
+)
+from server.app.agent.mcp_auth import (
+    AmbientWorkloadIdentity,
+    McpAuthenticationError,
+    McpTrustedContextInterceptor,
+    StaticBearerAuth,
+    WorkloadTokenExchangeAuth,
+    resolve_workload_client_secret,
+    trusted_context_headers,
 )
 from server.app.settings import McpWorkloadTokenExchangeProfile, Settings
 
@@ -64,6 +76,9 @@ class McpServerConfig(BaseModel):
         default="streamable_http", description="MCP transport protocol"
     )
     auth: McpAuthConfig = Field(default_factory=McpNoAuthConfig)
+    agent_name: str = Field(default="", exclude=True)
+    agent_revision: int = Field(default=1, ge=1, exclude=True)
+    effective_scope: dict[str, str] = Field(default_factory=dict, exclude=True)
     workload_profile: McpWorkloadTokenExchangeProfile | None = Field(
         default=None,
         exclude=True,
@@ -77,16 +92,23 @@ class McpServerConfig(BaseModel):
         alias: str,
         config: AgentMcpServerConfig,
         settings: Settings,
+        *,
+        agent_name: str,
+        agent_revision: int,
+        effective_scope: Mapping[str, str],
     ) -> McpServerConfig:
         workload_profile = None
         if isinstance(config.auth, McpWorkloadTokenExchangeAuthConfig):
             workload_profile = settings.get_mcp_auth_profile(config.auth.profile)
         return cls(
             name=alias,
-            url=config.url,
+            url=_canonical_server_uri(config.url),
             required=config.required,
             transport=config.transport,
             auth=config.auth,
+            agent_name=agent_name,
+            agent_revision=agent_revision,
+            effective_scope=dict(effective_scope),
             workload_profile=workload_profile,
         )
 
@@ -125,28 +147,76 @@ class McpToolInfo(BaseModel):
     task_support: str | None = None
 
 
-def mcp_config_to_connection(config: McpServerConfig) -> StreamableHttpConnection:
-    if not isinstance(config.auth, McpNoAuthConfig):
+def mcp_config_to_connection(
+    config: McpServerConfig,
+    settings: Settings,
+) -> StreamableHttpConnection:
+    if isinstance(config.auth, McpNoAuthConfig):
+        return {"transport": "streamable_http", "url": config.url}
+    if isinstance(config.auth, McpStaticBearerAuthConfig):
+        try:
+            static_auth = StaticBearerAuth.from_environment(config.auth.env)
+        except McpAuthenticationError as exc:
+            raise McpTransportAuthenticationError(config.name, exc.category) from exc
+        return {
+            "transport": "streamable_http",
+            "url": config.url,
+            "auth": static_auth,
+        }
+    if isinstance(config.auth, McpWorkloadTokenExchangeAuthConfig):
+        profile = config.workload_profile
+        if profile is None:
+            raise McpTransportAuthenticationError(config.name, "auth_profile_unavailable")
+        audience = config.url if profile.audience == "canonical_server_uri" else profile.audience
+        try:
+            workload_auth = WorkloadTokenExchangeAuth(
+                profile=profile,
+                audience=audience,
+                identity=AmbientWorkloadIdentity.from_settings(settings),
+                client_secret=resolve_workload_client_secret(profile),
+            )
+            headers = trusted_context_headers(**_trusted_context_kwargs(config))
+        except McpAuthenticationError as exc:
+            raise McpTransportAuthenticationError(config.name, exc.category) from exc
+        return {
+            "transport": "streamable_http",
+            "url": config.url,
+            "headers": headers,
+            "auth": workload_auth,
+        }
+    if isinstance(config.auth, McpOAuthConfig):
         raise McpTransportAuthenticationError(config.name)
-    return {"transport": "streamable_http", "url": config.url}
+    raise McpTransportAuthenticationError(config.name, "auth_invalid")
 
 
 def create_mcp_client(
     configs: Sequence[McpServerConfig],
+    settings: Settings,
     callbacks: Callbacks | None = None,
     tool_interceptors: list[ToolCallInterceptor] | None = None,
 ) -> MultiServerMCPClient:
-    connections: dict[str, Any] = {c.name: mcp_config_to_connection(c) for c in configs}
+    connections: dict[str, Any] = {c.name: mcp_config_to_connection(c, settings) for c in configs}
+    workload_contexts = {
+        config.name: _trusted_context_kwargs(config)
+        for config in configs
+        if isinstance(config.auth, McpWorkloadTokenExchangeAuthConfig)
+    }
+    interceptors = list(tool_interceptors or [])
+    if workload_contexts:
+        # Security projection is innermost so earlier interceptors cannot add or
+        # retain arbitrary per-call headers after this default-deny overwrite.
+        interceptors.append(McpTrustedContextInterceptor(workload_contexts))
     return MultiServerMCPClient(
         connections=connections or None,
         callbacks=callbacks,
-        tool_interceptors=tool_interceptors,
+        tool_interceptors=interceptors or None,
         tool_name_prefix=True,
     )
 
 
 async def load_mcp_tools_per_server(
     configs: Sequence[McpServerConfig],
+    settings: Settings,
     callbacks: Callbacks | None = None,
     tool_interceptors: list[ToolCallInterceptor] | None = None,
 ) -> list[BaseTool]:
@@ -155,22 +225,29 @@ async def load_mcp_tools_per_server(
     tools: list[BaseTool] = []
     seen: set[str] = set()
     for config in configs:
-        client = create_mcp_client(
-            [config],
-            callbacks=callbacks,
-            tool_interceptors=tool_interceptors,
-        )
         try:
+            client = create_mcp_client(
+                [config],
+                settings,
+                callbacks=callbacks,
+                tool_interceptors=tool_interceptors,
+            )
             server_tools = await client.get_tools(server_name=config.name)
         except Exception as exc:
+            category = (
+                exc.category
+                if isinstance(exc, McpTransportAuthenticationError)
+                else "discovery_failed"
+            )
             logger.warning(
                 "mcp_server_discovery_failed",
                 server=config.name,
                 required=config.required,
+                category=category,
                 error_type=type(exc).__name__,
             )
             if config.required:
-                raise McpServerDiscoveryError(config.name) from exc
+                raise McpServerDiscoveryError(config.name, category) from exc
             continue
 
         for tool in server_tools:
@@ -180,6 +257,21 @@ async def load_mcp_tools_per_server(
             seen.add(canonical_name)
             tools.append(tool)
     return tools
+
+
+def _trusted_context_kwargs(config: McpServerConfig) -> dict[str, Any]:
+    return {
+        "agent_name": config.agent_name,
+        "agent_revision": config.agent_revision,
+        "effective_scope": config.effective_scope,
+        "server_alias": config.name,
+        "canonical_server_uri": config.url,
+    }
+
+
+def _canonical_server_uri(value: str) -> str:
+    """Canonicalize an already validated MCP HTTP endpoint."""
+    return str(httpx.URL(value))
 
 
 def _build_mcp_callbacks() -> Callbacks:
@@ -195,7 +287,7 @@ def _build_mcp_callbacks() -> Callbacks:
             tool=context.tool_name,
             progress=progress,
             total=total,
-            message=message,
+            message_present=message is not None,
         )
 
     async def on_logging_message(
@@ -207,7 +299,7 @@ def _build_mcp_callbacks() -> Callbacks:
             "mcp_server_log",
             server=context.server_name,
             level=params.level,
-            data=str(params.data),
+            data_present=params.data is not None,
         )
 
     return Callbacks(
