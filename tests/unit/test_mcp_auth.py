@@ -8,7 +8,10 @@ from urllib.parse import parse_qs
 
 import httpx
 import pytest
+from cryptography.fernet import Fernet
 from langchain_mcp_adapters.interceptors import MCPToolCallRequest
+from mcp.client.auth import OAuthClientProvider
+from mcp.shared.auth import OAuthToken
 from mcp.types import CallToolResult
 from pydantic import SecretStr
 
@@ -26,6 +29,10 @@ from server.app.agent.mcp_client import (
     mcp_config_to_connection,
 )
 from server.app.settings import McpWorkloadTokenExchangeProfile, Settings
+from server.app.storage.mcp_oauth import (
+    EncryptedMcpOAuthTokenStorage,
+    MemoryMcpOAuthStateRepository,
+)
 
 
 def _profile(**overrides) -> McpWorkloadTokenExchangeProfile:
@@ -88,6 +95,68 @@ def test_static_bearer_missing_environment_fails_redacted() -> None:
         match="static_bearer_unavailable",
     ):
         mcp_config_to_connection(config, Settings())
+
+
+@pytest.mark.asyncio
+async def test_mcp_oauth_uses_upstream_provider_and_encrypted_exact_scope_state() -> None:
+    repository = MemoryMcpOAuthStateRepository()
+    key = SecretStr(Fernet.generate_key().decode("ascii"))
+    settings = Settings.model_validate(
+        {
+            "mcp_oauth_encryption_key": key,
+            "mcp_oauth_redirect_uri": "https://cognition.example.test/mcp/oauth/callback",
+        }
+    )
+    config = McpServerConfig.model_validate(
+        {
+            "name": "github",
+            "url": "https://mcp.example.test/github",
+            "auth": {"type": "mcp_oauth"},
+            "agent_name": "support-agent",
+            "effective_scope": {"tenant": "acme"},
+        }
+    )
+    storage = EncryptedMcpOAuthTokenStorage(
+        repository=repository,
+        encryption_key=key,
+        agent_name="support-agent",
+        effective_scope={"tenant": "acme"},
+        canonical_server_uri="https://mcp.example.test/github",
+    )
+    await storage.set_tokens(OAuthToken(access_token="scoped-oauth-token", expires_in=300))
+
+    connection = mcp_config_to_connection(config, settings, repository)
+    auth = connection["auth"]
+    assert isinstance(auth, OAuthClientProvider)
+    observed: list[str] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        observed.append(request.headers["Authorization"])
+        return httpx.Response(200, json={"ok": True})
+
+    async with httpx.AsyncClient(
+        auth=auth,
+        transport=httpx.MockTransport(handler),
+    ) as client:
+        await client.post(config.url)
+
+    assert observed == ["Bearer scoped-oauth-token"]
+
+
+def test_mcp_oauth_missing_deployment_configuration_fails_redacted() -> None:
+    config = McpServerConfig.model_validate(
+        {
+            "name": "github",
+            "url": "https://mcp.example.test/github",
+            "auth": {"type": "mcp_oauth"},
+        }
+    )
+
+    with pytest.raises(
+        McpTransportAuthenticationError,
+        match="oauth_configuration_unavailable",
+    ):
+        mcp_config_to_connection(config, Settings(), MemoryMcpOAuthStateRepository())
 
 
 @pytest.mark.asyncio

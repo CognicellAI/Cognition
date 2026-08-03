@@ -215,7 +215,10 @@ def test_protected_auth_never_silently_builds_anonymous_transport() -> None:
         }
     )
 
-    with pytest.raises(McpTransportAuthenticationError, match="auth_unavailable"):
+    with pytest.raises(
+        McpTransportAuthenticationError,
+        match="oauth_configuration_unavailable",
+    ):
         mcp_config_to_connection(config, Settings())
 
 
@@ -322,8 +325,10 @@ async def test_required_auth_failure_is_typed_and_redacted() -> None:
             Settings(),
         )
 
-    assert exc_info.value.category == "auth_unavailable"
-    assert str(exc_info.value) == "MCP server 'github' failed: auth_unavailable"
+    assert exc_info.value.category == "oauth_configuration_unavailable"
+    assert str(exc_info.value) == (
+        "MCP server 'github' failed: oauth_configuration_unavailable"
+    )
 
 
 @pytest.mark.asyncio

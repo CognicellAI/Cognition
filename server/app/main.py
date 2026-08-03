@@ -161,6 +161,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         storage_backend=storage_backend,
         runtime_resolver=runtime_resolver,
         config_store=config_store,
+        mcp_oauth_repository=mcp_oauth_state_repository,
     )
     set_session_agent_manager_dep(session_agent_manager)
     logger.info("SessionAgentManager initialized")
