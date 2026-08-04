@@ -31,6 +31,7 @@ See AGENTS.md for category definitions, DoD requirements, and precedence rules.
 
 | Date | Description | Issue | Layer | Status |
 |------|-------------|-------|-------|--------|
+| 2026-08-04 | Align the Agent-owned Skills backend with the installed Deep Agents `BackendProtocol` (`ls`/`als` and raw read content), and add a two-server workload-token-exchange regression proving exact-audience token isolation under concurrent use. | KennelAMS RC2 local integration evaluation | 4 | Implemented on `release/v0.14.0`; release validation pending |
 | 2026-08-03 | Keep generated A2A release evidence release-independent and exclude external consumer names from public release artifacts. | v0.14.0-rc.1 evidence review | 7 | In Review |
 | 2026-07-29 | Avoid duplicate CI runs for release branches by using pull-request validation for `release/**` and reserving push validation for long-lived branches. | PR #166 ran identical push and pull-request jobs | 7 | Implemented |
 | 2026-07-29 | Reject inbound A2A Parts whose declared `mediaType` is not advertised by the selected Agent Card, returning `ContentTypeNotSupportedError` before durable task creation or model execution for unary and streaming sends. | Official A2A v1 TCK `CORE-SEND-003` | 6 | Implemented; upstream TCK requirement metadata incorrectly treats the required error as an operation failure |

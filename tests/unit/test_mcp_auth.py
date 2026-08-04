@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import logging
 from types import SimpleNamespace
@@ -227,6 +228,57 @@ async def test_workload_exchange_is_exact_audience_bound_and_expiry_cached() -> 
 
 
 @pytest.mark.asyncio
+async def test_workload_exchange_never_reuses_a_token_across_canonical_servers() -> None:
+    """One profile may serve multiple routes without crossing audiences."""
+    exchange_audiences: list[str] = []
+    received_tokens: dict[str, list[str]] = {"github": [], "deepwiki": []}
+
+    async def exchange_handler(request: httpx.Request) -> httpx.Response:
+        audience = parse_qs(request.content.decode("utf-8"))["audience"][0]
+        exchange_audiences.append(audience)
+        return httpx.Response(
+            200,
+            json={"access_token": f"token-for:{audience}", "expires_in": 60},
+        )
+
+    def auth_for(audience: str) -> WorkloadTokenExchangeAuth:
+        return WorkloadTokenExchangeAuth(
+            profile=_profile(),
+            audience=audience,
+            identity=AmbientWorkloadIdentity(token_file=None, token=SecretStr("subject-token")),
+            client_factory=lambda: httpx.AsyncClient(
+                transport=httpx.MockTransport(exchange_handler)
+            ),
+        )
+
+    github_url = "https://mcp-egress.internal/mcp/github"
+    deepwiki_url = "https://mcp-egress.internal/mcp/deepwiki"
+
+    async def invoke(server: str, url: str, auth: WorkloadTokenExchangeAuth) -> None:
+        async def mcp_handler(request: httpx.Request) -> httpx.Response:
+            token = request.headers["Authorization"]
+            received_tokens[server].append(token)
+            assert token == f"Bearer token-for:{url}"
+            return httpx.Response(200, json={"ok": True})
+
+        async with httpx.AsyncClient(
+            auth=auth,
+            transport=httpx.MockTransport(mcp_handler),
+        ) as client:
+            await client.post(url)
+            await client.post(url)
+
+    await asyncio.gather(
+        invoke("github", github_url, auth_for(github_url)),
+        invoke("deepwiki", deepwiki_url, auth_for(deepwiki_url)),
+    )
+
+    assert sorted(exchange_audiences) == sorted([github_url, deepwiki_url])
+    assert received_tokens["github"] == [f"Bearer token-for:{github_url}"] * 2
+    assert received_tokens["deepwiki"] == [f"Bearer token-for:{deepwiki_url}"] * 2
+
+
+@pytest.mark.asyncio
 async def test_workload_exchange_failure_never_exposes_token_response() -> None:
     async def denied(request: httpx.Request) -> httpx.Response:
         return httpx.Response(403, text="subject-token provider-secret route-token")
@@ -270,9 +322,7 @@ async def test_workload_exchange_supports_deployment_client_secret_basic() -> No
         audience="https://mcp-egress.internal/mcp/github",
         identity=AmbientWorkloadIdentity(token_file=None, token=SecretStr("subject-token")),
         client_secret=SecretStr("client-secret"),
-        client_factory=lambda: httpx.AsyncClient(
-            transport=httpx.MockTransport(exchange_handler)
-        ),
+        client_factory=lambda: httpx.AsyncClient(transport=httpx.MockTransport(exchange_handler)),
     )
 
     async with httpx.AsyncClient(

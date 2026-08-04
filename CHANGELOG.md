@@ -9,6 +9,17 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.14.0-rc.3] — 2026-08-04
+
+### Fixed
+
+- Aligned the Agent-owned Skills backend with the current Deep Agents backend
+  protocol so embedded Skill bundles are discovered and loaded through the
+  pinned Agent revision.
+- Added concurrent two-server workload token-exchange coverage to verify that
+  one deployment profile obtains and uses distinct exact-audience tokens for
+  each canonical MCP server.
+
 ## [0.14.0-rc.2] — 2026-08-03
 
 ### Highlights

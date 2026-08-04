@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 from typing import Any
 
 from deepagents.backends.protocol import (
@@ -10,8 +9,10 @@ from deepagents.backends.protocol import (
     FileData,
     FileDownloadResponse,
     FileInfo,
+    LsResult,
     ReadResult,
 )
+from deepagents.backends.utils import normalize_read_bounds
 
 from server.app.agent.definition import AgentSkillBundle
 
@@ -22,13 +23,21 @@ class AgentSkillsBackend(BackendProtocol):
     def __init__(self, skills: list[AgentSkillBundle]) -> None:
         self._skills = {skill.name: skill.model_copy(deep=True) for skill in skills}
 
-    async def als_info(self, path: str) -> list[FileInfo]:
-        """List the Agent's skill directories for progressive disclosure."""
-        del path
-        return [
-            FileInfo(path=f"/{name}/", is_dir=True, size=0, modified_at="")
-            for name in sorted(self._skills)
-        ]
+    def ls(self, path: str) -> LsResult:
+        """List the selected Agent revision's skill directories.
+
+        ``CompositeBackend`` removes the ``/skills/api/`` route prefix before
+        calling this backend, so Deep Agents discovers the bundle directories
+        from its virtual root.
+        """
+        if path.rstrip("/") not in {"", "/"}:
+            return LsResult(entries=[])
+        return LsResult(
+            entries=[
+                FileInfo(path=f"/{name}/", is_dir=True, size=0, modified_at="")
+                for name in sorted(self._skills)
+            ]
+        )
 
     async def adownload_files(self, paths: list[str]) -> list[FileDownloadResponse]:
         """Download primary or supporting skill files."""
@@ -53,8 +62,8 @@ class AgentSkillsBackend(BackendProtocol):
             )
         return responses
 
-    async def aread(self, file_path: str, offset: int = 0, limit: int = 2000) -> ReadResult:
-        """Read a skill file with Deep Agents-compatible line numbering."""
+    def read(self, file_path: str, offset: int = 0, limit: int = 2000) -> ReadResult:
+        """Read a raw skill file window for Deep Agents formatting middleware."""
         parsed = _parse_bundle_path(file_path)
         if parsed is None:
             return ReadResult(error=f"Invalid path {file_path}")
@@ -63,45 +72,27 @@ class AgentSkillsBackend(BackendProtocol):
         content = _bundle_content(skill, relative_path) if skill is not None else None
         if content is None:
             return ReadResult(error="Skill bundle file not found")
+        offset, limit = normalize_read_bounds(offset, limit)
         lines = content.splitlines()
         if limit <= 0:
-            selected: list[str] = []
+            return ReadResult(no_lines_requested=True)
         else:
             selected = lines[offset : offset + limit]
-        numbered = [f"{offset + index + 1:6}\t{line}" for index, line in enumerate(selected)]
         return ReadResult(
-            file_data=FileData(content="\n".join(numbered), encoding="utf-8"),
+            file_data=FileData(content="\n".join(selected), encoding="utf-8"),
             total_lines=len(lines),
             start_line=offset + 1 if selected else None,
             end_line=offset + len(selected) if selected else None,
             next_offset=offset + len(selected) if offset + len(selected) < len(lines) else None,
-            no_lines_requested=limit <= 0,
+            no_lines_requested=False,
         )
-
-    def read(self, file_path: str, offset: int = 0, limit: int = 2000) -> ReadResult:
-        """Provide the synchronous protocol surface outside an active event loop."""
-        try:
-            asyncio.get_running_loop()
-        except RuntimeError:
-            return asyncio.run(self.aread(file_path, offset, limit))
-        return ReadResult(error="AgentSkillsBackend requires async file access")
-
-    def ls_info(self, path: str) -> list[FileInfo]:
-        """Provide the synchronous protocol surface outside an active event loop."""
-        try:
-            asyncio.get_running_loop()
-        except RuntimeError:
-            return asyncio.run(self.als_info(path))
-        return []
 
     def glob_info(self, pattern: str, path: str = "/") -> list[FileInfo]:
         """Avoid CompositeBackend fan-out failures for unrelated glob calls."""
         del pattern, path
         return []
 
-    def grep_raw(
-        self, pattern: str, path: str | None = None, glob: str | None = None
-    ) -> list[Any]:
+    def grep_raw(self, pattern: str, path: str | None = None, glob: str | None = None) -> list[Any]:
         """Avoid CompositeBackend fan-out failures for unrelated grep calls."""
         del pattern, path, glob
         return []

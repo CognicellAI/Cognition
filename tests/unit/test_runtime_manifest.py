@@ -76,8 +76,7 @@ async def test_active_run_keeps_agent_and_skill_snapshot_while_next_run_advances
     # not changed.
     assert first.run.agent_revision == first_record.revision == 1
     assert (
-        first.run.runtime_manifest["agent"]["definition"]["system_prompt"]
-        == "Agent revision one."
+        first.run.runtime_manifest["agent"]["definition"]["system_prompt"] == "Agent revision one."
     )
     assert first.run.manifest_digest == first_manifest_digest
 
@@ -100,9 +99,7 @@ async def test_active_run_keeps_agent_and_skill_snapshot_while_next_run_advances
     assert current_config.system_prompt == "Agent revision two."
 
     skill_backend = AgentSkillsBackend(pinned_config.skills)
-    downloaded = await skill_backend.adownload_files(
-        ["/runtime-skill/SKILL.md"]
-    )
+    downloaded = await skill_backend.adownload_files(["/runtime-skill/SKILL.md"])
     assert downloaded[0].content is not None
     assert b"Revision one" in downloaded[0].content
 
@@ -117,8 +114,7 @@ async def test_active_run_keeps_agent_and_skill_snapshot_while_next_run_advances
     assert second.run.agent_revision == second_record.revision == 2
     assert second.run.manifest_digest != first_manifest_digest
     assert (
-        second.run.runtime_manifest["agent"]["definition"]["system_prompt"]
-        == "Agent revision two."
+        second.run.runtime_manifest["agent"]["definition"]["system_prompt"] == "Agent revision two."
     )
 
     await storage.close()
@@ -130,7 +126,7 @@ async def test_explicit_empty_skill_attachment_exposes_no_skill(
 ) -> None:
     del tmp_path
     backend = AgentSkillsBackend([])
-    assert await backend.als_info("/") == []
+    assert (await backend.als("/")).entries == []
     response = await backend.adownload_files(["/unattached/SKILL.md"])
     # Direct reads are also denied even when a model guesses the virtual path.
     assert response[0].error == "file_not_found"
@@ -216,6 +212,7 @@ async def test_runtime_manifest_pins_provider_selection_for_active_run(
         return object()
 
     monkeypatch.setattr(resolver, "build_model", _fake_build_model)
+
     async def _ignore_tool_support(provider: str, model_id: str) -> None:
         return None
 
