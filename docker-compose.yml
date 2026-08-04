@@ -83,8 +83,8 @@ services:
       # with COGNITION_SANDBOX_BACKEND=docker instead.
       - COGNITION_SANDBOX_BACKEND=local
       - COGNITION_ALLOW_UNSAFE_LOCAL_EXECUTION=true
-      - COGNITION_ALLOW_HOST_TOOLS=true
-      - COGNITION_ALLOW_API_PYTHON_TOOLS=false
+      - COGNITION_MCP_OUTBOUND_TRANSPORT_ENABLED=false
+      - COGNITION_MCP_ALLOWED_ORIGINS=[]
 
       # Session Scoping — Multi-tenant isolation
       - COGNITION_SCOPING_ENABLED=true

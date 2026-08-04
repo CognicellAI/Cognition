@@ -115,7 +115,7 @@ class TestScopePreservation:
                 "name": "scoped-agent",
                 "system_prompt": "scoped",
                 "mode": "primary",
-                "tools": ["my_tool"],
+                "skills": [{"name": "review", "content": "# Review"}],
             },
             "api",
         )
@@ -124,7 +124,7 @@ class TestScopePreservation:
         assert result is not None
         data, scope = result
         assert scope == {"org": "acme"}
-        assert data["tools"] == ["my_tool"]
+        assert data["skills"] == [{"name": "review", "content": "# Review", "files": {}}]
 
     @pytest.mark.asyncio
     async def test_get_agent_raw_with_scope_empty_scope(self, store: DefaultConfigStore):
@@ -229,24 +229,6 @@ class TestValidationPropagation:
             await store.upsert_agent(
                 "bad-agent",
                 {},
-                {"name": "bad-agent", "system_prompt": "test", "tools": [""]},
+                {"name": "bad-agent", "system_prompt": "test", "unknown": True},
                 "api",
             )
-
-    @pytest.mark.asyncio
-    async def test_upsert_agent_valid_definition_updates_cache(self, store: DefaultConfigStore):
-        """Valid definition with simple tool names should succeed and update cache."""
-        await store.upsert_agent(
-            "simple-tool-agent",
-            {},
-            {
-                "name": "simple-tool-agent",
-                "system_prompt": "test",
-                "tools": ["my_tool", "file_tools"],
-            },
-            "api",
-        )
-
-        agent = await store.get_agent_definition("simple-tool-agent")
-        assert agent is not None
-        assert agent.tools == ["my_tool", "file_tools"]

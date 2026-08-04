@@ -53,13 +53,6 @@ async def resolve_runtime_manifest(
         else canonical_json_digest(validated_definition)
     )
 
-    tools: dict[str, str | None] = {}
-    for name in sorted(set(definition.tools or [])):
-        tool = await config_store.get_tool(name, effective_scope)
-        tools[name] = (
-            canonical_json_digest(tool.model_dump(mode="json")) if tool is not None else None
-        )
-
     resolver = RuntimeResolver(config_store, settings)
     try:
         target = await resolver.select_model_target_for_session(
@@ -131,7 +124,6 @@ async def resolve_runtime_manifest(
             "definition": validated_definition,
         },
         "dependencies": {
-            "tools": tools,
             "provider": provider_identity,
             "sandbox_profile": sandbox_profile_identity,
         },

@@ -40,13 +40,6 @@ All request and response bodies are JSON unless noted. Streaming endpoints retur
   - [`PUT /agents/{name}`](#put-agentsname)
   - [`PATCH /agents/{name}`](#patch-agentsname)
   - [`DELETE /agents/{name}`](#delete-agentsname)
-- [Tools](#tools)
-  - [`GET /tools`](#get-tools)
-  - [`GET /tools/{name}`](#get-toolsname)
-  - [`GET /tools/errors`](#get-toolserrors)
-  - [`POST /tools`](#post-tools)
-  - [`DELETE /tools/{name}`](#delete-toolsname)
-  - [`POST /tools/reload`](#post-toolsreload)
 - [Models](#models)
   - [`GET /models`](#get-models)
   - [`GET /models/providers`](#get-modelsproviders)
@@ -712,7 +705,6 @@ Create or replace an agent definition in the ConfigRegistry.
   "system_prompt": "You are a security expert. Audit code for vulnerabilities.",
   "description": "Audits code for security issues",
   "mode": "subagent",
-  "tools": ["run_semgrep"],
   "skills": [
     {
       "name": "python-review",
@@ -750,7 +742,6 @@ Create or replace an agent definition in the ConfigRegistry.
 | `mode` | `"primary"` \| `"subagent"` \| `"all"` | Whether agent can own sessions, be delegated to, or both |
 | `hidden` | boolean | Hide the agent from `GET /agents` list results |
 | `a2a` | object | A2A exposure and public Agent Card presentation. See the [A2A Builder Guide](a2a.md). |
-| `tools` | list[string] | Registry tool names to attach to this agent |
 | `skills` | list[object] | Complete `{name, content, files}` bundles owned by this Agent revision |
 | `memory` | list[string] | Paths to instruction files (e.g. AGENTS.md) |
 | `interrupt_on` | dict | Tool names mapped to `true` for HITL confirmation |
@@ -814,134 +805,6 @@ Delete an agent definition from the ConfigRegistry.
 - **Response `204 No Content`**
 - **Response `404 Not Found`:** Agent not found in the exact request scope
 - **Response `412 Precondition Failed`:** Stale `If-Match` revision
-
----
-
-## Tools
-
-### `GET /tools`
-
-List all registered tools from both file discovery (AgentRegistry) and API registration (ConfigRegistry).
-
-**Response `200 OK`:**
-```json
-{
-  "tools": [
-    {
-      "name": "bash",
-      "source_type": "file",
-      "source": "file",
-      "module": "server.app.agent.tools",
-      "description": null,
-      "enabled": true,
-      "interrupt_on": false
-    },
-    {
-      "name": "search-jira",
-      "source_type": "api_code",
-      "source": "api_code",
-      "module": null,
-      "description": "Search Jira issues",
-      "enabled": true,
-      "interrupt_on": true
-    },
-    {
-      "name": "run_analysis",
-      "source_type": "api_path",
-      "source": "api_path",
-      "module": "myapp.tools.analysis",
-      "description": null,
-      "enabled": true
-    }
-  ],
-  "count": 3
-}
-```
-
-`source_type` values:
-- `"file"` — auto-discovered from `.cognition/tools/` or built-in
-- `"api_code"` — registered via `POST /tools` with `code` field (Python source stored in DB)
-- `"api_path"` — registered via `POST /tools` with `path` field (module path)
-
-File-managed tools (seeded from `tool_sources` directories at startup) have `source: "file"` and cannot be modified or deleted via the API (returns `409 Conflict`).
-
-### `GET /tools/{name}`
-
-Get a specific tool by name. Checks file-discovered tools first, then ConfigRegistry.
-
-**Response `200 OK`:** Tool object  
-**Response `404 Not Found`**
-
-### `GET /tools/errors`
-
-Get any errors that occurred during tool discovery or reload.
-
-**Response `200 OK`:**
-```json
-[
-  {
-    "file": ".cognition/tools/broken_tool.py",
-    "error_type": "ImportError",
-    "error": "No module named 'missing_dep'",
-    "timestamp": 1711972800.0
-  }
-]
-```
-
-### `POST /tools`
-
-Register a tool in the ConfigRegistry. Exactly one of `code` or `path` must be provided.
-
-**Request body — inline source code:**
-```json
-{
-  "name": "search-jira",
-  "code": "from langchain_core.tools import tool\n\n@tool\ndef search_jira(query: str) -> str:\n    \"\"\"Search Jira issues by query string.\"\"\"\n    ...",
-  "enabled": true,
-  "description": "Search Jira issues",
-  "scope": {}
-}
-```
-
-**Request body — module path:**
-```json
-{
-  "name": "jira-tools",
-  "path": "mycompany.cognition_tools.jira",
-  "enabled": true
-}
-```
-
-| Field | Type | Description |
-|---|---|---|
-| `name` | string | Tool identifier (1–100 chars) |
-| `code` | string | Full Python source containing `@tool`-decorated functions or `BaseTool` subclasses |
-| `path` | string | Dotted module path importable by the server process |
-| `enabled` | bool | Whether this tool is active (default `true`) |
-| `description` | string | Optional description |
-| `interrupt_on` | bool | Whether this tool should require approval by default in builders that consume tool metadata |
-| `scope` | dict | Scope restriction; empty `{}` = global |
-
-**Response `201 Created`:** Tool object with `source_type`  
-**Response `422 Unprocessable Entity`:** Neither `code` nor `path` provided; or both provided
-
-> **Security:** Tool code executes with full Python privileges inside the sandbox backend. Restrict this endpoint to authorized administrators at the Gateway/proxy layer.
-
-### `DELETE /tools/{name}`
-
-Remove an API-registered tool from the ConfigRegistry.
-
-**Response `204 No Content`**  
-**Response `404 Not Found`:** Tool not in ConfigRegistry
-
-### `POST /tools/reload`
-
-Trigger a manual reload of file-discovered tools from `.cognition/tools/`.
-
-**Response `200 OK`:**
-```json
-{"tools_loaded": 5, "errors": 0}
-```
 
 ---
 

@@ -14,16 +14,12 @@ from server.app.agent.cognition_agent import (
     create_cognition_agent,
 )
 from server.app.agent.mcp_client import McpServerConfig
-from server.app.agent.resolver import RuntimeResolver
 from server.app.agent.sandbox_backend import CognitionDockerSandboxBackend
 from server.app.api.routes.messages import _approved_callback_origin
 from server.app.settings import Settings
 from server.app.storage.config_models import (
     GlobalAgentDefaults,
-    ToolRegistration,
 )
-from server.app.storage.config_registry import MemoryConfigRegistry
-from server.app.storage.config_store import DefaultConfigStore
 
 
 class _DefaultsOnlyStore:
@@ -67,8 +63,8 @@ def _strict_agent_params(tmp_path, **overrides: Any) -> CognitionAgentParams:
             tmp_path,
             sandbox_backend="local",
             unsafe_local_execution=True,
-            allow_host_tools=False,
-            allow_api_python_tools=False,
+            mcp_outbound_transport_enabled=False,
+            mcp_allowed_origins=[],
         ),
         "config_store": _DefaultsOnlyStore(),
         "system_prompt": "Strict runtime.",
@@ -95,18 +91,7 @@ async def test_local_execution_fails_closed_by_default(tmp_path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_attached_python_tools_are_rejected_in_strict_mode(tmp_path) -> None:
-    metric = _Metric()
-    with (
-        patch("server.app.agent.cognition_agent.STRICT_EXECUTION_REJECTIONS_TOTAL", metric),
-        pytest.raises(RuntimeError, match="Attached Python tools are disabled"),
-    ):
-        await create_cognition_agent(_strict_agent_params(tmp_path, tools=[lambda: None]))
-    assert metric.labels_seen == [{"reason": "api_python_tools"}]
-
-
-@pytest.mark.asyncio
-async def test_host_side_mcp_is_rejected_in_strict_mode(tmp_path) -> None:
+async def test_mcp_is_rejected_when_outbound_transport_disabled(tmp_path) -> None:
     config = McpServerConfig(
         name="host-mcp",
         url="https://mcp.example.test/sse",
@@ -114,10 +99,10 @@ async def test_host_side_mcp_is_rejected_in_strict_mode(tmp_path) -> None:
     metric = _Metric()
     with (
         patch("server.app.agent.cognition_agent.STRICT_EXECUTION_REJECTIONS_TOTAL", metric),
-        pytest.raises(RuntimeError, match="Host-side MCP tools are disabled"),
+        pytest.raises(RuntimeError, match="Outbound MCP transport is disabled"),
     ):
         await create_cognition_agent(_strict_agent_params(tmp_path, mcp_configs=[config]))
-    assert metric.labels_seen == [{"reason": "host_mcp_tools"}]
+    assert metric.labels_seen == [{"reason": "mcp_outbound_transport"}]
 
 
 @pytest.mark.asyncio
@@ -147,8 +132,8 @@ async def test_deep_agents_v07_graph_is_not_cached_across_sandboxed_runs(
         tmp_path,
         sandbox_backend="local",
         unsafe_local_execution=True,
-        allow_host_tools=False,
-        allow_api_python_tools=False,
+        mcp_outbound_transport_enabled=False,
+        mcp_allowed_origins=[],
     )
     with (
         patch(
@@ -181,42 +166,6 @@ async def test_deep_agents_v07_graph_is_not_cached_across_sandboxed_runs(
     assert create.call_args_list[0].kwargs["backend"] is first_sandbox
     assert create.call_args_list[1].kwargs["backend"] is second_sandbox
     clear_agent_cache()
-
-
-@pytest.mark.asyncio
-async def test_explicit_empty_agent_tool_list_does_not_expand_to_registry_tools(
-    tmp_path,
-) -> None:
-    registry = MemoryConfigRegistry()
-    store = DefaultConfigStore(registry, workspace_path=tmp_path)
-    await store.upsert_tool(
-        ToolRegistration(
-            name="host-python",
-            code="def host_python(): return 'unsafe'",
-            scope={"tenant": "acme"},
-            source="api",
-        )
-    )
-    resolver = RuntimeResolver(
-        store,
-        _settings(
-            tmp_path,
-            allow_api_python_tools=False,
-        ),
-    )
-
-    assert (
-        await resolver.build_tools(
-            {"tenant": "acme"},
-            allowed_tool_names=[],
-        )
-        == []
-    )
-    with pytest.raises(RuntimeError, match="cannot be loaded in strict mode"):
-        await resolver.build_tools(
-            {"tenant": "acme"},
-            allowed_tool_names=["host-python"],
-        )
 
 
 class _FakeDockerExecution:

@@ -324,19 +324,9 @@ The storage and execution backends never call each other. Composition happens on
 
 ---
 
-## Built-in Tools
+## Tool Capability
 
-Beyond the sandbox backends, deployments may explicitly enable host-provided
-tools from `server/app/agent/tools.py`. Production multi-tenant deployments
-should keep host tools disabled unless the operator accepts the trust boundary:
-
-| Tool | Class | Description |
-|---|---|---|
-| `browser` | `BrowserTool` | Fetch web pages as text, markdown, or HTML via `httpx` |
-| `search` | `SearchTool` | DuckDuckGo web search, returns titles, links, and snippets |
-| `inspect_package` | `InspectPackageTool` | Inspect Python packages: list submodules, classes, and functions |
-
-These run in the local process (not inside the Docker sandbox) and are always available regardless of `sandbox_backend` setting.
+Cognition v0.14 does not ship host-process Browser/Search/package-inspection tools and does not load Python tools from `.cognition/tools/` or `/tools`. Tool capability comes from Deep Agents-native runtime behavior, Agent-owned MCP servers, skills, middleware, and sandbox backends. Remote MCP transport must be explicitly enabled and constrained by deployment-approved origins.
 
 ---
 

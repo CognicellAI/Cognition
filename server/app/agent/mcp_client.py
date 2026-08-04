@@ -73,6 +73,15 @@ class McpTransportAuthenticationError(RuntimeError):
         super().__init__(f"MCP server '{server_alias}' failed: {category}")
 
 
+class McpTransportPolicyError(RuntimeError):
+    """Raised when a server is not admitted by deployment MCP transport policy."""
+
+    def __init__(self, server_alias: str, category: str = "origin_not_allowed") -> None:
+        self.server_alias = server_alias
+        self.category = category
+        super().__init__(f"MCP server '{server_alias}' failed: {category}")
+
+
 class McpServerConfig(BaseModel):
     """Configuration for a remote MCP server connection."""
 
@@ -143,6 +152,22 @@ class McpServerConfig(BaseModel):
         if parsed.fragment:
             raise ValueError("MCP server URLs must not contain fragments")
         return v
+
+
+def _origin_from_url(value: str) -> str:
+    parsed = urlsplit(value)
+    if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+        raise ValueError("MCP origin must be an HTTP or HTTPS origin")
+    origin = f"{parsed.scheme}://{parsed.hostname.lower()}"
+    if parsed.port is not None:
+        origin = f"{origin}:{parsed.port}"
+    return origin
+
+
+def _ensure_mcp_origin_allowed(config: McpServerConfig, settings: Settings) -> None:
+    allowed = {_origin_from_url(origin.rstrip("/")) for origin in settings.mcp_allowed_origins}
+    if _origin_from_url(config.url) not in allowed:
+        raise McpTransportPolicyError(config.name, "origin_not_allowed")
 
 
 class McpToolInfo(BaseModel):
@@ -258,6 +283,7 @@ async def load_mcp_tools_per_server(
     seen_visible: set[str] = set()
     for config in configs:
         try:
+            _ensure_mcp_origin_allowed(config, settings)
             client_kwargs: dict[str, Any] = {
                 "callbacks": callbacks,
                 "tool_interceptors": tool_interceptors,
@@ -269,7 +295,7 @@ async def load_mcp_tools_per_server(
         except Exception as exc:
             category = (
                 exc.category
-                if isinstance(exc, McpTransportAuthenticationError)
+                if isinstance(exc, (McpTransportAuthenticationError, McpTransportPolicyError))
                 else "discovery_failed"
             )
             logger.warning(

@@ -347,12 +347,13 @@ class DeepAgentStreamingService:
         scope: Mapping[str, str] | None = None,
         runtime_manifest: Mapping[str, Any] | None = None,
     ) -> tuple[ResolvedAgentConfig, list[Any]]:
-        """Resolve agent definition fields and custom tools from ConfigStore.
+        """Resolve agent definition fields from ConfigStore.
 
         Returns:
             (ResolvedAgentConfig, custom_tools) tuple. The config holds all
-            agent_def-derived overrides; custom_tools includes any
-            agent_def-resolved tools.
+            agent_def-derived overrides. ``custom_tools`` is retained for
+            programmatic tools supplied by tests or callers, not ConfigStore
+            Python tool loading.
         """
         custom_tools: list[Any] = []
 
@@ -426,7 +427,6 @@ class DeepAgentStreamingService:
                 "name": subagent.name,
                 "description": subagent.description or "",
                 "system_prompt": subagent.system_prompt,
-                "_declared_tool_names": list(subagent.tools),
                 **(
                     {
                         "permissions": [
@@ -561,15 +561,6 @@ class DeepAgentStreamingService:
 
             # Get checkpointer from storage backend
             checkpointer = await self.storage_backend.get_checkpointer()
-
-            # Load tools registered via POST /tools from ConfigStore.
-            config_store_tools = await self._get_runtime_resolver().build_tools(
-                scope=effective_scope,
-                extra_tools=custom_tools if custom_tools else None,
-                allowed_tool_names=agent_cfg.agent_def.tools if agent_cfg.agent_def else None,
-            )
-            if config_store_tools:
-                custom_tools = config_store_tools
 
             store = await self.storage_backend.get_store()
 
@@ -848,13 +839,6 @@ class DeepAgentStreamingService:
                 model_id,
             )
             checkpointer = await self.storage_backend.get_checkpointer()
-            config_store_tools = await self._get_runtime_resolver().build_tools(
-                scope=effective_scope,
-                extra_tools=custom_tools if custom_tools else None,
-                allowed_tool_names=agent_cfg.agent_def.tools if agent_cfg.agent_def else None,
-            )
-            if config_store_tools:
-                custom_tools = config_store_tools
             store = await self.storage_backend.get_store()
 
             from server.app.agent.cognition_agent import CognitionContext

@@ -120,7 +120,6 @@ class AgentDefinition(BaseModel):
     name: str                       # Stable runtime lookup identifier
     display_name: str | None = None # Optional public presentation name
     system_prompt: str | PromptConfig | None = None
-    tools: list[str] = []           # registry tool names
     skills: list[AgentSkillBundle] = []  # complete revision-owned bundles
     memory: list[str] = []          # paths to instruction files (AGENTS.md)
     subagents: list[SubagentDefinition] = []
@@ -216,9 +215,9 @@ class AgentConfig(BaseModel):
     tool_token_limit_before_evict: int | None = None
 ```
 
-### Tool Resolution
+### Tool Capability
 
-Tools are referenced by registry name. At runtime, `RuntimeResolver.build_tools()` looks up each name in the ConfigRegistry and returns the corresponding callable. File-seeded tools (from `tool_sources`) and API-registered tools are both resolved this way. The `allowed_tool_names` parameter on `build_tools()` filters to only the tools attached to the agent definition.
+Cognition does not load Python tools from a Cognition registry in v0.14. Tool capability comes from Deep Agents-native runtime behavior, Agent-owned MCP servers, skills, middleware, and sandbox backends. The removed `/tools` API and `.cognition/tools/` discovery path are not part of the supported runtime surface.
 
 ---
 
@@ -234,9 +233,13 @@ description: Audits code for security vulnerabilities
 system_prompt: |
   You are a security expert. Audit code for vulnerabilities.
   Report findings with severity ratings.
-tools:
-  - "run_semgrep"
-  - "check_dependencies"
+mcp:
+  servers:
+    semgrep:
+      url: https://mcp-egress.internal/mcp/semgrep
+      auth:
+        type: workload_token_exchange
+        profile: production_egress
 config:
   model: gpt-4o
   temperature: 0.1
@@ -250,8 +253,12 @@ The file name becomes the agent name; the Markdown body becomes the `system_prom
 ---
 mode: subagent
 description: Read-only research assistant
-tools:
-  - "web_search"
+mcp:
+  servers:
+    search:
+      url: https://mcp-egress.internal/mcp/search
+      auth:
+        type: none
 ---
 
 You are a research assistant. Gather information from the web and summarize findings.
@@ -339,15 +346,12 @@ Returns installed package versions, supported stream protocols, sandbox backends
 The factory:
 
 1. Selects the sandbox backend from settings (`local`, `docker`, `kubernetes`, or `aws_lambda_microvm`)
-2. Resolves built-in tool names only when host tools are explicitly enabled
-   for the deployment.
-3. Loads MCP tools from configured remote servers
-4. Resolves tools from the ConfigRegistry by registry name (filtered by `allowed_tool_names` from the AgentDefinition)
-5. Attaches the middleware stack:
+2. Loads Agent-owned MCP tools from configured remote servers when deployment MCP transport policy admits their origins
+3. Attaches the middleware stack:
    - `ToolSecurityMiddleware` — blocks tools on the `COGNITION_BLOCKED_TOOLS` deny-list
    - `CognitionObservabilityMiddleware` — tracks LLM and tool Prometheus metrics
    - `CognitionStreamingMiddleware` — emits `thinking`/`idle` status events
-6. Loads upstream middleware specified in the definition (see [Extending Agents](../guides/extending-agents.md))
+4. Loads upstream middleware specified in the definition (see [Extending Agents](../guides/extending-agents.md))
 7. Injects subagents as Deep Agents `SubAgent` dicts
 8. Passes `store=` (LangGraph `BaseStore`) and `context_schema=CognitionContext` for cross-thread memory
 

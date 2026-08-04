@@ -343,8 +343,8 @@ Cognition ships four sandbox backends:
 |---|---|---|---|
 | `sandbox.backend` | `COGNITION_SANDBOX_BACKEND` | `local` | `local`, `docker`, `kubernetes`, or `aws_lambda_microvm` |
 | (environment only) | `COGNITION_ALLOW_UNSAFE_LOCAL_EXECUTION` | `false` | Explicitly allow the `local` backend to run commands as the Cognition host process. Use only for standalone development. |
-| (environment only) | `COGNITION_ALLOW_HOST_TOOLS` | `false` | Explicitly inject host-backed Browser, Search, and package-inspection tools. Use only for development deployments that accept host access. |
-| (environment only) | `COGNITION_ALLOW_API_PYTHON_TOOLS` | `false` | Explicitly allow API-registered Python tool code to be loaded by the runtime. Use only for trusted development or admin-only deployments. |
+| `mcp.outbound_transport_enabled` | `COGNITION_MCP_OUTBOUND_TRANSPORT_ENABLED` | `false` | Explicitly permit remote MCP transport for Agent-owned MCP servers. |
+| `mcp.allowed_origins` | `COGNITION_MCP_ALLOWED_ORIGINS` | `[]` | Deployment-approved MCP origins as `scheme://host[:port]`; paths remain Agent-owned server config. |
 
 Production deployments should select `docker`, `kubernetes`, or
 `aws_lambda_microvm`. The `local` backend is intentionally unsafe because model
@@ -537,7 +537,6 @@ Collector, not as a Cognition runtime setting. Configure the Collector's
 | YAML key | Environment variable | Default | Description |
 |---|---|---|---|
 | `security.protected_paths` | `COGNITION_PROTECTED_PATHS` | `[".cognition/"]` | Paths the agent cannot write to |
-| `security.trusted_tool_namespaces` | `COGNITION_TRUSTED_TOOL_NAMESPACES` | `[]` | Allowed Python namespaces for tool imports; empty = allow all |
 | `security.blocked_tools` | `COGNITION_BLOCKED_TOOLS` | `[]` | Deployment-wide tool names no agent can invoke; merged with per-agent `blocked_tools` and enforced by `ToolSecurityMiddleware` |
 | `security.a2a_enabled` | `COGNITION_A2A_ENABLED` | `true` | Enable/disable the A2A protocol adapter (`/.well-known/agent-card.json` + `/a2a/{agent_name}`) |
 | — | `COGNITION_A2A_MAX_RAW_PART_BYTES` | `10485760` | Maximum decoded size of one inbound A2A `raw` Part; oversized Parts are rejected before a model run starts |
@@ -781,10 +780,6 @@ observability:
 mlflow:
   enabled: true
   tracking_uri: http://mlflow:5000
-
-security:
-  trusted_tool_namespaces:
-    - "myapp.tools"
 
 scoping:
   enabled: true

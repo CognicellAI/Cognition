@@ -25,6 +25,13 @@ from server.app.storage.mcp_readiness import (
 )
 
 
+def _mcp_settings(*origins: str) -> Settings:
+    settings = Settings()
+    settings.mcp_outbound_transport_enabled = True
+    settings.mcp_allowed_origins = list(origins)
+    return settings
+
+
 def test_agent_definition_carries_agent_owned_mcp_config() -> None:
     agent = AgentDefinition.model_validate(
         {
@@ -252,7 +259,7 @@ async def test_optional_mcp_server_failure_preserves_healthy_tools(monkeypatch) 
             McpServerConfig(name="optional", url="https://optional.test/mcp", required=False),
             McpServerConfig(name="healthy", url="https://healthy.test/mcp", required=True),
         ],
-        Settings(),
+        _mcp_settings("https://optional.test", "https://healthy.test"),
     )
 
     assert [tool.name for tool in tools] == ["healthy__search"]
@@ -290,7 +297,7 @@ async def test_optional_auth_failure_preserves_healthy_server(
             ),
             McpServerConfig(name="healthy", url="https://healthy.test/mcp"),
         ],
-        Settings(),
+        _mcp_settings("https://optional.test", "https://healthy.test"),
     )
 
     assert [tool.name for tool in tools] == ["healthy__search"]
@@ -310,11 +317,31 @@ async def test_required_mcp_server_failure_is_typed_and_redacted(monkeypatch) ->
     with pytest.raises(McpServerDiscoveryError) as exc_info:
         await load_mcp_tools_per_server(
             [McpServerConfig(name="github", url="https://github.test/mcp", required=True)],
-            Settings(),
+            _mcp_settings("https://github.test"),
         )
 
     assert exc_info.value.server_alias == "github"
     assert "secret-value" not in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+async def test_mcp_disallowed_origin_fails_before_discovery(monkeypatch) -> None:
+    create_client = monkeypatch.setattr(
+        "server.app.agent.mcp_client.create_mcp_client",
+        lambda configs, settings, callbacks=None, tool_interceptors=None: pytest.fail(
+            "disallowed origins must fail before discovery"
+        ),
+    )
+    del create_client
+
+    with pytest.raises(McpServerDiscoveryError) as exc_info:
+        await load_mcp_tools_per_server(
+            [McpServerConfig(name="github", url="https://github.test/mcp")],
+            _mcp_settings("https://other.test"),
+        )
+
+    assert exc_info.value.server_alias == "github"
+    assert exc_info.value.category == "origin_not_allowed"
 
 
 @pytest.mark.asyncio
@@ -331,7 +358,7 @@ async def test_required_auth_failure_is_typed_and_redacted() -> None:
                     }
                 )
             ],
-            Settings(),
+            _mcp_settings("https://github.test"),
         )
 
     assert exc_info.value.category == "oauth_configuration_unavailable"
@@ -357,7 +384,7 @@ async def test_duplicate_mcp_tool_identity_fails_discovery(monkeypatch) -> None:
                 McpServerConfig(name="one", url="https://one.test/mcp"),
                 McpServerConfig(name="two", url="https://two.test/mcp"),
             ],
-            Settings(),
+            _mcp_settings("https://one.test", "https://two.test"),
         )
 
 
@@ -397,7 +424,7 @@ async def test_discovery_records_exact_scope_readiness(monkeypatch) -> None:
 
     await load_mcp_tools_per_server(
         [config],
-        Settings(),
+        _mcp_settings("https://github.test"),
         readiness_repository=repository,
     )
 

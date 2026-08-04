@@ -1,13 +1,12 @@
 # Extending Agents
 
-Cognition uses a convention-over-configuration model. Most extensions require zero code changes — drop a file in the right directory and the server picks it up automatically (via the file watcher). More powerful extensions require Python.
+Cognition uses a definition-driven extension model. Agent behavior is assembled from Agent definitions, skills, MCP servers, middleware, and sandbox backends; v0.14 no longer loads Cognition-managed Python tool files or `/tools` API registrations.
 
 | Level | Mechanism | Code Required | Hot-Reload |
 |---|---|---|---|
 | Memory | `AGENTS.md` | No | Yes |
 | Skills | Complete bundles in an Agent definition | No | Yes, with the Agent revision |
 | Agents | `.cognition/agents/` YAML or Markdown | No | Yes |
-| Tools | Python functions | Yes | Yes |
 | Middleware | Python classes | Yes | No |
 | MCP servers | Agent-owned remote Streamable HTTP endpoints | No | Yes |
 | A2A exposure | `a2a.exposed: true` on agent definition | No | Yes |
@@ -191,163 +190,18 @@ File-based agent definitions put these fields under `config:`. The `/agents` API
 
 ---
 
-## 4. Custom Tools
+## 4. Tool Capability
 
-Tools are Python callables that the agent can invoke. Cognition converts them to LangChain tools automatically.
+Cognition v0.14 does not load Cognition-managed Python tools from `.cognition/tools/`, `/tools`, inline source code, or module paths. Use one of these supported surfaces instead:
 
-### Simple Function Tool
+| Need | Supported surface |
+|---|---|
+| Remote provider or builder-managed tools | Agent-owned MCP servers |
+| Procedural guidance, scripts, and reusable instructions | Skills installed into the Deep Agents backend/sandbox |
+| Runtime policy, telemetry, or request shaping | Deep Agents/LangChain middleware |
+| Filesystem/process execution | Configured sandbox backend and Deep Agents-native filesystem/runtime tools |
 
-```python
-# myapp/tools/analysis.py
-import subprocess
-
-def run_linter(file_path: str) -> str:
-    """Run ruff linter on a Python file and return the findings.
-
-    Args:
-        file_path: Path to the Python file to lint.
-
-    Returns:
-        Linter output as a string.
-    """
-    result = subprocess.run(
-        ["ruff", "check", file_path],
-        capture_output=True,
-        text=True,
-    )
-    return result.stdout or "No issues found."
-```
-
-The docstring becomes the tool description shown to the agent. Type annotations become the argument schema.
-
-### Register via Config
-
-```yaml
-# .cognition/config.yaml
-tool_sources:
-  - .cognition/tools/
-
-agent:
-  tools:
-    - "run_linter"
-    - "query_database"
-```
-
-### Auto-Discovery
-
-Drop Python files into `.cognition/tools/` and they are discovered automatically. Each public function in the file becomes a tool. The file watcher reloads them on change.
-
-```python
-# .cognition/tools/my_tools.py
-
-def fetch_ticket(ticket_id: str) -> str:
-    """Fetch a Jira ticket by ID and return its summary and status."""
-    ...
-
-def post_comment(ticket_id: str, comment: str) -> str:
-    """Post a comment to a Jira ticket."""
-    ...
-```
-
-### Register via API (Source-in-DB)
-
-When Cognition runs in a separate container from your builder application, you cannot write files into `.cognition/tools/`. Use the REST API to register tools with inline Python source code instead:
-
-```bash
-curl -X POST http://localhost:8000/tools \
-  -H "Content-Type: application/json" \
-  -d '{
-    "name": "search-jira",
-    "code": "from langchain_core.tools import tool\nimport httpx\n\n@tool\ndef search_jira(query: str) -> str:\n    \"\"\"Search Jira issues by query string.\"\"\"\n    resp = httpx.get(f\"https://jira.example.com/search?q={query}\")\n    return resp.text"
-  }'
-```
-
-The tool is stored in the ConfigRegistry (Postgres or SQLite) and loaded on every agent invocation — no restart required.
-
-```python
-# The code field contains a complete Python module as a string.
-# @tool-decorated functions and BaseTool subclasses are extracted automatically.
-code = """
-from langchain_core.tools import tool
-
-@tool
-def search_jira(query: str) -> str:
-    \"\"\"Search Jira issues by query string.\"\"\"
-    import httpx
-    resp = httpx.get(f"https://jira.example.com/search?q={query}")
-    return resp.text
-"""
-
-import httpx
-httpx.post("http://localhost:8000/tools", json={"name": "search-jira", "code": code})
-```
-
-> **Security:** Tool code executes with full Python privileges inside the sandbox backend. Restrict `POST /tools` to authorized administrators at your Gateway/proxy layer.
-
-Alternatively, register by module path if the module is already importable in the server's Python environment:
-
-```bash
-curl -X POST http://localhost:8000/tools \
-  -H "Content-Type: application/json" \
-  -d '{"name": "jira-tools", "path": "mycompany.cognition_tools.jira"}'
-```
-
-To see all registered tools (both file-discovered and API-registered):
-
-```bash
-curl http://localhost:8000/tools
-```
-
-Response includes a `source_type` field: `"file"` for auto-discovered tools, `"api_code"` for source-in-DB tools, and `"api_path"` for module-path tools.
-
-### Async Tools
-
-Async functions are supported natively:
-
-```python
-async def call_api(endpoint: str, payload: dict) -> str:
-    """Call an internal API endpoint with a JSON payload."""
-    async with httpx.AsyncClient() as client:
-        response = await client.post(endpoint, json=payload)
-        return response.text
-```
-
-### Programmatic Registration
-
-```python
-from server.app.agent.cognition_agent import create_cognition_agent
-from server.app.agent.definition import AgentDefinition
-
-definition = AgentDefinition(
-    name="my-agent",
-    system_prompt="You are a helpful assistant.",
-    tools=["run_linter"],
-)
-
-agent = await create_cognition_agent(definition, settings)
-```
-
-### Testing Tools
-
-```python
-# tests/unit/test_my_tools.py
-from myapp.tools.analysis import run_linter
-from unittest.mock import patch, MagicMock
-
-def test_run_linter_clean_file():
-    with patch("subprocess.run") as mock_run:
-        mock_run.return_value = MagicMock(stdout="", returncode=0)
-        result = run_linter("clean.py")
-    assert result == "No issues found."
-
-def test_run_linter_with_issues():
-    with patch("subprocess.run") as mock_run:
-        mock_run.return_value = MagicMock(
-            stdout="clean.py:1:1: E501 Line too long", returncode=1
-        )
-        result = run_linter("messy.py")
-    assert "E501" in result
-```
+For external tools, prefer MCP. See [MCP Tool Servers](#6-mcp-tool-servers).
 
 ---
 
@@ -652,10 +506,9 @@ For providers not supported by `init_chat_model`, wrap them in a LangChain `Base
 
 ## Hot-Reload
 
-The file watcher (`server/app/file_watcher.py`) monitors `.cognition/tools/`, `.cognition/middleware/`, and `.cognition/agents/` using `watchdog`. When any file in these directories changes:
+The file watcher (`server/app/file_watcher.py`) monitors `.cognition/middleware/` using `watchdog`. Agent definitions are reloaded through the config registry path. When watched files change:
 
-1. Tool registry is reloaded (new tools available, removed tools gone)
-2. Agent definition registry is reloaded (new/updated agents loaded)
-3. Agent cache is invalidated so the next session uses the updated definition
+1. The relevant registry/configuration path is refreshed.
+2. Agent cache is invalidated so the next session uses the updated definition.
 
 No server restart required. Changes typically take effect within 1 second.

@@ -5,7 +5,6 @@ Tests the config.yaml -> ConfigStore provider seeding logic.
 
 from __future__ import annotations
 
-from pathlib import Path
 from unittest.mock import AsyncMock
 
 import pytest
@@ -13,10 +12,7 @@ import pytest
 from server.app.bootstrap import (
     _infer_api_key_env,
     seed_providers_from_config,
-    seed_tools_from_sources,
 )
-from server.app.storage.config_registry import MemoryConfigRegistry
-from server.app.storage.config_store import DefaultConfigStore
 
 
 class TestInferApiKeyEnv:
@@ -186,60 +182,3 @@ class TestSeedProvidersFromConfig:
     @pytest.mark.asyncio
     async def test_empty_config(self) -> None:
         assert await seed_providers_from_config({}, self._store()) is False
-
-
-class TestSeedToolsFromSources:
-    @pytest.mark.asyncio
-    async def test_seeds_tool_from_configured_source(self, tmp_path: Path) -> None:
-        source_dir = tmp_path / ".cognition" / "tools"
-        source_dir.mkdir(parents=True)
-        (source_dir / "directorate.py").write_text(
-            "from langchain_core.tools import tool\n\n@tool\ndef directorate_get_change_set_context() -> str:\n    \"\"\"Get change set context.\"\"\"\n    return \"ok\"\n",
-            encoding="utf-8",
-        )
-
-        store = DefaultConfigStore(MemoryConfigRegistry(), workspace_path=tmp_path)
-        inserted = await seed_tools_from_sources(
-            {"tool_sources": [".cognition/tools/"]},
-            store,
-            tmp_path,
-        )
-
-        assert inserted == 1
-        tool = await store.get_tool("directorate_get_change_set_context", scope={})
-        assert tool is not None
-        assert tool.source == "file"
-
-    @pytest.mark.asyncio
-    async def test_does_not_override_api_tool(self, tmp_path: Path) -> None:
-        source_dir = tmp_path / ".cognition" / "tools"
-        source_dir.mkdir(parents=True)
-        (source_dir / "directorate.py").write_text(
-            "from langchain_core.tools import tool\n\n@tool\ndef directorate_get_change_set_context() -> str:\n    \"\"\"File tool\"\"\"\n    return \"ok\"\n",
-            encoding="utf-8",
-        )
-
-        store = DefaultConfigStore(MemoryConfigRegistry(), workspace_path=tmp_path)
-        await store.upsert_tool_from_dict(
-            {
-                "name": "directorate_get_change_set_context",
-                "path": "server.app.tools.test_tool",
-                "code": None,
-                "enabled": True,
-                "description": "API tool",
-                "interrupt_on": False,
-                "scope": {},
-                "source": "api",
-            }
-        )
-
-        inserted = await seed_tools_from_sources(
-            {"tool_sources": [".cognition/tools/"]},
-            store,
-            tmp_path,
-        )
-
-        assert inserted == 0
-        tool = await store.get_tool("directorate_get_change_set_context", scope={})
-        assert tool is not None
-        assert tool.source == "api"

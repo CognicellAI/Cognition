@@ -47,7 +47,6 @@ from server.app.agent.middleware import (  # noqa: E402
 )
 from server.app.agent.prompts import SYSTEM_PROMPT  # noqa: E402
 from server.app.agent.sandbox_backend import create_sandbox_backend  # noqa: E402
-from server.app.agent.tools import BrowserTool, InspectPackageTool, SearchTool  # noqa: E402
 from server.app.observability import (  # noqa: E402
     RUNTIME_CACHE_EVICTIONS_TOTAL,
     RUNTIME_CACHE_LOOKUPS_TOTAL,
@@ -777,16 +776,7 @@ async def create_cognition_agent(params: CognitionAgentParams) -> CognitionAgent
         }
     )
 
-    if params.tools and not settings.allow_api_python_tools:
-        STRICT_EXECUTION_REJECTIONS_TOTAL.labels(reason="api_python_tools").inc()
-        raise RuntimeError(
-            "Attached Python tools are disabled in strict execution mode. "
-            "Use sandboxed skills/scripts or explicitly enable development tool loading."
-        )
     agent_tools = list(params.tools) if params.tools else []
-    if settings.allow_host_tools:
-        logger.warning("Unsafe host tools enabled for development")
-        agent_tools.extend([BrowserTool(), SearchTool(), InspectPackageTool()])
 
     if params.mcp_configs:
         from server.app.agent.mcp_client import (
@@ -794,12 +784,12 @@ async def create_cognition_agent(params: CognitionAgentParams) -> CognitionAgent
         )
 
         if params.mcp_configs:
-            if not settings.allow_host_tools:
-                STRICT_EXECUTION_REJECTIONS_TOTAL.labels(reason="host_mcp_tools").inc()
+            if not settings.mcp_outbound_transport_enabled:
+                STRICT_EXECUTION_REJECTIONS_TOTAL.labels(reason="mcp_outbound_transport").inc()
                 raise RuntimeError(
-                    "Host-side MCP tools are disabled in strict execution mode. "
-                    "Route external operations through sandboxed skills or explicitly "
-                    "enable development host tools."
+                    "Outbound MCP transport is disabled. Set "
+                    "COGNITION_MCP_OUTBOUND_TRANSPORT_ENABLED=true and configure "
+                    "COGNITION_MCP_ALLOWED_ORIGINS for approved MCP origins."
                 )
             try:
                 mcp_callbacks = _build_mcp_callbacks()
@@ -840,23 +830,12 @@ async def create_cognition_agent(params: CognitionAgentParams) -> CognitionAgent
         ]
     )
 
-    available_tools = {
-        str(getattr(tool, "name", "")): tool for tool in agent_tools if getattr(tool, "name", None)
-    }
     agent_subagents: list[Any] = []
     for subagent in raw_subagents:
         if not isinstance(subagent, dict):
             agent_subagents.append(subagent)
             continue
         spec = {**subagent, "description": subagent.get("description", "")}
-        declared_tool_names = spec.pop("_declared_tool_names", None)
-        if declared_tool_names is not None:
-            # An explicit subagent never inherits a broader parent custom-tool
-            # set. Unknown names resolve to no capability and are rejected
-            # earlier by strict runtime tool loading.
-            spec["tools"] = [
-                available_tools[name] for name in declared_tool_names if name in available_tools
-            ]
         agent_subagents.append(spec)
     agent_subagents.extend(_resolve_async_subagents(raw_async_subagents))
 

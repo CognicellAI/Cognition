@@ -142,12 +142,6 @@ def load_config(cwd: Path | None = None) -> dict[str, Any]:
     return config
 
 
-def get_tool_sources(config: dict[str, Any]) -> list[str]:
-    """Return configured file-based tool source directories."""
-    tool_sources = config.get("tool_sources", [])
-    return [value for value in tool_sources if isinstance(value, str) and value]
-
-
 def _get_settings_schema() -> list[dict[str, Any]]:
     """Get Settings field schema with mappings.
 
@@ -488,9 +482,6 @@ def generate_config_example() -> str:
         "# Security note: Never commit API keys or secrets to this file.",
         "# Use environment variables for secrets.",
         "",
-        "tool_sources:",
-        "  - .cognition/tools/",
-        "",
     ]
 
     # Build nested structure with comments
@@ -512,10 +503,6 @@ def generate_config_example() -> str:
         "workspace": [
             "# Workspace settings",
             "# Configure where projects/workspaces are stored.",
-        ],
-        "tool_sources": [
-            "# File-based tool source directories",
-            "# Each source directory should contain Python modules defining tools.",
         ],
         "rate_limit": [
             "# Rate limiting settings",

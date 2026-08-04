@@ -880,12 +880,8 @@ class TestUpdateAgent:
         )
         assert response.status_code == 404
 
-    def test_patch_agent_tools_with_simple_names(self):
-        """PATCH with simple tool names (no dots) should persist correctly.
-
-        Regression: validate_tools used to reject names without at least one
-        dot, causing silent data loss in the PATCH handler.
-        """
+    def test_patch_agent_tools_field_rejected(self):
+        """The removed Cognition tool attachment field is rejected."""
         client.post(
             "/agents",
             json={
@@ -897,29 +893,7 @@ class TestUpdateAgent:
             "/agents/test-patch-tools-agent",
             json={"tools": ["directorate_get_change_set_context", "my_custom_tool"]},
         )
-        assert response.status_code == 200
-        data = response.json()
-        assert data["tools"] == ["directorate_get_change_set_context", "my_custom_tool"]
-
-        # Verify round-trip via GET
-        get_resp = client.get("/agents/test-patch-tools-agent")
-        assert get_resp.status_code == 200
-        assert get_resp.json()["tools"] == ["directorate_get_change_set_context", "my_custom_tool"]
-
-    def test_patch_agent_tools_with_module_paths_rejected(self):
-        """Agent tool attachments must be registry tool names, not module paths."""
-        client.post(
-            "/agents",
-            json={
-                "name": "test-patch-module-tools-agent",
-                "system_prompt": "module tools test",
-            },
-        )
-        response = client.patch(
-            "/agents/test-patch-module-tools-agent",
-            json={"tools": ["server.app.tools.file_tools"]},
-        )
-        assert response.status_code == 500
+        assert response.status_code == 422
 
     def test_patch_agent_skills(self):
         """PATCH with Agent-owned skill bundles persists atomically."""
@@ -947,7 +921,7 @@ class TestUpdateAgent:
         ]
 
     def test_patch_agent_empty_tool_name_rejected(self):
-        """Empty tool names should still be rejected by the validator."""
+        """Removed tools field is rejected before legacy value validation."""
         client.post(
             "/agents",
             json={
@@ -959,10 +933,10 @@ class TestUpdateAgent:
             "/agents/test-patch-empty-tool-agent",
             json={"tools": [""]},
         )
-        assert response.status_code == 500
+        assert response.status_code == 422
 
-    def test_create_agent_with_tools_and_skills(self):
-        """POST with tools and skills should persist and round-trip."""
+    def test_create_agent_with_removed_tools_field_rejected(self):
+        """POST with legacy tools field should fail under v0.14 strict schema."""
         response = client.post(
             "/agents",
             json={
@@ -972,12 +946,7 @@ class TestUpdateAgent:
                 "skills": [{"name": "clean-code", "content": "# Clean code"}],
             },
         )
-        assert response.status_code == 201
-        data = response.json()
-        assert data["tools"] == ["my_tool"]
-        assert data["skills"] == [
-            {"name": "clean-code", "content": "# Clean code", "files": {}}
-        ]
+        assert response.status_code == 422
 
 
 class TestDeleteAgent:

@@ -59,15 +59,15 @@ async def setup_storage_backend():
         settings = get_settings()
         previous_runtime_settings = (
             settings.unsafe_local_execution,
-            settings.allow_host_tools,
-            settings.allow_api_python_tools,
+            settings.mcp_outbound_transport_enabled,
+            list(settings.mcp_allowed_origins),
             list(settings.callback_allowed_origins),
         )
         # Existing unit tests intentionally exercise the standalone local runtime.
         # Production defaults remain strict; this fixture opts the test deployment in.
         settings.unsafe_local_execution = True
-        settings.allow_host_tools = True
-        settings.allow_api_python_tools = True
+        settings.mcp_outbound_transport_enabled = True
+        settings.mcp_allowed_origins = ["https://example.com"]
         settings.callback_allowed_origins = ["https://example.com"]
         set_session_agent_manager_dep(SessionAgentManager(settings))
 
@@ -103,8 +103,8 @@ async def setup_storage_backend():
 
         (
             settings.unsafe_local_execution,
-            settings.allow_host_tools,
-            settings.allow_api_python_tools,
+            settings.mcp_outbound_transport_enabled,
+            settings.mcp_allowed_origins,
             settings.callback_allowed_origins,
         ) = previous_runtime_settings
         await storage.close()

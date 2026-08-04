@@ -165,26 +165,16 @@ class ProviderConfig(BaseModel):
 
 
 class ToolRegistration(BaseModel):
-    """A tool registered in the config registry.
+    """Legacy tool registry record retained for existing storage rows.
 
-    Tools can be registered in two ways:
-    - ``path``: A Python module path (e.g. ``mypackage.tools.jira``) or file
-      path (e.g. ``.cognition/tools/my_tool.py``). The module must be importable
-      by the server process — suitable for pre-installed packages.
-    - ``code``: Full Python source code stored directly in the DB. Cognition
-      executes it at runtime via ``exec()``. Suitable for builder applications
-      that cannot access the server filesystem (e.g. separate containers).
-
-    Exactly one of ``path`` or ``code`` must be provided.
-
-    Security note: Tool code executes with full Python privileges inside the
-    sandbox backend. ``POST /tools`` should be restricted to authorized
-    administrators at the Gateway/proxy layer.
+    Cognition v0.14 no longer exposes ``/tools`` or loads Python tools from
+    ConfigRegistry records. Existing rows may remain in the database, but the
+    runtime ignores them and no compatibility layer is provided.
 
     Attributes:
         name: Tool identifier.
-        path: File path or module path to load the tool from.
-        code: Python source code to execute at runtime.
+        path: Legacy file path or module path.
+        code: Legacy Python source code.
         enabled: Whether this tool is active.
         description: Optional description for documentation purposes.
         scope: Scope this entry applies to. Empty dict = global.

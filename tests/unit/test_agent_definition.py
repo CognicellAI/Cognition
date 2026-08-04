@@ -108,7 +108,6 @@ class TestSubagentDefinition:
         )
         assert subagent.name == "test-subagent"
         assert subagent.system_prompt == "You are a test subagent."
-        assert subagent.tools == []
         assert subagent.config is None
 
     def test_empty_name(self):
@@ -127,15 +126,13 @@ class TestSubagentDefinition:
                 system_prompt="You are a test subagent.",
             )
 
-    def test_with_tools_and_config(self):
-        """Test subagent with tools and config."""
+    def test_with_config(self):
+        """Test subagent with config."""
         subagent = SubagentDefinition(
             name="scanner",
             system_prompt="Focus on finding vulnerabilities...",
-            tools=["server.app.tools.file_tools"],
             config=AgentConfig(temperature=0.1, max_tokens=1000),
         )
-        assert len(subagent.tools) == 1
         assert subagent.config.temperature == 0.1
 
 
@@ -150,7 +147,6 @@ class TestAgentDefinition:
         )
         assert agent.name == "test-agent"
         assert agent.system_prompt == "You are a test agent."
-        assert agent.tools == []
         assert agent.skills == []
         assert agent.memory == []
         assert agent.subagents == []
@@ -162,7 +158,6 @@ class TestAgentDefinition:
         agent = AgentDefinition(
             name="security-analyzer",
             system_prompt="You are a security expert...",
-            tools=["read_file", "execute"],
             skills=[
                 {
                     "name": "security",
@@ -191,7 +186,6 @@ class TestAgentDefinition:
             config=AgentConfig(temperature=0.3, max_tokens=2000),
         )
         assert agent.name == "security-analyzer"
-        assert len(agent.tools) == 2
         assert len(agent.skills) == 1
         assert len(agent.memory) == 2
         assert len(agent.subagents) == 1
@@ -266,22 +260,13 @@ class TestAgentDefinition:
         )
         assert agent.name == "test-agent_1"
 
-    def test_simple_tool_name_accepted(self):
-        """Simple registry tool names are accepted by the validator."""
-        agent = AgentDefinition(
-            name="test-agent",
-            system_prompt="You are a test agent.",
-            tools=["my_custom_tool", "directorate_get_change_set_context"],
-        )
-        assert agent.tools == ["my_custom_tool", "directorate_get_change_set_context"]
-
-    def test_module_path_tool_rejected(self):
-        """Agent tool attachments must be names, not module paths."""
+    def test_tool_field_rejected(self):
+        """Cognition-managed tool attachments are no longer supported."""
         with pytest.raises(ValueError):
             AgentDefinition(
                 name="test-agent",
                 system_prompt="You are a test agent.",
-                tools=["server.app.tools.file_tools"],
+                tools=["my_custom_tool"],
             )
 
     def test_skill_directory_rejected(self):
@@ -291,15 +276,6 @@ class TestAgentDefinition:
                 name="test-agent",
                 system_prompt="You are a test agent.",
                 skills=[".cognition/skills/"],
-            )
-
-    def test_empty_tool_path(self):
-        """Test that empty tool paths raise error."""
-        with pytest.raises(ValueError):
-            AgentDefinition(
-                name="test-agent",
-                system_prompt="You are a test agent.",
-                tools=[""],
             )
 
     def test_empty_skill_path(self):
@@ -334,13 +310,11 @@ class TestAgentDefinition:
         agent = AgentDefinition(
             name="test-agent",
             system_prompt="You are a test agent.",
-            tools=["read_file"],
             config=AgentConfig(temperature=0.5),
         )
         yaml_str = agent.to_yaml()
         assert "name: test-agent" in yaml_str
         assert "system_prompt: You are a test agent." in yaml_str
-        assert "tools:" in yaml_str
         assert "config:" in yaml_str
         assert "temperature: 0.5" in yaml_str
 
@@ -349,7 +323,6 @@ class TestAgentDefinition:
         agent = AgentDefinition(
             name="test-agent",
             system_prompt="You are a test agent.",
-            tools=["read_file"],
             skills=[{"name": "test-skill", "content": "# Test skill"}],
             memory=["TEST.md"],
             config=AgentConfig(temperature=0.5, max_tokens=1000),
@@ -359,7 +332,6 @@ class TestAgentDefinition:
         loaded = AgentDefinition.model_validate(data)
         assert loaded.name == agent.name
         assert loaded.system_prompt == agent.system_prompt
-        assert loaded.tools == agent.tools
         assert loaded.skills == agent.skills
         assert loaded.memory == agent.memory
         assert loaded.config.temperature == agent.config.temperature
@@ -393,9 +365,6 @@ class TestLoadAgentDefinition:
             f.write("""
 name: security-analyzer
 system_prompt: "You are a security expert..."
-tools:
-  - read_file
-  - execute
 skills:
   - name: security
     content: |
@@ -426,7 +395,6 @@ config:
             agent = load_agent_definition(temp_path)
             assert agent.name == "security-analyzer"
             assert agent.system_prompt == "You are a security expert..."
-            assert len(agent.tools) == 2
             assert len(agent.skills) == 1
             assert len(agent.memory) == 2
             assert agent.interrupt_on["execute"].allowed_decisions == [
@@ -446,8 +414,6 @@ system_prompt: "You are the main agent."
 subagents:
   - name: sub-agent-1
     system_prompt: "You are subagent 1."
-    tools:
-      - tool1
   - name: sub-agent-2
     system_prompt: "You are subagent 2."
 """)
@@ -506,16 +472,6 @@ subagents:
 class TestAgentDefinitionPathValidation:
     """Tests for AgentDefinition path validation methods."""
 
-    def test_validate_tool_paths(self):
-        """Agent tool attachments are resolved by registry at runtime."""
-        agent = AgentDefinition(
-            name="test-agent",
-            system_prompt="You are a test agent.",
-            tools=["read_file", "execute"],
-        )
-        failed = agent.validate_tool_paths()
-        assert failed == []
-
     def test_validate_skill_paths(self):
         """Agent-owned bundles do not depend on host filesystem paths."""
         agent = AgentDefinition(
@@ -547,12 +503,10 @@ class TestAgentDefinitionPathValidation:
         agent = AgentDefinition(
             name="test-agent",
             system_prompt="You are a test agent.",
-            tools=["read_file"],
             skills=[{"name": "clean-code", "content": "# Clean code"}],
             memory=["/fake/memory.md"],
         )
         results = agent.validate_all_paths()
-        assert len(results["tools"]) == 0
         assert len(results["skills"]) == 0
         assert len(results["memory"]) == 1
 

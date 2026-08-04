@@ -76,8 +76,6 @@ class TestCreateAgentRuntimeRecursionLimit:
         definition = _make_definition(recursion_limit=None)
 
         mock_settings = MagicMock()
-        mock_settings.trusted_tool_namespaces = ["server.app.tools"]
-
         mock_runtime = MagicMock()
 
         with (
@@ -111,8 +109,6 @@ class TestCreateAgentRuntimeRecursionLimit:
 
         mock_settings = MagicMock()
         mock_settings.agent_recursion_limit = 1000  # higher default — must be overridden
-        mock_settings.trusted_tool_namespaces = ["server.app.tools"]
-
         mock_runtime = MagicMock()
 
         with (

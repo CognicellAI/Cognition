@@ -18,11 +18,9 @@ from typing import Annotated, Any, Literal
 from urllib.parse import urlsplit
 
 import structlog
+from pydantic import AfterValidator, BaseModel, ConfigDict, Field, field_validator
 
 logger = structlog.get_logger(__name__)
-
-from langchain_core.tools import BaseTool
-from pydantic import AfterValidator, BaseModel, ConfigDict, Field, field_validator
 
 try:
     import yaml
@@ -348,6 +346,8 @@ class AsyncSubagentConfig(BaseModel):
     patterns; it requires an Agent Protocol-compatible worker deployment.
     """
 
+    model_config = ConfigDict(extra="forbid")
+
     name: str = Field(..., min_length=1, max_length=100)
     description: str = Field(..., min_length=1)
     graph_id: str = Field(..., min_length=1)
@@ -364,14 +364,12 @@ class SubagentDefinition(BaseModel):
         name: Unique name for the subagent.
         description: Human-readable description of the subagent's purpose.
         system_prompt: System prompt for the subagent.
-        tools: Tool module paths available to this subagent.
         config: Runtime configuration overrides.
     """
 
     name: str = Field(..., min_length=1, max_length=100)
     description: str | None = Field(default=None)
     system_prompt: str = Field(..., min_length=1)
-    tools: list[str] = Field(default_factory=list)
     config: AgentConfig | None = Field(default=None)
     permissions: list[FilesystemPermissionConfig] = Field(default_factory=list)
 
@@ -427,8 +425,8 @@ class AgentSkillBundle(BaseModel):
 class AgentDefinition(BaseModel):
     """Declarative agent definition.
 
-    This model defines a complete agent configuration including tools,
-    skills, memory, subagents, and runtime configuration. It enables
+    This model defines a complete agent configuration including skills,
+    memory, subagents, MCP, and runtime configuration. It enables
     agents to be defined entirely via YAML configuration files.
 
     Attributes:
@@ -436,7 +434,6 @@ class AgentDefinition(BaseModel):
         display_name: Optional human-readable name for public presentation.
         a2a: A2A exposure and public Agent Card presentation configuration.
         system_prompt: System prompt that defines agent behavior.
-        tools: List of attached tool names.
         skills: Complete skill bundles owned by this Agent revision.
         memory: List of memory file paths.
         subagents: Nested subagent definitions.
@@ -446,10 +443,11 @@ class AgentDefinition(BaseModel):
         config: Runtime configuration (temperature, max_tokens, etc.).
     """
 
+    model_config = ConfigDict(extra="forbid")
+
     name: str = Field(..., min_length=1, max_length=100)
     display_name: str | None = Field(default=None, min_length=1, max_length=200)
     system_prompt: str = Field(..., min_length=1)
-    tools: list[str] = Field(default_factory=list)
     skills: list[AgentSkillBundle] = Field(default_factory=list)
     memory: list[str] = Field(default_factory=list)
     subagents: list[SubagentDefinition] = Field(default_factory=list)
@@ -479,19 +477,6 @@ class AgentDefinition(BaseModel):
         """Validate agent name format."""
         if not v.replace("-", "").replace("_", "").isalnum():
             raise ValueError(f"Agent name must be alphanumeric with hyphens/underscores only: {v}")
-        return v
-
-    @field_validator("tools")
-    @classmethod
-    def validate_tools(cls, v: list[str]) -> list[str]:
-        """Validate attached tool names."""
-        for tool_name in v:
-            if not tool_name:
-                raise ValueError("Tool path cannot be empty")
-            if "/" in tool_name or tool_name.endswith(".py") or "." in tool_name:
-                raise ValueError(
-                    "Agent tools must be registry tool names, not module or file paths"
-                )
         return v
 
     @field_validator("skills")
@@ -570,10 +555,6 @@ class AgentDefinition(BaseModel):
         with open(path, "w") as f:
             yaml.dump(self.model_dump(), f, default_flow_style=False, sort_keys=False)
 
-    def validate_tool_paths(self, base_path: str | Path | None = None) -> list[str]:
-        """Agent tool attachments are validated by name against the registry at runtime."""
-        return []
-
     def validate_skill_paths(self, base_path: str | Path | None = None) -> list[str]:
         """Agent skill attachments are validated by name against the registry at runtime."""
         return []
@@ -604,31 +585,20 @@ class AgentDefinition(BaseModel):
             base_path: Optional base path for resolving relative paths.
 
         Returns:
-            Dictionary with keys 'tools', 'skills', 'memory' containing
+            Dictionary with keys 'skills' and 'memory' containing
             lists of paths that failed validation.
         """
         return {
-            "tools": self.validate_tool_paths(base_path),
             "skills": self.validate_skill_paths(base_path),
             "memory": self.validate_memory_paths(base_path),
         }
-
-    def _resolve_tools(self, base_path: str | Path | None = None) -> list[BaseTool]:
-        """Direct tool path resolution is no longer supported.
-
-        Agent definitions attach registry tool names only. Runtime resolution
-        happens via ``RuntimeResolver.build_tools()``.
-        """
-        return []
 
     def to_subagent(self, base_path: str | Path | None = None) -> dict[str, Any]:
         """Translate AgentDefinition to Deep Agents SubAgent TypedDict.
 
         Args:
-            base_path: Base path for resolving relative tool file paths. Should
-                be the workspace root — not a per-session sandbox — because
-                ``.cognition/tools/`` is a workspace-level concept loaded into
-                the server process. See issue #112.
+            base_path: Reserved for compatibility with callers that pass a
+                workspace root.
 
         Returns:
             A dict matching the Deep Agents SubAgent TypedDict specification:
@@ -636,7 +606,6 @@ class AgentDefinition(BaseModel):
             - description: str (required)
             - system_prompt: str (required)
             - model: str | None (optional, format: "provider:model" or just "model")
-            - tools: list[Any] | None (optional)
             - skills: list[str] | None (optional source paths)
             - middleware: list[Any] | None (optional)
             - interrupt_on: dict[str, InterruptOnConfig] | None (optional)
@@ -654,12 +623,6 @@ class AgentDefinition(BaseModel):
                 spec["model"] = f"{provider}:{self.config.model}"
             else:
                 spec["model"] = self.config.model
-
-        # Resolve tools from paths to BaseTool instances
-        # This prevents AttributeError when ToolNode tries to access .name on strings
-        resolved_tools = self._resolve_tools(base_path=base_path)
-        if resolved_tools:
-            spec["tools"] = resolved_tools
 
         if self.skills:
             spec["skills"] = ["/skills/api/"]
@@ -833,7 +796,6 @@ def load_agent_definition_from_markdown(path: str | Path) -> AgentDefinition:
         mode=frontmatter.get("mode", "all"),
         hidden=frontmatter.get("hidden", False),
         native=False,  # User-defined
-        tools=frontmatter.get("tools", []),
         skills=frontmatter.get("skills", []),
         memory=frontmatter.get("memory", []),
         async_subagents=frontmatter.get("async_subagents", []),

@@ -15,10 +15,13 @@ description: Handles deployment workflows
 system_prompt: |
   You are a deployment agent. Deploy applications safely and report results.
   Always run tests before deploying. Report the deployment URL when complete.
-tools:
-  - "bash"
-  - "read_file"
-  - "write_file"
+mcp:
+  servers:
+    deployment:
+      url: https://mcp-egress.internal/mcp/deployment
+      auth:
+        type: workload_token_exchange
+        profile: production_egress
 config:
   model: gpt-4o
   temperature: 0.1

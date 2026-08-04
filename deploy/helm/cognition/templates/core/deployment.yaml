@@ -60,7 +60,6 @@ spec:
               WS="/home/cognition"
               echo "Initializing workspace at ${WS}..."
               mkdir -p "${WS}/.cognition/skills"
-              mkdir -p "${WS}/.cognition/tools"
               mkdir -p "${WS}/.cognition/middleware"
               mkdir -p "${WS}/.cognition/agents"
               mkdir -p "${WS}/.cognition/sandboxes"
@@ -224,7 +223,13 @@ spec:
               value: "{{ .Values.config.sandbox.k8s.warmPool }}"
             {{- end }}
             {{- end }}
-            
+
+            # MCP outbound transport admission
+            - name: COGNITION_MCP_OUTBOUND_TRANSPORT_ENABLED
+              value: "{{ .Values.config.mcp.outboundTransportEnabled }}"
+            - name: COGNITION_MCP_ALLOWED_ORIGINS
+              value: '{{ toJson .Values.config.mcp.allowedOrigins }}'
+
             # Session scoping
             - name: COGNITION_SCOPING_ENABLED
               value: "{{ .Values.config.scoping.enabled }}"

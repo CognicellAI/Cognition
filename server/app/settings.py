@@ -289,6 +289,7 @@ class Settings(BaseSettings):
         "cors_origins",
         "scope_keys",
         "callback_allowed_origins",
+        "mcp_allowed_origins",
         mode="before",
     )
     @classmethod
@@ -360,15 +361,15 @@ class Settings(BaseSettings):
         alias="COGNITION_ALLOW_UNSAFE_LOCAL_EXECUTION",
         description="Explicitly permit host-local execution for standalone development.",
     )
-    allow_host_tools: bool = Field(
+    mcp_outbound_transport_enabled: bool = Field(
         default=False,
-        alias="COGNITION_ALLOW_HOST_TOOLS",
-        description="Explicitly inject Browser/Search/package host tools in development.",
+        alias="COGNITION_MCP_OUTBOUND_TRANSPORT_ENABLED",
+        description="Explicitly permit remote MCP transport for Agent-owned MCP servers.",
     )
-    allow_api_python_tools: bool = Field(
-        default=False,
-        alias="COGNITION_ALLOW_API_PYTHON_TOOLS",
-        description="Explicitly permit host loading of API Python tool code in development.",
+    mcp_allowed_origins: list[str] = Field(
+        default_factory=list,
+        alias="COGNITION_MCP_ALLOWED_ORIGINS",
+        description="Deployment-approved MCP origins as scheme://host[:port].",
     )
     callback_allowed_origins: list[str] = Field(
         default_factory=list,

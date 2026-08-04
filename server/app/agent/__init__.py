@@ -7,9 +7,6 @@ __all__ = [
     "CognitionAgentParams",
     "CognitionAgentResult",
     "CognitionLocalSandboxBackend",
-    "BrowserTool",
-    "InspectPackageTool",
-    "SearchTool",
     "AgentConfig",
     "AgentDefinition",
     "SubagentDefinition",
@@ -111,14 +108,5 @@ def __getattr__(name: str) -> object:
         from server.app.agent.sandbox_backend import CognitionLocalSandboxBackend
 
         return CognitionLocalSandboxBackend
-
-    if name in {"BrowserTool", "InspectPackageTool", "SearchTool"}:
-        from server.app.agent.tools import BrowserTool, InspectPackageTool, SearchTool
-
-        return {
-            "BrowserTool": BrowserTool,
-            "InspectPackageTool": InspectPackageTool,
-            "SearchTool": SearchTool,
-        }[name]
 
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

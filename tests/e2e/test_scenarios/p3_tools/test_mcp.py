@@ -15,6 +15,13 @@ from server.app.agent.mcp_client import (
 from server.app.settings import Settings
 
 
+def _mcp_settings(*origins: str) -> Settings:
+    settings = Settings()
+    settings.mcp_outbound_transport_enabled = True
+    settings.mcp_allowed_origins = list(origins)
+    return settings
+
+
 def test_agent_owned_mcp_config_round_trips_through_definition() -> None:
     definition = AgentDefinition.model_validate(
         {
@@ -76,7 +83,7 @@ async def test_per_server_discovery_keeps_optional_failure_isolated(monkeypatch)
             McpServerConfig(name="optional", url="https://optional.test/mcp", required=False),
             McpServerConfig(name="required", url="https://required.test/mcp", required=True),
         ],
-        Settings(),
+        _mcp_settings("https://optional.test", "https://required.test"),
     )
 
     assert [tool.name for tool in tools] == ["required__lookup"]
@@ -96,7 +103,7 @@ async def test_required_discovery_failure_is_redacted(monkeypatch) -> None:
     with pytest.raises(McpServerDiscoveryError) as exc_info:
         await load_mcp_tools_per_server(
             [McpServerConfig(name="github", url="https://github.test/mcp", required=True)],
-            Settings(),
+            _mcp_settings("https://github.test"),
         )
 
     assert exc_info.value.category == "discovery_failed"

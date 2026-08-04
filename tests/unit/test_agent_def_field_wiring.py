@@ -129,7 +129,6 @@ async def _run(
 
     s = MagicMock(spec=Settings)
     s.workspace_path = Path(session.workspace_path)
-    s.trusted_tool_namespaces = ["server.app.tools"]
     service = DeepAgentStreamingService(s)
     mock_storage = MagicMock()
     mock_storage.get_session = AsyncMock(return_value=session)
@@ -768,98 +767,7 @@ class TestMiddlewareWiring:
         assert params.middleware is None
 
 
-# ---------------------------------------------------------------------------
-# tools wiring
-# ---------------------------------------------------------------------------
-
-
-class TestToolsWiring:
-    @pytest.mark.asyncio
-    async def test_agent_def_tools_filtering_passed_to_runtime(self, tmp_path):
-        """Agent definition tool names are passed as allowed_tool_names to build_tools."""
-        from langchain_core.tools import BaseTool
-
-        from server.app.agent.definition import AgentDefinition
-        from server.app.llm.deep_agent_service import DeepAgentStreamingService
-        from server.app.settings import Settings
-
-        session = _make_session()
-        mock_runtime = _make_mock_runtime(DoneEvent())
-
-        agent_def_tool = MagicMock(spec=BaseTool)
-        agent_def = AgentDefinition(
-            name="test-agent",
-            system_prompt="test",
-            tools=["some_tool"],
-        )
-        mock_def_registry = MagicMock()
-        mock_def_registry.get = MagicMock(return_value=agent_def)
-        mock_def_registry.subagents = MagicMock(return_value=[])
-
-        s = MagicMock(spec=Settings)
-        s.workspace_path = tmp_path
-        service = DeepAgentStreamingService(s)
-
-        mock_config_store = MagicMock()
-        mock_config_store.get_agent_definition = AsyncMock(return_value=agent_def)
-        mock_config_store.list_agent_definitions = AsyncMock(return_value=[])
-        mock_config_store.list_tools = AsyncMock(return_value=[])
-        service._config_store = mock_config_store
-
-        mock_storage = MagicMock()
-        mock_storage.get_session = AsyncMock(return_value=session)
-        mock_storage.get_checkpointer = AsyncMock(return_value=MagicMock())
-        mock_storage.get_store = AsyncMock(return_value=MagicMock())
-        service.storage_backend = mock_storage
-
-        build_tools_calls: list[Any] = []
-
-        async def _fake_build_tools(*args: Any, **kwargs: Any) -> list[Any]:
-            build_tools_calls.append(kwargs)
-            return [agent_def_tool]
-
-        with (
-            patch(
-                "server.app.llm.deep_agent_service.DeepAgentRuntime",
-                return_value=mock_runtime,
-            ),
-            patch.object(
-                service,
-                "_resolve_model",
-                new_callable=AsyncMock,
-                return_value=(MagicMock(), "mock", "mock-model", 100),
-            ),
-            patch(
-                "server.app.llm.deep_agent_service.create_cognition_agent",
-                new_callable=AsyncMock,
-                return_value=MagicMock(),
-            ) as create_agent_mock,
-            patch(
-                "server.app.storage.factory.create_storage_backend",
-                return_value=mock_storage,
-            ),
-            patch.object(
-                service._get_runtime_resolver(),
-                "build_tools",
-                _fake_build_tools,
-            ),
-        ):
-            async for _ in service.stream_response(
-                session_id=session.id,
-                thread_id=session.thread_id,
-                project_path="/tmp/ws",
-                content="hello",
-            ):
-                pass
-
-        assert len(build_tools_calls) == 1
-        assert build_tools_calls[0].get("allowed_tool_names") == ["some_tool"]
-
-        params = _get_params(create_agent_mock)
-        assert params is not None
-        passed_tools = params.tools or []
-        assert agent_def_tool in passed_tools
-
+class TestSubagentWiring:
     @pytest.mark.asyncio
     async def test_only_explicit_inline_subagents_are_attached(self, tmp_path):
         """Unrelated scoped Agents must not become implicit subagents."""
@@ -933,7 +841,6 @@ class TestToolsWiring:
                 "name": "helper",
                 "description": "helps",
                 "system_prompt": "sub",
-                "_declared_tool_names": [],
             }
         ]
         mock_config_store.list_agent_definitions.assert_not_awaited()

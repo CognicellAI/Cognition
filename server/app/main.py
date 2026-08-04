@@ -41,7 +41,6 @@ from server.app.api.routes import (
     models,
     sandbox_profiles,
     sessions,
-    tools,
 )
 from server.app.exceptions import RateLimitError
 from server.app.file_watcher import WorkspaceWatcher
@@ -124,7 +123,6 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     from server.app.bootstrap import (
         seed_providers_from_config,
         seed_sandbox_profiles_from_config,
-        seed_tools_from_sources,
     )
     from server.app.config_loader import load_config
 
@@ -132,12 +130,10 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     logger.debug("Loaded YAML config", keys=list(yaml_config.keys()))
     await seed_providers_from_config(yaml_config, config_store)
     sandbox_profiles_seeded = await seed_sandbox_profiles_from_config(yaml_config, config_store)
-    tools_seeded = await seed_tools_from_sources(yaml_config, config_store, settings.workspace_path)
-    if sandbox_profiles_seeded or tools_seeded:
+    if sandbox_profiles_seeded:
         logger.info(
             "Bootstrapped file sources",
             sandbox_profiles=sandbox_profiles_seeded,
-            tools=tools_seeded,
         )
 
     # Seed store-backed agent definitions after ConfigStore is available.
@@ -235,18 +231,15 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     try:
         file_watcher = WorkspaceWatcher()
 
-        # Watch tools and middleware directories
-        tools_path = settings.workspace_path / ".cognition" / "tools"
+        # Watch middleware directory
         middleware_path = settings.workspace_path / ".cognition" / "middleware"
 
         # Create directories if they don't exist
-        tools_path.mkdir(parents=True, exist_ok=True)
         middleware_path.mkdir(parents=True, exist_ok=True)
 
-        file_watcher.watch_tools(str(tools_path))
         file_watcher.watch_middleware(str(middleware_path))
         file_watcher.start()
-        logger.info("File watcher started", watched_paths=["tools", "middleware"])
+        logger.info("File watcher started", watched_paths=["middleware"])
     except Exception as e:
         logger.warning("Failed to start file watcher", error_type=type(e).__name__)
 
@@ -332,7 +325,6 @@ app.include_router(config.router)
 app.include_router(sandbox_profiles.router)
 app.include_router(agents.router)
 app.include_router(models.router)
-app.include_router(tools.router)
 app.include_router(artifacts.router)
 app.include_router(capabilities.router)
 app.include_router(mcp_oauth.router)

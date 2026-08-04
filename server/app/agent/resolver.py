@@ -2,25 +2,18 @@
 
 from __future__ import annotations
 
-import importlib
-import importlib.util
-import inspect
 import json
 import os
-import sys
 from collections.abc import Iterator, Mapping
 from dataclasses import asdict, dataclass
-from pathlib import Path
 from typing import Any, cast
 
 import structlog
 from langchain.chat_models import init_chat_model
 from langchain_core.language_models import BaseChatModel
-from langchain_core.tools import BaseTool
 
 from server.app.agent.definition import AgentDefinition
 from server.app.exceptions import LLMProviderConfigError
-from server.app.observability import STRICT_EXECUTION_REJECTIONS_TOTAL
 from server.app.settings import Settings
 from server.app.storage.config_store import ConfigStore
 
@@ -144,101 +137,6 @@ class RuntimeResolver:
     def _test_provider_allowed(self, provider: str) -> bool:
         """Return whether a test-only provider is allowed for this deployment."""
         return provider not in _TEST_ONLY_PROVIDERS or self._settings.unsafe_local_execution
-
-    # ------------------------------------------------------------------
-    # Tool resolution
-    # ------------------------------------------------------------------
-
-    async def build_tools(
-        self,
-        scope: dict[str, str] | None = None,
-        extra_tools: list[Any] | None = None,
-        allowed_tool_names: list[str] | None = None,
-    ) -> list[Any]:
-        """Build BaseTool instances from all sources.
-
-        Sources (in priority order):
-        1. extra_tools: Programmatically provided tools
-        2. ConfigStore tools: API-registered tools (code or module path)
-
-        Args:
-            scope: Scope dict for ConfigStore lookup.
-            extra_tools: Additional tools to include.
-
-        Returns:
-            List of BaseTool instances.
-        """
-        tools: list[Any] = list(extra_tools) if extra_tools else []
-        if self._store is None:
-            return tools
-
-        try:
-            registrations = await self._store.list_tools(scope)
-        except Exception:
-            logger.debug("ConfigStore unavailable — skipping API-registered tools")
-            return tools
-
-        # ``None`` retains the legacy "all enabled registrations" behavior for
-        # internal callers. An explicit empty Agent tool list means no Python
-        # registrations are attached; it must not accidentally expand to all
-        # tools in the scope.
-        allowed = None if allowed_tool_names is None else set(allowed_tool_names)
-
-        for reg_tool in registrations:
-            if not reg_tool.enabled:
-                continue
-            if allowed is not None and reg_tool.name not in allowed:
-                continue
-            if not self._settings.allow_api_python_tools:
-                STRICT_EXECUTION_REJECTIONS_TOTAL.labels(reason="api_python_tools").inc()
-                raise RuntimeError(
-                    f"Python tool '{reg_tool.name}' cannot be loaded in strict mode. "
-                    "Set COGNITION_ALLOW_API_PYTHON_TOOLS=true only for development."
-                )
-            try:
-                if reg_tool.code:
-                    namespace: dict[str, Any] = {}
-                    exec(compile(reg_tool.code, reg_tool.name, "exec"), namespace)  # noqa: S102
-                    for obj in namespace.values():
-                        if (
-                            isinstance(obj, BaseTool)
-                            or callable(obj)
-                            and hasattr(obj, "name")
-                            and hasattr(obj, "run")
-                        ):
-                            tools.append(obj)
-                elif reg_tool.path:
-                    path = Path(reg_tool.path)
-                    if path.is_absolute() or "/" in reg_tool.path or reg_tool.path.endswith(".py"):
-                        base = self._settings.workspace_path
-                        tool_file = path if path.is_absolute() else (base / path)
-                        if not tool_file.exists() and not tool_file.suffix:
-                            tool_file = tool_file.with_suffix(".py")
-                        module_name = f"_cognition_registry_tool_{tool_file.stem}"
-                        spec = importlib.util.spec_from_file_location(module_name, str(tool_file))
-                        if spec and spec.loader:
-                            module = importlib.util.module_from_spec(spec)
-                            if module_name in sys.modules:
-                                del sys.modules[module_name]
-                            sys.modules[module_name] = module
-                            spec.loader.exec_module(module)
-                            for _, obj in inspect.getmembers(module):
-                                if isinstance(obj, BaseTool):
-                                    tools.append(obj)
-                    else:
-                        module = importlib.import_module(reg_tool.path)
-                        for _, obj in inspect.getmembers(module):
-                            if isinstance(obj, BaseTool):
-                                tools.append(obj)
-            except Exception:
-                logger.warning(
-                    "Failed to load ConfigStore tool — skipping",
-                    tool_name=reg_tool.name,
-                    source_type="api_code" if reg_tool.code else "api_path",
-                    exc_info=True,
-                )
-
-        return tools
 
     # ------------------------------------------------------------------
     # Agent definition resolution

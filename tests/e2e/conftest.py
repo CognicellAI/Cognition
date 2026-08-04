@@ -70,8 +70,6 @@ async def server():
         # Existing E2E tests exercise local/mock execution. Production defaults
         # remain strict; the test deployment opts into standalone development mode.
         env["COGNITION_ALLOW_UNSAFE_LOCAL_EXECUTION"] = "true"
-        env["COGNITION_ALLOW_HOST_TOOLS"] = "true"
-        env["COGNITION_ALLOW_API_PYTHON_TOOLS"] = "true"
         # Disable OpenTelemetry to avoid port conflicts
         env["COGNITION_OTEL_ENABLED"] = "false"
 

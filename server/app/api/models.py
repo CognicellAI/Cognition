@@ -890,10 +890,6 @@ class AgentResponse(BaseModel):
             "Experimental remote Agent Protocol async subagents exposed as background task tools"
         ),
     )
-    # ISSUE-009: Added tools and skills for better agent introspection
-    tools: list[str] = Field(
-        default_factory=list, description="Tool paths this agent has access to"
-    )
     skills: list[AgentSkillBundle] = Field(
         default_factory=list, description="Complete skill bundles owned by this Agent revision"
     )
@@ -948,40 +944,6 @@ class McpReadinessResponse(BaseModel):
     agent_name: str
     agent_revision: int = Field(ge=1)
     servers: list[McpServerReadinessResponse] = Field(default_factory=list)
-
-
-# ============================================================================
-# Tool Models
-# ============================================================================
-
-
-class ToolResponse(BaseModel):
-    """Tool information for API responses."""
-
-    name: str = Field(..., description="Tool name")
-    source_type: str = Field(
-        ...,
-        description=(
-            "Origin of the tool: 'builtin' (built-in), 'file' (file-discovered), "
-            "'api_code' (API-registered Python source), 'api_path' (API-registered module path)"
-        ),
-    )
-    module: str | None = Field(None, description="Module path if loaded from a module path")
-    description: str | None = Field(None, description="Tool description")
-    enabled: bool = Field(True, description="Whether the tool is enabled")
-    interrupt_on: bool = Field(
-        default=False,
-        description="Whether this tool is marked as requiring approval by default",
-    )
-    # Back-compat alias kept for existing consumers
-    source: str = Field(..., description="Deprecated — use source_type")
-
-
-class ToolList(BaseModel):
-    """List of tools response."""
-
-    tools: list[ToolResponse] = Field(default_factory=list, description="List of registered tools")
-    count: int = Field(0, description="Total number of tools")
 
 
 # ============================================================================
@@ -1253,7 +1215,6 @@ class AgentCreate(BaseModel):
         default_factory=A2AConfig,
         description="A2A exposure and public Agent Card presentation",
     )
-    tools: list[str] = Field(default_factory=list)
     skills: list[AgentSkillBundle] = Field(default_factory=list)
     memory: list[str] = Field(default_factory=list)
     interrupt_on: dict[str, HumanInTheLoopConfig] = Field(default_factory=dict)
@@ -1305,7 +1266,6 @@ class AgentUpdate(BaseModel):
         default=None,
         description="A2A exposure and public Agent Card presentation; null resets defaults",
     )
-    tools: list[str] | None = None
     skills: list[AgentSkillBundle] | None = None
     memory: list[str] | None = None
     interrupt_on: dict[str, HumanInTheLoopConfig] | None = None
@@ -1327,42 +1287,3 @@ class AgentUpdate(BaseModel):
     sandbox_execution_role_arn: str | None = None
     middleware: list[Any] | None = None
     mcp: AgentMcpConfig | None = None
-
-
-# ============================================================================
-# Tool CRUD Models
-# ============================================================================
-
-
-class ToolCreate(BaseModel):
-    """Request to register a tool in the ConfigRegistry.
-
-    Exactly one of ``path`` or ``code`` must be provided:
-
-    - ``path``: Python module path (e.g. ``mypackage.tools.jira``) or file
-      path. The module must be importable by the Cognition server process.
-    - ``code``: Full Python source code. Stored in the DB and executed at
-      runtime via ``exec()``. Suitable for builder applications that cannot
-      access the server filesystem.
-
-    Security note: Tool code executes with full Python privileges. This
-    endpoint should be restricted to authorized administrators.
-    """
-
-    name: str = Field(..., min_length=1, max_length=100, description="Tool identifier")
-    path: str | None = Field(default=None, description="Module or file path for the tool")
-    code: str | None = Field(default=None, description="Python source code to execute at runtime")
-    enabled: bool = Field(default=True)
-    description: str | None = Field(default=None)
-    interrupt_on: bool = Field(default=False)
-    scope: dict[str, str] = Field(default_factory=dict)
-
-
-class ToolUpdate(BaseModel):
-    """Request to partially update a tool registration."""
-
-    path: str | None = Field(default=None)
-    code: str | None = Field(default=None)
-    enabled: bool | None = Field(default=None)
-    description: str | None = Field(default=None)
-    interrupt_on: bool | None = Field(default=None)
