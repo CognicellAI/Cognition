@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, Literal
 
 from pydantic import (
@@ -158,10 +158,17 @@ class Settings(BaseSettings):
         le=900,
     )
 
-    # Workspace settings
+    # Host-local workspace settings. Remote sandbox paths are configured
+    # separately below and must never be inferred from this host path.
     workspace_root: Path = Field(
         default=Path("."),
-        alias="COGNITION_WORKSPACE_ROOT",
+        alias="COGNITION_LOCAL_WORKSPACE_ROOT",
+    )
+
+    sandbox_workspace_root: str = Field(
+        default="/workspace",
+        alias="COGNITION_SANDBOX_WORKSPACE_ROOT",
+        description="Absolute workspace path visible inside remote sandboxes.",
     )
 
     # OpenAI credentials — read by provider factories, not used directly by Settings
@@ -607,6 +614,15 @@ class Settings(BaseSettings):
         if not v.is_absolute():
             v = v.resolve()
         return v
+
+    @field_validator("sandbox_workspace_root")
+    @classmethod
+    def validate_sandbox_workspace_root(cls, value: str) -> str:
+        """Require a normalized absolute POSIX path for remote sandboxes."""
+        path = PurePosixPath(value)
+        if not value or not path.is_absolute() or ".." in path.parts:
+            raise ValueError("sandbox_workspace_root must be an absolute POSIX path")
+        return path.as_posix()
 
     @field_validator("port", "metrics_port")
     @classmethod

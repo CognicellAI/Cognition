@@ -120,7 +120,6 @@ class AgentDefinition(BaseModel):
     name: str                       # Stable runtime lookup identifier
     display_name: str | None = None # Optional public presentation name
     system_prompt: str | PromptConfig | None = None
-    skills: list[AgentSkillBundle] = []  # complete revision-owned bundles
     memory: list[str] = []          # paths to instruction files (AGENTS.md)
     subagents: list[SubagentDefinition] = []
     interrupt_on: dict[str, bool] = {}
@@ -189,7 +188,7 @@ curl -X POST http://localhost:8000/agents \
 Builders can also configure default MIME modes and public Agent Card skills
 under `a2a`. See [Agent Cards and Public Skills](a2a/agent-cards.md) for the
 discovery model and the [A2A Builder Guide](../guides/a2a.md) for setup. Public
-A2A skills remain separate from root-level runtime `skills`.
+A2A skills remain separate from sandbox-mounted runtime Skill bundles.
 
 ### System Prompt Sources
 
@@ -326,7 +325,7 @@ curl http://localhost:8000/agents
 curl http://localhost:8000/agents/readonly
 ```
 
-Response fields include `name`, `description`, `mode`, `hidden`, `native`, `a2a`, `model`, `temperature`, `response_format`, `interrupt_on`, `tools`, `skills`, and `system_prompt`.
+Response fields include `name`, `description`, `mode`, `hidden`, `native`, `a2a`, `model`, `temperature`, `response_format`, `interrupt_on`, and `system_prompt`.
 
 ### Capability Discovery
 

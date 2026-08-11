@@ -14,7 +14,6 @@ from pydantic import AnyHttpUrl, BaseModel, ConfigDict, Field, model_validator
 from server.app.agent.definition import (
     A2AConfig,
     AgentMcpConfig,
-    AgentSkillBundle,
     AsyncSubagentConfig,
     ContextPolicy,
     FilesystemPermissionConfig,
@@ -890,9 +889,6 @@ class AgentResponse(BaseModel):
             "Experimental remote Agent Protocol async subagents exposed as background task tools"
         ),
     )
-    skills: list[AgentSkillBundle] = Field(
-        default_factory=list, description="Complete skill bundles owned by this Agent revision"
-    )
     mcp: AgentMcpConfig = Field(default_factory=AgentMcpConfig)
     system_prompt: str | None = Field(None, description="Agent's system prompt")
 
@@ -1215,7 +1211,6 @@ class AgentCreate(BaseModel):
         default_factory=A2AConfig,
         description="A2A exposure and public Agent Card presentation",
     )
-    skills: list[AgentSkillBundle] = Field(default_factory=list)
     memory: list[str] = Field(default_factory=list)
     interrupt_on: dict[str, HumanInTheLoopConfig] = Field(default_factory=dict)
     permissions: list[FilesystemPermissionConfig] = Field(default_factory=list)
@@ -1266,7 +1261,6 @@ class AgentUpdate(BaseModel):
         default=None,
         description="A2A exposure and public Agent Card presentation; null resets defaults",
     )
-    skills: list[AgentSkillBundle] | None = None
     memory: list[str] | None = None
     interrupt_on: dict[str, HumanInTheLoopConfig] | None = None
     permissions: list[FilesystemPermissionConfig] | None = None

@@ -1418,7 +1418,7 @@ async def create_agent_runtime(
     declarative agent definition.
 
     Args:
-        definition: AgentDefinition with tools, skills, config, etc.
+        definition: AgentDefinition with tools, MCP, and runtime configuration.
         workspace_path: Path to the project workspace
         thread_id: Optional thread ID for state persistence
         settings: Optional settings override
@@ -1458,7 +1458,6 @@ async def create_agent_runtime(
             project_path=workspace_path,
             system_prompt=definition.system_prompt,
             memory=definition.memory,
-            skills=definition.skills,
             async_subagents=definition.async_subagents,
             middleware=resolved_middleware if resolved_middleware else None,
             checkpointer=checkpointer,

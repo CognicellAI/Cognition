@@ -147,7 +147,6 @@ class TestAgentDefinition:
         )
         assert agent.name == "test-agent"
         assert agent.system_prompt == "You are a test agent."
-        assert agent.skills == []
         assert agent.memory == []
         assert agent.subagents == []
         assert agent.interrupt_on == {}
@@ -158,12 +157,6 @@ class TestAgentDefinition:
         agent = AgentDefinition(
             name="security-analyzer",
             system_prompt="You are a security expert...",
-            skills=[
-                {
-                    "name": "security",
-                    "content": "---\nname: security\ndescription: Security review\n---\n",
-                }
-            ],
             memory=["AGENTS.md", "SECURITY.md"],
             subagents=[
                 SubagentDefinition(
@@ -186,7 +179,6 @@ class TestAgentDefinition:
             config=AgentConfig(temperature=0.3, max_tokens=2000),
         )
         assert agent.name == "security-analyzer"
-        assert len(agent.skills) == 1
         assert len(agent.memory) == 2
         assert len(agent.subagents) == 1
         assert agent.interrupt_on["execute"].allowed_decisions == ["approve", "reject"]
@@ -269,24 +261,6 @@ class TestAgentDefinition:
                 tools=["my_custom_tool"],
             )
 
-    def test_skill_directory_rejected(self):
-        """Legacy source-directory skill attachments are rejected."""
-        with pytest.raises(ValueError):
-            AgentDefinition(
-                name="test-agent",
-                system_prompt="You are a test agent.",
-                skills=[".cognition/skills/"],
-            )
-
-    def test_empty_skill_path(self):
-        """Test that empty skill paths raise error."""
-        with pytest.raises(ValueError):
-            AgentDefinition(
-                name="test-agent",
-                system_prompt="You are a test agent.",
-                skills=[""],
-            )
-
     def test_empty_memory_path(self):
         """Test that empty memory paths raise error."""
         with pytest.raises(ValueError):
@@ -323,7 +297,6 @@ class TestAgentDefinition:
         agent = AgentDefinition(
             name="test-agent",
             system_prompt="You are a test agent.",
-            skills=[{"name": "test-skill", "content": "# Test skill"}],
             memory=["TEST.md"],
             config=AgentConfig(temperature=0.5, max_tokens=1000),
         )
@@ -332,7 +305,6 @@ class TestAgentDefinition:
         loaded = AgentDefinition.model_validate(data)
         assert loaded.name == agent.name
         assert loaded.system_prompt == agent.system_prompt
-        assert loaded.skills == agent.skills
         assert loaded.memory == agent.memory
         assert loaded.config.temperature == agent.config.temperature
         assert loaded.config.max_tokens == agent.config.max_tokens
@@ -365,13 +337,6 @@ class TestLoadAgentDefinition:
             f.write("""
 name: security-analyzer
 system_prompt: "You are a security expert..."
-skills:
-  - name: security
-    content: |
-      ---
-      name: security
-      description: Security review
-      ---
 memory:
   - AGENTS.md
   - SECURITY.md
@@ -395,7 +360,6 @@ config:
             agent = load_agent_definition(temp_path)
             assert agent.name == "security-analyzer"
             assert agent.system_prompt == "You are a security expert..."
-            assert len(agent.skills) == 1
             assert len(agent.memory) == 2
             assert agent.interrupt_on["execute"].allowed_decisions == [
                 "approve",
@@ -472,15 +436,6 @@ subagents:
 class TestAgentDefinitionPathValidation:
     """Tests for AgentDefinition path validation methods."""
 
-    def test_validate_skill_paths(self):
-        """Agent-owned bundles do not depend on host filesystem paths."""
-        agent = AgentDefinition(
-            name="test-agent",
-            system_prompt="You are a test agent.",
-            skills=[{"name": "review", "content": "# Review"}],
-        )
-        assert agent.validate_skill_paths() == []
-
     def test_validate_memory_paths(self):
         """Test validating memory paths."""
         with tempfile.NamedTemporaryFile(mode="w", suffix=".md", delete=False) as f:
@@ -503,15 +458,13 @@ class TestAgentDefinitionPathValidation:
         agent = AgentDefinition(
             name="test-agent",
             system_prompt="You are a test agent.",
-            skills=[{"name": "clean-code", "content": "# Clean code"}],
             memory=["/fake/memory.md"],
         )
         results = agent.validate_all_paths()
-        assert len(results["skills"]) == 0
         assert len(results["memory"]) == 1
 
 
-def test_agent_skills_reject_legacy_registry_names() -> None:
+def test_agent_rejects_inline_skill_bundles() -> None:
     with pytest.raises(ValueError):
         AgentDefinition.model_validate(
             {
@@ -521,30 +474,3 @@ def test_agent_skills_reject_legacy_registry_names() -> None:
             }
         )
 
-
-def test_agent_skills_reject_duplicate_names_and_traversal() -> None:
-    with pytest.raises(ValueError, match="unique"):
-        AgentDefinition.model_validate(
-            {
-                "name": "duplicate-skills",
-                "system_prompt": "Reject duplicate skills.",
-                "skills": [
-                    {"name": "review", "content": "# One"},
-                    {"name": "review", "content": "# Two"},
-                ],
-            }
-        )
-    with pytest.raises(ValueError, match="safe relative POSIX"):
-        AgentDefinition.model_validate(
-            {
-                "name": "traversal-skill",
-                "system_prompt": "Reject traversal.",
-                "skills": [
-                    {
-                        "name": "review",
-                        "content": "# Review",
-                        "files": {"../secret.txt": "no"},
-                    }
-                ],
-            }
-        )

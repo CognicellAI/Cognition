@@ -52,7 +52,6 @@ def _runtime_context(
         store=None,
         system_prompt="prompt",
         memory=[],
-        skills=[],
         subagents=[],
         async_subagents=[],
         interrupt_on={},

@@ -1,6 +1,6 @@
 # Sandboxed Skill Package Registry
 
-**Status:** Superseded by ADR-0003 and the Agent-owned skill bundle model
+**Status:** Superseded by ADR-0003 and the sandbox-workspace Skills model
 **Audience:** Maintainers, deployment operators, and builders  
 **Last updated:** 2026-07-23
 
@@ -34,7 +34,12 @@ deployment responsibilities.
 
 ## Current state and problem
 
-Today a `SkillDefinition` stores a path and optional `SKILL.md` content in the
+> **Superseded by the v0.14 sandbox workspace Skills contract.** Builders now
+> mount selected standard Skill directories beneath the sandbox workspace and
+> Cognition passes that directory directly to Deep Agents; it no longer provides
+> a Skill registry or virtual Skills backend.
+
+Historically, a `SkillDefinition` stored a path and optional `SKILL.md` content in the
 Config Registry. The Skill API creates or replaces one mutable record, and
 `ConfigRegistrySkillsBackend` exposes attached skills beneath
 `/skills/api/`. `create_cognition_agent` routes that path through a Deep Agents

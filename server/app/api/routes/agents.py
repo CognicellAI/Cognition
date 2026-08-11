@@ -75,7 +75,6 @@ def _agent_to_response(
             p.model_dump() if hasattr(p, "model_dump") else dict(p)
             for p in (agent.permissions or [])
         ],
-        skills=agent.skills or [],
         mcp=agent.mcp,
         system_prompt=agent.system_prompt,
         subagents=[
@@ -264,7 +263,6 @@ async def create_agent(
             "hidden": body.hidden,
             "a2a": body.a2a.model_dump(mode="json"),
             "native": False,
-            "skills": [skill.model_dump(mode="json") for skill in body.skills],
             "memory": body.memory,
             "mcp": body.mcp.model_dump(mode="json"),
             "subagents": body.subagents,

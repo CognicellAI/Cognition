@@ -25,7 +25,7 @@ import structlog
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from server.app.agent.cognition_agent import CognitionAgentParams, create_cognition_agent
-from server.app.agent.definition import AgentDefinition, AgentSkillBundle
+from server.app.agent.definition import AgentDefinition
 from server.app.agent.resolver import ResolvedRuntimeModel, RuntimeResolver
 from server.app.agent.runtime import (
     ArtifactEvent,  # noqa: F401 — re-exported for custom runtimes
@@ -207,7 +207,6 @@ class ResolvedAgentConfig:
     """Fields resolved from an AgentDefinition, ready for CognitionAgentParams."""
 
     system_prompt: str | None = None
-    skills: list[AgentSkillBundle] = field(default_factory=list)
     memory: list[str] | None = None
     interrupt_on: dict[str, Any] | None = None
     permissions: list[Any] | None = None
@@ -417,9 +416,6 @@ class DeepAgentStreamingService:
         if resolved.system_prompt is None:
             resolved.system_prompt = agent_def.system_prompt
 
-        if agent_def.skills:
-            resolved.skills = list(agent_def.skills)
-
         # Only explicitly declared inline subagents are attached. Enumerating
         # every Agent in a tenant scope would silently widen capabilities.
         resolved.subagents = [
@@ -610,7 +606,6 @@ class DeepAgentStreamingService:
                 settings=self.settings,
                 tools=custom_tools if custom_tools else None,
                 system_prompt=agent_cfg.system_prompt,
-                skills=agent_cfg.skills if agent_cfg.skills else None,
                 subagents=agent_cfg.subagents,
                 async_subagents=agent_cfg.async_subagents,
                 memory=agent_cfg.memory,
@@ -875,7 +870,6 @@ class DeepAgentStreamingService:
                 settings=self.settings,
                 tools=custom_tools if custom_tools else None,
                 system_prompt=agent_cfg.system_prompt,
-                skills=agent_cfg.skills if agent_cfg.skills else None,
                 subagents=agent_cfg.subagents,
                 async_subagents=agent_cfg.async_subagents,
                 memory=agent_cfg.memory,

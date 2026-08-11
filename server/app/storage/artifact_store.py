@@ -22,6 +22,7 @@ import structlog
 
 from server.app.storage.common import effective_scope_key
 from server.app.storage.config_models import ArtifactDefinition
+from server.app.storage.s3_object_store import S3ObjectStore
 
 logger = structlog.get_logger(__name__)
 
@@ -651,16 +652,11 @@ class S3ArtifactStore:
         self._region_name = region_name
         self._force_path_style = force_path_style
 
-    def _backend(self, scope: dict[str, str]) -> Any:
-        from server.app.agent.s3_backend import S3CompatibleBackend
-
-        return S3CompatibleBackend.from_boto3(
+    def _object_store(self) -> S3ObjectStore:
+        return S3ObjectStore.from_boto3(
             bucket=self._bucket,
-            prefix=S3CompatibleBackend.scope_prefix(
-                base_prefix=self._base_prefix,
-                effective_scope=scope,
-                hmac_key=self._hmac_key,
-            ),
+            base_prefix=self._base_prefix,
+            hmac_key=self._hmac_key,
             endpoint_url=self._endpoint_url,
             region_name=self._region_name,
             force_path_style=self._force_path_style,
@@ -678,19 +674,15 @@ class S3ArtifactStore:
             raise RuntimeError("Artifact manifest is missing its durable-body checksum")
         return f"/artifacts/{artifact.artifact_type}/{artifact.id}/{artifact.version}/{digest}"
 
-    @staticmethod
-    def _download(backend: Any, path: str) -> bytes:
-        responses = backend.download_files([path])
-        if len(responses) != 1 or responses[0].error or responses[0].content is None:
-            raise RuntimeError("Artifact body is unavailable from configured durable storage")
-        return bytes(responses[0].content)
+    def _object_key(self, artifact: ArtifactDefinition, checksum: str | None = None) -> str:
+        return self._object_store().scoped_key(artifact.scope, self._path(artifact, checksum))
 
     async def initialize(self) -> None:
         initialize = getattr(self._manifest_store, "initialize", None)
         if initialize is not None:
             await initialize()
         try:
-            self._backend({}).verify_connection()
+            self._object_store().verify_connection()
         except Exception as exc:
             logger.warning(
                 "S3 artifact storage initialization failed",
@@ -711,18 +703,19 @@ class S3ArtifactStore:
         health_check = getattr(self._manifest_store, "health_check", None)
         if health_check is not None:
             await health_check()
-        self._backend({}).verify_connection()
+        self._object_store().verify_connection()
 
     async def _hydrate(self, artifact: ArtifactDefinition | None) -> ArtifactDefinition | None:
         if artifact is None:
             return None
         if artifact.object_key is None or artifact.content_size is None:
             raise RuntimeError("Artifact manifest is missing durable-body metadata")
-        backend = self._backend(artifact.scope)
-        path = self._path(artifact)
-        if backend.object_key(path) != artifact.object_key:
+        if self._object_key(artifact) != artifact.object_key:
             raise RuntimeError("Artifact manifest does not match its configured storage scope")
-        body = self._download(backend, path)
+        try:
+            body = self._object_store().get(artifact.object_key)
+        except Exception as exc:
+            raise RuntimeError("Artifact body is unavailable from configured durable storage") from exc
         digest = hashlib.sha256(body).hexdigest()
         if digest != artifact.content_checksum or len(body) != artifact.content_size:
             logger.warning(
@@ -764,12 +757,13 @@ class S3ArtifactStore:
 
     async def upsert_artifact(self, artifact: ArtifactDefinition) -> None:
         body, checksum, content_size = self._body_metadata(artifact.content)
-        backend = self._backend(artifact.scope)
-        path = self._path(artifact, checksum)
-        write = backend.write(path, artifact.content)
-        if write.error:
-            raise RuntimeError("Artifact body could not be written to configured durable storage")
-        stored_body = self._download(backend, path)
+        object_key = self._object_key(artifact, checksum)
+        object_store = self._object_store()
+        try:
+            object_store.put(object_key, body)
+            stored_body = object_store.get(object_key)
+        except Exception as exc:
+            raise RuntimeError("Artifact body could not be written to configured durable storage") from exc
         if stored_body != body or hashlib.sha256(stored_body).hexdigest() != checksum:
             logger.warning(
                 "Artifact upload integrity verification failed",
@@ -782,7 +776,7 @@ class S3ArtifactStore:
         manifest = artifact.model_copy(
             update={
                 "content": "",
-                "object_key": backend.object_key(path),
+                "object_key": object_key,
                 "content_checksum": checksum,
                 "content_size": content_size,
             }
@@ -802,9 +796,12 @@ class S3ArtifactStore:
     ) -> bool:
         versions = await self._manifest_store.list_artifact_versions(artifact_id, scope)
         for artifact in versions:
-            deleted = self._backend(artifact.scope).delete(self._path(artifact))
-            if deleted.error:
-                raise RuntimeError("Artifact body could not be deleted from configured durable storage")
+            if artifact.object_key is None:
+                raise RuntimeError("Artifact manifest is missing durable-body metadata")
+            try:
+                self._object_store().delete(artifact.object_key)
+            except Exception as exc:
+                raise RuntimeError("Artifact body could not be deleted from configured durable storage") from exc
         return await self._manifest_store.delete_artifact(artifact_id, scope)
 
     async def get_artifact_version(

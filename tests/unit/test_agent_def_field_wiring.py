@@ -1,7 +1,6 @@
 """Unit tests for AgentDefinition field wiring in DeepAgentStreamingService.
 
-Verifies that ALL AgentDefinition fields are consumed at runtime — not just
-system_prompt, skills, and subagents (the original 3), but also:
+Verifies that all AgentDefinition runtime fields are consumed, including:
   - memory → create_cognition_agent(memory=...)
   - interrupt_on → create_cognition_agent(interrupt_on=...)
   - middleware → resolved and passed to create_cognition_agent(middleware=...)
@@ -213,7 +212,6 @@ class TestNoAgentDef:
         agent_def = AgentDefinition(
             name="scoped-agent",
             system_prompt="scoped prompt",
-            skills=[{"name": "scoped-skill", "content": "# Scoped skill"}],
         )
 
         class ScopedRegistry:
@@ -237,7 +235,6 @@ class TestNoAgentDef:
 
         params = _get_params(create_agent_mock)
         assert params.system_prompt == "scoped prompt"
-        assert [skill.name for skill in params.skills] == ["scoped-skill"]
         assert registry.get_calls == [("scoped-agent", scope)]
         assert registry.subagent_scopes == []
 

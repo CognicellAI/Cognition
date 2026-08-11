@@ -29,9 +29,16 @@ Controls the HTTP server.
 
 | YAML key | Environment variable | Default | Description |
 |---|---|---|---|
-| `workspace.root` | `COGNITION_WORKSPACE_ROOT` | `.` | Root directory for agent workspaces |
+| `workspace.root` | `COGNITION_LOCAL_WORKSPACE_ROOT` | `.` | Host-local root for development workspaces and local state |
+| `sandbox.workspace_root` | `COGNITION_SANDBOX_WORKSPACE_ROOT` | `/workspace` | Builder-selected path visible inside remote sandboxes |
 
-The workspace root is resolved to an absolute path at startup. The agent's tools operate within this directory.
+The local workspace root is resolved to an absolute path at startup. Remote
+sandboxes use the separately configured sandbox workspace root. Builders mount
+Skills under `<sandbox workspace root>/skills`; Cognition passes that directory
+directly to Deep Agents. `COGNITION_WORKSPACE_ROOT` is injected inside each
+sandbox for scripts and is not a Cognition server setting. Docker receives this
+variable from Cognition; Kubernetes templates and Lambda MicroVM images must
+set it to the same configured sandbox workspace root.
 
 ---
 
@@ -76,8 +83,8 @@ stored data.
 | `COGNITION_S3_REGION` | AWS SDK default | Optional region |
 | `COGNITION_S3_FORCE_PATH_STYLE` | `false` | Enable for compatible stores that require path-style addressing |
 
-Agent-owned Skill bundles remain in the immutable Agent revision in the
-database. The `/artifacts/`, `/files/`, `/memories/`, `/contracts/`, `/evals/`,
+Skills are not stored by Cognition; builders mount them into the isolated
+sandbox workspace. The `/artifacts/`, `/files/`, `/memories/`, `/contracts/`, `/evals/`,
 and `/policies/` routes use database manifests and, when selected, immutable
 digest-addressed S3 bodies. Startup and `/ready` fail explicitly when a selected
 database or object store is unavailable.

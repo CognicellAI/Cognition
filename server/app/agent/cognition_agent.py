@@ -35,7 +35,6 @@ from deepagents import create_deep_agent as _create_deep_agent
 
 logger = structlog.get_logger(__name__)
 
-from server.app.agent.definition import AgentSkillBundle  # noqa: E402
 from server.app.agent.mcp_client import McpServerConfig, load_mcp_tools_per_server  # noqa: E402
 from server.app.agent.middleware import (  # noqa: E402
     CognitionObservabilityMiddleware,
@@ -130,7 +129,6 @@ class RuntimeContext:
     store_type: str
     system_prompt: str
     memory: tuple[str, ...]
-    skills: tuple[str, ...]
     subagent_count: int
     async_subagents: tuple[tuple[str, str, str, str], ...]
     interrupt_on: tuple[tuple[str, str], ...]
@@ -158,7 +156,6 @@ class RuntimeContext:
         store: Any,
         system_prompt: str | None,
         memory: Sequence[str] | None,
-        skills: Sequence[str] | None,
         subagents: Sequence[Any] | None,
         async_subagents: Sequence[Any] | None,
         interrupt_on: Mapping[str, Any] | None,
@@ -186,7 +183,6 @@ class RuntimeContext:
             store_type=store.__class__.__name__ if store else "None",
             system_prompt=system_prompt or "default",
             memory=tuple(sorted(memory)) if memory else (),
-            skills=tuple(sorted(skills)) if skills else (),
             subagent_count=len(subagents) if subagents else 0,
             async_subagents=_async_subagents_cache_key(async_subagents),
             interrupt_on=_mapping_cache_key(interrupt_on),
@@ -452,7 +448,6 @@ class CognitionAgentParams:
     checkpointer: Any = None
     system_prompt: str | None = None
     memory: Sequence[str] | None = None
-    skills: Sequence[AgentSkillBundle] | None = None
     subagents: Sequence[Any] | None = None
     async_subagents: Sequence[Any] | None = None
     interrupt_on: Mapping[str, Any] | None = None
@@ -515,6 +510,7 @@ def _create_sandbox(
             docker_memory_limit=settings.docker_memory_limit,
             docker_cpu_limit=settings.docker_cpu_limit,
             docker_host_workspace="",
+            sandbox_workspace_root=settings.sandbox_workspace_root,
             k8s_template=settings.k8s_sandbox_template,
             k8s_namespace=settings.k8s_sandbox_namespace,
             k8s_router_url=settings.k8s_sandbox_router_url,
@@ -662,14 +658,9 @@ async def create_cognition_agent(params: CognitionAgentParams) -> CognitionAgent
         defaults = await _defaults()
         agent_memory = defaults.memory if defaults else ["AGENTS.md"]
 
-    attached_skills = list(params.skills or [])
-    agent_skills = ["/skills/api/"] if attached_skills else []
+    agent_skills = [sandbox_backend.skills_root]
 
     routes: dict[str, Any] = {}
-    if attached_skills:
-        from server.app.agent.skills_backend import AgentSkillsBackend
-
-        routes["/skills/api/"] = AgentSkillsBackend(attached_skills)
     if config_store is not None:
         from server.app.agent.artifacts_backend import ArtifactBackend
         from server.app.api.dependencies import get_artifact_store

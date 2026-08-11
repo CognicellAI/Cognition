@@ -816,7 +816,6 @@ class TestSessionAgentName:
                     "name": agent_name,
                     "system_prompt": "You are scoped.",
                     "mode": "primary",
-                    "skills": [],
                 },
             )
             assert create_agent.status_code == 201
@@ -864,7 +863,6 @@ class TestSessionAgentName:
                         "name": agent_name,
                         "system_prompt": "You are scoped.",
                         "mode": "primary",
-                        "skills": [],
                     },
                 )
                 assert create_agent.status_code == 201

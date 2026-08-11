@@ -384,49 +384,11 @@ class SubagentDefinition(BaseModel):
         return v
 
 
-class AgentSkillBundle(BaseModel):
-    """Complete Deep Agents skill bundle owned by one Agent definition."""
-
-    model_config = ConfigDict(extra="forbid", frozen=True)
-
-    name: str = Field(..., min_length=1, max_length=100)
-    content: str = Field(
-        ...,
-        min_length=1,
-        description="Complete SKILL.md content, including YAML frontmatter.",
-    )
-    files: dict[str, str] = Field(
-        default_factory=dict,
-        description="Supporting text files keyed by safe relative POSIX paths.",
-    )
-
-    @field_validator("name")
-    @classmethod
-    def validate_name(cls, value: str) -> str:
-        if not value.replace("-", "").replace("_", "").isalnum():
-            raise ValueError("Skill name must be alphanumeric with hyphens/underscores only")
-        return value
-
-    @field_validator("files")
-    @classmethod
-    def validate_files(cls, value: dict[str, str]) -> dict[str, str]:
-        for path in value:
-            parts = path.split("/")
-            if (
-                not path
-                or path == "SKILL.md"
-                or path.startswith("/")
-                or any(part in {"", ".", ".."} for part in parts)
-            ):
-                raise ValueError("Skill bundle file paths must be safe relative POSIX paths")
-        return value
-
-
 class AgentDefinition(BaseModel):
     """Declarative agent definition.
 
-    This model defines a complete agent configuration including skills,
-    memory, subagents, MCP, and runtime configuration. It enables
+    This model defines a complete agent configuration including memory,
+    subagents, MCP, and runtime configuration. It enables
     agents to be defined entirely via YAML configuration files.
 
     Attributes:
@@ -434,7 +396,6 @@ class AgentDefinition(BaseModel):
         display_name: Optional human-readable name for public presentation.
         a2a: A2A exposure and public Agent Card presentation configuration.
         system_prompt: System prompt that defines agent behavior.
-        skills: Complete skill bundles owned by this Agent revision.
         memory: List of memory file paths.
         subagents: Nested subagent definitions.
         interrupt_on: Tool-name to HITL policy map.
@@ -448,7 +409,6 @@ class AgentDefinition(BaseModel):
     name: str = Field(..., min_length=1, max_length=100)
     display_name: str | None = Field(default=None, min_length=1, max_length=200)
     system_prompt: str = Field(..., min_length=1)
-    skills: list[AgentSkillBundle] = Field(default_factory=list)
     memory: list[str] = Field(default_factory=list)
     subagents: list[SubagentDefinition] = Field(default_factory=list)
     async_subagents: list[AsyncSubagentConfig] = Field(default_factory=list)
@@ -478,14 +438,6 @@ class AgentDefinition(BaseModel):
         if not v.replace("-", "").replace("_", "").isalnum():
             raise ValueError(f"Agent name must be alphanumeric with hyphens/underscores only: {v}")
         return v
-
-    @field_validator("skills")
-    @classmethod
-    def validate_skills(cls, value: list[AgentSkillBundle]) -> list[AgentSkillBundle]:
-        names = [skill.name for skill in value]
-        if len(names) != len(set(names)):
-            raise ValueError("Agent skill bundle names must be unique")
-        return value
 
     @field_validator("memory")
     @classmethod
@@ -555,10 +507,6 @@ class AgentDefinition(BaseModel):
         with open(path, "w") as f:
             yaml.dump(self.model_dump(), f, default_flow_style=False, sort_keys=False)
 
-    def validate_skill_paths(self, base_path: str | Path | None = None) -> list[str]:
-        """Agent skill attachments are validated by name against the registry at runtime."""
-        return []
-
     def validate_memory_paths(self, base_path: str | Path | None = None) -> list[str]:
         """Validate that memory file paths exist.
 
@@ -585,13 +533,10 @@ class AgentDefinition(BaseModel):
             base_path: Optional base path for resolving relative paths.
 
         Returns:
-            Dictionary with keys 'skills' and 'memory' containing
+            Dictionary with key 'memory' containing
             lists of paths that failed validation.
         """
-        return {
-            "skills": self.validate_skill_paths(base_path),
-            "memory": self.validate_memory_paths(base_path),
-        }
+        return {"memory": self.validate_memory_paths(base_path)}
 
     def to_subagent(self, base_path: str | Path | None = None) -> dict[str, Any]:
         """Translate AgentDefinition to Deep Agents SubAgent TypedDict.
@@ -606,7 +551,6 @@ class AgentDefinition(BaseModel):
             - description: str (required)
             - system_prompt: str (required)
             - model: str | None (optional, format: "provider:model" or just "model")
-            - skills: list[str] | None (optional source paths)
             - middleware: list[Any] | None (optional)
             - interrupt_on: dict[str, InterruptOnConfig] | None (optional)
             - permissions: list[FilesystemPermission] | None (optional)
@@ -623,9 +567,6 @@ class AgentDefinition(BaseModel):
                 spec["model"] = f"{provider}:{self.config.model}"
             else:
                 spec["model"] = self.config.model
-
-        if self.skills:
-            spec["skills"] = ["/skills/api/"]
 
         if self.interrupt_on:
             spec["interrupt_on"] = {
@@ -693,8 +634,6 @@ def load_agent_definition_from_markdown(path: str | Path) -> AgentDefinition:
     mode: subagent
     model: anthropic/claude-haiku-4
     temperature: 0.1
-    skills:
-      - my-skill-name
     ---
     You are a code reviewer. Focus on security...
 
@@ -796,7 +735,6 @@ def load_agent_definition_from_markdown(path: str | Path) -> AgentDefinition:
         mode=frontmatter.get("mode", "all"),
         hidden=frontmatter.get("hidden", False),
         native=False,  # User-defined
-        skills=frontmatter.get("skills", []),
         memory=frontmatter.get("memory", []),
         async_subagents=frontmatter.get("async_subagents", []),
         mcp=frontmatter.get("mcp", {}),
@@ -814,7 +752,6 @@ __all__ = [
     "AgentDefinition",
     "AgentMcpConfig",
     "AgentMcpServerConfig",
-    "AgentSkillBundle",
     "AsyncSubagentConfig",
     "McpAuthConfig",
     "MCPAuthType",

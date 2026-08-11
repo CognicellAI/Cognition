@@ -895,8 +895,8 @@ class TestUpdateAgent:
         )
         assert response.status_code == 422
 
-    def test_patch_agent_skills(self):
-        """PATCH with Agent-owned skill bundles persists atomically."""
+    def test_patch_agent_rejects_inline_skill_bundles(self):
+        """Runtime Skills are builder-mounted sandbox files, not API payloads."""
         client.post(
             "/agents",
             json={
@@ -913,12 +913,7 @@ class TestUpdateAgent:
                 ],
             },
         )
-        assert response.status_code == 200
-        data = response.json()
-        assert [skill["name"] for skill in data["skills"]] == [
-            "clean-code",
-            "github-workflow",
-        ]
+        assert response.status_code == 422
 
     def test_patch_agent_empty_tool_name_rejected(self):
         """Removed tools field is rejected before legacy value validation."""
@@ -935,8 +930,8 @@ class TestUpdateAgent:
         )
         assert response.status_code == 422
 
-    def test_create_agent_with_removed_tools_field_rejected(self):
-        """POST with legacy tools field should fail under v0.14 strict schema."""
+    def test_create_agent_with_removed_fields_rejected(self):
+        """POST cannot configure removed tool or inline Skill fields."""
         response = client.post(
             "/agents",
             json={

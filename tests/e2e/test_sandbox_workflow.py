@@ -65,7 +65,7 @@ class TestSandboxWorkflow:
             env["COGNITION_PORT"] = str(port)
             env["COGNITION_HOST"] = "127.0.0.1"
             env["COGNITION_LLM_PROVIDER"] = "openai_compatible"
-            env["COGNITION_WORKSPACE_ROOT"] = workspace
+            env["COGNITION_LOCAL_WORKSPACE_ROOT"] = workspace
             env["COGNITION_OPENAI_COMPATIBLE_BASE_URL"] = "https://openrouter.ai/api/v1"
             env["COGNITION_OPENAI_COMPATIBLE_API_KEY"] = os.environ.get(
                 "COGNITION_OPENAI_COMPATIBLE_API_KEY", ""

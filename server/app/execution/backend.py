@@ -53,6 +53,7 @@ class DockerExecutionBackend:
         memory_limit: str = "512m",
         cpu_limit: float = 1.0,
         host_workspace: str = "",
+        workspace_root: str = "/workspace",
     ):
         """Initialize Docker execution backend.
 
@@ -75,6 +76,7 @@ class DockerExecutionBackend:
         self.memory_limit = memory_limit
         self.cpu_limit = cpu_limit
         self.host_workspace = host_workspace or str(self.root_dir)
+        self.workspace_root = workspace_root.rstrip("/") or "/"
         self._container: Any = None
 
     def _ensure_container(self) -> None:
@@ -109,8 +111,9 @@ class DockerExecutionBackend:
                 network_mode=self.network_mode,
                 mem_limit=self.memory_limit,
                 cpu_quota=int(self.cpu_limit * 100000),
-                volumes={self.host_workspace: {"bind": "/workspace", "mode": "rw"}},
-                working_dir="/workspace",
+                volumes={self.host_workspace: {"bind": self.workspace_root, "mode": "rw"}},
+                working_dir=self.workspace_root,
+                environment={"COGNITION_WORKSPACE_ROOT": self.workspace_root},
                 stdin_open=True,
                 tty=True,
                 cap_drop=["ALL"],
@@ -147,7 +150,7 @@ class DockerExecutionBackend:
         try:
             exit_code, output = self._container.exec_run(
                 cmd=command,
-                workdir="/workspace",
+                workdir=self.workspace_root,
             )
 
             if isinstance(output, bytes):
@@ -169,7 +172,7 @@ class DockerExecutionBackend:
     def read_file_bytes(self, path: str) -> bytes:
         """Read bytes from the sandbox without touching the host filesystem."""
         self._ensure_container()
-        stream, _stat = self._container.get_archive(f"/workspace/{path}")
+        stream, _stat = self._container.get_archive(f"{self.workspace_root}/{path}")
         archive = io.BytesIO(b"".join(stream))
         with tarfile.open(fileobj=archive, mode="r:*") as tar:
             members = tar.getmembers()
@@ -189,7 +192,7 @@ class DockerExecutionBackend:
         self._ensure_container()
         relative = Path(path)
         parent = relative.parent.as_posix()
-        destination = "/workspace" if parent == "." else f"/workspace/{parent}"
+        destination = self.workspace_root if parent == "." else f"{self.workspace_root}/{parent}"
         mkdir_result = self.execute_argv(["mkdir", "-p", destination])
         if mkdir_result.exit_code != 0:
             raise OSError(mkdir_result.output)
@@ -211,7 +214,7 @@ import json
 import pathlib
 import sys
 
-root = pathlib.Path("/workspace")
+root = pathlib.Path(sys.argv[2])
 target = (root / sys.argv[1]).resolve()
 if root != target and root not in target.parents:
     raise SystemExit(2)
@@ -232,7 +235,7 @@ for child in target.iterdir():
     })
 print(json.dumps(sorted(rows, key=lambda row: row["path"])))
 """
-        result = self.execute_argv(["python", "-c", script, path])
+        result = self.execute_argv(["python", "-c", script, path, self.workspace_root])
         if result.exit_code == 3:
             raise FileNotFoundError(path)
         if result.exit_code == 4:
@@ -250,13 +253,13 @@ print(json.dumps(sorted(rows, key=lambda row: row["path"])))
 import pathlib
 import sys
 
-root = pathlib.Path("/workspace")
+root = pathlib.Path(sys.argv[2])
 target = (root / sys.argv[1]).resolve()
 if root != target and root not in target.parents:
     raise SystemExit(2)
 raise SystemExit(0 if target.exists() else 1)
 """
-        return self.execute_argv(["python", "-c", script, path]).exit_code == 0
+        return self.execute_argv(["python", "-c", script, path, self.workspace_root]).exit_code == 0
 
     def glob_files(self, pattern: str, path: str = ".") -> list[dict[str, Any]]:
         """Run glob discovery inside the sandbox."""
@@ -265,7 +268,7 @@ import json
 import pathlib
 import sys
 
-root = pathlib.Path("/workspace")
+root = pathlib.Path(sys.argv[3])
 base = (root / sys.argv[2]).resolve()
 if root != base and root not in base.parents:
     raise SystemExit(2)
@@ -283,7 +286,9 @@ if base.is_dir():
         })
 print(json.dumps(sorted(rows, key=lambda row: row["path"])))
 """
-        result = self.execute_argv(["python", "-c", script, pattern, path])
+        result = self.execute_argv(
+            ["python", "-c", script, pattern, path, self.workspace_root]
+        )
         if result.exit_code != 0:
             raise OSError(result.output)
         value = json.loads(result.output)
@@ -304,7 +309,7 @@ import json
 import pathlib
 import sys
 
-root = pathlib.Path("/workspace")
+root = pathlib.Path(sys.argv[4])
 base = (root / sys.argv[2]).resolve()
 if root != base and root not in base.parents:
     raise SystemExit(2)
@@ -335,7 +340,7 @@ for child in files:
 print(json.dumps(rows))
 """
         result = self.execute_argv(
-            ["python", "-c", script, pattern, path, glob or ""]
+            ["python", "-c", script, pattern, path, glob or "", self.workspace_root]
         )
         if result.exit_code != 0:
             raise OSError(result.output)

@@ -7,12 +7,6 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from deepagents.backends.protocol import (
-    DeleteResult,
-    FileDownloadResponse,
-    ReadResult,
-    WriteResult,
-)
 from pydantic import SecretStr
 from sqlalchemy.ext.asyncio import create_async_engine
 
@@ -27,40 +21,25 @@ from server.app.storage.factory import create_artifact_store
 from server.app.storage.schema import create_all_tables
 
 
-class _FakeObjectBackend:
+class _FakeObjectStore:
     def __init__(self) -> None:
-        self.objects: dict[str, str] = {}
+        self.objects: dict[str, bytes] = {}
 
-    def write(self, path: str, content: str) -> WriteResult:
-        self.objects[path] = content
-        return WriteResult(path=path)
-
-    def read(self, path: str, offset: int = 0, limit: int = 2000) -> ReadResult:
-        del offset, limit
-        content = self.objects.get(path)
-        if content is None:
-            return ReadResult(error="missing")
-        return ReadResult(error="not used by artifact publication")
-
-    def object_key(self, path: str) -> str:
+    def scoped_key(self, scope: dict[str, str], path: str) -> str:
+        del scope
         return f"opaque-scope{path}"
+
+    def put(self, key: str, body: bytes) -> None:
+        self.objects[key] = body
+
+    def get(self, key: str) -> bytes:
+        return self.objects[key]
 
     def verify_connection(self) -> None:
         return None
 
-    def download_files(self, paths: list[str]) -> list[FileDownloadResponse]:
-        return [
-            FileDownloadResponse(
-                path=path,
-                content=self.objects[path].encode("utf-8") if path in self.objects else None,
-                error=None if path in self.objects else "file_not_found",
-            )
-            for path in paths
-        ]
-
-    def delete(self, path: str) -> DeleteResult:
-        self.objects.pop(path, None)
-        return DeleteResult(path=path)
+    def delete(self, key: str) -> None:
+        self.objects.pop(key, None)
 
 
 def test_artifact_store_factory_honors_builder_selected_s3_backend(tmp_path: Path) -> None:
@@ -92,8 +71,8 @@ async def test_s3_artifact_store_initialization_verifies_selected_backend(
         base_prefix="cognition",
         hmac_key="test-key",
     )
-    backend = _FakeObjectBackend()
-    monkeypatch.setattr(store, "_backend", lambda scope: backend)
+    backend = _FakeObjectStore()
+    monkeypatch.setattr(store, "_object_store", lambda: backend)
     await store.initialize()
 
     def unavailable() -> None:
@@ -113,8 +92,8 @@ async def test_s3_artifact_store_keeps_body_out_of_database_manifest(monkeypatch
         base_prefix="cognition",
         hmac_key="test-key",
     )
-    backend = _FakeObjectBackend()
-    monkeypatch.setattr(store, "_backend", lambda scope: backend)
+    backend = _FakeObjectStore()
+    monkeypatch.setattr(store, "_object_store", lambda: backend)
     artifact = ArtifactDefinition(
         id="report",
         name="report",
@@ -135,7 +114,7 @@ async def test_s3_artifact_store_keeps_body_out_of_database_manifest(monkeypatch
     assert manifest.object_key == f"opaque-scope{path}"
     assert manifest.content_checksum == checksum
     assert manifest.content_size == len(b"tenant-safe content")
-    assert backend.objects == {path: "tenant-safe content"}
+    assert backend.objects == {f"opaque-scope{path}": b"tenant-safe content"}
 
     hydrated = await store.get_artifact("report", {"tenant": "acme"})
     assert hydrated is not None
@@ -203,16 +182,13 @@ async def test_s3_artifact_store_does_not_activate_corrupt_upload(
         base_prefix="cognition",
         hmac_key="test-key",
     )
-    backend = _FakeObjectBackend()
-    original_download = backend.download_files
+    backend = _FakeObjectStore()
+    def corrupt_get(key: str) -> bytes:
+        del key
+        return b"corrupt"
 
-    def corrupt_download(paths: list[str]) -> list[FileDownloadResponse]:
-        responses = original_download(paths)
-        responses[0].content = b"corrupt"
-        return responses
-
-    backend.download_files = corrupt_download  # type: ignore[method-assign]
-    monkeypatch.setattr(store, "_backend", lambda scope: backend)
+    backend.get = corrupt_get  # type: ignore[method-assign]
+    monkeypatch.setattr(store, "_object_store", lambda: backend)
 
     with pytest.raises(RuntimeError, match="post-upload integrity"):
         await store.upsert_artifact(
@@ -233,12 +209,12 @@ async def test_s3_artifact_store_detects_corrupt_body_on_read(
         base_prefix="cognition",
         hmac_key="test-key",
     )
-    backend = _FakeObjectBackend()
-    monkeypatch.setattr(store, "_backend", lambda scope: backend)
+    backend = _FakeObjectStore()
+    monkeypatch.setattr(store, "_object_store", lambda: backend)
     artifact = ArtifactDefinition(id="report", name="report", content="expected")
     await store.upsert_artifact(artifact)
     path = next(iter(backend.objects))
-    backend.objects[path] = "tampered"
+    backend.objects[path] = b"tampered"
 
     with pytest.raises(RuntimeError, match="integrity verification"):
         await store.get_artifact("report")
@@ -248,8 +224,8 @@ async def test_s3_artifact_store_detects_corrupt_body_on_read(
 async def test_s3_artifact_store_deletes_versioned_bodies(monkeypatch: pytest.MonkeyPatch) -> None:
     manifests = MemoryArtifactStore()
     store = S3ArtifactStore(manifests, bucket="test", base_prefix="cognition", hmac_key="test-key")
-    backend = _FakeObjectBackend()
-    monkeypatch.setattr(store, "_backend", lambda scope: backend)
+    backend = _FakeObjectStore()
+    monkeypatch.setattr(store, "_object_store", lambda: backend)
     first = ArtifactDefinition(id="report", name="report", content="one", scope={"tenant": "acme"})
     second = first.model_copy(update={"content": "two", "version": 2, "parent_version": 1})
 

@@ -20,17 +20,16 @@ boundary and immutable run snapshots.
 
 ## Decision
 
-1. Agent Skills and remote MCP server declarations belong to one complete Agent
-   definition. They are selected by the Agent revision, not by a global runtime
-   registry.
+1. Remote MCP server declarations belong to the complete Agent definition.
+   Skills are a selected sandbox capability: the builder mounts them into the
+   isolated Agent workspace before Cognition constructs the runtime.
 2. Updating an Agent creates a new immutable internal configuration revision;
    it does not create another logical Agent. A run resolves and pins one active
    revision at startup. Later updates apply only to later runs.
-3. Skill bundles follow the Deep Agents Agent Skills model: each bundle has a
-   required `SKILL.md` plus validated supporting files. Cognition materializes
-   the selected revision in a private virtual directory and passes it to the
-   Deep Agents runtime. Builder-authored scripts execute only in the selected
-   session sandbox.
+3. Skills follow the Deep Agents Agent Skills model: the builder supplies a
+   `SKILL.md` plus supporting files under `<sandbox workspace>/skills`, and
+   Cognition passes that root directly to Deep Agents. Cognition does not fetch,
+   store, validate, or expose Skill bundle payloads.
 4. Cognition removes the global MCP-server API, ConfigRegistry entity, and
    runtime resolution path. There is no compatibility endpoint, adapter, or
    automatic conversion of legacy global server records.
@@ -47,11 +46,11 @@ This leaves shared mutable state outside the pinned Agent revision and makes
 capability ownership ambiguous. It is rejected in favor of complete
 Agent-owned configuration.
 
-### Maintain a separate shared Skill catalog as the runtime authority
+### Maintain a Cognition Skill catalog as the runtime authority
 
-A shared catalog weakens atomic Agent deployment and lets an Agent's referenced
-skill content change independently of its revision. It is deferred; v0.14 uses
-Agent-owned bundles.
+A Cognition catalog makes the backend a registry client, installer, and package
+store. Builders already own sandbox admission and package selection, so the
+runtime consumes the mounted workspace instead.
 
 ### Reimplement skills and MCP orchestration outside Deep Agents
 
@@ -63,8 +62,8 @@ its scope, persistence, and security boundaries.
 
 ### Positive
 
-- A pinned Agent revision describes the skills and MCP capability set available
-  to a run.
+- A pinned Agent revision describes MCP capability; the selected sandbox image
+  and mounted workspace describe Skills available to a run.
 - Builder deployment is atomic and exact-scope isolation applies consistently
   to capability selection.
 - Deep Agents remains the underlying skills and MCP runtime abstraction.
@@ -78,8 +77,8 @@ its scope, persistence, and security boundaries.
 
 ## Migration and rollback
 
-1. Recreate each required skill bundle and MCP declaration in its target Agent
-   definition.
+1. Configure each sandbox initializer to mount the intended Skill directories
+   below its workspace root; retain MCP declarations in Agent definitions.
 2. Drain active runs before deploying the new worker set.
 3. Do not run mixed old/new writers or re-enable global MCP configuration.
 4. Roll back only before new-format writes or restore the database and object
@@ -87,11 +86,11 @@ its scope, persistence, and security boundaries.
 
 ## Verification
 
-- Agent create/update/read and runtime resolution preserve complete skill and
-  MCP configuration under the exact trusted scope.
+- Agent create/update/read and runtime resolution preserve complete MCP
+  configuration under the exact trusted scope.
 - A run pins its revision while a later Agent update affects the next run only.
-- Skill validation rejects malformed `SKILL.md`, traversal, special files, and
-  normalized duplicate paths.
+- Native Deep Agents discovery finds builder-mounted `SKILL.md` directories
+  through the selected sandbox backend.
 - Only the selected Agent's MCP declarations contribute tools; no global
   registry or endpoint remains reachable.
 - Focused Agent-owned MCP and skill-bundle tests pass alongside the full

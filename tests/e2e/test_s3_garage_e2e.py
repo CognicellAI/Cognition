@@ -10,7 +10,6 @@ import boto3
 import pytest
 from botocore.config import Config
 
-from server.app.agent.s3_backend import S3CompatibleBackend
 from server.app.storage.artifact_store import MemoryArtifactStore, S3ArtifactStore
 from server.app.storage.config_models import ArtifactDefinition
 
@@ -90,28 +89,6 @@ def garage_endpoint(tmp_path_factory: pytest.TempPathFactory) -> Iterator[str]:
             container.stop(timeout=5)
         except Exception:
             pass
-
-
-def test_s3_backend_against_garage(
-    garage_endpoint: str, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Garage behaves as an S3-compatible durable filesystem backend."""
-    monkeypatch.setenv("AWS_ACCESS_KEY_ID", _ACCESS_KEY)
-    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", _SECRET_KEY)
-    backend = S3CompatibleBackend.from_boto3(
-        bucket=_BUCKET,
-        prefix="scope/a0b1c2",
-        endpoint_url=garage_endpoint,
-        region_name="garage",
-        force_path_style=True,
-    )
-
-    assert backend.write("/skills/release/SKILL.md", "garage e2e").error is None
-    assert backend.read("/skills/release/SKILL.md").file_data == {
-        "content": "garage e2e",
-        "encoding": "utf-8",
-    }
-    assert backend.download_files(["/skills/release/SKILL.md"])[0].content == b"garage e2e"
 
 
 @pytest.mark.asyncio

@@ -5,7 +5,6 @@ from __future__ import annotations
 import pytest
 
 from server.app.agent.resolver import RuntimeResolver
-from server.app.agent.skills_backend import AgentSkillsBackend
 from server.app.agent.task_runtime import AgentTaskRuntime, SubmitTask
 from server.app.llm.deep_agent_service import DeepAgentStreamingService
 from server.app.settings import Settings
@@ -29,12 +28,6 @@ async def test_active_run_keeps_agent_and_skill_snapshot_while_next_run_advances
             "name": "manifest-agent",
             "mode": "primary",
             "system_prompt": "Agent revision one.",
-            "skills": [
-                {
-                    "name": "runtime-skill",
-                    "content": "# Revision one\nUse the first behavior.",
-                }
-            ],
         },
     )
 
@@ -62,12 +55,6 @@ async def test_active_run_keeps_agent_and_skill_snapshot_while_next_run_advances
             "name": "manifest-agent",
             "mode": "primary",
             "system_prompt": "Agent revision two.",
-            "skills": [
-                {
-                    "name": "runtime-skill",
-                    "content": "# Revision two\nUse the second behavior.",
-                }
-            ],
         },
         expected_revision=first_record.revision,
     )
@@ -98,11 +85,6 @@ async def test_active_run_keeps_agent_and_skill_snapshot_while_next_run_advances
     assert pinned_config.system_prompt == "Agent revision one."
     assert current_config.system_prompt == "Agent revision two."
 
-    skill_backend = AgentSkillsBackend(pinned_config.skills)
-    downloaded = await skill_backend.adownload_files(["/runtime-skill/SKILL.md"])
-    assert downloaded[0].content is not None
-    assert b"Revision one" in downloaded[0].content
-
     second = await runtime.submit(
         SubmitTask(
             context_id="manifest-context-two",
@@ -118,18 +100,6 @@ async def test_active_run_keeps_agent_and_skill_snapshot_while_next_run_advances
     )
 
     await storage.close()
-
-
-@pytest.mark.asyncio
-async def test_explicit_empty_skill_attachment_exposes_no_skill(
-    tmp_path,
-) -> None:
-    del tmp_path
-    backend = AgentSkillsBackend([])
-    assert (await backend.als("/")).entries == []
-    response = await backend.adownload_files(["/unattached/SKILL.md"])
-    # Direct reads are also denied even when a model guesses the virtual path.
-    assert response[0].error == "file_not_found"
 
 
 @pytest.mark.asyncio
