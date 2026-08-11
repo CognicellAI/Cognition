@@ -9,6 +9,17 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.14.0-rc.5] — 2026-08-10
+
+### Changed
+
+- Replaced Cognition-owned inline Skill bundles and the custom Skills backend
+  with Deep Agents native discovery from the builder-mounted sandbox workspace
+  `skills/` directory.
+- Added the explicit remote sandbox workspace-root contract and limited
+  S3-compatible storage to durable artifact/file bodies behind authoritative
+  database manifests.
+
 ## [0.14.0-rc.3] — 2026-08-04
 
 ### Fixed

@@ -115,7 +115,6 @@ class TestScopePreservation:
                 "name": "scoped-agent",
                 "system_prompt": "scoped",
                 "mode": "primary",
-                "skills": [{"name": "review", "content": "# Review"}],
             },
             "api",
         )
@@ -124,7 +123,7 @@ class TestScopePreservation:
         assert result is not None
         data, scope = result
         assert scope == {"org": "acme"}
-        assert data["skills"] == [{"name": "review", "content": "# Review", "files": {}}]
+        assert "skills" not in data
 
     @pytest.mark.asyncio
     async def test_get_agent_raw_with_scope_empty_scope(self, store: DefaultConfigStore):

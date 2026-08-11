@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from typing import Any
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import HTTPException
@@ -69,7 +69,6 @@ def _strict_agent_params(tmp_path, **overrides: Any) -> CognitionAgentParams:
         "config_store": _DefaultsOnlyStore(),
         "system_prompt": "Strict runtime.",
         "memory": [],
-        "skills": [],
         "subagents": [],
         "async_subagents": [],
         "interrupt_on": {},
@@ -125,8 +124,8 @@ async def test_deep_agents_v07_graph_is_not_cached_across_sandboxed_runs(
     tmp_path,
 ) -> None:
     clear_agent_cache()
-    first_sandbox = object()
-    second_sandbox = object()
+    first_sandbox = MagicMock(skills_root="/workspace/skills")
+    second_sandbox = MagicMock(skills_root="/workspace/skills")
     graph = object()
     settings = _settings(
         tmp_path,
