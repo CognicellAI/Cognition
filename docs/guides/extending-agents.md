@@ -1,15 +1,14 @@
 # Extending Agents
 
-Cognition uses a convention-over-configuration model. Most extensions require zero code changes — drop a file in the right directory and the server picks it up automatically (via the file watcher). More powerful extensions require Python.
+Cognition uses a definition-driven extension model. Agent behavior is assembled from Agent definitions, skills, MCP servers, middleware, and sandbox backends; v0.14 no longer loads Cognition-managed Python tool files or `/tools` API registrations.
 
 | Level | Mechanism | Code Required | Hot-Reload |
 |---|---|---|---|
 | Memory | `AGENTS.md` | No | Yes |
-| Skills | `.cognition/skills/` SKILL.md files | No | Yes |
+| Skills | Complete bundles in an Agent definition | No | Yes, with the Agent revision |
 | Agents | `.cognition/agents/` YAML or Markdown | No | Yes |
-| Tools | Python functions | Yes | Yes |
 | Middleware | Python classes | Yes | No |
-| MCP servers | Remote HTTP/SSE endpoints | No | Yes |
+| MCP servers | Agent-owned remote Streamable HTTP endpoints | No | Yes |
 | A2A exposure | `a2a.exposed: true` on agent definition | No | Yes |
 | Custom LLM providers | Python factories | Yes | No |
 
@@ -53,18 +52,6 @@ agent:
 
 Skills are modular instruction sets for domain-specific tasks. The agent sees a skill's name and description and loads the full content only when it is relevant to the current task (progressive disclosure).
 
-### Directory Structure
-
-```
-.cognition/skills/
-  deploy-app/
-    SKILL.md           # instructions for deploying the application
-    references/        # optional supporting files
-      checklist.md
-  run-migrations/
-    SKILL.md
-```
-
 ### SKILL.md Format
 
 ```markdown
@@ -83,12 +70,26 @@ Use this skill when the user asks to deploy the application or push changes to p
 4. Update the ECS service: `aws ecs update-service --cluster prod --service myapp --force-new-deployment`
 ```
 
-Attach skills by registry name (seeded from `skill_sources` directories):
+Skills are complete bundles inside the Agent definition. `content` is the
+bundle's `SKILL.md`; `files` carries progressive-disclosure supporting files:
 
 ```yaml
 agent:
   skills:
-    - "my-skill-name"
+    - name: my-skill
+      content: |
+        ---
+        name: my-skill
+        description: Apply the project review workflow
+        ---
+
+        # Review workflow
+
+        Read `references/checklist.md` before reviewing.
+      files:
+        references/checklist.md: |
+          - Verify tests
+          - Check tenant isolation
 ```
 
 ---
@@ -189,166 +190,18 @@ File-based agent definitions put these fields under `config:`. The `/agents` API
 
 ---
 
-## 4. Custom Tools
+## 4. Tool Capability
 
-Tools are Python callables that the agent can invoke. Cognition converts them to LangChain tools automatically.
+Cognition v0.14 does not load Cognition-managed Python tools from `.cognition/tools/`, `/tools`, inline source code, or module paths. Use one of these supported surfaces instead:
 
-### Simple Function Tool
+| Need | Supported surface |
+|---|---|
+| Remote provider or builder-managed tools | Agent-owned MCP servers |
+| Procedural guidance, scripts, and reusable instructions | Skills installed into the Deep Agents backend/sandbox |
+| Runtime policy, telemetry, or request shaping | Deep Agents/LangChain middleware |
+| Filesystem/process execution | Configured sandbox backend and Deep Agents-native filesystem/runtime tools |
 
-```python
-# myapp/tools/analysis.py
-import subprocess
-
-def run_linter(file_path: str) -> str:
-    """Run ruff linter on a Python file and return the findings.
-
-    Args:
-        file_path: Path to the Python file to lint.
-
-    Returns:
-        Linter output as a string.
-    """
-    result = subprocess.run(
-        ["ruff", "check", file_path],
-        capture_output=True,
-        text=True,
-    )
-    return result.stdout or "No issues found."
-```
-
-The docstring becomes the tool description shown to the agent. Type annotations become the argument schema.
-
-### Register via Config
-
-```yaml
-# .cognition/config.yaml
-skill_sources:
-  - .cognition/skills/
-
-tool_sources:
-  - .cognition/tools/
-
-agent:
-  tools:
-    - "run_linter"
-    - "query_database"
-```
-
-### Auto-Discovery
-
-Drop Python files into `.cognition/tools/` and they are discovered automatically. Each public function in the file becomes a tool. The file watcher reloads them on change.
-
-```python
-# .cognition/tools/my_tools.py
-
-def fetch_ticket(ticket_id: str) -> str:
-    """Fetch a Jira ticket by ID and return its summary and status."""
-    ...
-
-def post_comment(ticket_id: str, comment: str) -> str:
-    """Post a comment to a Jira ticket."""
-    ...
-```
-
-### Register via API (Source-in-DB)
-
-When Cognition runs in a separate container from your builder application, you cannot write files into `.cognition/tools/`. Use the REST API to register tools with inline Python source code instead:
-
-```bash
-curl -X POST http://localhost:8000/tools \
-  -H "Content-Type: application/json" \
-  -d '{
-    "name": "search-jira",
-    "code": "from langchain_core.tools import tool\nimport httpx\n\n@tool\ndef search_jira(query: str) -> str:\n    \"\"\"Search Jira issues by query string.\"\"\"\n    resp = httpx.get(f\"https://jira.example.com/search?q={query}\")\n    return resp.text"
-  }'
-```
-
-The tool is stored in the ConfigRegistry (Postgres or SQLite) and loaded on every agent invocation — no restart required.
-
-```python
-# The code field contains a complete Python module as a string.
-# @tool-decorated functions and BaseTool subclasses are extracted automatically.
-code = """
-from langchain_core.tools import tool
-
-@tool
-def search_jira(query: str) -> str:
-    \"\"\"Search Jira issues by query string.\"\"\"
-    import httpx
-    resp = httpx.get(f"https://jira.example.com/search?q={query}")
-    return resp.text
-"""
-
-import httpx
-httpx.post("http://localhost:8000/tools", json={"name": "search-jira", "code": code})
-```
-
-> **Security:** Tool code executes with full Python privileges inside the sandbox backend. Restrict `POST /tools` to authorized administrators at your Gateway/proxy layer.
-
-Alternatively, register by module path if the module is already importable in the server's Python environment:
-
-```bash
-curl -X POST http://localhost:8000/tools \
-  -H "Content-Type: application/json" \
-  -d '{"name": "jira-tools", "path": "mycompany.cognition_tools.jira"}'
-```
-
-To see all registered tools (both file-discovered and API-registered):
-
-```bash
-curl http://localhost:8000/tools
-```
-
-Response includes a `source_type` field: `"file"` for auto-discovered tools, `"api_code"` for source-in-DB tools, and `"api_path"` for module-path tools.
-
-### Async Tools
-
-Async functions are supported natively:
-
-```python
-async def call_api(endpoint: str, payload: dict) -> str:
-    """Call an internal API endpoint with a JSON payload."""
-    async with httpx.AsyncClient() as client:
-        response = await client.post(endpoint, json=payload)
-        return response.text
-```
-
-### Programmatic Registration
-
-```python
-from server.app.agent.cognition_agent import create_cognition_agent
-from server.app.agent.definition import AgentDefinition
-
-definition = AgentDefinition(
-    name="my-agent",
-    system_prompt="You are a helpful assistant.",
-    tools=["run_linter"],
-)
-
-agent = await create_cognition_agent(definition, settings)
-```
-
-### Testing Tools
-
-```python
-# tests/unit/test_my_tools.py
-from myapp.tools.analysis import run_linter
-from unittest.mock import patch, MagicMock
-
-def test_run_linter_clean_file():
-    with patch("subprocess.run") as mock_run:
-        mock_run.return_value = MagicMock(stdout="", returncode=0)
-        result = run_linter("clean.py")
-    assert result == "No issues found."
-
-def test_run_linter_with_issues():
-    with patch("subprocess.run") as mock_run:
-        mock_run.return_value = MagicMock(
-            stdout="clean.py:1:1: E501 Line too long", returncode=1
-        )
-        result = run_linter("messy.py")
-    assert "E501" in result
-```
+For external tools, prefer MCP. See [MCP Tool Servers](#6-mcp-tool-servers).
 
 ---
 
@@ -436,63 +289,63 @@ String entries are imported directly; dict entries with a `name` key are treated
 
 ## 6. MCP Tool Servers
 
-Connect to any remote Model Context Protocol (MCP) server. MCP servers expose tools over HTTP.
+Connect an Agent to remote Model Context Protocol (MCP) servers. Servers are
+declared on the Agent and are part of its immutable configuration revision.
 
 ```yaml
-# .cognition/config.yaml
+name: deploy-agent
 mcp:
   servers:
-    - name: github-tools
-      url: https://mcp.github.example.com/sse
-      transport: sse  # or "streamable_http"
-    - name: internal-db
-      url: http://db-tools.internal:8080/sse
+    github:
+      url: https://mcp.github.example.com/mcp
+      transport: streamable_http
+      required: true
+      auth:
+        type: mcp_oauth
+    internal-db:
+      url: https://db-tools.internal/mcp
+      required: false
+      auth:
+        type: workload_token_exchange
+        profile: internal-egress
+    legacy-service:
+      url: https://legacy-tools.internal/mcp
+      required: false
+      auth:
+        type: static_bearer
+        env: LEGACY_MCP_TOKEN
 ```
 
-All tools exposed by the MCP server become available to the agent under the server name as a namespace prefix (e.g. `github-tools/create_pr`). The `tool_name_prefix=True` setting on `MultiServerMCPClient` prevents tool name collisions between servers.
+Each server is discovered independently. A required-server failure stops the
+run with a typed, redacted error; an optional-server failure leaves healthy
+servers available. Duplicate canonical tool identities
+`(server_alias, provider_tool_name)` fail discovery.
 
 ### How It Works
 
 Cognition uses [`langchain-mcp-adapters`](https://github.com/langchain-ai/langchain-mcp-adapters) to connect to MCP servers. The adapter:
 
-1. Connects to each configured remote server using SSE or Streamable HTTP transport
+1. Connects to each declared remote server using Streamable HTTP transport
 2. Converts MCP tools into LangChain `BaseTool` instances
-3. Applies a **scope injection interceptor** that adds `X-Cognition-Scope-*` headers to every MCP request
-4. Registers progress and logging callbacks for observability
-5. Returns tools that participate in the full Deep Agents middleware stack (tool safety, HITL, permissions)
+3. Applies transport authentication during discovery and invocation
+4. Returns tools that participate in the full Deep Agents middleware stack (tool safety, HITL, permissions)
 
-### Transport Options
+The supported authentication types are `none`, standard `mcp_oauth`, built-in
+`workload_token_exchange`, and environment-backed `static_bearer`. Workload
+exchange references an opaque deployment profile and authenticates the
+Cognition workload to a builder-controlled endpoint; that endpoint performs
+live Agent authorization and may inject its upstream provider credential.
+`static_bearer` is supported but not recommended. Cognition does not classify
+deployments or ban a mode on the builder's behalf.
 
-| Transport | Description |
-|---|---|
-| `sse` | Server-Sent Events (default). Best for long-lived connections. |
-| `streamable_http` | HTTP with streaming. Best for serverless or short-lived connections. |
+Raw headers, tokens, API keys, provider credentials, and Python authentication
+callbacks are invalid Agent configuration. Only workload token exchange sends a
+fixed trusted-runtime envelope; it is constructed from the pinned Agent and run
+context and cannot be altered by the model.
 
-### Managing MCP Servers via API
-
-MCP servers can also be managed at runtime via the REST API:
-
-```bash
-# List registered servers
-curl http://localhost:8000/mcp-servers
-
-# Register a new server
-curl -X POST http://localhost:8000/mcp-servers \
-  -H "Content-Type: application/json" \
-  -d '{"name": "my-tools", "url": "https://tools.example.com/sse", "transport": "sse"}'
-
-# Update a server
-curl -X PATCH http://localhost:8000/mcp-servers/my-tools \
-  -H "Content-Type: application/json" \
-  -d '{"enabled": false}'
-
-# Delete a server
-curl -X DELETE http://localhost:8000/mcp-servers/my-tools
-```
-
-> **Note:** MCP server `headers` (containing credentials) are redacted in API responses — `GET /mcp-servers` returns an empty `headers` dict to prevent credential leakage. File-managed servers (from `.cognition/config.yaml`) are read-only via the API — mutation attempts return `409 Conflict`.
-
-Only HTTP/HTTPS URLs are accepted — stdio-based MCP servers are not supported for security reasons.
+Only HTTP/HTTPS URLs are accepted — stdio-based MCP servers and raw configured
+headers are deliberately unsupported. The complete v0.14 contract is in
+[the MCP runtime proposal](../proposals/v0.14.0-mcp-runtime-contract.md).
 
 ---
 
@@ -653,10 +506,9 @@ For providers not supported by `init_chat_model`, wrap them in a LangChain `Base
 
 ## Hot-Reload
 
-The file watcher (`server/app/file_watcher.py`) monitors `.cognition/tools/`, `.cognition/middleware/`, and `.cognition/agents/` using `watchdog`. When any file in these directories changes:
+The file watcher (`server/app/file_watcher.py`) monitors `.cognition/middleware/` using `watchdog`. Agent definitions are reloaded through the config registry path. When watched files change:
 
-1. Tool registry is reloaded (new tools available, removed tools gone)
-2. Agent definition registry is reloaded (new/updated agents loaded)
-3. Agent cache is invalidated so the next session uses the updated definition
+1. The relevant registry/configuration path is refreshed.
+2. Agent cache is invalidated so the next session uses the updated definition.
 
 No server restart required. Changes typically take effect within 1 second.

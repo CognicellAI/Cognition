@@ -39,6 +39,11 @@ logger = structlog.get_logger(__name__)
 from server.app.storage.config_models import LambdaMicroVmQuota, SandboxProfile  # noqa: E402
 
 
+def _skills_root(workspace_root: str) -> str:
+    """Return the conventional Deep Agents Skills directory for a workspace."""
+    return f"{workspace_root.rstrip('/')}/skills"
+
+
 class CognitionLocalSandboxBackend(LocalShellBackend, SandboxBackendProtocol):
     """Local sandbox backend built on Deep Agents' default LocalShellBackend.
 
@@ -77,6 +82,16 @@ class CognitionLocalSandboxBackend(LocalShellBackend, SandboxBackendProtocol):
         super().__init__(root_dir=root_dir, virtual_mode=False, env=sandbox_env, inherit_env=False)
         self._id = sandbox_id or f"cognition-local-{id(self)}"
         self._protected_paths = protected_paths or [".cognition"]
+
+    @property
+    def workspace_root(self) -> str:
+        """Return the concrete local workspace used by this sandbox."""
+        return str(self.cwd)
+
+    @property
+    def skills_root(self) -> str:
+        """Return the conventional native Deep Agents Skills source path."""
+        return str(self.cwd / "skills")
 
     def _is_protected_path(self, path: str) -> bool:
         """Check if a path is protected.
@@ -148,6 +163,7 @@ class CognitionDockerSandboxBackend(FilesystemBackend, SandboxBackendProtocol):
         memory_limit: str = "512m",
         cpu_limit: float = 1.0,
         host_workspace: str = "",
+        workspace_root: str = "/workspace",
     ):
         """Initialize the Docker sandbox backend.
 
@@ -170,6 +186,7 @@ class CognitionDockerSandboxBackend(FilesystemBackend, SandboxBackendProtocol):
         self._memory_limit = memory_limit
         self._cpu_limit = cpu_limit
         self._host_workspace = host_workspace
+        self._workspace_root = workspace_root.rstrip("/") or "/"
 
         # Lazy-init the Docker execution backend
         self._docker_backend: Any | None = None
@@ -200,6 +217,7 @@ class CognitionDockerSandboxBackend(FilesystemBackend, SandboxBackendProtocol):
                 memory_limit=self._memory_limit,
                 cpu_limit=self._cpu_limit,
                 host_workspace=self._host_workspace,
+                workspace_root=self._workspace_root,
             )
             logger.info(
                 "Docker sandbox backend initialized",
@@ -229,16 +247,16 @@ class CognitionDockerSandboxBackend(FilesystemBackend, SandboxBackendProtocol):
             truncated=result.truncated,
         )
 
-    @staticmethod
-    def _relative_path(path: str | None) -> str:
+    def _relative_path(self, path: str | None) -> str:
         """Normalize a virtual sandbox path and reject traversal."""
         raw = path or "."
         if "\x00" in raw or "\\" in raw:
             raise ValueError("Invalid sandbox path")
-        if raw == "/workspace":
+        workspace_root = self._workspace_root
+        if raw == workspace_root:
             raw = "."
-        elif raw.startswith("/workspace/"):
-            raw = raw.removeprefix("/workspace/")
+        elif raw.startswith(f"{workspace_root}/"):
+            raw = raw.removeprefix(f"{workspace_root}/")
         else:
             raw = raw.lstrip("/")
         candidate = PurePosixPath(raw or ".")
@@ -246,6 +264,16 @@ class CognitionDockerSandboxBackend(FilesystemBackend, SandboxBackendProtocol):
             raise ValueError("Path traversal is not allowed")
         normalized = candidate.as_posix()
         return "." if normalized in {"", "/"} else normalized
+
+    @property
+    def workspace_root(self) -> str:
+        """Return the container-visible workspace root."""
+        return self._workspace_root
+
+    @property
+    def skills_root(self) -> str:
+        """Return the conventional native Deep Agents Skills source path."""
+        return _skills_root(self._workspace_root)
 
     def _is_protected_path(self, path: str) -> bool:
         relative = self._relative_path(path)
@@ -363,14 +391,20 @@ class CognitionDockerSandboxBackend(FilesystemBackend, SandboxBackendProtocol):
         pattern: str,
         path: str | None = None,
         glob: str | None = None,
+        *,
+        max_count: int | None = None,
+        context_lines: int = 0,
     ) -> GrepResult:
         """Search text only through the assigned Docker sandbox."""
+        del context_lines  # Docker's adapter does not expose surrounding-line search.
         try:
             matches = self._get_docker_backend().grep_files(
                 pattern,
                 self._relative_path(path),
                 glob,
             )
+            if max_count is not None:
+                matches = matches[:max_count]
             return GrepResult(matches=cast(list[Any], matches))
         except Exception as exc:
             return GrepResult(error=f"Error searching sandbox: {exc}", matches=[])
@@ -527,6 +561,7 @@ class CognitionAwsLambdaMicroVmSandboxBackend(SandboxBackendProtocol):
         execution_role_arn: str | None = None,
         profile_config: SandboxProfile | None = None,
         protected_paths: list[str] | None = None,
+        workspace_root: str = "/workspace",
     ) -> None:
         self._root_dir = Path(root_dir).resolve()
         self._id = sandbox_id or f"cognition-aws-lambda-microvm-{id(self)}"
@@ -536,6 +571,17 @@ class CognitionAwsLambdaMicroVmSandboxBackend(SandboxBackendProtocol):
         self._protected_paths = protected_paths or [".cognition"]
         self._backend: Any | None = None
         self._last_runtime_metadata: dict[str, Any] = {}
+        self._workspace_root = workspace_root.rstrip("/") or "/"
+
+    @property
+    def workspace_root(self) -> str:
+        """Return the MicroVM-visible workspace root."""
+        return self._workspace_root
+
+    @property
+    def skills_root(self) -> str:
+        """Return the conventional native Deep Agents Skills source path."""
+        return _skills_root(self._workspace_root)
 
     @property
     def id(self) -> str:
@@ -681,7 +727,6 @@ class CognitionAwsLambdaMicroVmSandboxBackend(SandboxBackendProtocol):
             str | None,
             profile.extra.get("run_hook_payload"),
         )
-        workspace_root = str(profile.extra.get("workspace_root", "/workspace"))
         launch_timeout_seconds = int(profile.extra.get("launch_timeout_seconds", 120))
         healthcheck_timeout_seconds = int(profile.extra.get("healthcheck_timeout_seconds", 60))
 
@@ -698,7 +743,7 @@ class CognitionAwsLambdaMicroVmSandboxBackend(SandboxBackendProtocol):
             maximum_duration_seconds=profile.maximum_duration_seconds,
             port=profile.port,
             token_expiration_minutes=profile.token_expiration_minutes,
-            workspace_root=workspace_root,
+            workspace_root=self._workspace_root,
             sandbox_id=self._id,
             launch_timeout_seconds=launch_timeout_seconds,
             healthcheck_timeout_seconds=healthcheck_timeout_seconds,
@@ -762,10 +807,15 @@ class CognitionAwsLambdaMicroVmSandboxBackend(SandboxBackendProtocol):
         pattern: str,
         path: str | None = None,
         glob: str | None = None,
+        *,
+        max_count: int | None = None,
     ) -> GrepResult:
         """Search files in the AWS Lambda MicroVM sandbox."""
         backend = self._get_backend()
-        result: GrepResult = backend.grep(pattern, path=path, glob=glob)
+        kwargs: dict[str, Any] = {"path": path, "glob": glob}
+        if max_count is not None:
+            kwargs["max_count"] = max_count
+        result: GrepResult = backend.grep(pattern, **kwargs)
         return result
 
     def glob(self, pattern: str, path: str | None = "/") -> GlobResult:
@@ -853,6 +903,7 @@ class CognitionKubernetesSandboxBackend(SandboxBackendProtocol):
         ttl: int | None = 3600,
         protected_paths: list[str] | None = None,
         warm_pool: str | None = None,
+        workspace_root: str = "/workspace",
     ):
         """Initialize the Kubernetes sandbox backend.
 
@@ -877,8 +928,19 @@ class CognitionKubernetesSandboxBackend(SandboxBackendProtocol):
         self._ttl = ttl
         self._protected_paths = protected_paths or [".cognition"]
         self._warm_pool = warm_pool
+        self._workspace_root = workspace_root.rstrip("/") or "/"
 
         self._backend: Any | None = None
+
+    @property
+    def workspace_root(self) -> str:
+        """Return the pod-visible workspace root."""
+        return self._workspace_root
+
+    @property
+    def skills_root(self) -> str:
+        """Return the conventional native Deep Agents Skills source path."""
+        return _skills_root(self._workspace_root)
 
     @property
     def id(self) -> str:
@@ -936,13 +998,17 @@ class CognitionKubernetesSandboxBackend(SandboxBackendProtocol):
         checks: list[tuple[str, str, bool | None]] = []
 
         # Check workspace root
-        expected_root = str(self._root_dir)
-        result = self._backend.execute(f'test -d {shlex.quote(expected_root)} && echo "ok" || echo "missing"')
+        expected_root = self._workspace_root
+        result = self._backend.execute(
+            f'test -d {shlex.quote(expected_root)} && echo "ok" || echo "missing"'
+        )
         workspace_ok = result.exit_code == 0
         checks.append(("workspace_root", f"Expected {expected_root}", workspace_ok))
 
         # Check writable workspace
-        result = self._backend.execute(f'test -w {shlex.quote(expected_root)} && echo "ok" || echo "ro"')
+        result = self._backend.execute(
+            f'test -w {shlex.quote(expected_root)} && echo "ok" || echo "ro"'
+        )
         writable_ok = result.exit_code == 0
         checks.append(("workspace_writable", expected_root, writable_ok))
 
@@ -953,7 +1019,11 @@ class CognitionKubernetesSandboxBackend(SandboxBackendProtocol):
 
         # Check env vars
         result = self._backend.execute("env | grep -c COGNITION_WORKSPACE_ROOT")
-        env_ok = result.exit_code == 0 and result.output.strip().isdigit() and int(result.output.strip()) > 0
+        env_ok = (
+            result.exit_code == 0
+            and result.output.strip().isdigit()
+            and int(result.output.strip()) > 0
+        )
         checks.append(("env_var", "COGNITION_WORKSPACE_ROOT", env_ok))
 
         # Check GitHub auth if token is expected
@@ -1066,10 +1136,15 @@ class CognitionKubernetesSandboxBackend(SandboxBackendProtocol):
         pattern: str,
         path: str | None = None,
         glob: str | None = None,
+        *,
+        max_count: int | None = None,
     ) -> GrepResult:
         """Search files using Deep Agents' current result API."""
         backend = self._get_backend()
-        result: GrepResult = backend.grep(pattern, path=path, glob=glob)
+        kwargs: dict[str, Any] = {"path": path, "glob": glob}
+        if max_count is not None:
+            kwargs["max_count"] = max_count
+        result: GrepResult = backend.grep(pattern, **kwargs)
         return result
 
     def grep_raw(
@@ -1189,6 +1264,7 @@ def create_sandbox_backend(
     docker_memory_limit: str = "512m",
     docker_cpu_limit: float = 1.0,
     docker_host_workspace: str = "",
+    sandbox_workspace_root: str = "/workspace",
     k8s_template: str = "cognition-sandbox",
     k8s_namespace: str = "default",
     k8s_router_url: str = "http://sandbox-router-svc.default.svc.cluster.local:8080",
@@ -1198,7 +1274,9 @@ def create_sandbox_backend(
     aws_lambda_microvm_profile: str = "default",
     aws_lambda_microvm_execution_role_arn: str | None = None,
     aws_lambda_microvm_profile_config: SandboxProfile | None = None,
-) -> FilesystemBackend | CognitionKubernetesSandboxBackend | CognitionAwsLambdaMicroVmSandboxBackend:
+) -> (
+    FilesystemBackend | CognitionKubernetesSandboxBackend | CognitionAwsLambdaMicroVmSandboxBackend
+):
     """Factory for creating sandbox backends from settings.
 
     Args:
@@ -1246,10 +1324,12 @@ def create_sandbox_backend(
             memory_limit=docker_memory_limit,
             cpu_limit=docker_cpu_limit,
             host_workspace=docker_host_workspace,
+            workspace_root=sandbox_workspace_root,
         )
     elif sandbox_backend == "kubernetes":
         return CognitionKubernetesSandboxBackend(
             root_dir=root_dir,
+            workspace_root=sandbox_workspace_root,
             sandbox_id=sandbox_id,
             template=k8s_template,
             namespace=k8s_namespace,
@@ -1265,6 +1345,7 @@ def create_sandbox_backend(
             profile=aws_lambda_microvm_profile,
             execution_role_arn=aws_lambda_microvm_execution_role_arn,
             profile_config=aws_lambda_microvm_profile_config,
+            workspace_root=sandbox_workspace_root,
         )
     else:
         raise ValueError(

@@ -2,11 +2,78 @@
 
 from __future__ import annotations
 
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, Literal
 
-from pydantic import AliasChoices, Field, SecretStr, field_validator
+from pydantic import (
+    AliasChoices,
+    BaseModel,
+    ConfigDict,
+    Field,
+    SecretStr,
+    field_validator,
+    model_validator,
+)
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class McpWorkloadTokenExchangeProfile(BaseModel):
+    """Deployment-owned OAuth token-exchange profile for MCP transport."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    type: Literal["oauth_token_exchange"] = "oauth_token_exchange"
+    token_endpoint: str
+    subject_token_source: Literal["workload_identity"] = "workload_identity"
+    subject_token_type: str = "urn:ietf:params:oauth:token-type:access_token"
+    audience: str = Field(min_length=1)
+    client_auth: Literal["none", "client_secret_basic"] = "none"
+    client_id: str | None = None
+    client_secret_env: str | None = Field(
+        default=None,
+        pattern=r"^[A-Za-z_][A-Za-z0-9_]*$",
+    )
+    timeout_seconds: float = Field(default=10.0, gt=0, le=60)
+
+    @field_validator("token_endpoint")
+    @classmethod
+    def validate_token_endpoint(cls, value: str) -> str:
+        """Require an absolute HTTP(S) token endpoint without URL credentials."""
+        from urllib.parse import urlsplit
+
+        if not value or any(character.isspace() for character in value):
+            raise ValueError("MCP token endpoint must not be empty or contain whitespace")
+        try:
+            parsed = urlsplit(value)
+            hostname = parsed.hostname
+            _ = parsed.port
+        except ValueError as exc:
+            raise ValueError("MCP token endpoint is malformed") from exc
+        if parsed.scheme not in {"http", "https"} or not parsed.netloc or not hostname:
+            raise ValueError("MCP token endpoint must be an absolute HTTP(S) URL")
+        if parsed.username is not None or parsed.password is not None:
+            raise ValueError("MCP token endpoint must not contain credentials")
+        if parsed.fragment:
+            raise ValueError("MCP token endpoint must not contain a fragment")
+        return value
+
+    @field_validator("audience")
+    @classmethod
+    def validate_audience(cls, value: str) -> str:
+        """Reject ambiguous audience values while allowing URI-shaped identifiers."""
+        if value != value.strip() or any(character.isspace() for character in value):
+            raise ValueError("MCP token-exchange audience must not contain whitespace")
+        return value
+
+    @model_validator(mode="after")
+    def validate_client_auth(self) -> McpWorkloadTokenExchangeProfile:
+        """Require bounded environment client auth fields as one complete unit."""
+        if self.client_auth == "client_secret_basic":
+            if not self.client_id or self.client_secret_env is None:
+                raise ValueError("client_secret_basic requires client_id and client_secret_env")
+        elif self.client_id is not None or self.client_secret_env is not None:
+            raise ValueError("client_id/client_secret_env require client_secret_basic")
+        return self
 
 
 class Settings(BaseSettings):
@@ -37,11 +104,71 @@ class Settings(BaseSettings):
         alias="COGNITION_LOG_FORMAT",
         description="Structured log renderer. Use 'console' for local development.",
     )
+    deployment_mode: Literal["local", "development", "production"] = Field(
+        default="development",
+        alias="COGNITION_DEPLOYMENT_MODE",
+        description=(
+            "Builder-defined deployment label for operational metadata. Cognition does not "
+            "infer storage or MCP authentication policy from this value."
+        ),
+    )
 
-    # Workspace settings
+    # MCP transport identity is deployment configuration. Profiles contain no
+    # subject token or provider credential and are referenced opaquely by Agent
+    # definitions using workload_token_exchange authentication.
+    mcp_auth_profiles: dict[str, McpWorkloadTokenExchangeProfile] = Field(
+        default_factory=dict,
+        alias="COGNITION_MCP_AUTH_PROFILES",
+    )
+    mcp_workload_identity_token_file: Path | None = Field(
+        default=None,
+        alias="COGNITION_MCP_WORKLOAD_IDENTITY_TOKEN_FILE",
+        description="Projected, rotating workload subject-token file.",
+    )
+    mcp_workload_identity_token: SecretStr | None = Field(
+        default=None,
+        alias="COGNITION_MCP_WORKLOAD_IDENTITY_TOKEN",
+        description="Environment fallback for the ambient workload subject token.",
+    )
+    mcp_oauth_encryption_key: SecretStr | None = Field(
+        default=None,
+        alias="COGNITION_MCP_OAUTH_ENCRYPTION_KEY",
+        description="Fernet key for exact-scope MCP OAuth SDK state.",
+    )
+    mcp_oauth_redirect_uri: str | None = Field(
+        default=None,
+        alias="COGNITION_MCP_OAUTH_REDIRECT_URI",
+        description="Builder-routable OAuth callback URI registered by the MCP client.",
+    )
+    mcp_oauth_client_name: str = Field(
+        default="Cognition",
+        alias="COGNITION_MCP_OAUTH_CLIENT_NAME",
+        min_length=1,
+        max_length=100,
+    )
+    mcp_oauth_client_metadata_url: str | None = Field(
+        default=None,
+        alias="COGNITION_MCP_OAUTH_CLIENT_METADATA_URL",
+        description="Optional HTTPS client metadata document URL supported by the MCP SDK.",
+    )
+    mcp_oauth_timeout_seconds: float = Field(
+        default=300.0,
+        alias="COGNITION_MCP_OAUTH_TIMEOUT_SECONDS",
+        gt=0,
+        le=900,
+    )
+
+    # Host-local workspace settings. Remote sandbox paths are configured
+    # separately below and must never be inferred from this host path.
     workspace_root: Path = Field(
         default=Path("."),
-        alias="COGNITION_WORKSPACE_ROOT",
+        alias="COGNITION_LOCAL_WORKSPACE_ROOT",
+    )
+
+    sandbox_workspace_root: str = Field(
+        default="/workspace",
+        alias="COGNITION_SANDBOX_WORKSPACE_ROOT",
+        description="Absolute workspace path visible inside remote sandboxes.",
     )
 
     # OpenAI credentials — read by provider factories, not used directly by Settings
@@ -169,6 +296,7 @@ class Settings(BaseSettings):
         "cors_origins",
         "scope_keys",
         "callback_allowed_origins",
+        "mcp_allowed_origins",
         mode="before",
     )
     @classmethod
@@ -205,6 +333,31 @@ class Settings(BaseSettings):
         alias="COGNITION_PERSISTENCE_URI",
     )
 
+    # Durable Deep Agents file backend. Builders select local or S3-compatible
+    # placement explicitly; Cognition never changes backends based on a
+    # deployment label or after a selected-backend failure.
+    durable_file_backend: Literal["local", "s3"] = Field(
+        default="local",
+        alias="COGNITION_DURABLE_FILE_BACKEND",
+    )
+    s3_bucket: str | None = Field(default=None, alias="COGNITION_S3_BUCKET")
+    s3_prefix: str = Field(default="cognition", alias="COGNITION_S3_PREFIX")
+    s3_endpoint_url: str | None = Field(default=None, alias="COGNITION_S3_ENDPOINT_URL")
+    s3_region: str | None = Field(default=None, alias="COGNITION_S3_REGION")
+    s3_force_path_style: bool = Field(
+        default=False,
+        alias="COGNITION_S3_FORCE_PATH_STYLE",
+        description="Use path-style S3 requests for Garage and similar compatible stores.",
+    )
+    s3_scope_hmac_key: SecretStr | None = Field(
+        default=None,
+        alias="COGNITION_S3_SCOPE_HMAC_KEY",
+        description=(
+            "HMAC key used to derive opaque, exact-scope object prefixes. "
+            "It is never persisted or exposed to agent runtime data."
+        ),
+    )
+
     # Sandbox / Execution backend settings
     sandbox_backend: Literal["local", "docker", "kubernetes", "aws_lambda_microvm"] = Field(
         default="local",
@@ -215,15 +368,15 @@ class Settings(BaseSettings):
         alias="COGNITION_ALLOW_UNSAFE_LOCAL_EXECUTION",
         description="Explicitly permit host-local execution for standalone development.",
     )
-    allow_host_tools: bool = Field(
+    mcp_outbound_transport_enabled: bool = Field(
         default=False,
-        alias="COGNITION_ALLOW_HOST_TOOLS",
-        description="Explicitly inject Browser/Search/package host tools in development.",
+        alias="COGNITION_MCP_OUTBOUND_TRANSPORT_ENABLED",
+        description="Explicitly permit remote MCP transport for Agent-owned MCP servers.",
     )
-    allow_api_python_tools: bool = Field(
-        default=False,
-        alias="COGNITION_ALLOW_API_PYTHON_TOOLS",
-        description="Explicitly permit host loading of API Python tool code in development.",
+    mcp_allowed_origins: list[str] = Field(
+        default_factory=list,
+        alias="COGNITION_MCP_ALLOWED_ORIGINS",
+        description="Deployment-approved MCP origins as scheme://host[:port].",
     )
     callback_allowed_origins: list[str] = Field(
         default_factory=list,
@@ -239,6 +392,12 @@ class Settings(BaseSettings):
         default=900.0,
         gt=0,
         alias="COGNITION_AGENT_CACHE_TTL_SECONDS",
+    )
+    mcp_readiness_ttl_seconds: float = Field(
+        default=300.0,
+        gt=0,
+        alias="COGNITION_MCP_READINESS_TTL_SECONDS",
+        description="Freshness window for MCP discovery observations.",
     )
     session_service_cache_max_entries: int = Field(
         default=256,
@@ -456,6 +615,15 @@ class Settings(BaseSettings):
             v = v.resolve()
         return v
 
+    @field_validator("sandbox_workspace_root")
+    @classmethod
+    def validate_sandbox_workspace_root(cls, value: str) -> str:
+        """Require a normalized absolute POSIX path for remote sandboxes."""
+        path = PurePosixPath(value)
+        if not value or not path.is_absolute() or ".." in path.parts:
+            raise ValueError("sandbox_workspace_root must be an absolute POSIX path")
+        return path.as_posix()
+
     @field_validator("port", "metrics_port")
     @classmethod
     def validate_port(cls, v: int) -> int:
@@ -463,6 +631,25 @@ class Settings(BaseSettings):
         if not 1 <= v <= 65535:
             raise ValueError(f"Port must be between 1 and 65535, got {v}")
         return v
+
+    @property
+    def s3_enabled(self) -> bool:
+        """Return whether durable file data is configured for S3-compatible storage."""
+        return self.durable_file_backend == "s3"
+
+    def validate_deployment_storage_policy(self) -> None:
+        """Validate the builder-selected storage backend without classifying it."""
+        if self.s3_enabled and not self.s3_bucket:
+            raise ValueError("COGNITION_S3_BUCKET is required when durable_file_backend=s3")
+        if self.s3_enabled and self.s3_scope_hmac_key is None:
+            raise ValueError("COGNITION_S3_SCOPE_HMAC_KEY is required when durable_file_backend=s3")
+
+    def get_mcp_auth_profile(self, name: str) -> McpWorkloadTokenExchangeProfile:
+        """Resolve one deployment-owned MCP auth profile by opaque name."""
+        try:
+            return self.mcp_auth_profiles[name]
+        except KeyError as exc:
+            raise ValueError(f"Unknown MCP authentication profile: {name}") from exc
 
 
 # Global settings instance

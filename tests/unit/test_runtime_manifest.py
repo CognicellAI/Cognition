@@ -5,14 +5,10 @@ from __future__ import annotations
 import pytest
 
 from server.app.agent.resolver import RuntimeResolver
-from server.app.agent.skills_backend import ConfigRegistrySkillsBackend
 from server.app.agent.task_runtime import AgentTaskRuntime, SubmitTask
-from server.app.llm.deep_agent_service import (
-    DeepAgentStreamingService,
-    _pinned_skills,
-)
+from server.app.llm.deep_agent_service import DeepAgentStreamingService
 from server.app.settings import Settings
-from server.app.storage.config_models import ProviderConfig, SkillDefinition
+from server.app.storage.config_models import ProviderConfig
 from server.app.storage.config_registry import MemoryConfigRegistry
 from server.app.storage.config_store import DefaultConfigStore
 from server.app.storage.memory import MemoryStorageBackend
@@ -25,15 +21,6 @@ async def test_active_run_keeps_agent_and_skill_snapshot_while_next_run_advances
     scope = {"tenant": "manifest-tenant", "project": "manifest-project"}
     registry = MemoryConfigRegistry()
     config_store = DefaultConfigStore(registry, workspace_path=tmp_path)
-    await config_store.upsert_skill(
-        SkillDefinition(
-            name="runtime-skill",
-            path="registry://runtime-skill",
-            content="# Revision one\nUse the first behavior.",
-            scope=scope,
-            source="api",
-        )
-    )
     first_record = await config_store.upsert_agent(
         "manifest-agent",
         scope,
@@ -41,7 +28,6 @@ async def test_active_run_keeps_agent_and_skill_snapshot_while_next_run_advances
             "name": "manifest-agent",
             "mode": "primary",
             "system_prompt": "Agent revision one.",
-            "skills": ["runtime-skill"],
         },
     )
 
@@ -62,19 +48,6 @@ async def test_active_run_keeps_agent_and_skill_snapshot_while_next_run_advances
     )
     first_manifest = first.run.runtime_manifest
     first_manifest_digest = first.run.manifest_digest
-    first_skill_digest = first_manifest["dependencies"]["skills"][
-        "runtime-skill"
-    ]["digest"]
-
-    await config_store.upsert_skill(
-        SkillDefinition(
-            name="runtime-skill",
-            path="registry://runtime-skill",
-            content="# Revision two\nUse the second behavior.",
-            scope=scope,
-            source="api",
-        )
-    )
     second_record = await config_store.upsert_agent(
         "manifest-agent",
         scope,
@@ -82,7 +55,6 @@ async def test_active_run_keeps_agent_and_skill_snapshot_while_next_run_advances
             "name": "manifest-agent",
             "mode": "primary",
             "system_prompt": "Agent revision two.",
-            "skills": ["runtime-skill"],
         },
         expected_revision=first_record.revision,
     )
@@ -91,8 +63,7 @@ async def test_active_run_keeps_agent_and_skill_snapshot_while_next_run_advances
     # not changed.
     assert first.run.agent_revision == first_record.revision == 1
     assert (
-        first.run.runtime_manifest["agent"]["definition"]["system_prompt"]
-        == "Agent revision one."
+        first.run.runtime_manifest["agent"]["definition"]["system_prompt"] == "Agent revision one."
     )
     assert first.run.manifest_digest == first_manifest_digest
 
@@ -114,20 +85,6 @@ async def test_active_run_keeps_agent_and_skill_snapshot_while_next_run_advances
     assert pinned_config.system_prompt == "Agent revision one."
     assert current_config.system_prompt == "Agent revision two."
 
-    pinned_skills = _pinned_skills(first_manifest)
-    assert pinned_skills is not None
-    skill_backend = ConfigRegistrySkillsBackend(
-        registry,
-        scope,
-        allowed_skill_names=["runtime-skill"],
-        pinned_skills=pinned_skills,
-    )
-    downloaded = await skill_backend.adownload_files(
-        ["/runtime-skill/SKILL.md"]
-    )
-    assert downloaded[0].content is not None
-    assert b"Revision one" in downloaded[0].content
-
     second = await runtime.submit(
         SubmitTask(
             context_id="manifest-context-two",
@@ -136,40 +93,13 @@ async def test_active_run_keeps_agent_and_skill_snapshot_while_next_run_advances
             content="second run",
         )
     )
-    second_skill_digest = second.run.runtime_manifest["dependencies"]["skills"][
-        "runtime-skill"
-    ]["digest"]
     assert second.run.agent_revision == second_record.revision == 2
     assert second.run.manifest_digest != first_manifest_digest
-    assert second_skill_digest != first_skill_digest
     assert (
-        second.run.runtime_manifest["agent"]["definition"]["system_prompt"]
-        == "Agent revision two."
+        second.run.runtime_manifest["agent"]["definition"]["system_prompt"] == "Agent revision two."
     )
 
     await storage.close()
-
-
-@pytest.mark.asyncio
-async def test_explicit_empty_skill_attachment_exposes_no_registry_skill(
-    tmp_path,
-) -> None:
-    registry = MemoryConfigRegistry()
-    await registry.upsert_skill(
-        SkillDefinition(
-            name="unattached",
-            path="registry://unattached",
-            content="# Must stay hidden",
-        )
-    )
-    backend = ConfigRegistrySkillsBackend(
-        registry,
-        allowed_skill_names=[],
-    )
-    assert await backend.als_info("/") == []
-    response = await backend.adownload_files(["/unattached/SKILL.md"])
-    # Direct reads are also denied even when a model guesses the virtual path.
-    assert response[0].error == "file_not_found"
 
 
 @pytest.mark.asyncio
@@ -252,6 +182,7 @@ async def test_runtime_manifest_pins_provider_selection_for_active_run(
         return object()
 
     monkeypatch.setattr(resolver, "build_model", _fake_build_model)
+
     async def _ignore_tool_support(provider: str, model_id: str) -> None:
         return None
 

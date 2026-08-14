@@ -40,20 +40,6 @@ All request and response bodies are JSON unless noted. Streaming endpoints retur
   - [`PUT /agents/{name}`](#put-agentsname)
   - [`PATCH /agents/{name}`](#patch-agentsname)
   - [`DELETE /agents/{name}`](#delete-agentsname)
-- [Skills](#skills)
-  - [`GET /skills`](#get-skills)
-  - [`GET /skills/{name}`](#get-skillsname)
-  - [`POST /skills`](#post-skills)
-  - [`PUT /skills/{name}`](#put-skillsname)
-  - [`PATCH /skills/{name}`](#patch-skillsname)
-  - [`DELETE /skills/{name}`](#delete-skillsname)
-- [Tools](#tools)
-  - [`GET /tools`](#get-tools)
-  - [`GET /tools/{name}`](#get-toolsname)
-  - [`GET /tools/errors`](#get-toolserrors)
-  - [`POST /tools`](#post-tools)
-  - [`DELETE /tools/{name}`](#delete-toolsname)
-  - [`POST /tools/reload`](#post-toolsreload)
 - [Models](#models)
   - [`GET /models`](#get-models)
   - [`GET /models/providers`](#get-modelsproviders)
@@ -66,12 +52,6 @@ All request and response bodies are JSON unless noted. Streaming endpoints retur
   - [`GET /config`](#get-config)
   - [`PATCH /config`](#patch-config)
   - [`POST /config/rollback`](#post-configrollback)
-- [MCP Servers](#mcp-servers)
-  - [`GET /mcp-servers`](#get-mcp-servers)
-  - [`POST /mcp-servers`](#post-mcp-servers)
-  - [`GET /mcp-servers/{name}`](#get-mcp-serversname)
-  - [`PATCH /mcp-servers/{name}`](#patch-mcp-serversname)
-  - [`DELETE /mcp-servers/{name}`](#delete-mcp-serversname)
 - [Sandbox Profiles](#sandbox-profiles)
   - [`GET /sandbox/profiles`](#get-sandboxprofiles)
   - [`POST /sandbox/profiles`](#post-sandboxprofiles)
@@ -725,8 +705,13 @@ Create or replace an agent definition in the ConfigRegistry.
   "system_prompt": "You are a security expert. Audit code for vulnerabilities.",
   "description": "Audits code for security issues",
   "mode": "subagent",
-  "tools": ["run_semgrep"],
-  "skills": ["python-review"],
+  "skills": [
+    {
+      "name": "python-review",
+      "content": "---\nname: python-review\ndescription: Review Python changes\n---\n\n# Python review",
+      "files": {"references/checklist.md": "# Checklist"}
+    }
+  ],
   "memory": ["AGENTS.md"],
   "interrupt_on": {},
   "a2a": {
@@ -757,8 +742,7 @@ Create or replace an agent definition in the ConfigRegistry.
 | `mode` | `"primary"` \| `"subagent"` \| `"all"` | Whether agent can own sessions, be delegated to, or both |
 | `hidden` | boolean | Hide the agent from `GET /agents` list results |
 | `a2a` | object | A2A exposure and public Agent Card presentation. See the [A2A Builder Guide](a2a.md). |
-| `tools` | list[string] | Registry tool names to attach to this agent |
-| `skills` | list[string] | Registry skill names to attach to this agent |
+| `skills` | list[object] | Complete `{name, content, files}` bundles owned by this Agent revision |
 | `memory` | list[string] | Paths to instruction files (e.g. AGENTS.md) |
 | `interrupt_on` | dict | Tool names mapped to `true` for HITL confirmation |
 | `permissions` | list[object] | Deep Agents filesystem permission rules |
@@ -776,6 +760,7 @@ Create or replace an agent definition in the ConfigRegistry.
 | `middleware` | list | Middleware names or middleware config dicts |
 | `subagents` | list[object] | In-process subagent definitions |
 | `async_subagents` | list[object] | Experimental remote Agent Protocol async subagent definitions |
+| `mcp` | object | Agent-owned remote MCP server configuration. See [MCP Tool Servers](./extending-agents.md#6-mcp-tool-servers). |
 | `sandbox_profile` | string | Trusted sandbox profile selected for this agent |
 | `sandbox_execution_role_arn` | string | Trusted IAM role ARN assigned to this agent's sandbox runtime |
 | `scope` | dict | Scope restriction; empty `{}` = global |
@@ -820,234 +805,6 @@ Delete an agent definition from the ConfigRegistry.
 - **Response `204 No Content`**
 - **Response `404 Not Found`:** Agent not found in the exact request scope
 - **Response `412 Precondition Failed`:** Stale `If-Match` revision
-
----
-
-## Skills
-
-Skills are SKILL.md files stored in the ConfigRegistry. When an agent loads, its configured skills are injected progressively as the context window fills.
-
-File-managed skills (seeded from `skill_sources` directories at startup) have `source: "file"` and cannot be modified or deleted via the API (returns `409 Conflict`). API-created skills have `source: "api"`.
-
-### `GET /skills`
-
-List all registered skills.
-
-**Query parameters:**
-
-| Parameter | Type | Description |
-|---|---|---|
-| `scope` | dict (via headers) | Filtered by scope when scoping is enabled |
-
-**Response `200 OK`:**
-```json
-{
-  "skills": [
-    {
-      "name": "python-testing",
-      "path": "/skills/api/python-testing",
-      "enabled": true,
-      "description": "pytest patterns and fixtures",
-      "content": "# Python Testing\n\n...",
-      "scope": {},
-      "source": "api"
-    }
-  ],
-  "count": 1
-}
-```
-
-### `GET /skills/{name}`
-
-Get a specific skill by name, including full content.
-
-**Response `200 OK`:** Skill object  
-**Response `404 Not Found`**
-
-### `POST /skills`
-
-Create or replace a skill in the ConfigRegistry.
-
-**Request body:**
-```json
-{
-  "name": "python-testing",
-  "content": "# Python Testing\n\nUse pytest. Write tests in tests/. Run with `pytest`.",
-  "description": "pytest patterns for this project",
-  "enabled": true,
-  "scope": {}
-}
-```
-
-| Field | Type | Description |
-|---|---|---|
-| `name` | string | Skill identifier (1–100 chars) |
-| `content` | string | Full SKILL.md content (YAML frontmatter + Markdown body) |
-| `path` | string | Filesystem path alternative to inline content |
-| `description` | string | Short description |
-| `enabled` | bool | Whether this skill is active (default `true`) |
-| `scope` | dict | Scope restriction; empty `{}` = global |
-
-**Response `201 Created`:** Skill object  
-**Response `422 Unprocessable Entity`:** Validation error
-
-### `PUT /skills/{name}`
-
-Replace a skill entirely.
-
-**Request body:** Same as `POST /skills`  
-**Response `200 OK`:** Updated skill object  
-**Response `404 Not Found`**
-
-### `PATCH /skills/{name}`
-
-Partially update a skill. Only provided fields are changed.
-
-**Request body (all fields optional):**
-```json
-{
-  "content": "# Updated content...",
-  "enabled": false
-}
-```
-
-**Response `200 OK`:** Updated skill object  
-**Response `404 Not Found`**
-
-### `DELETE /skills/{name}`
-
-Delete a skill from the ConfigRegistry.
-
-**Response `204 No Content`**  
-**Response `404 Not Found`**
-
----
-
-## Tools
-
-### `GET /tools`
-
-List all registered tools from both file discovery (AgentRegistry) and API registration (ConfigRegistry).
-
-**Response `200 OK`:**
-```json
-{
-  "tools": [
-    {
-      "name": "bash",
-      "source_type": "file",
-      "source": "file",
-      "module": "server.app.agent.tools",
-      "description": null,
-      "enabled": true,
-      "interrupt_on": false
-    },
-    {
-      "name": "search-jira",
-      "source_type": "api_code",
-      "source": "api_code",
-      "module": null,
-      "description": "Search Jira issues",
-      "enabled": true,
-      "interrupt_on": true
-    },
-    {
-      "name": "run_analysis",
-      "source_type": "api_path",
-      "source": "api_path",
-      "module": "myapp.tools.analysis",
-      "description": null,
-      "enabled": true
-    }
-  ],
-  "count": 3
-}
-```
-
-`source_type` values:
-- `"file"` — auto-discovered from `.cognition/tools/` or built-in
-- `"api_code"` — registered via `POST /tools` with `code` field (Python source stored in DB)
-- `"api_path"` — registered via `POST /tools` with `path` field (module path)
-
-File-managed tools (seeded from `tool_sources` directories at startup) have `source: "file"` and cannot be modified or deleted via the API (returns `409 Conflict`).
-
-### `GET /tools/{name}`
-
-Get a specific tool by name. Checks file-discovered tools first, then ConfigRegistry.
-
-**Response `200 OK`:** Tool object  
-**Response `404 Not Found`**
-
-### `GET /tools/errors`
-
-Get any errors that occurred during tool discovery or reload.
-
-**Response `200 OK`:**
-```json
-[
-  {
-    "file": ".cognition/tools/broken_tool.py",
-    "error_type": "ImportError",
-    "error": "No module named 'missing_dep'",
-    "timestamp": 1711972800.0
-  }
-]
-```
-
-### `POST /tools`
-
-Register a tool in the ConfigRegistry. Exactly one of `code` or `path` must be provided.
-
-**Request body — inline source code:**
-```json
-{
-  "name": "search-jira",
-  "code": "from langchain_core.tools import tool\n\n@tool\ndef search_jira(query: str) -> str:\n    \"\"\"Search Jira issues by query string.\"\"\"\n    ...",
-  "enabled": true,
-  "description": "Search Jira issues",
-  "scope": {}
-}
-```
-
-**Request body — module path:**
-```json
-{
-  "name": "jira-tools",
-  "path": "mycompany.cognition_tools.jira",
-  "enabled": true
-}
-```
-
-| Field | Type | Description |
-|---|---|---|
-| `name` | string | Tool identifier (1–100 chars) |
-| `code` | string | Full Python source containing `@tool`-decorated functions or `BaseTool` subclasses |
-| `path` | string | Dotted module path importable by the server process |
-| `enabled` | bool | Whether this tool is active (default `true`) |
-| `description` | string | Optional description |
-| `interrupt_on` | bool | Whether this tool should require approval by default in builders that consume tool metadata |
-| `scope` | dict | Scope restriction; empty `{}` = global |
-
-**Response `201 Created`:** Tool object with `source_type`  
-**Response `422 Unprocessable Entity`:** Neither `code` nor `path` provided; or both provided
-
-> **Security:** Tool code executes with full Python privileges inside the sandbox backend. Restrict this endpoint to authorized administrators at the Gateway/proxy layer.
-
-### `DELETE /tools/{name}`
-
-Remove an API-registered tool from the ConfigRegistry.
-
-**Response `204 No Content`**  
-**Response `404 Not Found`:** Tool not in ConfigRegistry
-
-### `POST /tools/reload`
-
-Trigger a manual reload of file-discovered tools from `.cognition/tools/`.
-
-**Response `200 OK`:**
-```json
-{"tools_loaded": 5, "errors": 0}
-```
 
 ---
 
@@ -1333,95 +1090,6 @@ Roll back to the previous configuration backup.
 
 ---
 
-## MCP Servers
-
-Manage remote MCP (Model Context Protocol) tool servers at runtime. File-managed servers (from `.cognition/config.yaml`) have `source: "file"` and cannot be modified via the API (returns `409 Conflict`).
-
-### `GET /mcp-servers`
-
-List all registered MCP servers visible in the current scope.
-
-**Response `200 OK`:**
-```json
-{
-  "servers": [
-    {
-      "name": "github-tools",
-      "url": "https://mcp.github.example.com/sse",
-      "headers": {},
-      "enabled": true,
-      "transport": "sse",
-      "scope": {},
-      "source": "api"
-    }
-  ],
-  "count": 1
-}
-```
-
-> **Note:** `headers` is always returned as an empty `{}` to prevent credential leakage.
-
-### `POST /mcp-servers`
-
-Register a new MCP server.
-
-**Request body:**
-```json
-{
-  "name": "my-tools",
-  "url": "https://tools.example.com/sse",
-  "transport": "sse",
-  "enabled": true,
-  "headers": {"Authorization": "Bearer ..."},
-  "scope": {}
-}
-```
-
-| Field | Type | Required | Default | Description |
-|---|---|---|---|---|
-| `name` | string (1–100) | Yes | — | Unique server identifier |
-| `url` | string | Yes | — | HTTP/HTTPS URL (stdio not supported) |
-| `transport` | `"sse"` \| `"streamable_http"` | No | `"sse"` | Transport protocol |
-| `enabled` | bool | No | `true` | Whether to connect |
-| `headers` | dict | No | `{}` | HTTP headers sent with requests |
-| `scope` | dict | No | `{}` | Scope restriction |
-
-**Response `201 Created`:** MCP server object  
-**Response `422 Unprocessable Entity`:** Validation error
-
-### `GET /mcp-servers/{name}`
-
-Get a specific MCP server by name.
-
-**Response `200 OK`:** MCP server object  
-**Response `404 Not Found`**
-
-### `PATCH /mcp-servers/{name}`
-
-Partially update an MCP server.
-
-**Request body (all fields optional):**
-```json
-{
-  "enabled": false,
-  "url": "https://new-url.example.com/sse"
-}
-```
-
-**Response `200 OK`:** Updated MCP server object  
-**Response `404 Not Found`**  
-**Response `409 Conflict`:** Server is file-managed
-
-### `DELETE /mcp-servers/{name}`
-
-Delete an MCP server.
-
-**Response `204 No Content`**  
-**Response `404 Not Found`**  
-**Response `409 Conflict`:** Server is file-managed
-
----
-
 ## Sandbox Profiles
 
 Manage AWS Lambda MicroVM sandbox profiles at runtime. File-managed profiles
@@ -1567,7 +1235,7 @@ Related: [Lambda MicroVM Sandbox Profiles](../concepts/sandboxes/aws-lambda-micr
 
 Artifacts are durable, scope-aware files that agents and builders can read, write, list, and diff. They provide explicit state outside the model context window for long-running agent handoffs.
 
-Artifact types: `scratch` (thread-scoped), `artifact` (user-visible), `contract` (done criteria), `eval` (evaluator results), `memory` (scoped memory), `policy` (read-only org policy).
+Artifact types: `scratch` (thread-scoped), `artifact` (user-visible), `file` (general durable file), `contract` (done criteria), `eval` (evaluator results), `memory` (scoped memory), `policy` (read-only org policy).
 
 Visibilities: `private` (session-scoped), `run` (run-scoped), `public` (scope-visible).
 
@@ -1629,7 +1297,7 @@ Create a new artifact.
 |---|---|---|---|
 | `id` | string | Yes | Unique identifier |
 | `name` | string | Yes | Human-readable name |
-| `artifact_type` | string | Yes | `scratch`, `artifact`, `contract`, `eval`, `memory`, `policy` |
+| `artifact_type` | string | Yes | `scratch`, `artifact`, `file`, `contract`, `eval`, `memory`, `policy` |
 | `content` | string | Yes | Artifact content |
 | `content_type` | string | No | MIME type (e.g. `text/markdown`, `application/json`) |
 | `path` | string | No | Logical path |
@@ -1972,6 +1640,75 @@ create a second task or run and cannot collide across application scopes.
 Push notifications, gRPC, HTTP+JSON, and authenticated extended cards are not
 advertised. The JSON-RPC 1.0 MUST profile is checked with the official
 [A2A TCK](https://github.com/a2aproject/a2a-tck).
+
+---
+
+## MCP OAuth Authorization Handoff
+
+Direct `mcp_oauth` servers use a builder-facing, scope-bound authorization
+handoff. These endpoints never return access tokens, refresh tokens, dynamic
+client secrets, or authorization codes.
+
+### Start authorization
+
+```http
+POST /mcp/oauth/agents/{agent_name}/servers/{server_alias}/authorizations
+```
+
+The server must exist in the resolved Agent definition and select
+`auth.type: mcp_oauth`. The response is either already authorized or contains
+an SDK-generated URL:
+
+```json
+{
+  "flow_id": "opaque-flow-id",
+  "status": "authorization_required",
+  "authorization_url": "https://identity.example/authorize?...",
+  "expires_in_seconds": 300,
+  "failure_category": null
+}
+```
+
+### Relay callback
+
+The builder's registered redirect endpoint posts the provider response in the
+body, with the same authoritative scope headers used to start the flow:
+
+```http
+POST /mcp/oauth/callback
+Content-Type: application/json
+
+{"code":"provider-code","state":"provider-state"}
+```
+
+Do not place the code in the Cognition request URL. Unknown, cross-scope, or
+replayed state fails with a typed, redacted `400` response.
+
+### Observe flow
+
+```http
+GET /mcp/oauth/authorizations/{flow_id}
+```
+
+The result is visible only from the exact effective scope that began the flow.
+Pending authorization transactions expire and are non-durable; encrypted OAuth
+tokens are durable in SQLite/PostgreSQL and process-local in the memory backend.
+
+### Observe MCP readiness
+
+```http
+GET /agents/{agent_name}/mcp/readiness
+```
+
+This exact-scope endpoint reports discovery observations for the Agent's current
+revision. Each server includes its required/optional policy, observation and
+freshness timestamps, discovered tool count, schema digest, and a typed redacted
+failure category. A missing or expired observation reports `unknown`.
+
+Readiness is not authorization truth. In particular, a `ready` observation does
+not bypass live authorization at a builder-controlled gateway on the next MCP
+operation. Credentials, authorization headers, raw scope values, tool arguments,
+and tool results are never included in this projection.
 
 ---
 

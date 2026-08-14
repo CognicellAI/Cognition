@@ -1,10 +1,13 @@
 # Sandboxed Skill Package Registry
 
-**Status:** Draft proposal; not implemented or scheduled  
+**Status:** Superseded by ADR-0003 and the sandbox-workspace Skills model
 **Audience:** Maintainers, deployment operators, and builders  
 **Last updated:** 2026-07-23
 
-This proposal makes Cognition a bounded registry and runtime for executable
+> This document is retained as rejected design history. v0.14 does not provide
+> a standalone skill registry or name-based skill attachment.
+
+This proposal would have made Cognition a bounded registry and runtime for executable
 skill packages. A builder publishes scope-bound skills and attaches their names
 to an Agent. Cognition stores immutable revisions, pins the revisions selected
 for each run, and transfers only those packages into that run's sandbox.
@@ -31,7 +34,12 @@ deployment responsibilities.
 
 ## Current state and problem
 
-Today a `SkillDefinition` stores a path and optional `SKILL.md` content in the
+> **Superseded by the v0.14 sandbox workspace Skills contract.** Builders now
+> mount selected standard Skill directories beneath the sandbox workspace and
+> Cognition passes that directory directly to Deep Agents; it no longer provides
+> a Skill registry or virtual Skills backend.
+
+Historically, a `SkillDefinition` stored a path and optional `SKILL.md` content in the
 Config Registry. The Skill API creates or replaces one mutable record, and
 `ConfigRegistrySkillsBackend` exposes attached skills beneath
 `/skills/api/`. `create_cognition_agent` routes that path through a Deep Agents

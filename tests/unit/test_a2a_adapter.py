@@ -190,18 +190,16 @@ class TestBuildAgentCardForAgent:
         card_str = str(card)
         assert "SECRET PROMPT TEXT" not in card_str
 
-    def test_card_does_not_expose_tools(self):
+    def test_card_has_no_legacy_tools_surface(self):
         agent = AgentDefinition(
             name="coder",
             system_prompt="test",
             mode="primary",
-            tools=["tool1", "tool2"],
             a2a=A2AConfig(exposed=True),
         )
         card = build_agent_card_for_agent(agent, "http://localhost:8000", "0.10.0")
         card_str = str(card)
-        assert "tool1" not in card_str
-        assert "tool2" not in card_str
+        assert "tools" not in card_str.lower()
 
 
 class TestA2APerAgentCardRoute:

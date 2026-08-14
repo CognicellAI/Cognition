@@ -29,9 +29,65 @@ Controls the HTTP server.
 
 | YAML key | Environment variable | Default | Description |
 |---|---|---|---|
-| `workspace.root` | `COGNITION_WORKSPACE_ROOT` | `.` | Root directory for agent workspaces |
+| `workspace.root` | `COGNITION_LOCAL_WORKSPACE_ROOT` | `.` | Host-local root for development workspaces and local state |
+| `sandbox.workspace_root` | `COGNITION_SANDBOX_WORKSPACE_ROOT` | `/workspace` | Builder-selected path visible inside remote sandboxes |
 
-The workspace root is resolved to an absolute path at startup. The agent's tools operate within this directory.
+The local workspace root is resolved to an absolute path at startup. Remote
+sandboxes use the separately configured sandbox workspace root. Builders mount
+Skills under `<sandbox workspace root>/skills`; Cognition passes that directory
+directly to Deep Agents. `COGNITION_WORKSPACE_ROOT` is injected inside each
+sandbox for scripts and is not a Cognition server setting. Docker receives this
+variable from Cognition; Kubernetes templates and Lambda MicroVM images must
+set it to the same configured sandbox workspace root.
+
+---
+
+## Durable Storage
+
+Builders select persistence and durable-file placement explicitly. Cognition
+does not infer a production mode or silently change backends after a failure.
+SQLite, in-memory state, and local files remain valid local/development choices.
+
+For a distributed topology, select PostgreSQL-compatible persistence and an
+S3-compatible durable-file backend:
+
+```bash
+COGNITION_PERSISTENCE_BACKEND=postgres
+COGNITION_PERSISTENCE_URI=postgresql+asyncpg://cognition@database/cognition
+COGNITION_DURABLE_FILE_BACKEND=s3
+COGNITION_S3_BUCKET=cognition
+COGNITION_S3_PREFIX=cognition
+COGNITION_S3_SCOPE_HMAC_KEY=replace-with-a-deployment-secret
+COGNITION_S3_REGION=us-east-1
+```
+
+Garage, MinIO, and similar deployments may also set:
+
+```bash
+COGNITION_S3_ENDPOINT_URL=http://garage:3900
+COGNITION_S3_FORCE_PATH_STYLE=true
+```
+
+S3 credentials come from boto3's standard workload, environment, shared-file,
+or instance-role provider chain. The scope HMAC key derives opaque object
+prefixes; it is not an S3 credential and must be stable for the lifetime of the
+stored data.
+
+| Environment variable | Default | Description |
+|---|---|---|
+| `COGNITION_DURABLE_FILE_BACKEND` | `local` | `local` or `s3` |
+| `COGNITION_S3_BUCKET` | — | Required when the selected backend is `s3` |
+| `COGNITION_S3_PREFIX` | `cognition` | Builder-owned bucket prefix |
+| `COGNITION_S3_SCOPE_HMAC_KEY` | — | Required key for opaque exact-scope prefixes |
+| `COGNITION_S3_ENDPOINT_URL` | AWS SDK default | Optional S3-compatible endpoint |
+| `COGNITION_S3_REGION` | AWS SDK default | Optional region |
+| `COGNITION_S3_FORCE_PATH_STYLE` | `false` | Enable for compatible stores that require path-style addressing |
+
+Skills are not stored by Cognition; builders mount them into the isolated
+sandbox workspace. The `/artifacts/`, `/files/`, `/memories/`, `/contracts/`, `/evals/`,
+and `/policies/` routes use database manifests and, when selected, immutable
+digest-addressed S3 bodies. Startup and `/ready` fail explicitly when a selected
+database or object store is unavailable.
 
 ---
 
@@ -294,8 +350,8 @@ Cognition ships four sandbox backends:
 |---|---|---|---|
 | `sandbox.backend` | `COGNITION_SANDBOX_BACKEND` | `local` | `local`, `docker`, `kubernetes`, or `aws_lambda_microvm` |
 | (environment only) | `COGNITION_ALLOW_UNSAFE_LOCAL_EXECUTION` | `false` | Explicitly allow the `local` backend to run commands as the Cognition host process. Use only for standalone development. |
-| (environment only) | `COGNITION_ALLOW_HOST_TOOLS` | `false` | Explicitly inject host-backed Browser, Search, and package-inspection tools. Use only for development deployments that accept host access. |
-| (environment only) | `COGNITION_ALLOW_API_PYTHON_TOOLS` | `false` | Explicitly allow API-registered Python tool code to be loaded by the runtime. Use only for trusted development or admin-only deployments. |
+| `mcp.outbound_transport_enabled` | `COGNITION_MCP_OUTBOUND_TRANSPORT_ENABLED` | `false` | Explicitly permit remote MCP transport for Agent-owned MCP servers. |
+| `mcp.allowed_origins` | `COGNITION_MCP_ALLOWED_ORIGINS` | `[]` | Deployment-approved MCP origins as `scheme://host[:port]`; paths remain Agent-owned server config. |
 
 Production deployments should select `docker`, `kubernetes`, or
 `aws_lambda_microvm`. The `local` backend is intentionally unsafe because model
@@ -488,7 +544,6 @@ Collector, not as a Cognition runtime setting. Configure the Collector's
 | YAML key | Environment variable | Default | Description |
 |---|---|---|---|
 | `security.protected_paths` | `COGNITION_PROTECTED_PATHS` | `[".cognition/"]` | Paths the agent cannot write to |
-| `security.trusted_tool_namespaces` | `COGNITION_TRUSTED_TOOL_NAMESPACES` | `[]` | Allowed Python namespaces for tool imports; empty = allow all |
 | `security.blocked_tools` | `COGNITION_BLOCKED_TOOLS` | `[]` | Deployment-wide tool names no agent can invoke; merged with per-agent `blocked_tools` and enforced by `ToolSecurityMiddleware` |
 | `security.a2a_enabled` | `COGNITION_A2A_ENABLED` | `true` | Enable/disable the A2A protocol adapter (`/.well-known/agent-card.json` + `/a2a/{agent_name}`) |
 | — | `COGNITION_A2A_MAX_RAW_PART_BYTES` | `10485760` | Maximum decoded size of one inbound A2A `raw` Part; oversized Parts are rejected before a model run starts |
@@ -545,7 +600,6 @@ These settings configure the default agent behaviour when no `AgentDefinition` o
 | YAML key | Description |
 |---|---|
 | `agent.memory` | List of file paths injected into the system prompt (e.g. `["AGENTS.md"]`) |
-| `agent.skills` | List of attached skill names (registry names, not paths) |
 | `agent.subagents` | List of subagent definitions |
 | `agent.interrupt_on` | Map of tool names to `true`/`false` for human-in-the-loop confirmation |
 | `agent.middleware` | List of middleware names or `{name: ..., **kwargs}` dicts |
@@ -580,35 +634,84 @@ If no provider is found at any tier, `LLMProviderConfigError` is raised with an 
 
 ---
 
-## MCP Remote Servers
+## Agent MCP Servers
 
-MCP servers can be configured via YAML or managed at runtime via `POST /mcp-servers`.
+Remote MCP servers are part of an Agent definition, are pinned with its
+configuration revision, and are not managed through a global server registry.
+Only remote HTTP/HTTPS endpoints are supported; raw transport headers and
+credentials are never stored in an Agent definition. See
+[Extending Agents](./extending-agents.md#6-mcp-tool-servers) for the complete
+configuration and authentication contract.
+
+Each server declares one authentication type: `none`, `mcp_oauth`,
+`workload_token_exchange`, or `static_bearer`. Workload exchange references an
+opaque profile under deployment-owned `mcp_auth_profiles`; static bearer reads
+a named environment variable and is supported but not recommended. Cognition
+does not infer a production or multi-tenant mode or enforce the builder's
+authentication-mode policy.
+
+Define workload exchange outside the Agent:
 
 ```yaml
-# .cognition/config.yaml
-mcp:
-  servers:
-    - name: my-tools
-      url: https://tools.example.com/sse
-      transport: sse        # or "streamable_http" (default: "sse")
-      enabled: true
-      headers:              # optional auth headers
-        Authorization: "Bearer ..."
+mcp_auth_profiles:
+  production_egress:
+    type: oauth_token_exchange
+    token_endpoint: https://identity.internal/token
+    subject_token_source: workload_identity
+    audience: canonical_server_uri
 ```
 
-| Field | Required | Default | Description |
-|---|---|---|---|
-| `name` | Yes | — | Unique identifier (1–100 chars) |
-| `url` | Yes | — | HTTP/HTTPS URL (stdio not supported) |
-| `transport` | No | `sse` | `sse` or `streamable_http` |
-| `enabled` | No | `true` | Whether to connect at startup |
-| `headers` | No | `{}` | HTTP headers sent with every request |
+Set `COGNITION_MCP_WORKLOAD_IDENTITY_TOKEN_FILE` to a projected, rotating
+workload token file. `COGNITION_MCP_WORKLOAD_IDENTITY_TOKEN` is an environment
+fallback when file projection is unavailable. Cognition rereads the projected
+file for each uncached exchange and caches only the short-lived exchanged token
+until its bounded expiry.
 
-Each server must be an HTTP/HTTPS SSE endpoint. Stdio-based MCP servers are not supported for security reasons.
+Token endpoints that require confidential-client authentication may add
+`client_auth: client_secret_basic`, `client_id`, and `client_secret_env` to the
+deployment profile. `client_secret_env` names an environment variable; its
+value never enters YAML, Agent configuration, persistence, or telemetry.
 
-Tools are namespaced by server name (e.g. `github-tools/create_pr`) to prevent collisions. The `tool_name_prefix=True` setting on `MultiServerMCPClient` is always active.
+Direct MCP OAuth uses deployment-owned client settings:
 
-MCP servers can also be managed at runtime via `POST/GET/PATCH/DELETE /mcp-servers`. See [Extending Agents](./extending-agents.md#6-mcp-tool-servers) for details.
+| Environment variable | Purpose |
+|---|---|
+| `COGNITION_MCP_OAUTH_ENCRYPTION_KEY` | Fernet key for encrypted token and dynamic-client state |
+| `COGNITION_MCP_OAUTH_REDIRECT_URI` | Builder callback URI registered with the authorization server |
+| `COGNITION_MCP_OAUTH_CLIENT_NAME` | OAuth client display name; defaults to `Cognition` |
+| `COGNITION_MCP_OAUTH_CLIENT_METADATA_URL` | Optional HTTPS client metadata document URL |
+| `COGNITION_MCP_OAUTH_TIMEOUT_SECONDS` | Short-lived authorization transaction timeout; defaults to 300 seconds |
+| `COGNITION_MCP_READINESS_TTL_SECONDS` | Freshness window for scoped MCP discovery observations; defaults to 300 seconds |
+
+Generate a key with `Fernet.generate_key()` from Python's `cryptography`
+package and inject it as a secret environment value. Rotating the key makes
+existing encrypted OAuth state inaccessible and requires reauthorization.
+
+The builder starts authorization with:
+
+```text
+POST /mcp/oauth/agents/{agent_name}/servers/{server_alias}/authorizations
+```
+
+Cognition returns the SDK-generated authorization URL and an opaque flow ID.
+The configured redirect URI belongs to the builder's user-facing callback. It
+relays the authorization response to Cognition using the same authoritative
+scope headers:
+
+```http
+POST /mcp/oauth/callback
+Content-Type: application/json
+
+{"code":"...","state":"..."}
+```
+
+The code is deliberately accepted only in the POST body, not a Cognition URL,
+so it is not exposed through normal access-log query strings. Pending PKCE
+transactions are expiry-bounded process memory; tokens and dynamically
+registered client secrets are encrypted in the configured database. Builders
+running multiple Cognition replicas must keep the three short-lived handoff
+operations for a flow on the initiating replica. Normal authenticated MCP use
+does not require affinity because token state is durable and shared.
 
 ---
 
@@ -643,8 +746,6 @@ persistence:
 agent:
   memory:
     - "AGENTS.md"
-  skills:
-    - "my-skill-name"
 ```
 
 ```bash
@@ -686,10 +787,6 @@ observability:
 mlflow:
   enabled: true
   tracking_uri: http://mlflow:5000
-
-security:
-  trusted_tool_namespaces:
-    - "myapp.tools"
 
 scoping:
   enabled: true

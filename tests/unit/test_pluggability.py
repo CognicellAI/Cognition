@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
+from pathlib import Path
 from typing import Any, cast
 from unittest.mock import AsyncMock, patch
 
@@ -53,7 +54,6 @@ async def test_create_cognition_agent_pluggability():
         params = CognitionAgentParams(
             project_path=".",
             memory=["TEST_MEMORY.md"],
-            skills=["clean-code"],
             subagents=[{"name": "test-subagent", "system_prompt": "..."}],
             interrupt_on={"execute": {"allowed_decisions": ["approve", "reject"]}},
             permissions=[
@@ -68,7 +68,7 @@ async def test_create_cognition_agent_pluggability():
 
         args, kwargs = mock_create.call_args
         assert kwargs["memory"] == ["TEST_MEMORY.md"]
-        assert kwargs["skills"] == ["/skills/api/"]
+        assert kwargs["skills"] == [str(Path(".").resolve() / "skills")]
         assert len(kwargs["subagents"]) == 1
         sa = kwargs["subagents"][0]
         assert sa["name"] == "test-subagent"

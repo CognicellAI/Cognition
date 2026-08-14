@@ -13,6 +13,7 @@ from pydantic import AnyHttpUrl, BaseModel, ConfigDict, Field, model_validator
 
 from server.app.agent.definition import (
     A2AConfig,
+    AgentMcpConfig,
     AsyncSubagentConfig,
     ContextPolicy,
     FilesystemPermissionConfig,
@@ -698,7 +699,6 @@ class GlobalAgentDefaultsResponse(BaseModel):
     """Global agent defaults exposed by the ConfigRegistry API."""
 
     memory: list[str] = Field(default_factory=list)
-    skills: list[str] = Field(default_factory=list)
     subagents: list[dict[str, Any]] = Field(default_factory=list)
     async_subagents: list[AsyncSubagentConfig] = Field(default_factory=list)
     interrupt_on: dict[str, Any] = Field(default_factory=dict)
@@ -707,14 +707,12 @@ class GlobalAgentDefaultsResponse(BaseModel):
     tool_token_limit_before_evict: int | None = None
     context_policy: ContextPolicy | None = None
     recursion_limit: int
-    mcp_servers: dict[str, Any] = Field(default_factory=dict)
 
 
 class GlobalAgentDefaultsUpdate(BaseModel):
     """Partial update model for global agent defaults."""
 
     memory: list[str] | None = None
-    skills: list[str] | None = None
     subagents: list[dict[str, Any]] | None = None
     async_subagents: list[AsyncSubagentConfig] | None = None
     interrupt_on: dict[str, HumanInTheLoopConfig] | None = None
@@ -723,51 +721,6 @@ class GlobalAgentDefaultsUpdate(BaseModel):
     tool_token_limit_before_evict: int | None = None
     context_policy: ContextPolicy | None = None
     recursion_limit: int | None = None
-    mcp_servers: dict[str, Any] | None = None
-
-
-class McpServerCreate(BaseModel):
-    """Request to register a remote MCP server."""
-
-    name: str = Field(..., min_length=1, max_length=100)
-    url: str = Field(..., min_length=1)
-    headers: dict[str, str] = Field(default_factory=dict)
-    enabled: bool = True
-    transport: Literal["sse", "streamable_http"] = "sse"
-    scope: dict[str, str] | None = None
-
-
-class McpServerUpdate(BaseModel):
-    """Partial update request for a remote MCP server."""
-
-    url: str | None = Field(default=None, min_length=1)
-    headers: dict[str, str] | None = None
-    enabled: bool | None = None
-    transport: Literal["sse", "streamable_http"] | None = None
-
-
-class McpServerResponse(BaseModel):
-    """Registered remote MCP server response.
-
-    Headers are intentionally redacted from responses — they may contain
-    bearer tokens or other sensitive values. Builders who need to view or
-    rotate header values should manage them through their own infrastructure.
-    """
-
-    name: str
-    url: str
-    headers: dict[str, str] = Field(default_factory=dict)
-    enabled: bool
-    transport: Literal["sse", "streamable_http"]
-    scope: dict[str, str] = Field(default_factory=dict)
-    source: Literal["file", "api"]
-
-
-class McpServerList(BaseModel):
-    """List of remote MCP servers visible in scope."""
-
-    servers: list[McpServerResponse]
-    count: int
 
 
 class SandboxProfileCreate(BaseModel):
@@ -936,13 +889,7 @@ class AgentResponse(BaseModel):
             "Experimental remote Agent Protocol async subagents exposed as background task tools"
         ),
     )
-    # ISSUE-009: Added tools and skills for better agent introspection
-    tools: list[str] = Field(
-        default_factory=list, description="Tool paths this agent has access to"
-    )
-    skills: list[str] = Field(
-        default_factory=list, description="Skill directories this agent can use"
-    )
+    mcp: AgentMcpConfig = Field(default_factory=AgentMcpConfig)
     system_prompt: str | None = Field(None, description="Agent's system prompt")
 
 
@@ -973,38 +920,26 @@ class AgentList(BaseModel):
     next_offset: int | None = None
 
 
-# ============================================================================
-# Tool Models
-# ============================================================================
+class McpServerReadinessResponse(BaseModel):
+    """Freshness-qualified MCP discovery observation."""
+
+    server_alias: str
+    required: bool
+    status: Literal["ready", "unavailable", "unknown"]
+    observed_at: datetime | None = None
+    fresh_until: datetime | None = None
+    tool_count: int = 0
+    schema_digest: str | None = None
+    failure_category: str | None = None
+    authorization_truth: Literal[False] = False
 
 
-class ToolResponse(BaseModel):
-    """Tool information for API responses."""
+class McpReadinessResponse(BaseModel):
+    """Scoped MCP readiness for the current Agent revision."""
 
-    name: str = Field(..., description="Tool name")
-    source_type: str = Field(
-        ...,
-        description=(
-            "Origin of the tool: 'builtin' (built-in), 'file' (file-discovered), "
-            "'api_code' (API-registered Python source), 'api_path' (API-registered module path)"
-        ),
-    )
-    module: str | None = Field(None, description="Module path if loaded from a module path")
-    description: str | None = Field(None, description="Tool description")
-    enabled: bool = Field(True, description="Whether the tool is enabled")
-    interrupt_on: bool = Field(
-        default=False,
-        description="Whether this tool is marked as requiring approval by default",
-    )
-    # Back-compat alias kept for existing consumers
-    source: str = Field(..., description="Deprecated — use source_type")
-
-
-class ToolList(BaseModel):
-    """List of tools response."""
-
-    tools: list[ToolResponse] = Field(default_factory=list, description="List of registered tools")
-    count: int = Field(0, description="Total number of tools")
+    agent_name: str
+    agent_revision: int = Field(ge=1)
+    servers: list[McpServerReadinessResponse] = Field(default_factory=list)
 
 
 # ============================================================================
@@ -1044,62 +979,6 @@ class ModelList(BaseModel):
     """List of available models."""
 
     models: list[ModelInfo] = Field(default_factory=list, description="List of available models")
-
-
-# ============================================================================
-# Skill Models
-# ============================================================================
-
-
-class SkillCreate(BaseModel):
-    """Request to create or replace a skill."""
-
-    name: str = Field(..., min_length=1, max_length=100, description="Skill identifier")
-    path: str | None = Field(
-        default=None,
-        min_length=1,
-        description="Filesystem path to skill directory or SKILL.md. Auto-generated if content is provided.",
-    )
-    enabled: bool = Field(default=True, description="Whether this skill is active")
-    description: str | None = Field(default=None, description="Short description")
-    content: str | None = Field(
-        default=None,
-        description="Full SKILL.md content (YAML frontmatter + markdown body). If provided, path is auto-generated.",
-    )
-    scope: dict[str, str] = Field(default_factory=dict, description="Scope (empty = global)")
-
-
-class SkillUpdate(BaseModel):
-    """Request to partially update a skill."""
-
-    path: str | None = Field(default=None)
-    enabled: bool | None = Field(default=None)
-    description: str | None = Field(default=None)
-    content: str | None = Field(
-        default=None, description="Full SKILL.md content (YAML frontmatter + markdown body)"
-    )
-    scope: dict[str, str] | None = Field(default=None)
-
-
-class SkillResponse(BaseModel):
-    """Skill information for API responses."""
-
-    name: str
-    path: str
-    enabled: bool
-    description: str | None = None
-    content: str | None = Field(
-        default=None, description="Full SKILL.md content (YAML frontmatter + markdown body)"
-    )
-    scope: dict[str, str] = Field(default_factory=dict)
-    source: str = "api"
-
-
-class SkillList(BaseModel):
-    """List of skills response."""
-
-    skills: list[SkillResponse] = Field(default_factory=list)
-    count: int = 0
 
 
 # ============================================================================
@@ -1332,8 +1211,6 @@ class AgentCreate(BaseModel):
         default_factory=A2AConfig,
         description="A2A exposure and public Agent Card presentation",
     )
-    tools: list[str] = Field(default_factory=list)
-    skills: list[str] = Field(default_factory=list)
     memory: list[str] = Field(default_factory=list)
     interrupt_on: dict[str, HumanInTheLoopConfig] = Field(default_factory=dict)
     permissions: list[FilesystemPermissionConfig] = Field(default_factory=list)
@@ -1359,6 +1236,7 @@ class AgentCreate(BaseModel):
         description="Trusted IAM role ARN assigned to this agent's sandbox runtime.",
     )
     middleware: list[Any] = Field(default_factory=list)
+    mcp: AgentMcpConfig = Field(default_factory=AgentMcpConfig)
     subagents: list[dict[str, Any]] = Field(default_factory=list)
     async_subagents: list[AsyncSubagentConfig] = Field(default_factory=list)
     scope: dict[str, str] = Field(default_factory=dict)
@@ -1383,8 +1261,6 @@ class AgentUpdate(BaseModel):
         default=None,
         description="A2A exposure and public Agent Card presentation; null resets defaults",
     )
-    tools: list[str] | None = None
-    skills: list[str] | None = None
     memory: list[str] | None = None
     interrupt_on: dict[str, HumanInTheLoopConfig] | None = None
     permissions: list[FilesystemPermissionConfig] | None = None
@@ -1404,42 +1280,4 @@ class AgentUpdate(BaseModel):
     sandbox_profile: str | None = None
     sandbox_execution_role_arn: str | None = None
     middleware: list[Any] | None = None
-
-
-# ============================================================================
-# Tool CRUD Models
-# ============================================================================
-
-
-class ToolCreate(BaseModel):
-    """Request to register a tool in the ConfigRegistry.
-
-    Exactly one of ``path`` or ``code`` must be provided:
-
-    - ``path``: Python module path (e.g. ``mypackage.tools.jira``) or file
-      path. The module must be importable by the Cognition server process.
-    - ``code``: Full Python source code. Stored in the DB and executed at
-      runtime via ``exec()``. Suitable for builder applications that cannot
-      access the server filesystem.
-
-    Security note: Tool code executes with full Python privileges. This
-    endpoint should be restricted to authorized administrators.
-    """
-
-    name: str = Field(..., min_length=1, max_length=100, description="Tool identifier")
-    path: str | None = Field(default=None, description="Module or file path for the tool")
-    code: str | None = Field(default=None, description="Python source code to execute at runtime")
-    enabled: bool = Field(default=True)
-    description: str | None = Field(default=None)
-    interrupt_on: bool = Field(default=False)
-    scope: dict[str, str] = Field(default_factory=dict)
-
-
-class ToolUpdate(BaseModel):
-    """Request to partially update a tool registration."""
-
-    path: str | None = Field(default=None)
-    code: str | None = Field(default=None)
-    enabled: bool | None = Field(default=None)
-    description: str | None = Field(default=None)
-    interrupt_on: bool | None = Field(default=None)
+    mcp: AgentMcpConfig | None = None

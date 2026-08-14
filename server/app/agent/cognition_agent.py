@@ -35,7 +35,7 @@ from deepagents import create_deep_agent as _create_deep_agent
 
 logger = structlog.get_logger(__name__)
 
-from server.app.agent.mcp_client import McpServerConfig, create_mcp_client  # noqa: E402
+from server.app.agent.mcp_client import McpServerConfig, load_mcp_tools_per_server  # noqa: E402
 from server.app.agent.middleware import (  # noqa: E402
     CognitionObservabilityMiddleware,
     CognitionStreamingMiddleware,
@@ -46,7 +46,6 @@ from server.app.agent.middleware import (  # noqa: E402
 )
 from server.app.agent.prompts import SYSTEM_PROMPT  # noqa: E402
 from server.app.agent.sandbox_backend import create_sandbox_backend  # noqa: E402
-from server.app.agent.tools import BrowserTool, InspectPackageTool, SearchTool  # noqa: E402
 from server.app.observability import (  # noqa: E402
     RUNTIME_CACHE_EVICTIONS_TOTAL,
     RUNTIME_CACHE_LOOKUPS_TOTAL,
@@ -56,7 +55,7 @@ from server.app.observability import (  # noqa: E402
     STRICT_EXECUTION_REJECTIONS_TOTAL,
 )
 from server.app.settings import Settings, get_settings  # noqa: E402
-from server.app.storage.config_models import SandboxProfile, SkillDefinition  # noqa: E402
+from server.app.storage.config_models import SandboxProfile  # noqa: E402
 from server.app.storage.config_store import ConfigStore  # noqa: E402
 
 DeepAgentResponseFormat = Any
@@ -79,6 +78,7 @@ class CognitionContext:
         thread_id: LangGraph checkpoint thread id, when available.
         agent_name: Agent definition bound to the session, when available.
         metadata: Builder-provided session metadata. This is not a secret channel.
+        request_deadline: Absolute Unix-millisecond execution deadline, when configured.
     """
 
     effective_scope: dict[str, str] = field(default_factory=dict)
@@ -86,6 +86,7 @@ class CognitionContext:
     thread_id: str | None = None
     agent_name: str | None = None
     metadata: dict[str, str] = field(default_factory=dict)
+    request_deadline: int | None = None
     # Process-local invocation state. This field is supplied for every run and
     # is intentionally absent from durable checkpoints and manifests.
     sandbox_backend: Any | None = field(default=None, repr=False)
@@ -99,6 +100,7 @@ class CognitionContext:
         thread_id: str | None = None,
         agent_name: str | None = None,
         metadata: dict[str, str] | None = None,
+        request_deadline: int | None = None,
         sandbox_backend: Any | None = None,
     ) -> CognitionContext:
         return cls(
@@ -107,6 +109,7 @@ class CognitionContext:
             thread_id=thread_id,
             agent_name=agent_name,
             metadata=dict(metadata or {}),
+            request_deadline=request_deadline,
             sandbox_backend=sandbox_backend,
         )
 
@@ -126,7 +129,6 @@ class RuntimeContext:
     store_type: str
     system_prompt: str
     memory: tuple[str, ...]
-    skills: tuple[str, ...]
     subagent_count: int
     async_subagents: tuple[tuple[str, str, str, str], ...]
     interrupt_on: tuple[tuple[str, str], ...]
@@ -154,7 +156,6 @@ class RuntimeContext:
         store: Any,
         system_prompt: str | None,
         memory: Sequence[str] | None,
-        skills: Sequence[str] | None,
         subagents: Sequence[Any] | None,
         async_subagents: Sequence[Any] | None,
         interrupt_on: Mapping[str, Any] | None,
@@ -182,7 +183,6 @@ class RuntimeContext:
             store_type=store.__class__.__name__ if store else "None",
             system_prompt=system_prompt or "default",
             memory=tuple(sorted(memory)) if memory else (),
-            skills=tuple(sorted(skills)) if skills else (),
             subagent_count=len(subagents) if subagents else 0,
             async_subagents=_async_subagents_cache_key(async_subagents),
             interrupt_on=_mapping_cache_key(interrupt_on),
@@ -448,7 +448,6 @@ class CognitionAgentParams:
     checkpointer: Any = None
     system_prompt: str | None = None
     memory: Sequence[str] | None = None
-    skills: Sequence[str] | None = None
     subagents: Sequence[Any] | None = None
     async_subagents: Sequence[Any] | None = None
     interrupt_on: Mapping[str, Any] | None = None
@@ -462,13 +461,14 @@ class CognitionAgentParams:
     tools: Sequence[Any] | None = None
     settings: Settings | None = None
     mcp_configs: Sequence[McpServerConfig] | None = None
+    mcp_oauth_repository: Any | None = None
+    mcp_readiness_repository: Any | None = None
     scope: dict[str, str] | None = None
     config_store: ConfigStore | None = None
     sandbox_profile: str | None = None
     sandbox_execution_role_arn: str | None = None
     model_cache_key: str | None = None
     manifest_digest: str | None = None
-    pinned_skills: dict[str, SkillDefinition] | None = None
     pinned_sandbox_profile_config: SandboxProfile | None = None
 
 
@@ -510,6 +510,7 @@ def _create_sandbox(
             docker_memory_limit=settings.docker_memory_limit,
             docker_cpu_limit=settings.docker_cpu_limit,
             docker_host_workspace="",
+            sandbox_workspace_root=settings.sandbox_workspace_root,
             k8s_template=settings.k8s_sandbox_template,
             k8s_namespace=settings.k8s_sandbox_namespace,
             k8s_router_url=settings.k8s_sandbox_router_url,
@@ -621,34 +622,6 @@ async def create_cognition_agent(params: CognitionAgentParams) -> CognitionAgent
         except RuntimeError:
             config_store = None
 
-    runtime_ctx = RuntimeContext.from_params(
-        project_path=project_path,
-        model=getattr(params.model, "model_name", None)
-        or getattr(params.model, "model_id", None)
-        or getattr(params.model, "model", None)
-        or str(params.model),
-        store=params.store,
-        system_prompt=params.system_prompt,
-        memory=params.memory,
-        skills=params.skills,
-        subagents=params.subagents,
-        async_subagents=params.async_subagents,
-        interrupt_on=params.interrupt_on,
-        permissions=params.permissions,
-        response_format=params.response_format,
-        tool_token_limit_before_evict=params.tool_token_limit_before_evict,
-        context_policy=params.context_policy,
-        excluded_tools=params.excluded_tools,
-        blocked_tools=params.blocked_tools,
-        middleware=params.middleware,
-        tools=params.tools,
-        settings=settings,
-        scope=params.scope,
-        sandbox_profile=params.sandbox_profile,
-        sandbox_execution_role_arn=params.sandbox_execution_role_arn,
-        model_cache_key=params.model_cache_key,
-        manifest_digest=params.manifest_digest,
-    )
     resolved_sandbox_profile = params.sandbox_profile or settings.aws_lambda_microvm_default_profile
     sandbox_profile_config = params.pinned_sandbox_profile_config
     if sandbox_profile_config is None:
@@ -658,19 +631,6 @@ async def create_cognition_agent(params: CognitionAgentParams) -> CognitionAgent
             profile_name=resolved_sandbox_profile,
             scope=params.scope,
         )
-
-    cached_agent = get_cached_agent(runtime_ctx)
-    if cached_agent is not None:
-        sandbox_backend = _create_sandbox(
-            project_path,
-            sandbox_id,
-            settings,
-            k8s_labels,
-            sandbox_profile=resolved_sandbox_profile,
-            sandbox_execution_role_arn=params.sandbox_execution_role_arn,
-            sandbox_profile_config=sandbox_profile_config,
-        )
-        return CognitionAgentResult(agent=cached_agent, sandbox_backend=sandbox_backend)
 
     sandbox_backend = _create_sandbox(
         project_path,
@@ -698,34 +658,20 @@ async def create_cognition_agent(params: CognitionAgentParams) -> CognitionAgent
         defaults = await _defaults()
         agent_memory = defaults.memory if defaults else ["AGENTS.md"]
 
-    if params.skills is not None:
-        attached_skill_names = list(params.skills)
-    else:
-        defaults = await _defaults()
-        attached_skill_names = defaults.skills if defaults else []
-
-    agent_skills = ["/skills/api/"] if attached_skill_names else []
+    agent_skills = [sandbox_backend.skills_root]
 
     routes: dict[str, Any] = {}
     if config_store is not None:
         from server.app.agent.artifacts_backend import ArtifactBackend
-        from server.app.agent.skills_backend import ConfigRegistrySkillsBackend
         from server.app.api.dependencies import get_artifact_store
 
         reg = getattr(config_store, "config_registry", None)
         if reg is not None:
-            db_skills_backend = ConfigRegistrySkillsBackend(
-                registry=reg,
-                scope=params.scope,
-                allowed_skill_names=attached_skill_names,
-                pinned_skills=params.pinned_skills,
-            )
             try:
                 artifact_store = get_artifact_store()
             except RuntimeError:
                 artifact_store = None
 
-            routes = {"/skills/api/": db_skills_backend}
             if artifact_store is not None:
                 artifact_backend = ArtifactBackend(
                     artifact_store=artifact_store,
@@ -735,6 +681,7 @@ async def create_cognition_agent(params: CognitionAgentParams) -> CognitionAgent
                     {
                         "/scratch/": artifact_backend,
                         "/artifacts/": artifact_backend,
+                        "/files/": artifact_backend,
                         "/contracts/": artifact_backend,
                         "/evals/": artifact_backend,
                         "/memories/": artifact_backend,
@@ -742,23 +689,16 @@ async def create_cognition_agent(params: CognitionAgentParams) -> CognitionAgent
                     }
                 )
 
-    def runtime_backend(tool_runtime: Any) -> Any:
-        """Resolve only the current invocation's assigned sandbox."""
-        context = getattr(tool_runtime, "context", None)
-        selected = getattr(context, "sandbox_backend", None)
-        if selected is None:
-            STRICT_EXECUTION_REJECTIONS_TOTAL.labels(reason="missing_sandbox").inc()
-            raise RuntimeError(
-                "The current run has no assigned sandbox backend; refusing "
-                "host or stale-sandbox fallback"
-            )
-        if routes:
-            from deepagents.backends.composite import CompositeBackend
+    # Deep Agents 0.7 deliberately accepts only initialized backend instances,
+    # not runtime factories. A compiled graph therefore captures its sandbox;
+    # caching that graph would cross a session's execution boundary. Build each
+    # run with its assigned sandbox instead of retaining a stale graph.
+    if routes:
+        from deepagents.backends.composite import CompositeBackend
 
-            return CompositeBackend(default=selected, routes=routes)
-        return selected
-
-    backend = runtime_backend
+        backend = CompositeBackend(default=sandbox_backend, routes=routes)
+    else:
+        backend = sandbox_backend
 
     if params.subagents is not None:
         raw_subagents = list(params.subagents)
@@ -827,41 +767,30 @@ async def create_cognition_agent(params: CognitionAgentParams) -> CognitionAgent
         }
     )
 
-    if params.tools and not settings.allow_api_python_tools:
-        STRICT_EXECUTION_REJECTIONS_TOTAL.labels(reason="api_python_tools").inc()
-        raise RuntimeError(
-            "Attached Python tools are disabled in strict execution mode. "
-            "Use sandboxed skills/scripts or explicitly enable development tool loading."
-        )
     agent_tools = list(params.tools) if params.tools else []
-    if settings.allow_host_tools:
-        logger.warning("Unsafe host tools enabled for development")
-        agent_tools.extend([BrowserTool(), SearchTool(), InspectPackageTool()])
 
     if params.mcp_configs:
         from server.app.agent.mcp_client import (
             _build_mcp_callbacks,
-            _build_mcp_interceptors,
         )
 
-        enabled_configs = [c for c in params.mcp_configs if c.enabled]
-        if enabled_configs:
-            if not settings.allow_host_tools:
-                STRICT_EXECUTION_REJECTIONS_TOTAL.labels(reason="host_mcp_tools").inc()
+        if params.mcp_configs:
+            if not settings.mcp_outbound_transport_enabled:
+                STRICT_EXECUTION_REJECTIONS_TOTAL.labels(reason="mcp_outbound_transport").inc()
                 raise RuntimeError(
-                    "Host-side MCP tools are disabled in strict execution mode. "
-                    "Route external operations through sandboxed skills or explicitly "
-                    "enable development host tools."
+                    "Outbound MCP transport is disabled. Set "
+                    "COGNITION_MCP_OUTBOUND_TRANSPORT_ENABLED=true and configure "
+                    "COGNITION_MCP_ALLOWED_ORIGINS for approved MCP origins."
                 )
             try:
                 mcp_callbacks = _build_mcp_callbacks()
-                mcp_interceptors = _build_mcp_interceptors(params.scope)
-                mcp_client = create_mcp_client(
-                    enabled_configs,
+                mcp_tools = await load_mcp_tools_per_server(
+                    params.mcp_configs,
+                    settings,
                     callbacks=mcp_callbacks,
-                    tool_interceptors=mcp_interceptors,
+                    oauth_repository=params.mcp_oauth_repository,
+                    readiness_repository=params.mcp_readiness_repository,
                 )
-                mcp_tools = await mcp_client.get_tools()
                 agent_tools.extend(mcp_tools)
                 logger.info("MCP tools loaded", count=len(mcp_tools))
             except Exception as e:
@@ -892,23 +821,12 @@ async def create_cognition_agent(params: CognitionAgentParams) -> CognitionAgent
         ]
     )
 
-    available_tools = {
-        str(getattr(tool, "name", "")): tool for tool in agent_tools if getattr(tool, "name", None)
-    }
     agent_subagents: list[Any] = []
     for subagent in raw_subagents:
         if not isinstance(subagent, dict):
             agent_subagents.append(subagent)
             continue
         spec = {**subagent, "description": subagent.get("description", "")}
-        declared_tool_names = spec.pop("_declared_tool_names", None)
-        if declared_tool_names is not None:
-            # An explicit subagent never inherits a broader parent custom-tool
-            # set. Unknown names resolve to no capability and are rejected
-            # earlier by strict runtime tool loading.
-            spec["tools"] = [
-                available_tools[name] for name in declared_tool_names if name in available_tools
-            ]
         agent_subagents.append(spec)
     agent_subagents.extend(_resolve_async_subagents(raw_async_subagents))
 
@@ -949,7 +867,6 @@ async def create_cognition_agent(params: CognitionAgentParams) -> CognitionAgent
     agent = cast(Any, create_deep_agent)(**create_kwargs)
 
     result = CognitionAgentResult(agent=agent, sandbox_backend=sandbox_backend)
-    cache_agent(runtime_ctx, agent)
 
     return result
 

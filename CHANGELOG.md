@@ -9,6 +9,83 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.14.0] — 2026-08-14
+
+### Changed
+
+- Replaced Cognition-owned inline Skill bundles and the custom Skills backend
+  with Deep Agents native discovery from the builder-mounted sandbox workspace
+  `skills/` directory.
+- Added the explicit remote sandbox workspace-root contract and limited
+  S3-compatible storage to durable artifact/file bodies behind authoritative
+  database manifests.
+
+## [0.14.0-rc.3] — 2026-08-04
+
+### Fixed
+
+- Aligned the Agent-owned Skills backend with the current Deep Agents backend
+  protocol so embedded Skill bundles are discovered and loaded through the
+  pinned Agent revision.
+- Added concurrent two-server workload token-exchange coverage to verify that
+  one deployment profile obtains and uses distinct exact-audience tokens for
+  each canonical MCP server.
+
+## [0.14.0-rc.2] — 2026-08-03
+
+### Highlights
+
+- Updated Cognition to Deep Agents 0.7 and aligned Agent Skills, MCP tools,
+  sandbox binding, and backend composition with Deep Agents-native extension
+  points.
+- Made Skills and MCP server declarations part of immutable, scope-owned Agent
+  revisions so every run executes against one pinned capability snapshot.
+- Added four standards-oriented MCP authentication modes: anonymous transport,
+  standard MCP OAuth, workload token exchange, and static bearer credentials.
+- Added S3-compatible durable storage for file and artifact bodies while keeping
+  authoritative metadata and runtime state in the configured database.
+
+### Breaking Changes
+
+- Removed the global MCP server registry and its API. MCP servers are now
+  declared on Agent definitions, with no compatibility layer.
+- Removed the standalone Skill registry and API. Skill bundles are now stored
+  in complete Agent revisions, with no compatibility layer.
+- Production deployments no longer implicitly fall back to host-local durable
+  storage. Builders must configure durable database and S3-compatible storage;
+  SQLite, in-memory storage, and local filesystems remain supported deployment
+  choices when explicitly selected.
+- Raw MCP authorization headers and provider credentials are not part of Agent
+  configuration. Authentication behavior is selected by typed server auth
+  configuration and deployment-owned profiles.
+
+### Added
+
+- Added direct MCP OAuth discovery and authorization handoff, encrypted and
+  scope-partitioned OAuth token persistence, refresh handling, and canonical
+  server-resource isolation.
+- Added workload token exchange using ambient workload identity, exact
+  audience-bound tokens, trusted model-invisible runtime context, and
+  builder-controlled live gateway authorization.
+- Added static bearer authentication as a supported but not recommended MCP
+  transport option for deployments that require it.
+- Added per-server MCP discovery, canonical tool identities, required and
+  optional server failure semantics, and durable scope-aware readiness
+  observations with freshness state.
+- Added digest-addressed S3 object publication, read-after-write verification,
+  persisted SHA-256 and size metadata, and checksum verification on every read.
+- Added startup and readiness verification for the selected S3-compatible
+  backend, including Garage-backed integration coverage.
+
+### Security
+
+- Updated vulnerable transitive and direct dependencies, including MCP,
+  GitPython, Pillow, pyasn1, Click, and langgraph-checkpoint, and verified the
+  resolved project environment with `pip-audit`.
+- Kept MCP credentials, tokens, authorization headers, scopes, tool arguments,
+  and results out of persisted Agent configuration and bounded their exposure
+  in telemetry and readiness projections.
+
 ## [0.13.1] — 2026-07-29
 
 ### Added

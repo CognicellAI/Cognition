@@ -4,24 +4,20 @@ from server.app.api.routes import (
     agents,
     capabilities,
     config,
-    mcp_servers,
+    mcp_oauth,
     messages,
     models,
     sandbox_profiles,
     sessions,
-    skills,
-    tools,
 )
 
 __all__ = [
     "agents",
     "capabilities",
     "config",
-    "mcp_servers",
     "messages",
+    "mcp_oauth",
     "models",
     "sandbox_profiles",
     "sessions",
-    "skills",
-    "tools",
 ]

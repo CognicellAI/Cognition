@@ -2,9 +2,8 @@
 
 from __future__ import annotations
 
-from types import SimpleNamespace
 from typing import Any
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import HTTPException
@@ -15,16 +14,12 @@ from server.app.agent.cognition_agent import (
     create_cognition_agent,
 )
 from server.app.agent.mcp_client import McpServerConfig
-from server.app.agent.resolver import RuntimeResolver
 from server.app.agent.sandbox_backend import CognitionDockerSandboxBackend
 from server.app.api.routes.messages import _approved_callback_origin
 from server.app.settings import Settings
 from server.app.storage.config_models import (
     GlobalAgentDefaults,
-    ToolRegistration,
 )
-from server.app.storage.config_registry import MemoryConfigRegistry
-from server.app.storage.config_store import DefaultConfigStore
 
 
 class _DefaultsOnlyStore:
@@ -68,13 +63,12 @@ def _strict_agent_params(tmp_path, **overrides: Any) -> CognitionAgentParams:
             tmp_path,
             sandbox_backend="local",
             unsafe_local_execution=True,
-            allow_host_tools=False,
-            allow_api_python_tools=False,
+            mcp_outbound_transport_enabled=False,
+            mcp_allowed_origins=[],
         ),
         "config_store": _DefaultsOnlyStore(),
         "system_prompt": "Strict runtime.",
         "memory": [],
-        "skills": [],
         "subagents": [],
         "async_subagents": [],
         "interrupt_on": {},
@@ -96,18 +90,7 @@ async def test_local_execution_fails_closed_by_default(tmp_path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_attached_python_tools_are_rejected_in_strict_mode(tmp_path) -> None:
-    metric = _Metric()
-    with (
-        patch("server.app.agent.cognition_agent.STRICT_EXECUTION_REJECTIONS_TOTAL", metric),
-        pytest.raises(RuntimeError, match="Attached Python tools are disabled"),
-    ):
-        await create_cognition_agent(_strict_agent_params(tmp_path, tools=[lambda: None]))
-    assert metric.labels_seen == [{"reason": "api_python_tools"}]
-
-
-@pytest.mark.asyncio
-async def test_host_side_mcp_is_rejected_in_strict_mode(tmp_path) -> None:
+async def test_mcp_is_rejected_when_outbound_transport_disabled(tmp_path) -> None:
     config = McpServerConfig(
         name="host-mcp",
         url="https://mcp.example.test/sse",
@@ -115,10 +98,10 @@ async def test_host_side_mcp_is_rejected_in_strict_mode(tmp_path) -> None:
     metric = _Metric()
     with (
         patch("server.app.agent.cognition_agent.STRICT_EXECUTION_REJECTIONS_TOTAL", metric),
-        pytest.raises(RuntimeError, match="Host-side MCP tools are disabled"),
+        pytest.raises(RuntimeError, match="Outbound MCP transport is disabled"),
     ):
         await create_cognition_agent(_strict_agent_params(tmp_path, mcp_configs=[config]))
-    assert metric.labels_seen == [{"reason": "host_mcp_tools"}]
+    assert metric.labels_seen == [{"reason": "mcp_outbound_transport"}]
 
 
 @pytest.mark.asyncio
@@ -137,19 +120,19 @@ async def test_strict_agent_does_not_inject_host_browser_search_or_inspection(
 
 
 @pytest.mark.asyncio
-async def test_cached_graph_resolves_each_runs_current_sandbox_dynamically(
+async def test_deep_agents_v07_graph_is_not_cached_across_sandboxed_runs(
     tmp_path,
 ) -> None:
     clear_agent_cache()
-    first_sandbox = object()
-    second_sandbox = object()
+    first_sandbox = MagicMock(skills_root="/workspace/skills")
+    second_sandbox = MagicMock(skills_root="/workspace/skills")
     graph = object()
     settings = _settings(
         tmp_path,
         sandbox_backend="local",
         unsafe_local_execution=True,
-        allow_host_tools=False,
-        allow_api_python_tools=False,
+        mcp_outbound_transport_enabled=False,
+        mcp_allowed_origins=[],
     )
     with (
         patch(
@@ -176,52 +159,12 @@ async def test_cached_graph_resolves_each_runs_current_sandbox_dynamically(
             )
         )
 
-    assert create.call_count == 1
-    assert first.agent is second.agent is graph
-    backend_factory = create.call_args.kwargs["backend"]
-    first_context = SimpleNamespace(sandbox_backend=first.sandbox_backend)
-    second_context = SimpleNamespace(sandbox_backend=second.sandbox_backend)
-    assert backend_factory(SimpleNamespace(context=first_context)) is first_sandbox
-    assert backend_factory(SimpleNamespace(context=second_context)) is second_sandbox
-    with pytest.raises(RuntimeError, match="no assigned sandbox"):
-        backend_factory(SimpleNamespace(context=SimpleNamespace()))
+    assert create.call_count == 2
+    assert first.agent is graph
+    assert second.agent is graph
+    assert create.call_args_list[0].kwargs["backend"] is first_sandbox
+    assert create.call_args_list[1].kwargs["backend"] is second_sandbox
     clear_agent_cache()
-
-
-@pytest.mark.asyncio
-async def test_explicit_empty_agent_tool_list_does_not_expand_to_registry_tools(
-    tmp_path,
-) -> None:
-    registry = MemoryConfigRegistry()
-    store = DefaultConfigStore(registry, workspace_path=tmp_path)
-    await store.upsert_tool(
-        ToolRegistration(
-            name="host-python",
-            code="def host_python(): return 'unsafe'",
-            scope={"tenant": "acme"},
-            source="api",
-        )
-    )
-    resolver = RuntimeResolver(
-        store,
-        _settings(
-            tmp_path,
-            allow_api_python_tools=False,
-        ),
-    )
-
-    assert (
-        await resolver.build_tools(
-            {"tenant": "acme"},
-            allowed_tool_names=[],
-        )
-        == []
-    )
-    with pytest.raises(RuntimeError, match="cannot be loaded in strict mode"):
-        await resolver.build_tools(
-            {"tenant": "acme"},
-            allowed_tool_names=["host-python"],
-        )
 
 
 class _FakeDockerExecution:

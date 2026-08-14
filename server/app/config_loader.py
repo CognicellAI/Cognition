@@ -142,22 +142,6 @@ def load_config(cwd: Path | None = None) -> dict[str, Any]:
     return config
 
 
-def get_skill_sources(config: dict[str, Any]) -> list[str]:
-    """Return configured file-based skill source directories.
-
-    Skill sources are workspace-relative or absolute directories containing
-    subdirectories with ``SKILL.md`` files.
-    """
-    skill_sources = config.get("skill_sources", [])
-    return [value for value in skill_sources if isinstance(value, str) and value]
-
-
-def get_tool_sources(config: dict[str, Any]) -> list[str]:
-    """Return configured file-based tool source directories."""
-    tool_sources = config.get("tool_sources", [])
-    return [value for value in tool_sources if isinstance(value, str) and value]
-
-
 def _get_settings_schema() -> list[dict[str, Any]]:
     """Get Settings field schema with mappings.
 
@@ -214,6 +198,25 @@ def _get_settings_schema() -> list[dict[str, Any]]:
             # Test settings
             "test": "test",
         }
+
+        # Deployment-owned MCP auth profiles are intentionally top-level so
+        # Agent definitions can reference them without embedding identity
+        # system configuration.
+        if field_name == "mcp_auth_profiles":
+            yaml_path = ["mcp_auth_profiles"]
+            default_factory = getattr(field_info, "default_factory", None)
+            default = default_factory() if callable(default_factory) else {}
+            schema.append(
+                {
+                    "field_name": field_name,
+                    "env_var": env_var,
+                    "yaml_path": yaml_path,
+                    "default": default,
+                    "annotation": str(field_info.annotation),
+                    "is_secret": False,
+                }
+            )
+            continue
 
         # Find which section this field belongs to
         parts = field_name.split("_")
@@ -479,12 +482,6 @@ def generate_config_example() -> str:
         "# Security note: Never commit API keys or secrets to this file.",
         "# Use environment variables for secrets.",
         "",
-        "skill_sources:",
-        "  - .cognition/skills/",
-        "",
-        "tool_sources:",
-        "  - .cognition/tools/",
-        "",
     ]
 
     # Build nested structure with comments
@@ -506,14 +503,6 @@ def generate_config_example() -> str:
         "workspace": [
             "# Workspace settings",
             "# Configure where projects/workspaces are stored.",
-        ],
-        "skill_sources": [
-            "# File-based skill source directories",
-            "# Each source directory should contain subdirectories with SKILL.md files.",
-        ],
-        "tool_sources": [
-            "# File-based tool source directories",
-            "# Each source directory should contain Python modules defining tools.",
         ],
         "rate_limit": [
             "# Rate limiting settings",

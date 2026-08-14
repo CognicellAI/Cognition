@@ -2,7 +2,7 @@
 
 This backend implements ``BackendProtocol`` and exposes artifacts stored in
 the ``ConfigStore`` as files on virtual paths under ``/artifacts/``,
-``/scratch/``, ``/contracts/``, ``/evals/``, ``/memories/``, and
+``/scratch/``, ``/files/``, ``/contracts/``, ``/evals/``, ``/memories/``, and
 ``/policies/``.
 
 When wired into the ``CompositeBackend``, Deep Agents file tools (read,
@@ -35,6 +35,7 @@ logger = structlog.get_logger(__name__)
 ARTIFACT_ROUTE_PREFIXES = {
     "scratch": "/scratch/",
     "artifact": "/artifacts/",
+    "file": "/files/",
     "contract": "/contracts/",
     "eval": "/evals/",
     "memory": "/memories/",
@@ -160,13 +161,15 @@ class ArtifactBackend(BackendProtocol):
                 scope=self._scope,
                 artifact_type=artifact_type,
             )
-            return LsResult(entries=[
-                FileInfo(
-                    path=f"/{artifact_type}/{a.id}",
-                    size=len(a.content.encode("utf-8")),
-                )
-                for a in artifacts
-            ])
+            return LsResult(
+                entries=[
+                    FileInfo(
+                        path=f"/{artifact_type}/{a.id}",
+                        size=len(a.content.encode("utf-8")),
+                    )
+                    for a in artifacts
+                ]
+            )
 
         return LsResult(entries=[])
 
@@ -200,13 +203,25 @@ class ArtifactBackend(BackendProtocol):
         return []
 
     async def agrep(
-        self, pattern: str, path: str | None = None, glob: str | None = None
+        self,
+        pattern: str,
+        path: str | None = None,
+        glob: str | None = None,
+        *,
+        max_count: int | None = None,
     ) -> GrepResult:
+        del pattern, path, glob, max_count
         return GrepResult(matches=[])
 
     def grep(
-        self, pattern: str, path: str | None = None, glob: str | None = None
+        self,
+        pattern: str,
+        path: str | None = None,
+        glob: str | None = None,
+        *,
+        max_count: int | None = None,
     ) -> GrepResult:
+        del pattern, path, glob, max_count
         return GrepResult(matches=[])
 
     async def agrep_raw(
@@ -307,9 +322,7 @@ class ArtifactBackend(BackendProtocol):
             loop = asyncio.get_running_loop()
         except RuntimeError:
             return EditResult(error="ArtifactBackend requires an async event loop")
-        return loop.run_until_complete(
-            self.aedit(file_path, old_string, new_string, replace_all)
-        )
+        return loop.run_until_complete(self.aedit(file_path, old_string, new_string, replace_all))
 
     async def aexecute(self, command: str, *, timeout: int | None = None) -> Any:
         return None

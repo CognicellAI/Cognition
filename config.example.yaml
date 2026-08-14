@@ -67,6 +67,14 @@ aws:
 bedrock:
   model_id: "anthropic.claude-3-sonnet-20240229-v1:0"
 
+# MCP outbound transport admission.
+# Disabled by default. When enabled, each Agent-owned MCP server URL must use
+# one of these exact origins (scheme + host + optional port). Paths remain in
+# the Agent definition.
+mcp:
+  outbound_transport_enabled: false
+  allowed_origins: []
+
 # Rate limiting settings
 # Control API request throttling.
 rate_limit:
@@ -84,12 +92,8 @@ observability:
 
 # Agent behavior settings
 # Configure how the AI agent behaves and what capabilities it has.
-# File-based resource sources are seeded into the ConfigRegistry at startup.
 skill_sources:
   - ".cognition/skills/"
-
-tool_sources:
-  - ".cognition/tools/"
 
 agent:
   memory:
@@ -97,9 +101,6 @@ agent:
   # Attached skill names. These must match skill names discovered from
   # configured skill_sources or created dynamically via the API.
   skills: []
-  # Attached tool names. These must match tool names discovered from
-  # configured tool_sources or created dynamically via the API.
-  tools: []
   subagents: []
   interrupt_on: {}
   # Maximum recursion depth for the agent ReAct loop.

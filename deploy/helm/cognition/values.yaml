@@ -88,7 +88,7 @@ database:
 # Workspace configuration
 # The workspace serves as both HOME and COGNITION_WORKSPACE_ROOT.
 # By default, an emptyDir is used (ephemeral — state lives in Postgres).
-# Enable persistence if you need custom tools/skills/agents to survive pod restarts.
+# Enable persistence only if you need workspace-local development files to survive pod restarts.
 workspace:
   persistence:
     enabled: false
@@ -119,12 +119,9 @@ config:
     # Base URL for OpenAI compatible providers (e.g., OpenRouter, vLLM)
     openaiCompatibleBaseUrl: "https://openrouter.ai/api/v1"
 
-  # File-based skill and tool source directories to seed into the registry at startup.
+  # File-based skill source directories to seed into the registry at startup.
   skillSources:
     - .cognition/skills/
-
-  toolSources:
-    - .cognition/tools/
   
   # Embedded skill definitions to copy into the workspace from ConfigMap.
   # Each key becomes a skill directory under .cognition/skills/<name>/SKILL.md.
@@ -143,8 +140,6 @@ config:
       - AGENTS.md
     # Attached skill names (not filesystem paths)
     skills: []
-    # Attached tool names (not filesystem paths)
-    tools: []
     # Custom AGENTS.md content (optional)
     agentsMd: ""
   
@@ -186,6 +181,13 @@ config:
       warmPool: ""
       # Deny all egress from sandbox pods (K8s equivalent of Docker network_mode: "none")
       denyEgress: false
+
+  # MCP outbound transport admission.
+  # Set enabled=true and list exact scheme://host[:port] origins to admit
+  # Agent-owned remote MCP server URLs.
+  mcp:
+    outboundTransportEnabled: false
+    allowedOrigins: []
   
   # Session scoping configuration
   scoping:

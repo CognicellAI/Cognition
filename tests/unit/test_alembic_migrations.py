@@ -50,14 +50,17 @@ async def test_alembic_upgrade_head_creates_runtime_task_schema(tmp_path: Path) 
             event_columns = {str(row[1]) async for row in cursor}
         async with connection.execute("PRAGMA table_info(config_entities)") as cursor:
             config_columns = {str(row[1]) async for row in cursor}
+        async with connection.execute("PRAGMA table_info(artifacts)") as cursor:
+            artifact_columns = {str(row[1]) async for row in cursor}
 
-    assert version == ("005",)
+    assert version == ("006",)
     assert "runtime_tasks" in tables
     assert "task_id" in run_columns
     assert {"scope_key", "agent_revision", "runtime_manifest", "manifest_digest"} <= run_columns
     assert "task_id" in event_columns
     assert "scope_key" in event_columns
     assert {"scope_key", "revision", "definition_digest"} <= config_columns
+    assert {"path", "object_key", "content_checksum", "content_size"} <= artifact_columns
 
 
 async def test_v013_migration_backfills_scope_keys_and_manifests(
@@ -305,7 +308,7 @@ async def test_v013_migration_backfills_scope_keys_and_manifests(
         ) as cursor:
             config_row = await cursor.fetchone()
 
-    assert version == ("005",)
+    assert version == ("006",)
     assert session_scope_key == (expected_scope_key,)
     assert run_row == (
         expected_scope_key,

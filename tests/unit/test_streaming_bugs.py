@@ -61,7 +61,6 @@ def _make_settings(
     # These remain in Settings (infrastructure config)
     s.persistence_backend = "memory"
     s.workspace_path = Path("/tmp/ws")
-    s.trusted_tool_namespaces = ["server.app.tools"]
     return s
 
 

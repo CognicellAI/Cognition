@@ -36,11 +36,9 @@ class TestPluggabilityE2E:
         env["COGNITION_PORT"] = str(port)
         env["COGNITION_HOST"] = "127.0.0.1"
         env["COGNITION_LLM_PROVIDER"] = "mock"
-        env["COGNITION_WORKSPACE_ROOT"] = str(workspace_root)
+        env["COGNITION_LOCAL_WORKSPACE_ROOT"] = str(workspace_root)
         env["COGNITION_METRICS_PORT"] = str(metrics_port)
         env["COGNITION_ALLOW_UNSAFE_LOCAL_EXECUTION"] = "true"
-        env["COGNITION_ALLOW_HOST_TOOLS"] = "true"
-        env["COGNITION_ALLOW_API_PYTHON_TOOLS"] = "true"
 
         # Start server with unbuffered output for debugging
         env["PYTHONUNBUFFERED"] = "1"

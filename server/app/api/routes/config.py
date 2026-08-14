@@ -130,7 +130,6 @@ def _provider_defaults_response(defaults: Any) -> GlobalProviderDefaultsResponse
 def _agent_defaults_response(defaults: Any) -> GlobalAgentDefaultsResponse:
     return GlobalAgentDefaultsResponse(
         memory=list(defaults.memory),
-        skills=list(defaults.skills),
         subagents=list(defaults.subagents),
         async_subagents=list(defaults.async_subagents),
         interrupt_on={
@@ -144,7 +143,6 @@ def _agent_defaults_response(defaults: Any) -> GlobalAgentDefaultsResponse:
         tool_token_limit_before_evict=defaults.tool_token_limit_before_evict,
         context_policy=defaults.context_policy,
         recursion_limit=defaults.recursion_limit,
-        mcp_servers=dict(defaults.mcp_servers),
     )
 
 

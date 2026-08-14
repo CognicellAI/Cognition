@@ -64,6 +64,55 @@ class _JsonbOrJson(TypeDecorator):
 # Central metadata object that holds all table definitions
 metadata = MetaData()
 
+# Encrypted MCP OAuth SDK state. Partition keys are deployment-keyed digests of
+# exact effective scope + Agent identity + canonical server URI; no raw scope or
+# OAuth material is stored in indexable columns.
+mcp_oauth_state_table = Table(
+    "mcp_oauth_state",
+    metadata,
+    Column("partition_key", String(64), primary_key=True),
+    Column("tokens_ciphertext", Text),
+    Column("client_info_ciphertext", Text),
+    Column(
+        "updated_at",
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    ),
+)
+
+# Freshness-qualified MCP discovery observations. Scope values are represented
+# only by the same canonical digest used by other exact-scope runtime tables.
+mcp_readiness_table = Table(
+    "mcp_readiness",
+    metadata,
+    Column("scope_key", String(64), nullable=False),
+    Column("agent_name", String(200), nullable=False),
+    Column("agent_revision", Integer, nullable=False),
+    Column("server_alias", String(200), nullable=False),
+    Column("required", Boolean, nullable=False),
+    Column("status", String(20), nullable=False),
+    Column("tool_count", Integer, nullable=False, default=0),
+    Column("schema_digest", String(64)),
+    Column("failure_category", String(100)),
+    Column("observed_at", DateTime(timezone=True), nullable=False),
+    Column("fresh_until", DateTime(timezone=True), nullable=False),
+    UniqueConstraint(
+        "scope_key",
+        "agent_name",
+        "agent_revision",
+        "server_alias",
+        name="uq_mcp_readiness_identity",
+    ),
+)
+Index(
+    "idx_mcp_readiness_lookup",
+    mcp_readiness_table.c.scope_key,
+    mcp_readiness_table.c.agent_name,
+    mcp_readiness_table.c.agent_revision,
+)
+
 # Sessions table - stores conversation session metadata
 sessions_table = Table(
     "sessions",
@@ -297,7 +346,7 @@ Index("idx_session_events_type_created", session_events_table.c.event_type, sess
 # ---------------------------------------------------------------------------
 
 # config_entities — single source of truth for all hot-reloadable config.
-# entity_type: "provider" | "tool" | "skill" | "agent" | "mcp_server"
+# entity_type: "provider" | "tool" | "agent" | "sandbox_profile"
 # name:        entity identifier (e.g. "openai-gpt4o", "default")
 # scope:       JSON dict of scope key-values (empty = global)
 # definition:  JSON blob of the entity's Pydantic model fields
@@ -383,8 +432,12 @@ artifacts_table = Table(
     Column("version", Integer, primary_key=False, nullable=False),
     Column("name", String(200), nullable=False),
     Column("artifact_type", String(50), nullable=False, default="scratch"),
+    Column("path", String(1024), nullable=False, default=""),
     Column("content", Text, default=""),
     Column("content_type", String(100), default="text/plain"),
+    Column("object_key", String(1024)),
+    Column("content_checksum", String(64)),
+    Column("content_size", Integer),
     Column("parent_version", Integer),
     Column("run_id", String(100)),
     Column("checkpoint_id", String(100)),

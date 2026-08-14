@@ -239,16 +239,12 @@ class TestAgentFallback:
 @pytest.mark.asyncio
 @pytest.mark.e2e
 class TestAgentSkills:
-    """Per-agent skills are loaded and available to the agent.
-
-    Skills registered in the DB are passed to create_deep_agent(skills=...)
-    when the agent's session starts (wired in #22).
-    """
+    """Agent-owned skill bundles are loaded from the pinned definition."""
 
     async def test_agent_with_skill_registered_completes_stream(
         self, api_client: ScenarioTestClient
     ) -> None:
-        """An agent definition referencing a registered skill can still stream.
+        """An Agent definition containing a skill bundle can still stream.
 
         This is a smoke test: we don't verify the skill's content influenced
         the response (that would require a real LLM + specific prompt), but we
@@ -257,28 +253,18 @@ class TestAgentSkills:
         skill_name = _unique("skill")
         agent_name = _unique("agent")
 
-        # Register a skill
-        skill_resp = await api_client.post(
-            "/skills",
-            json={
-                "name": skill_name,
-                "content": f"# {skill_name}\n\nThis is a test skill.",
-                "description": "E2E test skill",
-            },
-        )
-        if skill_resp.status_code == 404:
-            pytest.skip("POST /skills endpoint not available")
-        assert skill_resp.status_code in (200, 201), (
-            f"Failed to register skill: {skill_resp.status_code}"
-        )
-
-        # Register an agent that references the skill
         agent_resp = await api_client.post(
             "/agents",
             json={
                 "name": agent_name,
                 "system_prompt": "You are a helpful assistant.",
-                "skills": [skill_name],
+                "skills": [
+                    {
+                        "name": skill_name,
+                        "content": f"# {skill_name}\n\nThis is a test skill.",
+                        "files": {},
+                    }
+                ],
             },
         )
         if agent_resp.status_code == 404:
@@ -304,4 +290,3 @@ class TestAgentSkills:
                 await api_client.delete(f"/sessions/{session_id}")
         finally:
             await api_client.delete(f"/agents/{agent_name}")
-            await api_client.delete(f"/skills/{skill_name}")

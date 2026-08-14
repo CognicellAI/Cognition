@@ -48,10 +48,8 @@ from server.app.storage.config_models import (
     EntityType,
     GlobalAgentDefaults,
     GlobalProviderDefaults,
-    McpServerRegistration,
     ProviderConfig,
     SandboxProfile,
-    SkillDefinition,
     ToolRegistration,
 )
 
@@ -120,28 +118,6 @@ class ConfigRegistry(Protocol):
         ...
 
     # ------------------------------------------------------------------
-    # Skill CRUD
-    # ------------------------------------------------------------------
-
-    async def get_skill(
-        self, name: str, scope: dict[str, str] | None = None
-    ) -> SkillDefinition | None:
-        """Return the best-matching skill definition."""
-        ...
-
-    async def list_skills(self, scope: dict[str, str] | None = None) -> list[SkillDefinition]:
-        """List all skill definitions visible in the given scope."""
-        ...
-
-    async def upsert_skill(self, skill: SkillDefinition) -> None:
-        """Create or replace a skill definition."""
-        ...
-
-    async def delete_skill(self, name: str, scope: dict[str, str] | None = None) -> bool:
-        """Delete a skill definition. Returns True if row existed."""
-        ...
-
-    # ------------------------------------------------------------------
     # Agent CRUD (raw dict — stored as JSON blob in config_entities)
     # ------------------------------------------------------------------
 
@@ -191,24 +167,6 @@ class ConfigRegistry(Protocol):
         expected_revision: int | None = None,
     ) -> bool:
         """Delete an agent definition row. Returns True if row existed."""
-        ...
-
-    # ------------------------------------------------------------------
-    # MCP server CRUD
-    # ------------------------------------------------------------------
-
-    async def list_mcp_servers(
-        self, scope: dict[str, str] | None = None
-    ) -> list[McpServerRegistration]:
-        """List all MCP server registrations visible in the given scope."""
-        ...
-
-    async def upsert_mcp_server(self, server: McpServerRegistration) -> None:
-        """Create or replace an MCP server registration."""
-        ...
-
-    async def delete_mcp_server(self, name: str, scope: dict[str, str] | None = None) -> bool:
-        """Delete an MCP server registration. Returns True if row existed."""
         ...
 
     # ------------------------------------------------------------------
@@ -786,29 +744,6 @@ class SqliteConfigRegistry:
         return await self._delete_entity("tool", name, scope)
 
     # ------------------------------------------------------------------
-    # Skill CRUD
-    # ------------------------------------------------------------------
-
-    async def get_skill(
-        self, name: str, scope: dict[str, str] | None = None
-    ) -> SkillDefinition | None:
-        data = await self._get_entity("skill", name, scope)
-        if data is None:
-            return None
-        return SkillDefinition.model_validate(data)
-
-    async def list_skills(self, scope: dict[str, str] | None = None) -> list[SkillDefinition]:
-        rows = await self._list_entities("skill", scope)
-        return [SkillDefinition.model_validate(r) for r in rows]
-
-    async def upsert_skill(self, skill: SkillDefinition) -> None:
-        data = skill.model_dump()
-        await self._upsert_entity("skill", skill.name, skill.scope, data, skill.source)
-
-    async def delete_skill(self, name: str, scope: dict[str, str] | None = None) -> bool:
-        return await self._delete_entity("skill", name, scope)
-
-    # ------------------------------------------------------------------
     # Agent CRUD
     # ------------------------------------------------------------------
 
@@ -912,23 +847,6 @@ class SqliteConfigRegistry:
                     f"Expected revision {expected_revision} was not current"
                 )
         return await self._delete_entity("agent", name, scope)
-
-    # ------------------------------------------------------------------
-    # MCP server CRUD (SqliteConfigRegistry)
-    # ------------------------------------------------------------------
-
-    async def list_mcp_servers(
-        self, scope: dict[str, str] | None = None
-    ) -> list[McpServerRegistration]:
-        rows = await self._list_entities("mcp_server", scope)
-        return [McpServerRegistration.model_validate(r) for r in rows]
-
-    async def upsert_mcp_server(self, server: McpServerRegistration) -> None:
-        data = server.model_dump()
-        await self._upsert_entity("mcp_server", server.name, server.scope, data, server.source)
-
-    async def delete_mcp_server(self, name: str, scope: dict[str, str] | None = None) -> bool:
-        return await self._delete_entity("mcp_server", name, scope)
 
     # ------------------------------------------------------------------
     # Sandbox profile CRUD (SqliteConfigRegistry)
@@ -1452,28 +1370,6 @@ class PostgresConfigRegistry:
     async def delete_tool(self, name: str, scope: dict[str, str] | None = None) -> bool:
         return await self._delete_entity("tool", name, scope)
 
-    # ------------------------------------------------------------------
-    # Skill CRUD
-    # ------------------------------------------------------------------
-
-    async def get_skill(
-        self, name: str, scope: dict[str, str] | None = None
-    ) -> SkillDefinition | None:
-        data = await self._get_entity("skill", name, scope)
-        return SkillDefinition.model_validate(data) if data else None
-
-    async def list_skills(self, scope: dict[str, str] | None = None) -> list[SkillDefinition]:
-        rows = await self._list_entities("skill", scope)
-        return [SkillDefinition.model_validate(r) for r in rows]
-
-    async def upsert_skill(self, skill: SkillDefinition) -> None:
-        await self._upsert_entity(
-            "skill", skill.name, skill.scope, skill.model_dump(), skill.source
-        )
-
-    async def delete_skill(self, name: str, scope: dict[str, str] | None = None) -> bool:
-        return await self._delete_entity("skill", name, scope)
-
     # Agent CRUD
     async def upsert_agent(
         self,
@@ -1605,24 +1501,6 @@ class PostgresConfigRegistry:
             if deleted:
                 await self._record_change(conn, "agent", name, exact_scope, "delete")
             return deleted
-
-    # ------------------------------------------------------------------
-    # MCP server CRUD
-    # ------------------------------------------------------------------
-
-    async def list_mcp_servers(
-        self, scope: dict[str, str] | None = None
-    ) -> list[McpServerRegistration]:
-        rows = await self._list_entities("mcp_server", scope)
-        return [McpServerRegistration.model_validate(r) for r in rows]
-
-    async def upsert_mcp_server(self, server: McpServerRegistration) -> None:
-        await self._upsert_entity(
-            "mcp_server", server.name, server.scope, server.model_dump(), server.source
-        )
-
-    async def delete_mcp_server(self, name: str, scope: dict[str, str] | None = None) -> bool:
-        return await self._delete_entity("mcp_server", name, scope)
 
     # ------------------------------------------------------------------
     # Sandbox profile CRUD
@@ -1919,22 +1797,6 @@ class MemoryConfigRegistry:
     async def delete_tool(self, name: str, scope: dict[str, str] | None = None) -> bool:
         return self._delete("tool", name, scope)
 
-    # Skill
-    async def get_skill(
-        self, name: str, scope: dict[str, str] | None = None
-    ) -> SkillDefinition | None:
-        d = self._get_entity("skill", name, scope)
-        return SkillDefinition.model_validate(d) if d else None
-
-    async def list_skills(self, scope: dict[str, str] | None = None) -> list[SkillDefinition]:
-        return [SkillDefinition.model_validate(r) for r in self._list_entities("skill", scope)]
-
-    async def upsert_skill(self, skill: SkillDefinition) -> None:
-        self._upsert("skill", skill.name, skill.scope, skill.model_dump(), skill.source)
-
-    async def delete_skill(self, name: str, scope: dict[str, str] | None = None) -> bool:
-        return self._delete("skill", name, scope)
-
     # Agent CRUD
     async def upsert_agent(
         self,
@@ -2010,21 +1872,6 @@ class MemoryConfigRegistry:
                 f"Expected revision {expected_revision} was not current"
             )
         return self._delete("agent", name, scope)
-
-    # MCP
-    async def list_mcp_servers(
-        self, scope: dict[str, str] | None = None
-    ) -> list[McpServerRegistration]:
-        return [
-            McpServerRegistration.model_validate(r)
-            for r in self._list_entities("mcp_server", scope)
-        ]
-
-    async def upsert_mcp_server(self, server: McpServerRegistration) -> None:
-        self._upsert("mcp_server", server.name, server.scope, server.model_dump(), server.source)
-
-    async def delete_mcp_server(self, name: str, scope: dict[str, str] | None = None) -> bool:
-        return self._delete("mcp_server", name, scope)
 
     # Sandbox profile
     async def get_sandbox_profile(

@@ -124,7 +124,7 @@ Implemented in `server/app/agent/middleware.py:ToolVisibilityMiddleware` and `To
 
 ### Trust Model
 
-Tool source code (both file-discovered and API-registered) executes with full Python privileges inside the sandbox backend. Cognition does not perform AST scanning or Python-level restrictions on tool code — these were removed as they were bypassable via reflection and created a false sense of security.
+Cognition v0.14 does not expose a Cognition-managed Python tool registry, file-discovered tool loading, or `/tools` API. Tool capability comes from Deep Agents-native runtime tools, Agent-owned MCP servers, skills, middleware, and sandbox backends.
 
 **The real security boundaries are:**
 
@@ -133,24 +133,13 @@ Tool source code (both file-discovered and API-registered) executes with full Py
 | API authorization | Gateway/proxy layer — Cognition assumes authenticated callers |
 | Per-agent tool visibility | `ToolVisibilityMiddleware` — `config.excluded_tools` removes matching tools from the model-visible schema |
 | Per-name tool blocking | `ToolSecurityMiddleware` — `config.blocked_tools` plus `COGNITION_BLOCKED_TOOLS` are enforced at call time |
+| MCP transport admission | Deployment-controlled `COGNITION_MCP_OUTBOUND_TRANSPORT_ENABLED` plus `COGNITION_MCP_ALLOWED_ORIGINS` |
 | Process isolation | Docker, Kubernetes, or AWS Lambda MicroVM sandbox backend |
 | Network isolation | Docker `network_mode=none`, Kubernetes network policy, or Lambda MicroVM connector policy |
 | Filesystem isolation | `CognitionLocalSandboxBackend` protected paths |
 | Memory isolation | LangGraph Store namespaces derived from exact `CognitionContext.effective_scope` |
 
-`POST /tools` (API-registered tools) executes arbitrary Python with full privileges. **Restrict this endpoint to authorized administrators at the Gateway/proxy layer.**
-
-For a detailed explanation, see the Tool Security Trust Model section in `AGENTS.md`.
-
-### Tool Namespace Allowlist
-
-Tool imports are validated against a set of trusted namespaces before the agent starts. This prevents agent definitions from loading arbitrary Python code by specifying a malicious import path.
-
-```env
-COGNITION_TRUSTED_TOOL_NAMESPACES=["myapp.tools", "cognition_tools"]
-```
-
-If a tool's dotted path does not start with a trusted namespace, it is rejected at agent creation time. An empty `trusted_tool_namespaces` list disables the check (all namespaces allowed — suitable only for development).
+Cognition's deny-list middleware is a generic last-mile runtime guard. It is not a replacement for builder authorization, MCP server authorization, gateway policy, sandbox isolation, or Deep Agents permissions.
 
 ### Tool Visibility and Blocklists
 
@@ -207,10 +196,12 @@ def validate_url(cls, v: str) -> str:
 This policy ensures MCP tool servers cannot be used to execute arbitrary local processes.
 
 Additional MCP security measures:
-- **Header redaction** — `GET /mcp-servers` returns empty `headers` dicts to prevent credential leakage
-- **File-managed immutability** — servers from `.cognition/config.yaml` cannot be modified via API (409 on mutation)
-- **Scope injection** — `X-Cognition-Scope-*` headers are automatically added to MCP requests via `ToolCallInterceptor`
-- **Tool name prefixing** — `tool_name_prefix=True` on `MultiServerMCPClient` prevents tool name collisions
+- **Agent-owned configuration** — MCP servers are declared on an Agent revision; no global server registry or CRUD endpoint exists
+- **No raw transport credentials** — Agent definitions cannot contain headers, bearer values, or URL credentials
+- **Bounded authentication** — `none`, standard `mcp_oauth`, built-in `workload_token_exchange`, or environment-backed `static_bearer` applies consistently to discovery and invocation without exposing credentials to the model, API, persistence, or telemetry
+- **No arbitrary scope projection** — only workload token exchange sends a fixed, reserved trusted-runtime envelope; Agent or model content cannot define arbitrary outbound headers
+- **Builder-owned policy** — Cognition does not infer production or multi-tenant posture; builders admit endpoints and authentication modes, and `static_bearer` is supported but not recommended
+- **Canonical tool identity** — duplicate `(server_alias, provider_tool_name)` identities fail discovery
 
 ---
 
@@ -320,14 +311,14 @@ These prevent MIME sniffing, clickjacking, and reflected XSS attacks in browser 
 - [ ] Set `COGNITION_SCOPING_ENABLED=true` and configure `COGNITION_SCOPE_KEYS` (builder-defined keys matching your tenancy model)
 - [ ] Set `COGNITION_SANDBOX_BACKEND=docker`
 - [ ] Set `COGNITION_DOCKER_NETWORK=none`
-- [ ] Restrict `POST /tools` to authorized administrators at the Gateway/proxy layer
-- [ ] Set `COGNITION_TRUSTED_TOOL_NAMESPACES` to your allowed namespaces
 - [ ] Use per-agent `excluded_tools` to hide inherited harness tools from agents that should not see them
 - [ ] Use per-agent or global `blocked_tools` for tools that must be denied even if a call is attempted
+- [ ] Set `COGNITION_MCP_OUTBOUND_TRANSPORT_ENABLED=true` only when remote MCP is required
+- [ ] Set `COGNITION_MCP_ALLOWED_ORIGINS` to exact deployment-approved MCP origins
 - [ ] Set `COGNITION_CORS_ORIGINS` to your specific frontend domains
 - [ ] Set `COGNITION_RATE_LIMIT_PER_MINUTE` appropriate for your load
 - [ ] Never commit API keys; use `.env` or secrets management (Vault, AWS Secrets Manager)
 - [ ] Run the sandbox image from a minimal, audited base image
 - [ ] Set `COGNITION_PROTECTED_PATHS` to include any sensitive directories
 - [ ] Review which agents have `a2a.exposed: true` — only expose agents intended for external A2A access
-- [ ] Restrict `/mcp-servers` CRUD to authorized administrators (MCP server headers contain credentials)
+- [ ] Review each Agent's declared MCP endpoints and required/optional status

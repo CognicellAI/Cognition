@@ -397,8 +397,7 @@ async def agent_event_stream(
         agent_manager: Manager for session agent lifecycle.
         scope: Optional builder-authorized runtime isolation scope.
             Propagated to the agent runtime so that scope-aware
-            backends (e.g. ConfigRegistrySkillsBackend) can filter
-            skills, providers, and other config by application scope.
+            backends can filter providers and other config by application scope.
         parent_message_id: Optional user message ID used as the parent for
             projected assistant tool-call messages.
 

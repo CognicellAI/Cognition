@@ -19,7 +19,6 @@ C4Component
         Component(factory, "create_cognition_agent", "Runtime factory", "Builds composite backend for one Agent runtime")
         Component(selector, "create_sandbox_backend", "Backend factory", "Selects one execution adapter")
         Component(composite, "CompositeBackend", "Deep Agents router", "Routes virtual paths or falls through to sandbox")
-        Component(skills, "ConfigRegistrySkillsBackend", "Virtual filesystem", "Exposes allowed registry skills under /skills/api/")
         Component(artifacts, "ArtifactBackend", "Virtual filesystem", "Exposes versioned content routes")
         Component(local, "Local sandbox", "LocalShellBackend", "Runs under the server OS identity")
         Component(docker, "Docker sandbox adapter", "FilesystemBackend + DockerExecutionBackend", "Host file operations and container commands")
@@ -35,9 +34,7 @@ C4Component
 
     Rel(factory, selector, "Requests selected sandbox")
     Rel(factory, composite, "Creates")
-    Rel(composite, skills, "Routes /skills/api/")
     Rel(composite, artifacts, "Routes artifact namespaces")
-    Rel(skills, config, "Reads allowed skills")
     Rel(artifacts, config, "Reads/writes versions")
     Rel(composite, local, "Default when selected")
     Rel(composite, docker, "Default when selected")
@@ -59,7 +56,6 @@ artifact stores are available, the factory overlays these virtual routes:
 
 | Path | Backend | Meaning |
 | --- | --- | --- |
-| `/skills/api/` | `ConfigRegistrySkillsBackend` | Attached, scope-visible skills |
 | `/scratch/` | `ArtifactBackend` | Versioned scratch content |
 | `/artifacts/` | `ArtifactBackend` | General artifacts |
 | `/contracts/` | `ArtifactBackend` | Structured contracts |
@@ -68,8 +64,9 @@ artifact stores are available, the factory overlays these virtual routes:
 | `/policies/` | `ArtifactBackend` | Policy artifacts |
 | All other paths | Selected sandbox | Workspace files and commands |
 
-Artifact writes create a new version. Registry skills are restricted to the
-names attached to the resolved Agent. Scope is passed to both virtual backends.
+Artifact writes create a new version. Skills are builder-mounted beneath the
+selected sandbox workspace's `skills/` directory and Deep Agents discovers them
+through the sandbox backend. Scope is passed to durable virtual backends.
 
 ## Sandbox choices
 
@@ -87,7 +84,7 @@ boundary.
 creates a container for commands. `DockerExecutionBackend` configures:
 
 - A read-only container root
-- Writable `/workspace`, `/tmp`, and `/home`
+- Builder-configured workspace root, `/tmp`, and `/home`
 - All Linux capabilities dropped
 - `no-new-privileges`
 - Configured CPU and memory limits
@@ -161,7 +158,7 @@ apply it to `exec_run`. This is a known operational constraint.
 | Docker container configuration | `server/app/execution/backend.py` |
 | Kubernetes adapter package | `packages/langchain-k8s-sandbox/langchain_k8s_sandbox/sandbox.py` |
 | Lambda MicroVM adapter package | `packages/langchain-aws-lambda-microvms/langchain_aws_lambda_microvms/sandbox.py` |
-| Registry skill filesystem | `server/app/agent/skills_backend.py` |
+| Native Skills directory | `<sandbox workspace_root>/skills`, passed to Deep Agents by `server/app/agent/cognition_agent.py` |
 | Artifact virtual filesystem | `server/app/agent/artifacts_backend.py` |
 | Sandbox lifecycle ownership | `server/app/llm/deep_agent_service.py` — `SessionAgentManager` |
 | Per-session workspace | `server/app/session_manager.py` |
@@ -172,4 +169,3 @@ apply it to `exec_run`. This is a known operational constraint.
 - [Agent runtime components](04-agent-runtime-components.md)
 - [Runtime flows](07-runtime-flows.md)
 - [Deployment and operations](08-deployment-and-operations.md)
-

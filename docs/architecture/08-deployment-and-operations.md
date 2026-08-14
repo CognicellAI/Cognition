@@ -107,7 +107,7 @@ The Helm chart supplies:
 The chart does not deploy PostgreSQL. It expects an external service; a
 CloudNativePG example is present under `deploy/cnpg/`.
 
-When file-managed Agents, tools, skills, or middleware matter, replicas require
+When file-managed Agents, tools, or middleware matter, replicas require
 identical immutable workspace content or a correctly shared volume. An
 `emptyDir` workspace is per pod and can diverge.
 
@@ -196,4 +196,3 @@ database-upgrade scenarios, or image vulnerability scanning.
 - [Container view](02-container-view.md)
 - [Execution and sandboxes](06-execution-and-sandboxes.md)
 - [Governance and evolution](09-governance-and-evolution.md)
-

@@ -64,14 +64,12 @@ async def server():
         env = os.environ.copy()
         env["COGNITION_PORT"] = str(port)
         env["COGNITION_HOST"] = "127.0.0.1"
-        env["COGNITION_WORKSPACE_ROOT"] = str(workspace)
+        env["COGNITION_LOCAL_WORKSPACE_ROOT"] = str(workspace)
         env["COGNITION_LLM_PROVIDER"] = "mock"
         env["COGNITION_METRICS_PORT"] = str(metrics_port)
         # Existing E2E tests exercise local/mock execution. Production defaults
         # remain strict; the test deployment opts into standalone development mode.
         env["COGNITION_ALLOW_UNSAFE_LOCAL_EXECUTION"] = "true"
-        env["COGNITION_ALLOW_HOST_TOOLS"] = "true"
-        env["COGNITION_ALLOW_API_PYTHON_TOOLS"] = "true"
         # Disable OpenTelemetry to avoid port conflicts
         env["COGNITION_OTEL_ENABLED"] = "false"
 

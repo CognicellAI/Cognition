@@ -66,7 +66,7 @@ from server.app.observability import (
 )
 from server.app.settings import Settings
 from server.app.storage.common import canonical_json_digest
-from server.app.storage.config_models import SandboxProfile, SkillDefinition
+from server.app.storage.config_models import SandboxProfile
 from server.app.storage.config_store import ConfigStore
 from server.app.storage.factory import create_storage_backend
 
@@ -108,29 +108,6 @@ def _effective_context_policy(
     if tool_token_limit_before_evict is not None:
         effective.setdefault("tool_token_limit_before_evict", tool_token_limit_before_evict)
     return effective
-
-
-def _pinned_skills(
-    runtime_manifest: Mapping[str, Any] | None,
-) -> dict[str, SkillDefinition] | None:
-    """Return validated immutable skill snapshots from a run manifest."""
-    if not isinstance(runtime_manifest, Mapping):
-        return None
-    dependencies = runtime_manifest.get("dependencies")
-    skills = dependencies.get("skills") if isinstance(dependencies, Mapping) else None
-    if not isinstance(skills, Mapping):
-        return None
-    snapshots: dict[str, SkillDefinition] = {}
-    for name, identity in skills.items():
-        definition = identity.get("definition") if isinstance(identity, Mapping) else None
-        expected_digest = identity.get("digest") if isinstance(identity, Mapping) else None
-        if not isinstance(name, str) or not isinstance(definition, Mapping):
-            continue
-        skill = SkillDefinition.model_validate(dict(definition))
-        if canonical_json_digest(skill.model_dump(mode="json")) != expected_digest:
-            raise RuntimeError(f"Pinned skill manifest is invalid: {name}")
-        snapshots[name] = skill
-    return snapshots
 
 
 def _pinned_sandbox_profile(
@@ -230,7 +207,6 @@ class ResolvedAgentConfig:
     """Fields resolved from an AgentDefinition, ready for CognitionAgentParams."""
 
     system_prompt: str | None = None
-    skills: list[str] = field(default_factory=list)
     memory: list[str] | None = None
     interrupt_on: dict[str, Any] | None = None
     permissions: list[Any] | None = None
@@ -244,6 +220,7 @@ class ResolvedAgentConfig:
     blocked_tools: list[str] = field(default_factory=list)
     subagents: list[Any] = field(default_factory=list)
     async_subagents: list[Any] = field(default_factory=list)
+    mcp_configs: list[Any] = field(default_factory=list)
     agent_def: Any = None
 
 
@@ -329,11 +306,15 @@ class DeepAgentStreamingService:
         settings: Settings,
         runtime_resolver: RuntimeResolver | None = None,
         config_store: ConfigStore | None = None,
+        mcp_oauth_repository: Any | None = None,
+        mcp_readiness_repository: Any | None = None,
     ) -> None:
         self.settings = settings
         self.storage_backend = create_storage_backend(settings)
         self._runtime_resolver = runtime_resolver
         self._config_store = config_store
+        self._mcp_oauth_repository = mcp_oauth_repository
+        self._mcp_readiness_repository = mcp_readiness_repository
 
     def _get_runtime_resolver(self) -> RuntimeResolver:
         if self._runtime_resolver is None:
@@ -365,12 +346,13 @@ class DeepAgentStreamingService:
         scope: Mapping[str, str] | None = None,
         runtime_manifest: Mapping[str, Any] | None = None,
     ) -> tuple[ResolvedAgentConfig, list[Any]]:
-        """Resolve agent definition fields and custom tools from ConfigStore.
+        """Resolve agent definition fields from ConfigStore.
 
         Returns:
             (ResolvedAgentConfig, custom_tools) tuple. The config holds all
-            agent_def-derived overrides; custom_tools includes any
-            agent_def-resolved tools.
+            agent_def-derived overrides. ``custom_tools`` is retained for
+            programmatic tools supplied by tests or callers, not ConfigStore
+            Python tool loading.
         """
         custom_tools: list[Any] = []
 
@@ -434,9 +416,6 @@ class DeepAgentStreamingService:
         if resolved.system_prompt is None:
             resolved.system_prompt = agent_def.system_prompt
 
-        if agent_def.skills:
-            resolved.skills = list(agent_def.skills)
-
         # Only explicitly declared inline subagents are attached. Enumerating
         # every Agent in a tenant scope would silently widen capabilities.
         resolved.subagents = [
@@ -444,7 +423,6 @@ class DeepAgentStreamingService:
                 "name": subagent.name,
                 "description": subagent.description or "",
                 "system_prompt": subagent.system_prompt,
-                "_declared_tool_names": list(subagent.tools),
                 **(
                     {
                         "permissions": [
@@ -505,6 +483,25 @@ class DeepAgentStreamingService:
         if agent_def.middleware:
             resolved.middleware = _resolve_middleware(agent_def.middleware)
 
+        if agent_def.mcp.servers:
+            from server.app.agent.mcp_client import McpServerConfig
+
+            pinned_revision = (
+                pinned_agent.get("revision") if isinstance(pinned_agent, Mapping) else None
+            )
+            agent_revision = pinned_revision if isinstance(pinned_revision, int) else 1
+            resolved.mcp_configs = [
+                McpServerConfig.from_agent_config(
+                    alias,
+                    config,
+                    self.settings,
+                    agent_name=agent_def.name,
+                    agent_revision=agent_revision,
+                    effective_scope=effective_scope or {},
+                )
+                for alias, config in agent_def.mcp.servers.items()
+            ]
+
         return resolved, custom_tools
 
     async def stream_response(
@@ -561,28 +558,29 @@ class DeepAgentStreamingService:
             # Get checkpointer from storage backend
             checkpointer = await self.storage_backend.get_checkpointer()
 
-            # Load tools registered via POST /tools from ConfigStore.
-            config_store_tools = await self._get_runtime_resolver().build_tools(
-                scope=effective_scope,
-                extra_tools=custom_tools if custom_tools else None,
-                allowed_tool_names=agent_cfg.agent_def.tools if agent_cfg.agent_def else None,
-            )
-            if config_store_tools:
-                custom_tools = config_store_tools
-
             store = await self.storage_backend.get_store()
 
             from server.app.agent.cognition_agent import CognitionContext
 
+            execution_timeout_seconds = (
+                agent_cfg.agent_def.config.timeout_seconds
+                if agent_cfg.agent_def is not None
+                else None
+            )
+            request_deadline = (
+                int((time.time() + execution_timeout_seconds) * 1000)
+                if execution_timeout_seconds is not None
+                else None
+            )
             invocation_context = CognitionContext.from_scope(
                 effective_scope,
                 session_id=session.id if session else session_id,
                 thread_id=session.thread_id if session else thread_id,
                 agent_name=session.agent_name if session else None,
                 metadata=session.metadata if session else None,
+                request_deadline=request_deadline,
             )
 
-            mcp_configs = await self._resolve_mcp_configs(scope=effective_scope)
             context_policy = _effective_context_policy(
                 agent_cfg.context_policy,
                 agent_cfg.tool_token_limit_before_evict,
@@ -603,13 +601,11 @@ class DeepAgentStreamingService:
                 model=model,
                 model_cache_key=model_cache_key,
                 manifest_digest=manifest_digest,
-                pinned_skills=_pinned_skills(pinned_manifest),
                 store=store,
                 checkpointer=checkpointer,
                 settings=self.settings,
                 tools=custom_tools if custom_tools else None,
                 system_prompt=agent_cfg.system_prompt,
-                skills=agent_cfg.skills if agent_cfg.skills else None,
                 subagents=agent_cfg.subagents,
                 async_subagents=agent_cfg.async_subagents,
                 memory=agent_cfg.memory,
@@ -624,7 +620,9 @@ class DeepAgentStreamingService:
                 excluded_tools=agent_cfg.excluded_tools,
                 blocked_tools=agent_cfg.blocked_tools,
                 middleware=agent_cfg.middleware,
-                mcp_configs=mcp_configs or None,
+                mcp_configs=agent_cfg.mcp_configs or None,
+                mcp_oauth_repository=self._mcp_oauth_repository,
+                mcp_readiness_repository=self._mcp_readiness_repository,
                 scope=effective_scope,
                 config_store=self._get_config_store(),
                 sandbox_profile=agent_cfg.sandbox_profile,
@@ -664,12 +662,6 @@ class DeepAgentStreamingService:
                 default_provider=provider,
                 default_model=model_id,
             )
-            execution_timeout_seconds = (
-                agent_cfg.agent_def.config.timeout_seconds
-                if agent_cfg.agent_def is not None
-                else None
-            )
-
             runtime_exception: Exception | None = None
 
             try:
@@ -842,13 +834,6 @@ class DeepAgentStreamingService:
                 model_id,
             )
             checkpointer = await self.storage_backend.get_checkpointer()
-            config_store_tools = await self._get_runtime_resolver().build_tools(
-                scope=effective_scope,
-                extra_tools=custom_tools if custom_tools else None,
-                allowed_tool_names=agent_cfg.agent_def.tools if agent_cfg.agent_def else None,
-            )
-            if config_store_tools:
-                custom_tools = config_store_tools
             store = await self.storage_backend.get_store()
 
             from server.app.agent.cognition_agent import CognitionContext
@@ -860,7 +845,6 @@ class DeepAgentStreamingService:
                 agent_name=session.agent_name,
                 metadata=session.metadata,
             )
-            mcp_configs = await self._resolve_mcp_configs(scope=effective_scope)
             context_policy = _effective_context_policy(
                 agent_cfg.context_policy,
                 agent_cfg.tool_token_limit_before_evict,
@@ -881,13 +865,11 @@ class DeepAgentStreamingService:
                 model=model,
                 model_cache_key=model_cache_key,
                 manifest_digest=active_run.manifest_digest,
-                pinned_skills=_pinned_skills(active_run.runtime_manifest),
                 store=store,
                 checkpointer=checkpointer,
                 settings=self.settings,
                 tools=custom_tools if custom_tools else None,
                 system_prompt=agent_cfg.system_prompt,
-                skills=agent_cfg.skills if agent_cfg.skills else None,
                 subagents=agent_cfg.subagents,
                 async_subagents=agent_cfg.async_subagents,
                 memory=agent_cfg.memory,
@@ -900,7 +882,9 @@ class DeepAgentStreamingService:
                 excluded_tools=agent_cfg.excluded_tools,
                 blocked_tools=agent_cfg.blocked_tools,
                 middleware=agent_cfg.middleware,
-                mcp_configs=mcp_configs or None,
+                mcp_configs=agent_cfg.mcp_configs or None,
+                mcp_oauth_repository=self._mcp_oauth_repository,
+                mcp_readiness_repository=self._mcp_readiness_repository,
                 scope=effective_scope,
                 config_store=self._get_config_store(),
                 sandbox_profile=agent_cfg.sandbox_profile,
@@ -1054,13 +1038,6 @@ class DeepAgentStreamingService:
             session=session, scope=scope, agent_def=agent_def
         )
 
-    async def _resolve_mcp_configs(self, scope: dict[str, str] | None) -> list[Any]:
-        """Load MCP server registrations from ConfigStore.
-
-        Delegates to RuntimeResolver.resolve_mcp_configs().
-        """
-        return await self._get_runtime_resolver().resolve_mcp_configs(scope=scope)
-
     def _build_messages(self, user_content: str, custom_system_prompt: str | None = None) -> list:
         """Build message list with optional system prompt.
 
@@ -1095,6 +1072,8 @@ class SessionAgentManager:
         storage_backend: Any | None = None,
         runtime_resolver: RuntimeResolver | None = None,
         config_store: ConfigStore | None = None,
+        mcp_oauth_repository: Any | None = None,
+        mcp_readiness_repository: Any | None = None,
     ) -> None:
         """Initialize the session manager.
 
@@ -1108,6 +1087,8 @@ class SessionAgentManager:
         self._storage_backend = storage_backend
         self._runtime_resolver = runtime_resolver
         self._config_store = config_store
+        self._mcp_oauth_repository = mcp_oauth_repository
+        self._mcp_readiness_repository = mcp_readiness_repository
         self._services: dict[str, DeepAgentStreamingService] = {}
         self._project_paths: dict[str, str] = {}
         self._service_access: dict[str, float] = {}
@@ -1143,6 +1124,8 @@ class SessionAgentManager:
             settings=self.settings,
             runtime_resolver=self._runtime_resolver,
             config_store=self._config_store,
+            mcp_oauth_repository=self._mcp_oauth_repository,
+            mcp_readiness_repository=self._mcp_readiness_repository,
         )
         if self._storage_backend is not None:
             service.storage_backend = self._storage_backend

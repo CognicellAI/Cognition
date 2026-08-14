@@ -1418,7 +1418,7 @@ async def create_agent_runtime(
     declarative agent definition.
 
     Args:
-        definition: AgentDefinition with tools, skills, config, etc.
+        definition: AgentDefinition with tools, MCP, and runtime configuration.
         workspace_path: Path to the project workspace
         thread_id: Optional thread ID for state persistence
         settings: Optional settings override
@@ -1445,52 +1445,6 @@ async def create_agent_runtime(
         storage_backend = create_storage_backend(settings)
         checkpointer = await storage_backend.get_checkpointer()
 
-    # Resolve tool paths with namespace validation
-    tools: list[Any] = []
-    trusted_namespaces = (
-        getattr(settings, "trusted_tool_namespaces", ["server.app.tools"])
-        if settings
-        else ["server.app.tools"]
-    )
-    for tool_path in definition.tools:
-        try:
-            module_path, tool_name = tool_path.rsplit(".", 1)
-
-            # Validate namespace allowlist
-            is_trusted = any(
-                module_path == ns or module_path.startswith(ns + ".") for ns in trusted_namespaces
-            )
-            if not is_trusted:
-                from server.app.exceptions import CognitionError
-
-                raise CognitionError(
-                    f"Tool path '{tool_path}' is not in a trusted namespace. "
-                    f"Allowed namespaces: {trusted_namespaces}"
-                )
-
-            module = __import__(module_path, fromlist=[tool_name])
-            tool = getattr(module, tool_name)
-            tools.append(tool)
-        except ImportError as e:
-            import structlog
-
-            logger = structlog.get_logger(__name__)
-            logger.warning(f"Failed to import tool: {tool_path}", error=str(e))
-        except AttributeError as e:
-            import structlog
-
-            logger = structlog.get_logger(__name__)
-            logger.warning(f"Tool not found in module: {tool_path}", error=str(e))
-        except Exception as e:
-            # Check if this is a CognitionError by checking module
-            if hasattr(e, "__module__") and "exceptions" in str(e.__module__):
-                # Re-raise our own errors
-                raise
-            import structlog
-
-            logger = structlog.get_logger(__name__)
-            logger.warning(f"Failed to load tool: {tool_path}", error=str(e))
-
     # Resolve middleware with upstream support
     resolved_middleware: list[Any] = []
     for mw_spec in definition.middleware:
@@ -1503,9 +1457,7 @@ async def create_agent_runtime(
         CognitionAgentParams(
             project_path=workspace_path,
             system_prompt=definition.system_prompt,
-            tools=tools if tools else None,
             memory=definition.memory,
-            skills=definition.skills,
             async_subagents=definition.async_subagents,
             middleware=resolved_middleware if resolved_middleware else None,
             checkpointer=checkpointer,

@@ -32,6 +32,7 @@ async def setup_storage_backend():
     from server.app.api.dependencies import (
         set_artifact_store,
         set_config_store,
+        set_mcp_readiness_repository,
         set_session_agent_manager_dep,
         set_storage_backend_dep,
     )
@@ -42,6 +43,7 @@ async def setup_storage_backend():
         DefaultConfigStore,
         set_default_config_store,
     )
+    from server.app.storage.mcp_readiness import MemoryMcpReadinessRepository
 
     with tempfile.TemporaryDirectory() as tmpdir:
         storage = SqliteStorageBackend(
@@ -52,19 +54,20 @@ async def setup_storage_backend():
 
         set_storage_backend_dep(storage)
         set_artifact_store(MemoryArtifactStore())
+        set_mcp_readiness_repository(MemoryMcpReadinessRepository())
 
         settings = get_settings()
         previous_runtime_settings = (
             settings.unsafe_local_execution,
-            settings.allow_host_tools,
-            settings.allow_api_python_tools,
+            settings.mcp_outbound_transport_enabled,
+            list(settings.mcp_allowed_origins),
             list(settings.callback_allowed_origins),
         )
         # Existing unit tests intentionally exercise the standalone local runtime.
         # Production defaults remain strict; this fixture opts the test deployment in.
         settings.unsafe_local_execution = True
-        settings.allow_host_tools = True
-        settings.allow_api_python_tools = True
+        settings.mcp_outbound_transport_enabled = True
+        settings.mcp_allowed_origins = ["https://example.com"]
         settings.callback_allowed_origins = ["https://example.com"]
         set_session_agent_manager_dep(SessionAgentManager(settings))
 
@@ -100,8 +103,8 @@ async def setup_storage_backend():
 
         (
             settings.unsafe_local_execution,
-            settings.allow_host_tools,
-            settings.allow_api_python_tools,
+            settings.mcp_outbound_transport_enabled,
+            settings.mcp_allowed_origins,
             settings.callback_allowed_origins,
         ) = previous_runtime_settings
         await storage.close()

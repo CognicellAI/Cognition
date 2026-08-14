@@ -18,11 +18,9 @@ from typing import Annotated, Any, Literal
 from urllib.parse import urlsplit
 
 import structlog
+from pydantic import AfterValidator, BaseModel, ConfigDict, Field, field_validator
 
 logger = structlog.get_logger(__name__)
-
-from langchain_core.tools import BaseTool
-from pydantic import AfterValidator, BaseModel, ConfigDict, Field, field_validator
 
 try:
     import yaml
@@ -212,6 +210,110 @@ class AgentConfig(BaseModel):
     sandbox_execution_role_arn: str | None = Field(default=None)
 
 
+MCPAuthType = Literal[
+    "none",
+    "mcp_oauth",
+    "workload_token_exchange",
+    "static_bearer",
+]
+
+
+class McpNoAuthConfig(BaseModel):
+    """Anonymous MCP transport with no Cognition-provided authentication."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    type: Literal["none"] = "none"
+
+
+class McpOAuthConfig(BaseModel):
+    """Standard MCP OAuth authorization handled by the upstream MCP SDK."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    type: Literal["mcp_oauth"] = "mcp_oauth"
+
+
+class McpWorkloadTokenExchangeAuthConfig(BaseModel):
+    """Deployment-profile selection for workload OAuth token exchange."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    type: Literal["workload_token_exchange"] = "workload_token_exchange"
+    profile: str = Field(min_length=1, pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+
+
+class McpStaticBearerAuthConfig(BaseModel):
+    """Environment-backed static bearer transport authentication."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    type: Literal["static_bearer"] = "static_bearer"
+    env: str = Field(min_length=1, pattern=r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+
+McpAuthConfig = Annotated[
+    McpNoAuthConfig
+    | McpOAuthConfig
+    | McpWorkloadTokenExchangeAuthConfig
+    | McpStaticBearerAuthConfig,
+    Field(discriminator="type"),
+]
+
+
+class AgentMcpServerConfig(BaseModel):
+    """Agent-scoped MCP server definition."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    url: str = Field(..., min_length=1)
+    transport: Literal["streamable_http"] = Field(default="streamable_http")
+    required: bool = Field(default=True)
+    auth: McpAuthConfig = Field(default_factory=McpNoAuthConfig)
+
+    @field_validator("url")
+    @classmethod
+    def validate_url(cls, value: str) -> str:
+        if not value or any(character.isspace() for character in value):
+            raise ValueError("Agent MCP server URL must not be empty or contain whitespace")
+        try:
+            parsed = urlsplit(value)
+            hostname = parsed.hostname
+            _ = parsed.port
+        except ValueError as exc:
+            raise ValueError("Agent MCP server URL is malformed") from exc
+        if parsed.scheme not in {"http", "https"} or not parsed.netloc or not hostname:
+            raise ValueError(
+                "Agent MCP servers must use absolute HTTP/HTTPS URLs; local stdio "
+                "servers are not supported"
+            )
+        if parsed.username is not None or parsed.password is not None:
+            raise ValueError("Agent MCP server URLs must not contain credentials")
+        if parsed.fragment:
+            raise ValueError("Agent MCP server URLs must not contain fragments")
+        return value
+
+
+class AgentMcpConfig(BaseModel):
+    """Agent-owned MCP configuration."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    servers: dict[str, AgentMcpServerConfig] = Field(default_factory=dict)
+
+    @field_validator("servers")
+    @classmethod
+    def validate_server_aliases(
+        cls, value: dict[str, AgentMcpServerConfig]
+    ) -> dict[str, AgentMcpServerConfig]:
+        for alias in value:
+            if not alias.replace("-", "").replace("_", "").isalnum():
+                raise ValueError(
+                    "MCP server aliases must be alphanumeric with hyphens/underscores only"
+                )
+        return value
+
+
 class FilesystemPermissionConfig(BaseModel):
     """Deep Agents filesystem permission rule.
 
@@ -244,6 +346,8 @@ class AsyncSubagentConfig(BaseModel):
     patterns; it requires an Agent Protocol-compatible worker deployment.
     """
 
+    model_config = ConfigDict(extra="forbid")
+
     name: str = Field(..., min_length=1, max_length=100)
     description: str = Field(..., min_length=1)
     graph_id: str = Field(..., min_length=1)
@@ -260,14 +364,12 @@ class SubagentDefinition(BaseModel):
         name: Unique name for the subagent.
         description: Human-readable description of the subagent's purpose.
         system_prompt: System prompt for the subagent.
-        tools: Tool module paths available to this subagent.
         config: Runtime configuration overrides.
     """
 
     name: str = Field(..., min_length=1, max_length=100)
     description: str | None = Field(default=None)
     system_prompt: str = Field(..., min_length=1)
-    tools: list[str] = Field(default_factory=list)
     config: AgentConfig | None = Field(default=None)
     permissions: list[FilesystemPermissionConfig] = Field(default_factory=list)
 
@@ -285,8 +387,8 @@ class SubagentDefinition(BaseModel):
 class AgentDefinition(BaseModel):
     """Declarative agent definition.
 
-    This model defines a complete agent configuration including tools,
-    skills, memory, subagents, and runtime configuration. It enables
+    This model defines a complete agent configuration including memory,
+    subagents, MCP, and runtime configuration. It enables
     agents to be defined entirely via YAML configuration files.
 
     Attributes:
@@ -294,8 +396,6 @@ class AgentDefinition(BaseModel):
         display_name: Optional human-readable name for public presentation.
         a2a: A2A exposure and public Agent Card presentation configuration.
         system_prompt: System prompt that defines agent behavior.
-        tools: List of attached tool names.
-        skills: List of attached skill names.
         memory: List of memory file paths.
         subagents: Nested subagent definitions.
         interrupt_on: Tool-name to HITL policy map.
@@ -304,11 +404,11 @@ class AgentDefinition(BaseModel):
         config: Runtime configuration (temperature, max_tokens, etc.).
     """
 
+    model_config = ConfigDict(extra="forbid")
+
     name: str = Field(..., min_length=1, max_length=100)
     display_name: str | None = Field(default=None, min_length=1, max_length=200)
     system_prompt: str = Field(..., min_length=1)
-    tools: list[str] = Field(default_factory=list)
-    skills: list[str] = Field(default_factory=list)
     memory: list[str] = Field(default_factory=list)
     subagents: list[SubagentDefinition] = Field(default_factory=list)
     async_subagents: list[AsyncSubagentConfig] = Field(default_factory=list)
@@ -316,6 +416,7 @@ class AgentDefinition(BaseModel):
     permissions: list[FilesystemPermissionConfig] = Field(default_factory=list)
     response_format: str | None = Field(default=None)
     middleware: list[str | dict[str, Any]] = Field(default_factory=list)
+    mcp: AgentMcpConfig = Field(default_factory=AgentMcpConfig)
 
     config: AgentConfig = Field(default_factory=AgentConfig)
     # P3 Multi-Agent Registry additions
@@ -336,32 +437,6 @@ class AgentDefinition(BaseModel):
         """Validate agent name format."""
         if not v.replace("-", "").replace("_", "").isalnum():
             raise ValueError(f"Agent name must be alphanumeric with hyphens/underscores only: {v}")
-        return v
-
-    @field_validator("tools")
-    @classmethod
-    def validate_tools(cls, v: list[str]) -> list[str]:
-        """Validate attached tool names."""
-        for tool_name in v:
-            if not tool_name:
-                raise ValueError("Tool path cannot be empty")
-            if "/" in tool_name or tool_name.endswith(".py") or "." in tool_name:
-                raise ValueError(
-                    "Agent tools must be registry tool names, not module or file paths"
-                )
-        return v
-
-    @field_validator("skills")
-    @classmethod
-    def validate_skills(cls, v: list[str]) -> list[str]:
-        """Validate attached skill names."""
-        for skill_name in v:
-            if not skill_name:
-                raise ValueError("Skill path cannot be empty")
-            if "/" in skill_name or skill_name.endswith(".md"):
-                raise ValueError(
-                    "Agent skills must be registry skill names, not file or directory paths"
-                )
         return v
 
     @field_validator("memory")
@@ -432,14 +507,6 @@ class AgentDefinition(BaseModel):
         with open(path, "w") as f:
             yaml.dump(self.model_dump(), f, default_flow_style=False, sort_keys=False)
 
-    def validate_tool_paths(self, base_path: str | Path | None = None) -> list[str]:
-        """Agent tool attachments are validated by name against the registry at runtime."""
-        return []
-
-    def validate_skill_paths(self, base_path: str | Path | None = None) -> list[str]:
-        """Agent skill attachments are validated by name against the registry at runtime."""
-        return []
-
     def validate_memory_paths(self, base_path: str | Path | None = None) -> list[str]:
         """Validate that memory file paths exist.
 
@@ -466,31 +533,17 @@ class AgentDefinition(BaseModel):
             base_path: Optional base path for resolving relative paths.
 
         Returns:
-            Dictionary with keys 'tools', 'skills', 'memory' containing
+            Dictionary with key 'memory' containing
             lists of paths that failed validation.
         """
-        return {
-            "tools": self.validate_tool_paths(base_path),
-            "skills": self.validate_skill_paths(base_path),
-            "memory": self.validate_memory_paths(base_path),
-        }
-
-    def _resolve_tools(self, base_path: str | Path | None = None) -> list[BaseTool]:
-        """Direct tool path resolution is no longer supported.
-
-        Agent definitions attach registry tool names only. Runtime resolution
-        happens via ``RuntimeResolver.build_tools()``.
-        """
-        return []
+        return {"memory": self.validate_memory_paths(base_path)}
 
     def to_subagent(self, base_path: str | Path | None = None) -> dict[str, Any]:
         """Translate AgentDefinition to Deep Agents SubAgent TypedDict.
 
         Args:
-            base_path: Base path for resolving relative tool file paths. Should
-                be the workspace root — not a per-session sandbox — because
-                ``.cognition/tools/`` is a workspace-level concept loaded into
-                the server process. See issue #112.
+            base_path: Reserved for compatibility with callers that pass a
+                workspace root.
 
         Returns:
             A dict matching the Deep Agents SubAgent TypedDict specification:
@@ -498,8 +551,6 @@ class AgentDefinition(BaseModel):
             - description: str (required)
             - system_prompt: str (required)
             - model: str | None (optional, format: "provider:model" or just "model")
-            - tools: list[Any] | None (optional)
-            - skills: list[str] | None (optional)
             - middleware: list[Any] | None (optional)
             - interrupt_on: dict[str, InterruptOnConfig] | None (optional)
             - permissions: list[FilesystemPermission] | None (optional)
@@ -516,15 +567,6 @@ class AgentDefinition(BaseModel):
                 spec["model"] = f"{provider}:{self.config.model}"
             else:
                 spec["model"] = self.config.model
-
-        # Resolve tools from paths to BaseTool instances
-        # This prevents AttributeError when ToolNode tries to access .name on strings
-        resolved_tools = self._resolve_tools(base_path=base_path)
-        if resolved_tools:
-            spec["tools"] = resolved_tools
-
-        if self.skills:
-            spec["skills"] = self.skills
 
         if self.interrupt_on:
             spec["interrupt_on"] = {
@@ -592,8 +634,6 @@ def load_agent_definition_from_markdown(path: str | Path) -> AgentDefinition:
     mode: subagent
     model: anthropic/claude-haiku-4
     temperature: 0.1
-    skills:
-      - my-skill-name
     ---
     You are a code reviewer. Focus on security...
 
@@ -695,10 +735,9 @@ def load_agent_definition_from_markdown(path: str | Path) -> AgentDefinition:
         mode=frontmatter.get("mode", "all"),
         hidden=frontmatter.get("hidden", False),
         native=False,  # User-defined
-        tools=frontmatter.get("tools", []),
-        skills=frontmatter.get("skills", []),
         memory=frontmatter.get("memory", []),
         async_subagents=frontmatter.get("async_subagents", []),
+        mcp=frontmatter.get("mcp", {}),
         config=AgentConfig(**config_kwargs),
     )
 
@@ -711,7 +750,15 @@ __all__ = [
     "A2APublicSkill",
     "AgentConfig",
     "AgentDefinition",
+    "AgentMcpConfig",
+    "AgentMcpServerConfig",
     "AsyncSubagentConfig",
+    "McpAuthConfig",
+    "MCPAuthType",
+    "McpNoAuthConfig",
+    "McpOAuthConfig",
+    "McpStaticBearerAuthConfig",
+    "McpWorkloadTokenExchangeAuthConfig",
     "SubagentDefinition",
     "load_agent_definition",
     "load_agent_definition_from_markdown",

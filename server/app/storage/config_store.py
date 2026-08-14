@@ -36,10 +36,8 @@ from server.app.storage.config_models import (
     EntityType,
     GlobalAgentDefaults,
     GlobalProviderDefaults,
-    McpServerRegistration,
     ProviderConfig,
     SandboxProfile,
-    SkillDefinition,
     ToolRegistration,
 )
 
@@ -105,22 +103,6 @@ class ConfigStore(Protocol):
     async def delete_tool(self, name: str, scope: dict[str, str] | None = None) -> bool: ...
 
     # ------------------------------------------------------------------
-    # Skill CRUD
-    # ------------------------------------------------------------------
-
-    async def get_skill(
-        self, name: str, scope: dict[str, str] | None = None
-    ) -> SkillDefinition | None: ...
-
-    async def list_skills(self, scope: dict[str, str] | None = None) -> list[SkillDefinition]: ...
-
-    async def upsert_skill(self, skill: SkillDefinition) -> None: ...
-
-    async def upsert_skill_from_dict(self, data: dict[str, Any]) -> None: ...
-
-    async def delete_skill(self, name: str, scope: dict[str, str] | None = None) -> bool: ...
-
-    # ------------------------------------------------------------------
     # Agent CRUD
     # ------------------------------------------------------------------
 
@@ -176,18 +158,6 @@ class ConfigStore(Protocol):
     async def is_valid_primary(self, name: str, scope: dict[str, str] | None = None) -> bool:
         """Check if an agent name is a valid primary agent."""
         ...
-
-    # ------------------------------------------------------------------
-    # MCP server CRUD
-    # ------------------------------------------------------------------
-
-    async def list_mcp_servers(
-        self, scope: dict[str, str] | None = None
-    ) -> list[McpServerRegistration]: ...
-
-    async def upsert_mcp_server(self, server: McpServerRegistration) -> None: ...
-
-    async def delete_mcp_server(self, name: str, scope: dict[str, str] | None = None) -> bool: ...
 
     # ------------------------------------------------------------------
     # Sandbox profile CRUD
@@ -376,28 +346,6 @@ class DefaultConfigStore:
         return bool(await self._config_registry.delete_tool(name, scope))
 
     # ------------------------------------------------------------------
-    # Skill CRUD
-    # ------------------------------------------------------------------
-
-    async def get_skill(
-        self, name: str, scope: dict[str, str] | None = None
-    ) -> SkillDefinition | None:
-        return cast(SkillDefinition | None, await self._config_registry.get_skill(name, scope))
-
-    async def list_skills(self, scope: dict[str, str] | None = None) -> list[SkillDefinition]:
-        return cast(list[SkillDefinition], await self._config_registry.list_skills(scope))
-
-    async def upsert_skill(self, skill: SkillDefinition) -> None:
-        await self._config_registry.upsert_skill(skill)
-
-    async def upsert_skill_from_dict(self, data: dict[str, Any]) -> None:
-        skill = SkillDefinition.model_validate(data)
-        await self._config_registry.upsert_skill(skill)
-
-    async def delete_skill(self, name: str, scope: dict[str, str] | None = None) -> bool:
-        return bool(await self._config_registry.delete_skill(name, scope))
-
-    # ------------------------------------------------------------------
     # Agent CRUD (raw dict for DB)
     # ------------------------------------------------------------------
 
@@ -509,23 +457,6 @@ class DefaultConfigStore:
         if agent is None or agent.hidden:
             return False
         return agent.mode in ("primary", "all")
-
-    # ------------------------------------------------------------------
-    # MCP server CRUD
-    # ------------------------------------------------------------------
-
-    async def list_mcp_servers(
-        self, scope: dict[str, str] | None = None
-    ) -> list[McpServerRegistration]:
-        return cast(
-            list[McpServerRegistration], await self._config_registry.list_mcp_servers(scope)
-        )
-
-    async def upsert_mcp_server(self, server: McpServerRegistration) -> None:
-        await self._config_registry.upsert_mcp_server(server)
-
-    async def delete_mcp_server(self, name: str, scope: dict[str, str] | None = None) -> bool:
-        return bool(await self._config_registry.delete_mcp_server(name, scope))
 
     # ------------------------------------------------------------------
     # Sandbox profile CRUD

@@ -159,12 +159,10 @@ class WorkspaceWatcher:
         watcher = WorkspaceWatcher()
 
         # Watch directories
-        watcher.watch_tools("/project/.cognition/tools")
         watcher.watch_middleware("/project/.cognition/middleware")
         watcher.watch_config("/project/.cognition/config.yaml")
 
         # Set up callbacks for GUI
-        watcher.on_tools_changed(lambda: gui.notify("Tools reloaded"))
         watcher.on_middleware_changed(lambda: gui.notify("Middleware pending"))
 
         # Start watching
@@ -192,39 +190,10 @@ class WorkspaceWatcher:
         self._debounce_timers: dict[str, asyncio.TimerHandle] = {}
 
         # Callbacks for GUI notifications
-        self._tools_changed_callbacks: list[Callable[[], None]] = []
         self._middleware_changed_callbacks: list[Callable[[], None]] = []
         self._config_changed_callbacks: list[Callable[[], None]] = []
 
         logger.debug("WorkspaceWatcher initialized", enabled=self.config.enabled)
-
-    def watch_tools(self, tools_dir: str) -> WorkspaceWatcher:
-        """Watch the tools directory for changes.
-
-        When tools change, notifies GUI callbacks.
-
-        Args:
-            tools_dir: Path to .cognition/tools/ directory
-
-        Returns:
-            Self for method chaining
-        """
-        if not self.config.enabled:
-            return self
-
-        path = Path(tools_dir).resolve()
-        if not path.exists():
-            logger.warning("Tools directory does not exist, skipping watch", path=str(path))
-            return self
-
-        handler = WorkspaceFileHandler(self, str(path), "tools")
-        self._handlers[str(path)] = handler
-
-        if self._observer:
-            self._observer.schedule(handler, str(path), recursive=True)
-            logger.info("Watching tools directory", path=str(path))
-
-        return self
 
     def watch_middleware(self, middleware_dir: str) -> WorkspaceWatcher:
         """Watch the middleware directory for changes.
@@ -280,18 +249,6 @@ class WorkspaceWatcher:
             self._observer.schedule(handler, str(path.parent), recursive=False)
             logger.info("Watching config file", path=str(path))
 
-        return self
-
-    def on_tools_changed(self, callback: Callable[[], None]) -> WorkspaceWatcher:
-        """Register a callback for when tools change.
-
-        Args:
-            callback: Function to call when tools are reloaded
-
-        Returns:
-            Self for method chaining
-        """
-        self._tools_changed_callbacks.append(callback)
         return self
 
     def on_middleware_changed(self, callback: Callable[[], None]) -> WorkspaceWatcher:
@@ -424,17 +381,7 @@ class WorkspaceWatcher:
         )
 
         try:
-            if watch_type == "tools":
-                for callback in self._tools_changed_callbacks:
-                    try:
-                        if asyncio.iscoroutinefunction(callback):
-                            await callback()
-                        else:
-                            callback()
-                    except Exception as e:
-                        logger.error("Tools changed callback failed", error=str(e))
-
-            elif watch_type == "middleware":
+            if watch_type == "middleware":
                 for callback in self._middleware_changed_callbacks:
                     try:
                         if asyncio.iscoroutinefunction(callback):

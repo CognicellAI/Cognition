@@ -29,7 +29,7 @@ C4Container
         Container(cli, "Cognition CLI", "Python, Typer, HTTPX", "Interactive shell and session client")
         Container(server, "Cognition server", "Python, FastAPI, Deep Agents, LangGraph", "REST, SSE, A2A, runtime composition, lifecycle, and telemetry")
         ContainerDb(database, "Runtime database", "SQLite, PostgreSQL, or memory", "Sessions, messages, tasks, runs, events, checkpoints, Store, config, and artifacts")
-        Container(workspace, "Workspace", "Filesystem/PVC", "AGENTS.md, config, file-managed Agents, tools, skills, middleware, and local sandbox roots")
+        Container(workspace, "Workspace", "Filesystem/PVC", "AGENTS.md, config, file-managed Agents, tools, middleware, and local sandbox roots")
         Container(sandbox, "Provisioned sandbox", "Local process, Docker container, Kubernetes Sandbox, or Lambda MicroVM", "Agent-visible filesystem and command execution")
     }
 
@@ -88,7 +88,8 @@ Supported placements are:
 
 The workspace is not the authoritative store for API-created runtime state. It
 provides startup and extension inputs such as `.cognition/config.yaml`,
-file-managed Agents, tools, skills, middleware, and `AGENTS.md`. The server
+file-managed Agents, tools, middleware, and `AGENTS.md`. Skill bundles are part
+of Agent definitions rather than independent workspace or registry state. The server
 creates watched tool/middleware directories during startup. Kubernetes may
 mount the workspace from a persistent volume claim or use an ephemeral volume.
 

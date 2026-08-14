@@ -7,15 +7,19 @@ from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 
 import structlog
-from fastapi import Depends, FastAPI, Request
+from fastapi import Depends, FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from server.app.agent.resolver import RuntimeResolver
 from server.app.api.dependencies import (
+    get_artifact_store,
     get_storage_backend_dep,
     set_artifact_store,
     set_config_store,
+    set_mcp_oauth_flow_coordinator,
+    set_mcp_oauth_state_repository,
+    set_mcp_readiness_repository,
     set_model_catalog_dep,
     set_runtime_resolver,
     set_session_agent_manager_dep,
@@ -32,13 +36,11 @@ from server.app.api.routes import (
     artifacts,
     capabilities,
     config,
-    mcp_servers,
+    mcp_oauth,
     messages,
     models,
     sandbox_profiles,
     sessions,
-    skills,
-    tools,
 )
 from server.app.exceptions import RateLimitError
 from server.app.file_watcher import WorkspaceWatcher
@@ -48,6 +50,7 @@ from server.app.rate_limiter import RateLimitConfig, get_rate_limiter
 from server.app.session_manager import initialize_session_manager
 from server.app.settings import get_settings
 from server.app.storage import create_storage_backend
+from server.app.storage.artifact_store import ArtifactStore
 from server.app.storage.backend import StorageBackend
 from server.app.storage.config_store import DefaultConfigStore, set_default_config_store
 from server.version import VERSION
@@ -69,12 +72,35 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         json_format=settings.log_format == "json",
     )
     logger.info("Starting Cognition server")
+    settings.validate_deployment_storage_policy()
 
     # Initialize storage backend
     storage_backend = create_storage_backend(settings)
     await storage_backend.initialize()
     set_storage_backend_dep(storage_backend)
     logger.info("Storage backend initialized")
+
+    from server.app.storage.factory import create_mcp_oauth_state_repository
+
+    mcp_oauth_state_repository = create_mcp_oauth_state_repository(settings)
+    await mcp_oauth_state_repository.initialize()
+    set_mcp_oauth_state_repository(mcp_oauth_state_repository)
+    logger.info("MCP OAuth state repository initialized")
+
+    from server.app.storage.factory import create_mcp_readiness_repository
+
+    mcp_readiness_repository = create_mcp_readiness_repository(settings)
+    await mcp_readiness_repository.initialize()
+    set_mcp_readiness_repository(mcp_readiness_repository)
+    logger.info("MCP readiness repository initialized")
+
+    from server.app.agent.mcp_oauth_flow import McpOAuthFlowCoordinator
+
+    mcp_oauth_flow_coordinator = McpOAuthFlowCoordinator(
+        settings=settings,
+        repository=mcp_oauth_state_repository,
+    )
+    set_mcp_oauth_flow_coordinator(mcp_oauth_flow_coordinator)
 
     # Initialize ConfigRegistry
     from server.app.storage.factory import create_config_dispatcher, create_config_registry
@@ -97,8 +123,6 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     from server.app.bootstrap import (
         seed_providers_from_config,
         seed_sandbox_profiles_from_config,
-        seed_skills_from_sources,
-        seed_tools_from_sources,
     )
     from server.app.config_loader import load_config
 
@@ -106,16 +130,10 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     logger.debug("Loaded YAML config", keys=list(yaml_config.keys()))
     await seed_providers_from_config(yaml_config, config_store)
     sandbox_profiles_seeded = await seed_sandbox_profiles_from_config(yaml_config, config_store)
-    skills_seeded = await seed_skills_from_sources(
-        yaml_config, config_store, settings.workspace_path
-    )
-    tools_seeded = await seed_tools_from_sources(yaml_config, config_store, settings.workspace_path)
-    if sandbox_profiles_seeded or skills_seeded or tools_seeded:
+    if sandbox_profiles_seeded:
         logger.info(
             "Bootstrapped file sources",
             sandbox_profiles=sandbox_profiles_seeded,
-            skills=skills_seeded,
-            tools=tools_seeded,
         )
 
     # Seed store-backed agent definitions after ConfigStore is available.
@@ -153,6 +171,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         storage_backend=storage_backend,
         runtime_resolver=runtime_resolver,
         config_store=config_store,
+        mcp_oauth_repository=mcp_oauth_state_repository,
+        mcp_readiness_repository=mcp_readiness_repository,
     )
     set_session_agent_manager_dep(session_agent_manager)
     logger.info("SessionAgentManager initialized")
@@ -211,18 +231,15 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     try:
         file_watcher = WorkspaceWatcher()
 
-        # Watch tools and middleware directories
-        tools_path = settings.workspace_path / ".cognition" / "tools"
+        # Watch middleware directory
         middleware_path = settings.workspace_path / ".cognition" / "middleware"
 
         # Create directories if they don't exist
-        tools_path.mkdir(parents=True, exist_ok=True)
         middleware_path.mkdir(parents=True, exist_ok=True)
 
-        file_watcher.watch_tools(str(tools_path))
         file_watcher.watch_middleware(str(middleware_path))
         file_watcher.start()
-        logger.info("File watcher started", watched_paths=["tools", "middleware"])
+        logger.info("File watcher started", watched_paths=["middleware"])
     except Exception as e:
         logger.warning("Failed to start file watcher", error_type=type(e).__name__)
 
@@ -276,6 +293,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # Close storage backend connections
     if storage_backend:
         await storage_backend.close()
+    await mcp_oauth_flow_coordinator.close()
+    await mcp_oauth_state_repository.close()
+    await mcp_readiness_repository.close()
     logger.info("Server shutdown complete")
 
 
@@ -302,14 +322,12 @@ app.add_middleware(ObservabilityMiddleware)
 app.include_router(sessions.router)
 app.include_router(messages.router)
 app.include_router(config.router)
-app.include_router(mcp_servers.router)
 app.include_router(sandbox_profiles.router)
 app.include_router(agents.router)
-app.include_router(skills.router)
 app.include_router(models.router)
-app.include_router(tools.router)
 app.include_router(artifacts.router)
 app.include_router(capabilities.router)
+app.include_router(mcp_oauth.router)
 
 
 @app.get("/health", response_model=HealthStatus, tags=["health"])
@@ -334,8 +352,19 @@ async def health_check(
 
 
 @app.get("/ready", response_model=ReadyStatus, tags=["health"])
-async def ready_check() -> ReadyStatus:
-    """Readiness probe endpoint."""
+async def ready_check(
+    response: Response,
+    storage_backend: StorageBackend = Depends(get_storage_backend_dep),  # noqa: B008
+    artifact_store: ArtifactStore = Depends(get_artifact_store),  # noqa: B008
+) -> ReadyStatus:
+    """Report readiness only while the builder-selected durable stores respond."""
+    try:
+        await storage_backend.list_sessions(limit=1)
+        await artifact_store.health_check()
+    except Exception as exc:
+        logger.warning("Selected durable storage is not ready", error_type=type(exc).__name__)
+        response.status_code = 503
+        return ReadyStatus(ready=False)
     return ReadyStatus(ready=True)
 
 

@@ -27,7 +27,7 @@ If a capability is primarily about presentation, user interaction, workflow orch
 | Streaming | Emits canonical SSE events (`token`, `tool_call`, `tool_result`, `delegation`, `usage`, `done`) | Renders those events into chat bubbles, activity timelines, spinners, and progress UI |
 | Tooling | Hosts trusted tools, middleware, skills, prompts, and agent definitions | Decides which product workflows invoke which agents |
 | A2A protocol | Exposes agents via A2A JSON-RPC, Agent Card discovery, scope-aware routing | Decides which agents to expose (`a2a.exposed`), handles external auth at gateway |
-| MCP servers | Manages remote MCP server connections, tool namespacing, scope injection | Decides which MCP servers to connect, manages server credentials |
+| MCP servers | Resolves Agent-owned remote MCP connections, applies the selected built-in authentication transport, and enforces canonical tool identities | Decides which endpoints and authentication modes to admit; configures workload-exchange profiles, identity infrastructure, gateways, and live Agent authorization |
 | Artifacts | Persists versioned artifacts with scope isolation and CRUD API | Decides which artifacts to create, manages artifact lifecycle in product workflows |
 | Security boundaries | Enforces sandboxing, scope filtering, rate limiting, and API-side policy | Enforces end-user auth, permissions, billing, and product-level access control |
 | Observability | Captures traces, metrics, and run-level backend telemetry | Tracks product analytics, UX funnels, retention, and user behavior |

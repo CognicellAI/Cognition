@@ -12,11 +12,6 @@ data:
       {{- toYaml .Values.config.skillSources | nindent 6 }}
     {{- end }}
 
-    {{- if .Values.config.toolSources }}
-    tool_sources:
-      {{- toYaml .Values.config.toolSources | nindent 6 }}
-    {{- end }}
-
     llm:
       provider: {{ .Values.config.llm.provider }}
       model: {{ .Values.config.llm.model }}
@@ -38,10 +33,6 @@ data:
       {{- if .Values.config.agent.skills }}
       skills:
         {{- toYaml .Values.config.agent.skills | nindent 8 }}
-      {{- end }}
-      {{- if .Values.config.agent.tools }}
-      tools:
-        {{- toYaml .Values.config.agent.tools | nindent 8 }}
       {{- end }}
   
   AGENTS.md: |

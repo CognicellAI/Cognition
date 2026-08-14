@@ -121,7 +121,7 @@ def create_app() -> FastAPI:
 
     settings = Settings.model_validate(
         {
-            "COGNITION_WORKSPACE_ROOT": workspace,
+            "COGNITION_LOCAL_WORKSPACE_ROOT": workspace,
             "COGNITION_SCOPE_KEYS": [],
         }
     )

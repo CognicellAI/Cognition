@@ -43,7 +43,7 @@ runtime. It runs the unchanged official A2A TCK revision pinned in
 test-only fixture.
 
 1. Pull requests run all applicable `MUST` requirements and preserve the
-   resulting compatibility evidence; findings are advisory for v0.13.1.
+   resulting non-blocking compatibility evidence.
 2. The pre-release workflow must run the full suite for the exact candidate
    commit.
 3. Review `COGNITION-EXPLANATION.md` in the uploaded evidence and record the
@@ -56,8 +56,7 @@ test-only fixture.
      Cognition gap or a verified external harness defect first.
 4. Treat `SHOULD` and `MAY` findings as advisory follow-up unless a release
    explicitly declares that optional capability.
-5. Keep exploratory production-agent runs, such as the Kennel Stock Guru run
-   that surfaced this investigation, separate from repeatable release reporting.
+5. Keep exploratory production-agent runs separate from repeatable release reporting.
    Do not patch the TCK or add model/OAuth gateway dependencies to the
    deterministic fixture.
 

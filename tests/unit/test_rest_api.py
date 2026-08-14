@@ -12,6 +12,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from server.app.api.dependencies import (
+    get_artifact_store,
     get_settings_dep,
     get_storage_backend_dep,
     set_config_store,
@@ -88,6 +89,23 @@ class TestHealthEndpoints:
         assert response.status_code == 200
         data = response.json()
         assert data["ready"] is True
+
+    def test_ready_check_fails_closed_when_selected_artifact_store_is_unavailable(self):
+        """Readiness must not hide failure of the builder-selected durable store."""
+
+        class UnavailableArtifactStore:
+            async def health_check(self) -> None:
+                raise ConnectionError("private endpoint details")
+
+        app.dependency_overrides[get_artifact_store] = lambda: UnavailableArtifactStore()
+        try:
+            response = client.get("/ready")
+        finally:
+            app.dependency_overrides.pop(get_artifact_store, None)
+
+        assert response.status_code == 503
+        assert response.json() == {"ready": False}
+        assert "private endpoint details" not in response.text
 
     def test_general_exception_response_redacts_internal_error(self):
         """Unhandled 500 responses must not expose raw exception text."""
@@ -798,8 +816,6 @@ class TestSessionAgentName:
                     "name": agent_name,
                     "system_prompt": "You are scoped.",
                     "mode": "primary",
-                    "skills": [],
-                    "tools": [],
                 },
             )
             assert create_agent.status_code == 201
@@ -847,8 +863,6 @@ class TestSessionAgentName:
                         "name": agent_name,
                         "system_prompt": "You are scoped.",
                         "mode": "primary",
-                        "skills": [],
-                        "tools": [],
                     },
                 )
                 assert create_agent.status_code == 201
