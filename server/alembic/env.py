@@ -62,11 +62,11 @@ def get_database_url() -> str:
         db_path = Path(uri)
         if not db_path.is_absolute():
             db_path = settings.workspace_path / uri
-        return f"sqlite:///{db_path}"
+        return f"sqlite+aiosqlite:///{db_path}"
     else:
         # Default to SQLite for memory backend during migrations
         db_path = settings.workspace_path / ".cognition" / "state.db"
-        return f"sqlite:///{db_path}"
+        return f"sqlite+aiosqlite:///{db_path}"
 
 
 def run_migrations_offline() -> None:

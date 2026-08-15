@@ -1,8 +1,8 @@
 """Pydantic models for the ConfigRegistry system.
 
 These models represent the runtime configuration entities that move out of
-Settings into the DB-backed ConfigRegistry: providers, agents (seeds from
-AgentDefinition), tools, skills, and config-change events.
+Settings into the DB-backed ConfigRegistry: providers, agents (including skill
+bundles), tools, sandbox profiles, and config-change events.
 
 Design notes:
 - Scope is a plain dict[str, str] (e.g. {"user": "alice", "project": "myapp"}).
@@ -32,6 +32,18 @@ PROVIDER_TYPES = {
     "google_genai",
     "google_vertexai",
 }
+
+
+class AgentConfigRecord(BaseModel):
+    """Immutable identity metadata for one exact-scoped Agent revision."""
+
+    name: str
+    scope: dict[str, str] = Field(default_factory=dict)
+    scope_key: str
+    definition: dict[str, Any]
+    revision: int = Field(ge=1)
+    definition_digest: str
+    source: Literal["file", "api"] = "api"
 
 # ---------------------------------------------------------------------------
 # Provider / LLM
@@ -83,6 +95,32 @@ class ProviderConfig(BaseModel):
     scope: dict[str, str] = Field(default_factory=dict)
     source: Literal["file", "api"] = Field(default="file")
 
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_legacy_extra_fields(cls, data: Any) -> Any:
+        """Accept legacy provider payloads that used ``extra_fields``.
+
+        The public and storage models now use ``extra`` plus first-class
+        ``base_url``. Older builder integrations and scenario tests placed
+        OpenAI-compatible ``base_url`` under ``extra_fields``; lifting it here
+        keeps that shape working without making credentials or store location
+        model-controlled input.
+        """
+        if not isinstance(data, dict):
+            return data
+
+        normalized = dict(data)
+        legacy_extra = normalized.pop("extra_fields", None)
+        if isinstance(legacy_extra, dict):
+            canonical_extra = dict(legacy_extra)
+            canonical_extra.update(normalized.get("extra") or {})
+            normalized["extra"] = canonical_extra
+            if normalized.get("base_url") is None and isinstance(
+                canonical_extra.get("base_url"), str
+            ):
+                normalized["base_url"] = canonical_extra["base_url"]
+        return normalized
+
     @field_validator("id")
     @classmethod
     def validate_id(cls, v: str) -> str:
@@ -127,26 +165,16 @@ class ProviderConfig(BaseModel):
 
 
 class ToolRegistration(BaseModel):
-    """A tool registered in the config registry.
+    """Legacy tool registry record retained for existing storage rows.
 
-    Tools can be registered in two ways:
-    - ``path``: A Python module path (e.g. ``mypackage.tools.jira``) or file
-      path (e.g. ``.cognition/tools/my_tool.py``). The module must be importable
-      by the server process — suitable for pre-installed packages.
-    - ``code``: Full Python source code stored directly in the DB. Cognition
-      executes it at runtime via ``exec()``. Suitable for builder applications
-      that cannot access the server filesystem (e.g. separate containers).
-
-    Exactly one of ``path`` or ``code`` must be provided.
-
-    Security note: Tool code executes with full Python privileges inside the
-    sandbox backend. ``POST /tools`` should be restricted to authorized
-    administrators at the Gateway/proxy layer.
+    Cognition v0.14 no longer exposes ``/tools`` or loads Python tools from
+    ConfigRegistry records. Existing rows may remain in the database, but the
+    runtime ignores them and no compatibility layer is provided.
 
     Attributes:
         name: Tool identifier.
-        path: File path or module path to load the tool from.
-        code: Python source code to execute at runtime.
+        path: Legacy file path or module path.
+        code: Legacy Python source code.
         enabled: Whether this tool is active.
         description: Optional description for documentation purposes.
         scope: Scope this entry applies to. Empty dict = global.
@@ -185,79 +213,6 @@ class ToolRegistration(BaseModel):
         if has_path and has_code:
             raise ValueError("Provide either 'path' or 'code', not both.")
         return self
-
-
-# ---------------------------------------------------------------------------
-# Skill
-# ---------------------------------------------------------------------------
-
-
-class SkillDefinition(BaseModel):
-    """A skill registered in the config registry.
-
-    Skills are Markdown files that inject domain-specific instructions into
-    an agent's context window via progressive disclosure.
-
-    Attributes:
-        name: Skill identifier (e.g. "typescript-best-practices").
-        path: Filesystem path to the skill directory or SKILL.md file.
-        enabled: Whether this skill is active.
-        description: Short description shown in skill listings.
-        content: Full SKILL.md content (YAML frontmatter + markdown body).
-        scope: Scope this entry applies to. Empty dict = global.
-        source: "file" or "api".
-    """
-
-    name: str = Field(..., min_length=1, max_length=100)
-    path: str = Field(..., min_length=1)
-    enabled: bool = Field(default=True)
-    description: str | None = Field(default=None)
-    content: str | None = Field(default=None)
-    scope: dict[str, str] = Field(default_factory=dict)
-    source: Literal["file", "api"] = Field(default="file")
-
-    @field_validator("name")
-    @classmethod
-    def validate_name(cls, v: str) -> str:
-        """Validate skill name format."""
-        if not v.replace("-", "").replace("_", "").isalnum():
-            raise ValueError(f"Skill name must be alphanumeric with hyphens/underscores only: {v}")
-        return v
-
-
-# ---------------------------------------------------------------------------
-# MCP Server
-# ---------------------------------------------------------------------------
-
-
-class McpServerRegistration(BaseModel):
-    """An MCP (Model Context Protocol) server registered in the config registry.
-
-    Attributes:
-        name: Server identifier.
-        url: HTTP/HTTPS URL for the MCP server.
-        headers: Optional request headers (e.g. auth tokens).
-        enabled: Whether this server is active.
-        scope: Scope this entry applies to.
-        source: "file" or "api".
-        transport: Transport protocol ("sse" or "streamable_http").
-    """
-
-    name: str = Field(..., min_length=1, max_length=100)
-    url: str = Field(..., min_length=1)
-    headers: dict[str, str] = Field(default_factory=dict)
-    enabled: bool = Field(default=True)
-    scope: dict[str, str] = Field(default_factory=dict)
-    source: Literal["file", "api"] = Field(default="file")
-    transport: Literal["sse", "streamable_http"] = Field(default="sse")
-
-    @field_validator("url")
-    @classmethod
-    def validate_url(cls, v: str) -> str:
-        """Ensure URL uses HTTP/HTTPS only."""
-        if not v.startswith(("http://", "https://")):
-            raise ValueError(f"MCP server URL must start with http:// or https://, got: {v!r}")
-        return v
 
 
 # ---------------------------------------------------------------------------
@@ -404,7 +359,9 @@ class SandboxProfile(BaseModel):
 # Artifact
 # ---------------------------------------------------------------------------
 
-ARTIFACT_TYPES = Literal["scratch", "artifact", "contract", "eval", "memory", "policy"]
+ARTIFACT_TYPES = Literal[
+    "scratch", "artifact", "file", "contract", "eval", "memory", "policy"
+]
 
 
 class ArtifactDefinition(BaseModel):
@@ -417,11 +374,15 @@ class ArtifactDefinition(BaseModel):
     Attributes:
         id: Unique artifact identifier (UUID).
         name: Human-readable name (e.g. "feature-list", "progress").
-        artifact_type: Route category (scratch, artifact, contract, eval,
-            memory, policy).
+        artifact_type: Route category (scratch, artifact, file, contract,
+            eval, memory, policy).
         path: Virtual path within the type route (e.g. "feature_list.json").
         content: File content (JSON, Markdown, or plain text).
         content_type: MIME or type tag (e.g. "application/json").
+        object_key: Opaque durable-object key when the body is stored outside
+            the database.
+        content_checksum: SHA-256 hex digest of the durable body.
+        content_size: UTF-8 body size in bytes.
         version: Monotonic version number (incremented on update).
         parent_version: Version this artifact descends from (None for v1).
         run_id: Optional associated run identifier.
@@ -437,9 +398,12 @@ class ArtifactDefinition(BaseModel):
     id: str = Field(..., min_length=1, max_length=100)
     name: str = Field(..., min_length=1, max_length=100)
     artifact_type: ARTIFACT_TYPES = Field(default="scratch")
-    path: str = Field(default="")
+    path: str = Field(default="", max_length=1024)
     content: str = Field(default="")
     content_type: str = Field(default="text/plain")
+    object_key: str | None = Field(default=None, max_length=1024)
+    content_checksum: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    content_size: int | None = Field(default=None, ge=0)
     version: int = Field(default=1, ge=1)
     parent_version: int | None = Field(default=None, ge=1)
     run_id: str | None = Field(default=None)
@@ -460,11 +424,27 @@ class ArtifactDefinition(BaseModel):
             )
         return v
 
+    @field_validator("path")
+    @classmethod
+    def validate_artifact_path(cls, v: str) -> str:
+        """Require an empty or normalized relative POSIX manifest path."""
+        if not v:
+            return v
+        segments = v.split("/")
+        if (
+            v.startswith("/")
+            or "\\" in v
+            or "\x00" in v
+            or any(segment in {"", ".", ".."} for segment in segments)
+        ):
+            raise ValueError("Artifact path must be a normalized relative POSIX path")
+        return v
+
     @field_validator("artifact_type")
     @classmethod
     def validate_artifact_type(cls, v: str) -> str:
         """Ensure artifact type is one of the known route categories."""
-        allowed = {"scratch", "artifact", "contract", "eval", "memory", "policy"}
+        allowed = {"scratch", "artifact", "file", "contract", "eval", "memory", "policy"}
         if v not in allowed:
             raise ValueError(f"Artifact type must be one of {sorted(allowed)}, got: {v!r}")
         return v
@@ -477,9 +457,7 @@ class ArtifactDefinition(BaseModel):
 EntityType = Literal[
     "provider",
     "tool",
-    "skill",
     "agent",
-    "mcp_server",
     "sandbox_profile",
 ]
 OperationType = Literal["upsert", "delete"]
@@ -564,16 +542,13 @@ class GlobalAgentDefaults(BaseModel):
 
     Attributes:
         memory: List of memory file paths.
-        skills: List of skill directory paths.
         subagents: Subagent specs (list of dicts).
         interrupt_on: Tool-name -> bool or rich human-in-the-loop config.
         permissions: Deep Agents filesystem permission rules.
         recursion_limit: Max ReAct recursion depth.
-        mcp_servers: MCP server config dicts keyed by name.
     """
 
     memory: list[str] = Field(default_factory=lambda: ["AGENTS.md"])
-    skills: list[str] = Field(default_factory=list)
     subagents: list[dict[str, Any]] = Field(default_factory=list)
     async_subagents: list[AsyncSubagentConfig] = Field(default_factory=list)
     interrupt_on: dict[str, Any] = Field(default_factory=dict)
@@ -582,7 +557,6 @@ class GlobalAgentDefaults(BaseModel):
     tool_token_limit_before_evict: int | None = Field(default=None, gt=0)
     context_policy: ContextPolicy | None = Field(default=None)
     recursion_limit: int = Field(default=1000, gt=0)
-    mcp_servers: dict[str, Any] = Field(default_factory=dict)
 
 
 __all__ = [
@@ -594,13 +568,11 @@ __all__ = [
     "GlobalAgentDefaults",
     "GlobalProviderDefaults",
     "LambdaMicroVmCloudWatchLogging",
-    "McpServerRegistration",
     "OperationType",
     "ProviderConfig",
     "LambdaMicroVmIdlePolicy",
     "LambdaMicroVmLogging",
     "LambdaMicroVmQuota",
     "SandboxProfile",
-    "SkillDefinition",
     "ToolRegistration",
 ]

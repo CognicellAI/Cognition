@@ -199,6 +199,7 @@ class SessionManager:
     async def create_session(
         self,
         workspace_path: str,
+        agent_name: str,
         title: str | None = None,
         config: SessionConfig | None = None,
         scopes: dict[str, str] | None = None,
@@ -211,6 +212,7 @@ class SessionManager:
 
         Args:
             workspace_path: Path to the project workspace.
+            agent_name: Builder-provisioned Agent bound to the session.
             title: Optional session title.
             config: Optional session configuration.
             scopes: Builder-defined effective scope key-value pairs.
@@ -234,6 +236,7 @@ class SessionManager:
             config=config or SessionConfig(),
             created_at=now,
             updated_at=now,
+            agent_name=agent_name,
             message_count=0,
             scopes=scopes or {},
         )
@@ -243,6 +246,7 @@ class SessionManager:
             session_id=session.id,
             thread_id=session.thread_id,
             config=session.config,
+            agent_name=session.agent_name,
             title=session.title,
             scopes=session.scopes,
         )
@@ -262,7 +266,11 @@ class SessionManager:
 
         return session
 
-    async def get_session(self, session_id: str) -> Session | None:
+    async def get_session(
+        self,
+        session_id: str,
+        effective_scope: dict[str, str] | None = None,
+    ) -> Session | None:
         """Get a session by ID.
 
         First checks the in-memory cache, then falls back to StorageBackend.
@@ -277,11 +285,13 @@ class SessionManager:
         # Check cache first
         if session_id in self._sessions:
             managed = self._sessions[session_id]
+            if managed.session.scopes != (effective_scope or {}):
+                return None
             managed.last_accessed = datetime.now(UTC)
             return managed.session
 
         # Fall back to storage
-        session = await self._storage.get_session(session_id)
+        session = await self._storage.get_session(session_id, effective_scope)
         if session:
             self._sessions[session_id] = ManagedSession(session=session)
 
@@ -301,21 +311,19 @@ class SessionManager:
         Returns:
             List of matching Session objects.
         """
-        sessions = await self._storage.list_sessions()
+        sessions = await self._storage.list_sessions(filter_scopes=filter_scopes)
 
         # Filter by workspace if specified
         if workspace_path:
             sessions = [s for s in sessions if s.workspace_path == workspace_path]
 
-        # Filter by scopes if specified
-        if filter_scopes:
-            sessions = [
-                s for s in sessions if all(s.scopes.get(k) == v for k, v in filter_scopes.items())
-            ]
-
         return sessions
 
-    async def delete_session(self, session_id: str) -> bool:
+    async def delete_session(
+        self,
+        session_id: str,
+        effective_scope: dict[str, str] | None = None,
+    ) -> bool:
         """Delete a session.
 
         Removes the session from storage and cache, and notifies
@@ -328,10 +336,13 @@ class SessionManager:
             True if session was deleted, False if not found.
         """
         # Remove from cache
+        session = await self.get_session(session_id, effective_scope)
+        if session is None:
+            return False
         self._sessions.pop(session_id, None)
 
         # Remove from storage
-        deleted = await self._storage.delete_session(session_id)
+        deleted = await self._storage.delete_session(session_id, effective_scope)
 
         if deleted:
             logger.info("Session deleted", session_id=session_id)
@@ -344,6 +355,7 @@ class SessionManager:
         session_id: str,
         title: str | None = None,
         status: SessionStatus | None = None,
+        effective_scope: dict[str, str] | None = None,
     ) -> Session | None:
         """Update a session's metadata.
 
@@ -355,7 +367,7 @@ class SessionManager:
         Returns:
             The updated Session if found, None otherwise.
         """
-        session = await self.get_session(session_id)
+        session = await self.get_session(session_id, effective_scope)
         if not session:
             return None
 
@@ -371,6 +383,7 @@ class SessionManager:
             session_id=session_id,
             title=session.title,
             status=session.status.value,
+            effective_scope=effective_scope,
         )
 
         # Update in cache

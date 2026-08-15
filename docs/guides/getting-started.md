@@ -13,7 +13,7 @@ This guide gets you from zero to a working integration in under 15 minutes.
 - [3. Send a message from your application](#3-send-a-message-from-your-application)
 - [4. Parse the streaming response](#4-parse-the-streaming-response)
 - [5. Persist context across turns](#5-persist-context-across-turns)
-- [6. Give the agent your tools](#6-give-the-agent-your-tools)
+- [6. Connect external capability](#6-connect-external-capability)
 - [7. Scope sessions to your users](#7-scope-sessions-to-your-users)
 - [What's next](#whats-next)
 
@@ -233,7 +233,7 @@ Every event has a type. Here are the ones you'll use in a UI:
 | `tool_call` | `name`, `args`, `id` | Show a "running tool…" indicator |
 | `tool_result` | `tool_call_id`, `output`, `exit_code` | Hide the indicator; optionally show the output |
 | `status` | `status: "thinking" \| "idle"` | Drive a loading spinner |
-| `usage` | `input_tokens`, `output_tokens`, `estimated_cost`, `model` | Update a cost tracker |
+| `usage` | `status`, nullable token fields, `model_calls`, `model` | Show provider-reported usage availability |
 | `done` | `assistant_data` | Final message stored; stream is complete |
 | `error` | `message`, `code` | Show an error; stream is terminated |
 
@@ -337,87 +337,35 @@ curl -X POST "http://localhost:8000/sessions/$SESSION/abort"
 
 ---
 
-## 6. Give the agent your tools
+## 6. Connect external capability
 
-Tools are the primary way to connect Cognition to your systems — databases, APIs, queues, filesystems. The agent calls them during its ReAct loop just like any other tool.
+Cognition v0.14 does not load Cognition-managed Python tools from `.cognition/tools/` or `/tools`. Connect capability through the surfaces that match where the work should live:
 
-### Option A — File drop (for filesystem access)
+| Need | Use |
+|---|---|
+| Builder-managed systems such as GitHub, Jira, Slack, databases, or internal APIs | Agent-owned MCP servers |
+| Reusable procedures, scripts, and domain playbooks | Skills installed into the Deep Agents backend/sandbox |
+| Runtime guardrails, retries, approvals, or telemetry | Middleware |
+| Filesystem/process execution | The configured sandbox backend and Deep Agents-native runtime tools |
 
-Drop Python files into `.cognition/tools/`. Every public function becomes a tool. Hot-reloaded on change.
+For remote tools, add MCP servers to the Agent definition and admit their origins at deployment:
 
-```python
-# .cognition/tools/jira_tools.py
-import httpx
-
-def get_ticket(ticket_id: str) -> str:
-    """Fetch a Jira ticket by ID and return its title and status."""
-    resp = httpx.get(
-        f"https://jira.example.com/rest/api/2/issue/{ticket_id}",
-        headers={"Authorization": "Bearer ..."},
-    )
-    return resp.json()["fields"]["summary"]
-
-def add_comment(ticket_id: str, comment: str) -> str:
-    """Add a comment to a Jira ticket."""
-    httpx.post(
-        f"https://jira.example.com/rest/api/2/issue/{ticket_id}/comment",
-        json={"body": comment},
-    )
-    return f"Comment added to {ticket_id}"
+```yaml
+mcp:
+  servers:
+    github:
+      url: https://mcp-egress.internal/mcp/github
+      auth:
+        type: workload_token_exchange
+        profile: production_egress
 ```
-
-### Option B — API registration (for containerised builder apps)
-
-When your builder app and Cognition run in separate containers, use `POST /tools` with inline Python source:
-
-```python
-import httpx
-
-tool_code = """
-from langchain_core.tools import tool
-import httpx as _httpx
-
-@tool
-def get_ticket(ticket_id: str) -> str:
-    \"\"\"Fetch a Jira ticket by ID and return its title and status.\"\"\"
-    resp = _httpx.get(
-        f"https://jira.example.com/rest/api/2/issue/{ticket_id}",
-        headers={"Authorization": "Bearer ..."},
-    )
-    return resp.json()["fields"]["summary"]
-"""
-
-async with httpx.AsyncClient() as client:
-    await client.post(
-        "http://localhost:8000/tools",
-        json={
-            "name": "jira-tools",
-            "code": tool_code,
-            "description": "Jira ticket operations",
-        },
-    )
-```
-
-The tool is stored in the database and loaded on every agent invocation — no restart needed. Use `DELETE /tools/{name}` to remove it.
-
-> **Trust model:** Tool code runs with full Python privileges inside the sandbox. Restrict `POST /tools` to administrators at your Gateway layer.
-
-### Inspect what tools are active
 
 ```bash
-curl http://localhost:8000/tools
+export COGNITION_MCP_OUTBOUND_TRANSPORT_ENABLED=true
+export COGNITION_MCP_ALLOWED_ORIGINS=https://mcp-egress.internal
 ```
 
-```json
-{
-  "tools": [
-    {"name": "ls",         "source_type": "file",     "enabled": true},
-    {"name": "grep",       "source_type": "file",     "enabled": true},
-    {"name": "jira-tools", "source_type": "api_code", "enabled": true}
-  ],
-  "count": 3
-}
-```
+The allowlist matches only `scheme://host[:port]`; the Agent-owned MCP server URL keeps its path.
 
 ---
 

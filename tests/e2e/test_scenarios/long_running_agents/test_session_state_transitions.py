@@ -55,10 +55,18 @@ class TestSessionLifecycleWorkflow:
     async def test_pause_session_transitions_to_idle(
         self, api_client: ScenarioTestClient
     ) -> None:
-        """Pausing an active session transitions it to idle."""
+        """Pausing an active session transitions it to idle.
+
+        v0.13 rejects pause for already-idle sessions with 409 because there is
+        no active run to pause.
+        """
         session_id = await api_client.create_session("Pause Test")
 
         pause = await api_client.post(f"/sessions/{session_id}/pause")
+        if pause.status_code == 409:
+            after = await api_client.get(f"/sessions/{session_id}")
+            assert after.json()["status"] == "idle"
+            return
         assert pause.status_code == 200
         assert pause.json()["success"] is True
 

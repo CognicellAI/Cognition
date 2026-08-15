@@ -9,9 +9,11 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import AnyHttpUrl, BaseModel, Field
+from pydantic import AnyHttpUrl, BaseModel, ConfigDict, Field, model_validator
 
 from server.app.agent.definition import (
+    A2AConfig,
+    AgentMcpConfig,
     AsyncSubagentConfig,
     ContextPolicy,
     FilesystemPermissionConfig,
@@ -39,7 +41,11 @@ class SessionCreate(BaseModel):
     """
 
     title: str | None = Field(None, max_length=200, description="Optional session title")
-    agent_name: str = Field("default", description="Agent to use for this session")
+    agent_name: str = Field(
+        ...,
+        min_length=1,
+        description="Builder-provisioned Agent to bind to this session",
+    )
     metadata: dict[str, str] | None = Field(
         default=None,
         description="Arbitrary key-value metadata attached to the session",
@@ -59,16 +65,24 @@ class SessionResponse(BaseModel):
     title: str | None = Field(None, description="Session title")
     thread_id: str = Field(..., description="LangGraph thread ID for checkpointing")
     status: Literal[
-        "queued", "starting", "active", "idle",
-        "waiting_for_approval", "stalled",
-        "aborting", "aborted",
-        "failed", "done", "expired",
-        "inactive", "error",
+        "queued",
+        "starting",
+        "active",
+        "idle",
+        "waiting_for_approval",
+        "stalled",
+        "aborting",
+        "aborted",
+        "failed",
+        "done",
+        "expired",
+        "inactive",
+        "error",
     ] = Field(..., description="Session status")
     created_at: str = Field(..., description="Session creation timestamp (ISO format)")
     updated_at: str = Field(..., description="Last activity timestamp (ISO format)")
     message_count: int = Field(0, description="Number of messages in session")
-    agent_name: str = Field("default", description="Agent bound to this session")
+    agent_name: str = Field(..., description="Agent bound to this session")
     idempotency_key: str | None = Field(
         default=None, description="Idempotency key used during creation, if any"
     )
@@ -76,9 +90,7 @@ class SessionResponse(BaseModel):
         default_factory=dict,
         description="Arbitrary key-value metadata attached to the session",
     )
-    active_run_id: str | None = Field(
-        default=None, description="Currently active run, if any"
-    )
+    active_run_id: str | None = Field(default=None, description="Currently active run, if any")
     latest_run_id: str | None = Field(
         default=None, description="Most recent run associated with the session"
     )
@@ -117,6 +129,8 @@ class SessionList(BaseModel):
 
     sessions: list[SessionResponse] = Field(default_factory=list)
     total: int = Field(..., description="Total number of sessions")
+    has_more: bool = False
+    next_offset: int | None = None
 
 
 class SessionUpdate(BaseModel):
@@ -301,7 +315,7 @@ class ContextMessageDebug(BaseModel):
     id: str
     role: str
     token_count: int | None = None
-    estimated_tokens: int
+    estimated_tokens: int | None = None
     created_at: datetime
 
 
@@ -314,7 +328,7 @@ class ContextDebugResponse(BaseModel):
     scope_keys: list[str] = Field(default_factory=list)
     policy: dict[str, Any] = Field(default_factory=dict)
     message_count: int
-    estimated_tokens: int
+    estimated_tokens: int | None = None
     messages: list[ContextMessageDebug] = Field(default_factory=list)
 
 
@@ -410,7 +424,11 @@ class UsageEvent(BaseModel):
 
     event: Literal["usage"] = "usage"
     data: dict = Field(
-        ..., description="Usage with 'input_tokens', 'output_tokens', 'estimated_cost'"
+        ...,
+        description=(
+            "Provider-authoritative usage with nullable token fields and "
+            "complete/partial/unavailable status"
+        ),
     )
 
 
@@ -631,7 +649,13 @@ class ConfigUpdateRequest(BaseModel):
         None, description="Rate limiting settings (per_minute, burst)"
     )
     observability: dict[str, Any] | None = Field(
-        None, description="Observability settings (otel_enabled, metrics_port, otel_endpoint)"
+        None,
+        description=(
+            "Observability settings (otel_enabled, otel_max_export_bytes, "
+            "otlp_queue_size, otlp_export_timeout_ms, trace_sample_ratio, "
+            "trace_detail, otlp_metric_export_interval_ms, metrics_enabled, "
+            "metrics_port, otel_endpoint, log_format)"
+        ),
     )
 
 
@@ -675,7 +699,6 @@ class GlobalAgentDefaultsResponse(BaseModel):
     """Global agent defaults exposed by the ConfigRegistry API."""
 
     memory: list[str] = Field(default_factory=list)
-    skills: list[str] = Field(default_factory=list)
     subagents: list[dict[str, Any]] = Field(default_factory=list)
     async_subagents: list[AsyncSubagentConfig] = Field(default_factory=list)
     interrupt_on: dict[str, Any] = Field(default_factory=dict)
@@ -684,14 +707,12 @@ class GlobalAgentDefaultsResponse(BaseModel):
     tool_token_limit_before_evict: int | None = None
     context_policy: ContextPolicy | None = None
     recursion_limit: int
-    mcp_servers: dict[str, Any] = Field(default_factory=dict)
 
 
 class GlobalAgentDefaultsUpdate(BaseModel):
     """Partial update model for global agent defaults."""
 
     memory: list[str] | None = None
-    skills: list[str] | None = None
     subagents: list[dict[str, Any]] | None = None
     async_subagents: list[AsyncSubagentConfig] | None = None
     interrupt_on: dict[str, HumanInTheLoopConfig] | None = None
@@ -700,51 +721,6 @@ class GlobalAgentDefaultsUpdate(BaseModel):
     tool_token_limit_before_evict: int | None = None
     context_policy: ContextPolicy | None = None
     recursion_limit: int | None = None
-    mcp_servers: dict[str, Any] | None = None
-
-
-class McpServerCreate(BaseModel):
-    """Request to register a remote MCP server."""
-
-    name: str = Field(..., min_length=1, max_length=100)
-    url: str = Field(..., min_length=1)
-    headers: dict[str, str] = Field(default_factory=dict)
-    enabled: bool = True
-    transport: Literal["sse", "streamable_http"] = "sse"
-    scope: dict[str, str] | None = None
-
-
-class McpServerUpdate(BaseModel):
-    """Partial update request for a remote MCP server."""
-
-    url: str | None = Field(default=None, min_length=1)
-    headers: dict[str, str] | None = None
-    enabled: bool | None = None
-    transport: Literal["sse", "streamable_http"] | None = None
-
-
-class McpServerResponse(BaseModel):
-    """Registered remote MCP server response.
-
-    Headers are intentionally redacted from responses — they may contain
-    bearer tokens or other sensitive values. Builders who need to view or
-    rotate header values should manage them through their own infrastructure.
-    """
-
-    name: str
-    url: str
-    headers: dict[str, str] = Field(default_factory=dict)
-    enabled: bool
-    transport: Literal["sse", "streamable_http"]
-    scope: dict[str, str] = Field(default_factory=dict)
-    source: Literal["file", "api"]
-
-
-class McpServerList(BaseModel):
-    """List of remote MCP servers visible in scope."""
-
-    servers: list[McpServerResponse]
-    count: int
 
 
 class SandboxProfileCreate(BaseModel):
@@ -856,12 +832,29 @@ class CapabilityResponse(BaseModel):
 class AgentResponse(BaseModel):
     """Agent information for API responses."""
 
-    name: str = Field(..., description="Agent name")
+    name: str = Field(..., description="Stable agent runtime identifier")
+    revision: int = Field(..., ge=1, description="Exact-scoped Agent revision")
+    definition_digest: str = Field(
+        ...,
+        min_length=64,
+        max_length=64,
+        description="SHA-256 digest of the validated Agent definition",
+    )
+    display_name: str | None = Field(
+        None,
+        description="Optional human-readable name used for public Agent presentation",
+    )
     description: str | None = Field(None, description="Agent description")
     mode: Literal["primary", "subagent", "all"] = Field(..., description="Agent mode")
     hidden: bool = Field(..., description="Whether agent is hidden from listings")
-    native: bool = Field(..., description="Whether agent is built-in")
-    a2a_exposed: bool = Field(default=False, description="Whether agent is exposed via A2A protocol")
+    native: bool = Field(
+        ...,
+        description=("Legacy compatibility flag; Cognition does not create native Agents"),
+    )
+    a2a: A2AConfig = Field(
+        default_factory=A2AConfig,
+        description="A2A exposure and public Agent Card presentation",
+    )
     provider: str | None = Field(
         None,
         description="Deprecated compatibility field. Use config.provider instead.",
@@ -893,17 +886,10 @@ class AgentResponse(BaseModel):
     async_subagents: list[AsyncSubagentConfig] = Field(
         default_factory=list,
         description=(
-            "Experimental remote Agent Protocol async subagents exposed as "
-            "background task tools"
+            "Experimental remote Agent Protocol async subagents exposed as background task tools"
         ),
     )
-    # ISSUE-009: Added tools and skills for better agent introspection
-    tools: list[str] = Field(
-        default_factory=list, description="Tool paths this agent has access to"
-    )
-    skills: list[str] = Field(
-        default_factory=list, description="Skill directories this agent can use"
-    )
+    mcp: AgentMcpConfig = Field(default_factory=AgentMcpConfig)
     system_prompt: str | None = Field(None, description="Agent's system prompt")
 
 
@@ -930,40 +916,30 @@ class AgentList(BaseModel):
     agents: list[AgentResponse] = Field(
         default_factory=list, description="List of available agents"
     )
+    has_more: bool = False
+    next_offset: int | None = None
 
 
-# ============================================================================
-# Tool Models
-# ============================================================================
+class McpServerReadinessResponse(BaseModel):
+    """Freshness-qualified MCP discovery observation."""
+
+    server_alias: str
+    required: bool
+    status: Literal["ready", "unavailable", "unknown"]
+    observed_at: datetime | None = None
+    fresh_until: datetime | None = None
+    tool_count: int = 0
+    schema_digest: str | None = None
+    failure_category: str | None = None
+    authorization_truth: Literal[False] = False
 
 
-class ToolResponse(BaseModel):
-    """Tool information for API responses."""
+class McpReadinessResponse(BaseModel):
+    """Scoped MCP readiness for the current Agent revision."""
 
-    name: str = Field(..., description="Tool name")
-    source_type: str = Field(
-        ...,
-        description=(
-            "Origin of the tool: 'builtin' (built-in), 'file' (file-discovered), "
-            "'api_code' (API-registered Python source), 'api_path' (API-registered module path)"
-        ),
-    )
-    module: str | None = Field(None, description="Module path if loaded from a module path")
-    description: str | None = Field(None, description="Tool description")
-    enabled: bool = Field(True, description="Whether the tool is enabled")
-    interrupt_on: bool = Field(
-        default=False,
-        description="Whether this tool is marked as requiring approval by default",
-    )
-    # Back-compat alias kept for existing consumers
-    source: str = Field(..., description="Deprecated — use source_type")
-
-
-class ToolList(BaseModel):
-    """List of tools response."""
-
-    tools: list[ToolResponse] = Field(default_factory=list, description="List of registered tools")
-    count: int = Field(0, description="Total number of tools")
+    agent_name: str
+    agent_revision: int = Field(ge=1)
+    servers: list[McpServerReadinessResponse] = Field(default_factory=list)
 
 
 # ============================================================================
@@ -1003,62 +979,6 @@ class ModelList(BaseModel):
     """List of available models."""
 
     models: list[ModelInfo] = Field(default_factory=list, description="List of available models")
-
-
-# ============================================================================
-# Skill Models
-# ============================================================================
-
-
-class SkillCreate(BaseModel):
-    """Request to create or replace a skill."""
-
-    name: str = Field(..., min_length=1, max_length=100, description="Skill identifier")
-    path: str | None = Field(
-        default=None,
-        min_length=1,
-        description="Filesystem path to skill directory or SKILL.md. Auto-generated if content is provided.",
-    )
-    enabled: bool = Field(default=True, description="Whether this skill is active")
-    description: str | None = Field(default=None, description="Short description")
-    content: str | None = Field(
-        default=None,
-        description="Full SKILL.md content (YAML frontmatter + markdown body). If provided, path is auto-generated.",
-    )
-    scope: dict[str, str] = Field(default_factory=dict, description="Scope (empty = global)")
-
-
-class SkillUpdate(BaseModel):
-    """Request to partially update a skill."""
-
-    path: str | None = Field(default=None)
-    enabled: bool | None = Field(default=None)
-    description: str | None = Field(default=None)
-    content: str | None = Field(
-        default=None, description="Full SKILL.md content (YAML frontmatter + markdown body)"
-    )
-    scope: dict[str, str] | None = Field(default=None)
-
-
-class SkillResponse(BaseModel):
-    """Skill information for API responses."""
-
-    name: str
-    path: str
-    enabled: bool
-    description: str | None = None
-    content: str | None = Field(
-        default=None, description="Full SKILL.md content (YAML frontmatter + markdown body)"
-    )
-    scope: dict[str, str] = Field(default_factory=dict)
-    source: str = "api"
-
-
-class SkillList(BaseModel):
-    """List of skills response."""
-
-    skills: list[SkillResponse] = Field(default_factory=list)
-    count: int = 0
 
 
 # ============================================================================
@@ -1168,6 +1088,25 @@ class ProviderCreate(BaseModel):
     extra: dict[str, Any] = Field(default_factory=dict)
     scope: dict[str, str] = Field(default_factory=dict)
 
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_legacy_extra_fields(cls, data: Any) -> Any:
+        """Accept legacy ``extra_fields`` while keeping ``extra`` canonical."""
+        if not isinstance(data, dict):
+            return data
+
+        normalized = dict(data)
+        legacy_extra = normalized.pop("extra_fields", None)
+        if isinstance(legacy_extra, dict):
+            canonical_extra = dict(legacy_extra)
+            canonical_extra.update(normalized.get("extra") or {})
+            normalized["extra"] = canonical_extra
+            if normalized.get("base_url") is None and isinstance(
+                canonical_extra.get("base_url"), str
+            ):
+                normalized["base_url"] = canonical_extra["base_url"]
+        return normalized
+
 
 class ProviderUpdate(BaseModel):
     """Request to partially update a provider config."""
@@ -1184,6 +1123,25 @@ class ProviderUpdate(BaseModel):
     region: str | None = None
     role_arn: str | None = None
     extra: dict[str, Any] | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_legacy_extra_fields(cls, data: Any) -> Any:
+        """Accept legacy ``extra_fields`` while keeping ``extra`` canonical."""
+        if not isinstance(data, dict):
+            return data
+
+        normalized = dict(data)
+        legacy_extra = normalized.pop("extra_fields", None)
+        if isinstance(legacy_extra, dict):
+            canonical_extra = dict(legacy_extra)
+            canonical_extra.update(normalized.get("extra") or {})
+            normalized["extra"] = canonical_extra
+            if normalized.get("base_url") is None and isinstance(
+                canonical_extra.get("base_url"), str
+            ):
+                normalized["base_url"] = canonical_extra["base_url"]
+        return normalized
 
 
 class ProviderResponse(BaseModel):
@@ -1231,14 +1189,28 @@ class ProviderTestResponse(BaseModel):
 class AgentCreate(BaseModel):
     """Request to create or replace an agent definition."""
 
-    name: str = Field(..., min_length=1, max_length=100, description="Agent identifier")
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(
+        ...,
+        min_length=1,
+        max_length=100,
+        description="Stable agent runtime identifier",
+    )
+    display_name: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=200,
+        description="Optional human-readable name used for public Agent presentation",
+    )
     system_prompt: str = Field(default="", description="System prompt text")
     description: str | None = Field(default=None)
     mode: Literal["primary", "subagent", "all"] = Field(default="primary")
     hidden: bool = Field(default=False)
-    a2a_exposed: bool = Field(default=False, description="Expose agent via A2A protocol")
-    tools: list[str] = Field(default_factory=list)
-    skills: list[str] = Field(default_factory=list)
+    a2a: A2AConfig = Field(
+        default_factory=A2AConfig,
+        description="A2A exposure and public Agent Card presentation",
+    )
     memory: list[str] = Field(default_factory=list)
     interrupt_on: dict[str, HumanInTheLoopConfig] = Field(default_factory=dict)
     permissions: list[FilesystemPermissionConfig] = Field(default_factory=list)
@@ -1264,6 +1236,7 @@ class AgentCreate(BaseModel):
         description="Trusted IAM role ARN assigned to this agent's sandbox runtime.",
     )
     middleware: list[Any] = Field(default_factory=list)
+    mcp: AgentMcpConfig = Field(default_factory=AgentMcpConfig)
     subagents: list[dict[str, Any]] = Field(default_factory=list)
     async_subagents: list[AsyncSubagentConfig] = Field(default_factory=list)
     scope: dict[str, str] = Field(default_factory=dict)
@@ -1272,13 +1245,22 @@ class AgentCreate(BaseModel):
 class AgentUpdate(BaseModel):
     """Request to partially update an agent definition."""
 
+    model_config = ConfigDict(extra="forbid")
+
+    display_name: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=200,
+        description="Optional human-readable name used for public Agent presentation",
+    )
     system_prompt: str | None = None
     description: str | None = None
     mode: Literal["primary", "subagent", "all"] | None = None
     hidden: bool | None = None
-    a2a_exposed: bool | None = None
-    tools: list[str] | None = None
-    skills: list[str] | None = None
+    a2a: A2AConfig | None = Field(
+        default=None,
+        description="A2A exposure and public Agent Card presentation; null resets defaults",
+    )
     memory: list[str] | None = None
     interrupt_on: dict[str, HumanInTheLoopConfig] | None = None
     permissions: list[FilesystemPermissionConfig] | None = None
@@ -1298,42 +1280,4 @@ class AgentUpdate(BaseModel):
     sandbox_profile: str | None = None
     sandbox_execution_role_arn: str | None = None
     middleware: list[Any] | None = None
-
-
-# ============================================================================
-# Tool CRUD Models
-# ============================================================================
-
-
-class ToolCreate(BaseModel):
-    """Request to register a tool in the ConfigRegistry.
-
-    Exactly one of ``path`` or ``code`` must be provided:
-
-    - ``path``: Python module path (e.g. ``mypackage.tools.jira``) or file
-      path. The module must be importable by the Cognition server process.
-    - ``code``: Full Python source code. Stored in the DB and executed at
-      runtime via ``exec()``. Suitable for builder applications that cannot
-      access the server filesystem.
-
-    Security note: Tool code executes with full Python privileges. This
-    endpoint should be restricted to authorized administrators.
-    """
-
-    name: str = Field(..., min_length=1, max_length=100, description="Tool identifier")
-    path: str | None = Field(default=None, description="Module or file path for the tool")
-    code: str | None = Field(default=None, description="Python source code to execute at runtime")
-    enabled: bool = Field(default=True)
-    description: str | None = Field(default=None)
-    interrupt_on: bool = Field(default=False)
-    scope: dict[str, str] = Field(default_factory=dict)
-
-
-class ToolUpdate(BaseModel):
-    """Request to partially update a tool registration."""
-
-    path: str | None = Field(default=None)
-    code: str | None = Field(default=None)
-    enabled: bool | None = Field(default=None)
-    description: str | None = Field(default=None)
-    interrupt_on: bool | None = Field(default=None)
+    mcp: AgentMcpConfig | None = None

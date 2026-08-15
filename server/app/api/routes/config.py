@@ -48,8 +48,16 @@ ALLOWED_CONFIG_PATHS = {
     "rate_limit.burst",
     # Observability
     "observability.otel_enabled",
+    "observability.otel_max_export_bytes",
+    "observability.otlp_queue_size",
+    "observability.otlp_export_timeout_ms",
+    "observability.trace_sample_ratio",
+    "observability.trace_detail",
+    "observability.otlp_metric_export_interval_ms",
+    "observability.metrics_enabled",
     "observability.metrics_port",
     "observability.otel_endpoint",
+    "observability.log_format",
 }
 
 
@@ -122,7 +130,6 @@ def _provider_defaults_response(defaults: Any) -> GlobalProviderDefaultsResponse
 def _agent_defaults_response(defaults: Any) -> GlobalAgentDefaultsResponse:
     return GlobalAgentDefaultsResponse(
         memory=list(defaults.memory),
-        skills=list(defaults.skills),
         subagents=list(defaults.subagents),
         async_subagents=list(defaults.async_subagents),
         interrupt_on={
@@ -136,7 +143,6 @@ def _agent_defaults_response(defaults: Any) -> GlobalAgentDefaultsResponse:
         tool_token_limit_before_evict=defaults.tool_token_limit_before_evict,
         context_policy=defaults.context_policy,
         recursion_limit=defaults.recursion_limit,
-        mcp_servers=dict(defaults.mcp_servers),
     )
 
 

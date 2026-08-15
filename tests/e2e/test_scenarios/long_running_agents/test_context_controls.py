@@ -111,7 +111,7 @@ class TestContextControls:
             assert debug["agent_name"] == agent_name
             assert debug["policy"]["max_input_tokens"] == 32000
             assert debug["message_count"] >= 1
-            assert debug["estimated_tokens"] > 0
+            assert debug["estimated_tokens"] is None
             assert "messages" in debug
             assert "context-ok" not in debug_response.text
             assert prompt not in debug_response.text

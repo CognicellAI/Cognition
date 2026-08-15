@@ -1,0 +1,511 @@
+"""Security tests for mandatory MCP transport authentication."""
+
+from __future__ import annotations
+
+import asyncio
+import base64
+import logging
+from types import SimpleNamespace
+from urllib.parse import parse_qs
+
+import httpx
+import pytest
+from cryptography.fernet import Fernet
+from langchain_mcp_adapters.interceptors import MCPToolCallRequest
+from mcp.client.auth import OAuthClientProvider
+from mcp.shared.auth import OAuthToken
+from mcp.types import CallToolResult
+from pydantic import SecretStr
+
+from server.app.agent.mcp_auth import (
+    AmbientWorkloadIdentity,
+    McpAuthenticationError,
+    McpTrustedContextInterceptor,
+    StaticBearerAuth,
+    WorkloadTokenExchangeAuth,
+    trusted_context_headers,
+)
+from server.app.agent.mcp_client import (
+    McpServerConfig,
+    McpTransportAuthenticationError,
+    mcp_config_to_connection,
+)
+from server.app.settings import McpWorkloadTokenExchangeProfile, Settings
+from server.app.storage.mcp_oauth import (
+    EncryptedMcpOAuthTokenStorage,
+    MemoryMcpOAuthStateRepository,
+)
+
+
+def _profile(**overrides) -> McpWorkloadTokenExchangeProfile:
+    values = {
+        "type": "oauth_token_exchange",
+        "token_endpoint": "https://identity.internal/token",
+        "subject_token_source": "workload_identity",
+        "audience": "canonical_server_uri",
+    }
+    values.update(overrides)
+    return McpWorkloadTokenExchangeProfile.model_validate(values)
+
+
+def test_none_connection_adds_no_authentication_or_context_headers() -> None:
+    connection = mcp_config_to_connection(
+        McpServerConfig(name="docs", url="https://mcp.example.test/docs"),
+        Settings(),
+    )
+
+    assert connection == {
+        "transport": "streamable_http",
+        "url": "https://mcp.example.test/docs",
+    }
+
+
+def test_static_bearer_reads_named_environment_at_transport_construction(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("DIRECT_MCP_TOKEN", "static-secret")
+    config = McpServerConfig.model_validate(
+        {
+            "name": "direct",
+            "url": "https://mcp.example.test/direct",
+            "auth": {"type": "static_bearer", "env": "DIRECT_MCP_TOKEN"},
+        }
+    )
+
+    connection = mcp_config_to_connection(config, Settings())
+    auth = connection["auth"]
+    assert isinstance(auth, StaticBearerAuth)
+    request = httpx.Request("POST", config.url)
+    authenticated = next(auth.auth_flow(request))
+
+    assert authenticated.headers["Authorization"] == "Bearer static-secret"
+    assert "static-secret" not in repr(auth)
+    assert "static-secret" not in str(config.model_dump(mode="json"))
+
+
+def test_static_bearer_missing_environment_fails_redacted() -> None:
+    config = McpServerConfig.model_validate(
+        {
+            "name": "direct",
+            "url": "https://mcp.example.test/direct",
+            "auth": {"type": "static_bearer", "env": "MISSING_MCP_TOKEN"},
+        }
+    )
+
+    with pytest.raises(
+        McpTransportAuthenticationError,
+        match="static_bearer_unavailable",
+    ):
+        mcp_config_to_connection(config, Settings())
+
+
+@pytest.mark.asyncio
+async def test_mcp_oauth_uses_upstream_provider_and_encrypted_exact_scope_state() -> None:
+    repository = MemoryMcpOAuthStateRepository()
+    key = SecretStr(Fernet.generate_key().decode("ascii"))
+    settings = Settings.model_validate(
+        {
+            "mcp_oauth_encryption_key": key,
+            "mcp_oauth_redirect_uri": "https://cognition.example.test/mcp/oauth/callback",
+        }
+    )
+    config = McpServerConfig.model_validate(
+        {
+            "name": "github",
+            "url": "https://mcp.example.test/github",
+            "auth": {"type": "mcp_oauth"},
+            "agent_name": "support-agent",
+            "effective_scope": {"tenant": "acme"},
+        }
+    )
+    storage = EncryptedMcpOAuthTokenStorage(
+        repository=repository,
+        encryption_key=key,
+        agent_name="support-agent",
+        effective_scope={"tenant": "acme"},
+        canonical_server_uri="https://mcp.example.test/github",
+    )
+    await storage.set_tokens(OAuthToken(access_token="scoped-oauth-token", expires_in=300))
+
+    connection = mcp_config_to_connection(config, settings, repository)
+    auth = connection["auth"]
+    assert isinstance(auth, OAuthClientProvider)
+    observed: list[str] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        observed.append(request.headers["Authorization"])
+        return httpx.Response(200, json={"ok": True})
+
+    async with httpx.AsyncClient(
+        auth=auth,
+        transport=httpx.MockTransport(handler),
+    ) as client:
+        await client.post(config.url)
+
+    assert observed == ["Bearer scoped-oauth-token"]
+
+
+def test_mcp_oauth_missing_deployment_configuration_fails_redacted() -> None:
+    config = McpServerConfig.model_validate(
+        {
+            "name": "github",
+            "url": "https://mcp.example.test/github",
+            "auth": {"type": "mcp_oauth"},
+        }
+    )
+
+    with pytest.raises(
+        McpTransportAuthenticationError,
+        match="oauth_configuration_unavailable",
+    ):
+        mcp_config_to_connection(config, Settings(), MemoryMcpOAuthStateRepository())
+
+
+def test_upstream_mcp_oauth_error_logging_is_redacted(caplog) -> None:
+    settings = Settings.model_validate(
+        {
+            "mcp_oauth_encryption_key": Fernet.generate_key().decode("ascii"),
+            "mcp_oauth_redirect_uri": "https://cognition.example.test/mcp/oauth/callback",
+        }
+    )
+    config = McpServerConfig.model_validate(
+        {
+            "name": "github",
+            "url": "https://mcp.example.test/github",
+            "auth": {"type": "mcp_oauth"},
+            "agent_name": "support-agent",
+        }
+    )
+    mcp_config_to_connection(config, settings, MemoryMcpOAuthStateRepository())
+    sdk_logger = logging.getLogger("mcp.client.auth.oauth2")
+
+    with caplog.at_level(logging.ERROR, logger=sdk_logger.name):
+        try:
+            raise RuntimeError("provider-token-response-secret")
+        except RuntimeError:
+            sdk_logger.exception("token exchange body: provider-token-response-secret")
+
+    assert "provider-token-response-secret" not in caplog.text
+    assert "details redacted" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_workload_exchange_is_exact_audience_bound_and_expiry_cached() -> None:
+    exchange_requests: list[httpx.Request] = []
+    mcp_authorization: list[str] = []
+
+    async def exchange_handler(request: httpx.Request) -> httpx.Response:
+        exchange_requests.append(request)
+        return httpx.Response(
+            200,
+            json={"access_token": "route-token", "token_type": "Bearer", "expires_in": 60},
+        )
+
+    async def mcp_handler(request: httpx.Request) -> httpx.Response:
+        mcp_authorization.append(request.headers["Authorization"])
+        return httpx.Response(200, json={"ok": True})
+
+    auth = WorkloadTokenExchangeAuth(
+        profile=_profile(),
+        audience="https://mcp-egress.internal/mcp/github",
+        identity=AmbientWorkloadIdentity(token_file=None, token=SecretStr("subject-token")),
+        client_factory=lambda: httpx.AsyncClient(transport=httpx.MockTransport(exchange_handler)),
+    )
+
+    async with httpx.AsyncClient(
+        auth=auth,
+        transport=httpx.MockTransport(mcp_handler),
+    ) as client:
+        await client.post("https://mcp-egress.internal/mcp/github")
+        await client.post("https://mcp-egress.internal/mcp/github")
+
+    assert len(exchange_requests) == 1
+    form = parse_qs(exchange_requests[0].content.decode("utf-8"))
+    assert form["audience"] == ["https://mcp-egress.internal/mcp/github"]
+    assert form["subject_token"] == ["subject-token"]
+    assert form["grant_type"] == ["urn:ietf:params:oauth:grant-type:token-exchange"]
+    assert mcp_authorization == ["Bearer route-token", "Bearer route-token"]
+
+
+@pytest.mark.asyncio
+async def test_workload_exchange_never_reuses_a_token_across_canonical_servers() -> None:
+    """One profile may serve multiple routes without crossing audiences."""
+    exchange_audiences: list[str] = []
+    received_tokens: dict[str, list[str]] = {"github": [], "deepwiki": []}
+
+    async def exchange_handler(request: httpx.Request) -> httpx.Response:
+        audience = parse_qs(request.content.decode("utf-8"))["audience"][0]
+        exchange_audiences.append(audience)
+        return httpx.Response(
+            200,
+            json={"access_token": f"token-for:{audience}", "expires_in": 60},
+        )
+
+    def auth_for(audience: str) -> WorkloadTokenExchangeAuth:
+        return WorkloadTokenExchangeAuth(
+            profile=_profile(),
+            audience=audience,
+            identity=AmbientWorkloadIdentity(token_file=None, token=SecretStr("subject-token")),
+            client_factory=lambda: httpx.AsyncClient(
+                transport=httpx.MockTransport(exchange_handler)
+            ),
+        )
+
+    github_url = "https://mcp-egress.internal/mcp/github"
+    deepwiki_url = "https://mcp-egress.internal/mcp/deepwiki"
+
+    async def invoke(server: str, url: str, auth: WorkloadTokenExchangeAuth) -> None:
+        async def mcp_handler(request: httpx.Request) -> httpx.Response:
+            token = request.headers["Authorization"]
+            received_tokens[server].append(token)
+            assert token == f"Bearer token-for:{url}"
+            return httpx.Response(200, json={"ok": True})
+
+        async with httpx.AsyncClient(
+            auth=auth,
+            transport=httpx.MockTransport(mcp_handler),
+        ) as client:
+            await client.post(url)
+            await client.post(url)
+
+    await asyncio.gather(
+        invoke("github", github_url, auth_for(github_url)),
+        invoke("deepwiki", deepwiki_url, auth_for(deepwiki_url)),
+    )
+
+    assert sorted(exchange_audiences) == sorted([github_url, deepwiki_url])
+    assert received_tokens["github"] == [f"Bearer token-for:{github_url}"] * 2
+    assert received_tokens["deepwiki"] == [f"Bearer token-for:{deepwiki_url}"] * 2
+
+
+@pytest.mark.asyncio
+async def test_workload_exchange_failure_never_exposes_token_response() -> None:
+    async def denied(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(403, text="subject-token provider-secret route-token")
+
+    auth = WorkloadTokenExchangeAuth(
+        profile=_profile(),
+        audience="https://mcp-egress.internal/mcp/github",
+        identity=AmbientWorkloadIdentity(token_file=None, token=SecretStr("subject-token")),
+        client_factory=lambda: httpx.AsyncClient(transport=httpx.MockTransport(denied)),
+    )
+
+    with pytest.raises(McpAuthenticationError) as exc_info:
+        async with httpx.AsyncClient(
+            auth=auth,
+            transport=httpx.MockTransport(lambda request: httpx.Response(200)),
+        ) as client:
+            await client.post("https://mcp-egress.internal/mcp/github")
+
+    message = str(exc_info.value)
+    assert exc_info.value.category == "token_exchange_denied"
+    assert "subject-token" not in message
+    assert "provider-secret" not in message
+    assert "route-token" not in message
+
+
+@pytest.mark.asyncio
+async def test_workload_exchange_supports_deployment_client_secret_basic() -> None:
+    exchange_requests: list[httpx.Request] = []
+
+    async def exchange_handler(request: httpx.Request) -> httpx.Response:
+        exchange_requests.append(request)
+        return httpx.Response(200, json={"access_token": "route-token"})
+
+    profile = _profile(
+        client_auth="client_secret_basic",
+        client_id="cognition-exchange",
+        client_secret_env="TOKEN_EXCHANGE_CLIENT_SECRET",
+    )
+    auth = WorkloadTokenExchangeAuth(
+        profile=profile,
+        audience="https://mcp-egress.internal/mcp/github",
+        identity=AmbientWorkloadIdentity(token_file=None, token=SecretStr("subject-token")),
+        client_secret=SecretStr("client-secret"),
+        client_factory=lambda: httpx.AsyncClient(transport=httpx.MockTransport(exchange_handler)),
+    )
+
+    async with httpx.AsyncClient(
+        auth=auth,
+        transport=httpx.MockTransport(lambda request: httpx.Response(200)),
+    ) as client:
+        await client.post("https://mcp-egress.internal/mcp/github")
+
+    encoded = base64.b64encode(b"cognition-exchange:client-secret").decode("ascii")
+    assert exchange_requests[0].headers["Authorization"] == f"Basic {encoded}"
+
+
+@pytest.mark.asyncio
+async def test_projected_workload_identity_is_reread_for_rotation(tmp_path) -> None:
+    token_file = tmp_path / "workload-token"
+    token_file.write_text("first-token", encoding="utf-8")
+    identity = AmbientWorkloadIdentity(token_file=token_file, token=None)
+
+    first = await identity.get_subject_token()
+    token_file.write_text("second-token", encoding="utf-8")
+    second = await identity.get_subject_token()
+
+    assert first.get_secret_value() == "first-token"
+    assert second.get_secret_value() == "second-token"
+
+
+def test_workload_connection_resolves_canonical_audience_and_discovery_context() -> None:
+    settings = Settings.model_validate(
+        {
+            "mcp_auth_profiles": {"egress": _profile().model_dump()},
+            "mcp_workload_identity_token": "ambient-subject",
+        }
+    )
+    config = McpServerConfig.model_validate(
+        {
+            "name": "github",
+            "url": "https://mcp-egress.internal/mcp/github",
+            "auth": {"type": "workload_token_exchange", "profile": "egress"},
+            "agent_name": "support-agent",
+            "agent_revision": 4,
+            "effective_scope": {"tenant": "acme"},
+            "workload_profile": settings.mcp_auth_profiles["egress"],
+        }
+    )
+
+    connection = mcp_config_to_connection(config, settings)
+
+    assert isinstance(connection["auth"], WorkloadTokenExchangeAuth)
+    assert connection["headers"] == {
+        "X-Cognition-Context-Version": "1",
+        "X-Cognition-Agent-ID": "support-agent",
+        "X-Cognition-Agent-Revision": "4",
+        "X-Cognition-Effective-Scope": '{"tenant":"acme"}',
+        "X-Cognition-MCP-Server-Alias": "github",
+        "X-Cognition-MCP-Server-URI": "https://mcp-egress.internal/mcp/github",
+    }
+
+
+@pytest.mark.asyncio
+async def test_trusted_context_interceptor_default_denies_incoming_headers() -> None:
+    contexts = {
+        "github": {
+            "agent_name": "support-agent",
+            "agent_revision": 7,
+            "effective_scope": {"tenant": "acme"},
+            "server_alias": "github",
+            "canonical_server_uri": "https://mcp-egress.internal/mcp/github",
+        }
+    }
+    runtime = SimpleNamespace(
+        context=SimpleNamespace(
+            session_id="session-1",
+            thread_id="thread-1",
+            request_deadline=1_800_000_000_000,
+        ),
+        config={"run_id": "run-1"},
+    )
+    request = MCPToolCallRequest(
+        name="search",
+        args={"query": "safe"},
+        server_name="github",
+        headers={
+            "Authorization": "Bearer model-token",
+            "X-Cognition-Agent-ID": "model-agent",
+            "X-Arbitrary": "model-value",
+        },
+        runtime=runtime,
+    )
+    captured: MCPToolCallRequest | None = None
+
+    async def handler(value: MCPToolCallRequest) -> CallToolResult:
+        nonlocal captured
+        captured = value
+        return CallToolResult(content=[])
+
+    await McpTrustedContextInterceptor(contexts)(request, handler)
+
+    assert captured is not None
+    assert captured.headers is not None
+    assert "Authorization" not in captured.headers
+    assert "X-Arbitrary" not in captured.headers
+    assert captured.headers["X-Cognition-Agent-ID"] == "support-agent"
+    assert captured.headers["X-Cognition-Session-ID"] == "session-1"
+    assert captured.headers["X-Cognition-Run-ID"] == "run-1"
+    assert captured.headers["X-Cognition-Request-Deadline"] == "1800000000000"
+
+
+@pytest.mark.asyncio
+async def test_trusted_context_interceptor_fails_closed_for_unknown_server() -> None:
+    request = MCPToolCallRequest(
+        name="search",
+        args={},
+        server_name="unexpected",
+        headers={"Authorization": "Bearer untrusted"},
+        runtime=None,
+    )
+
+    async def handler(value: MCPToolCallRequest) -> CallToolResult:
+        pytest.fail(f"unexpected transport call: {value.server_name}")
+
+    with pytest.raises(McpAuthenticationError) as exc_info:
+        await McpTrustedContextInterceptor({})(request, handler)
+
+    assert exc_info.value.category == "trusted_context_unavailable"
+
+
+def test_two_scopes_produce_distinct_trusted_context_without_cross_use() -> None:
+    first = trusted_context_headers(
+        agent_name="support-agent",
+        agent_revision=1,
+        effective_scope={"tenant": "one"},
+        server_alias="github",
+        canonical_server_uri="https://mcp-egress.internal/mcp/github",
+    )
+    second = trusted_context_headers(
+        agent_name="support-agent",
+        agent_revision=1,
+        effective_scope={"tenant": "two"},
+        server_alias="github",
+        canonical_server_uri="https://mcp-egress.internal/mcp/github",
+    )
+
+    assert first["X-Cognition-Effective-Scope"] == '{"tenant":"one"}'
+    assert second["X-Cognition-Effective-Scope"] == '{"tenant":"two"}'
+    assert first != second
+
+
+@pytest.mark.parametrize(
+    ("agent_name", "category"),
+    [
+        ("support-agent\r\nX-Forged: true", "trusted_context_invalid"),
+        ("a" * 9000, "trusted_context_too_large"),
+    ],
+)
+def test_trusted_context_rejects_injection_and_unbounded_values(
+    agent_name: str,
+    category: str,
+) -> None:
+    with pytest.raises(McpAuthenticationError) as exc_info:
+        trusted_context_headers(
+            agent_name=agent_name,
+            agent_revision=1,
+            effective_scope={"tenant": "acme"},
+            server_alias="github",
+            canonical_server_uri="https://mcp-egress.internal/mcp/github",
+        )
+
+    assert exc_info.value.category == category
+
+
+def test_workload_transport_fails_when_ambient_identity_is_unavailable() -> None:
+    settings = Settings.model_validate({"mcp_auth_profiles": {"egress": _profile().model_dump()}})
+    config = McpServerConfig.model_validate(
+        {
+            "name": "github",
+            "url": "https://mcp-egress.internal/mcp/github",
+            "auth": {"type": "workload_token_exchange", "profile": "egress"},
+            "workload_profile": settings.mcp_auth_profiles["egress"],
+        }
+    )
+
+    with pytest.raises(
+        McpTransportAuthenticationError,
+        match="workload_identity_unavailable",
+    ):
+        mcp_config_to_connection(config, settings)

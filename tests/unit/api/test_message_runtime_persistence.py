@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from collections.abc import AsyncGenerator
-from contextlib import contextmanager
 from types import SimpleNamespace
 from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -29,6 +28,8 @@ from server.app.models import RunStatus, SessionConfig, SessionStatus
 from server.app.rate_limiter import RateLimitConfig, RateLimiter
 from server.app.runtime_projection import RuntimeProjectionService
 from server.app.settings import Settings
+from server.app.storage.config_registry import MemoryConfigRegistry
+from server.app.storage.config_store import DefaultConfigStore
 from server.app.storage.memory import MemoryStorageBackend
 
 
@@ -48,7 +49,12 @@ class _FakeService:
         for event in self._events:
             yield event
 
-    async def rebuild_message_projection(self, session_id: str, thread_id: str) -> int:
+    async def rebuild_message_projection(
+        self,
+        session_id: str,
+        thread_id: str,
+        scope: dict[str, str] | None = None,
+    ) -> int:
         self.rebuild_calls.append((session_id, thread_id))
         if self.store is None or self._checkpoint_messages is None:
             return 0
@@ -56,6 +62,7 @@ class _FakeService:
             session_id=session_id,
             thread_id=thread_id,
             checkpoint_messages=self._checkpoint_messages,
+            effective_scope=scope,
         )
 
 
@@ -113,7 +120,26 @@ def _settings() -> Settings:
     settings = MagicMock(spec=Settings)
     settings.scoping_enabled = False
     settings.sse_heartbeat_interval_seconds = 30
+    settings.callback_allowed_origins = ["https://example.com"]
     return cast(Settings, settings)
+
+
+async def _config_store(tmp_path: Any) -> DefaultConfigStore:
+    store = DefaultConfigStore(
+        MemoryConfigRegistry(),
+        workspace_path=tmp_path,
+    )
+    await store.upsert_agent(
+        "test-agent",
+        {},
+        {
+            "name": "test-agent",
+            "system_prompt": "Test agent.",
+            "mode": "primary",
+        },
+        "api",
+    )
+    return store
 
 
 @pytest.mark.asyncio
@@ -123,6 +149,7 @@ async def test_agent_stream_done_includes_assistant_data(tmp_path) -> None:
         session_id="session-runtime-assistant",
         thread_id="thread-runtime-assistant",
         config=SessionConfig(),
+        agent_name="test-agent",
     )
     manager = _FakeAgentManager(
         _FakeService(
@@ -162,6 +189,7 @@ async def test_tool_activity_updates_session_and_message_projection(tmp_path) ->
         session_id="session-runtime-tools",
         thread_id="thread-runtime-tools",
         config=SessionConfig(),
+        agent_name="test-agent",
     )
     original_updated_at = session.updated_at
     manager = _FakeAgentManager(
@@ -206,6 +234,7 @@ async def test_done_keeps_session_active_when_other_runtime_active(tmp_path) -> 
         session_id="session-overlap",
         thread_id="thread-overlap",
         config=SessionConfig(),
+        agent_name="test-agent",
     )
     manager = _FakeAgentManager(_FakeService([DoneEvent()]), active_runtime_count=2)
 
@@ -235,6 +264,7 @@ async def test_terminal_run_rebuilds_message_projection_from_checkpoint(tmp_path
         session_id="session-checkpoint-projection",
         thread_id="thread-checkpoint-projection",
         config=SessionConfig(),
+        agent_name="test-agent",
     )
     run = await store.create_run(
         run_id="run-checkpoint-projection",
@@ -290,6 +320,7 @@ async def test_run_state_sse_uses_durable_transition_correlation(tmp_path) -> No
         session_id="session-run-state-correlation",
         thread_id="thread-run-state-correlation",
         config=SessionConfig(),
+        agent_name="test-agent",
     )
     run = await store.create_run(
         run_id="run-state-correlation",
@@ -335,6 +366,7 @@ async def test_context_sse_overwrites_upstream_ids_with_durable_correlation(tmp_
         session_id="session-context-correlation",
         thread_id="thread-context-correlation",
         config=SessionConfig(),
+        agent_name="test-agent",
     )
     run = await store.create_run(
         run_id="run-context-correlation",
@@ -387,6 +419,7 @@ async def test_sandbox_lifecycle_metadata_is_streamed_and_persisted(tmp_path) ->
         session_id="session-sandbox-lifecycle",
         thread_id="thread-sandbox-lifecycle",
         config=SessionConfig(),
+        agent_name="test-agent",
     )
     run = await store.create_run(
         run_id="run-sandbox-lifecycle",
@@ -440,9 +473,7 @@ async def test_sandbox_lifecycle_metadata_is_streamed_and_persisted(tmp_path) ->
 
     durable_events = await store.list_events(session.id, run_id=run.id)
     sandbox_event = next(
-        event
-        for event in durable_events
-        if event.event_type == "sandbox.runtime_snapshot"
+        event for event in durable_events if event.event_type == "sandbox.runtime_snapshot"
     )
     persisted_metadata = sandbox_event.payload["metadata"]
     assert persisted_metadata["microvm_id"] == "microvm-123"
@@ -457,6 +488,7 @@ async def test_error_event_terminates_run_without_done(tmp_path) -> None:
         session_id="session-error-terminal",
         thread_id="thread-error-terminal",
         config=SessionConfig(),
+        agent_name="test-agent",
     )
     run = await store.create_run(
         run_id="run-error-terminal",
@@ -505,8 +537,7 @@ async def test_error_event_terminates_run_without_done(tmp_path) -> None:
     assert manager.release_calls == [session.id]
 
     durable_event_types = [
-        event.event_type
-        for event in await store.list_events(session.id, run_id=run.id)
+        event.event_type for event in await store.list_events(session.id, run_id=run.id)
     ]
     assert "run.failed" in durable_event_types
     assert "run.error" in durable_event_types
@@ -519,9 +550,7 @@ async def test_empty_checkpoint_does_not_wipe_existing_message_projection() -> N
     checkpointer.aget = AsyncMock(return_value={"channel_values": {"messages": []}})
     storage = MagicMock()
     storage.get_checkpointer = AsyncMock(return_value=checkpointer)
-    storage.list_messages_for_session = AsyncMock(
-        return_value=[MagicMock(), MagicMock()]
-    )
+    storage.list_messages_for_session = AsyncMock(return_value=[MagicMock(), MagicMock()])
     storage.rebuild_message_projection = AsyncMock()
 
     service = DeepAgentStreamingService(Settings())
@@ -543,15 +572,17 @@ async def test_runtime_events_capture_current_trace_context(tmp_path) -> None:
         session_id="session-trace-context",
         thread_id="thread-trace-context",
         config=SessionConfig(),
+        agent_name="test-agent",
     )
     projection = RuntimeProjectionService(store)
 
-    @contextmanager
-    def _fake_span(_name: str, _attributes: dict[str, Any] | None = None) -> Any:
-        yield None
+    span_events: list[tuple[str, dict[str, Any] | None]] = []
+
+    def _fake_span_event(name: str, attributes: dict[str, Any] | None = None) -> None:
+        span_events.append((name, attributes))
 
     with (
-        patch("server.app.runtime_projection.trace_span", new=_fake_span),
+        patch("server.app.runtime_projection.add_span_event", new=_fake_span_event),
         patch(
             "server.app.runtime_projection.current_trace_context",
             return_value=("trace-123", "span-456"),
@@ -564,6 +595,24 @@ async def test_runtime_events_capture_current_trace_context(tmp_path) -> None:
     assert event.trace_id == "trace-123"
     assert event.span_id == "span-456"
 
+    with (
+        patch("server.app.runtime_projection.add_span_event", new=_fake_span_event),
+        patch(
+            "server.app.runtime_projection.current_trace_context",
+            return_value=("trace-drift", "span-drift"),
+        ),
+    ):
+        drifted_event = await projection.append_event(run, "tool.call.completed")
+
+    assert drifted_event.trace_id == "trace-123"
+    assert drifted_event.span_id is None
+    assert [name for name, _attributes in span_events] == [
+        "cognition.run.begin",
+        "cognition.runtime_event",
+        "cognition.runtime_event",
+        "cognition.runtime_event",
+    ]
+
 
 @pytest.mark.asyncio
 async def test_send_message_rejects_concurrent_runtime_turn(tmp_path) -> None:
@@ -572,6 +621,7 @@ async def test_send_message_rejects_concurrent_runtime_turn(tmp_path) -> None:
         session_id="session-active-turn",
         thread_id="thread-active-turn",
         config=SessionConfig(),
+        agent_name="test-agent",
     )
     manager = _FakeAgentManager(_FakeService([]), active_runtime_count=1)
     rate_limiter = RateLimiter(RateLimitConfig(requests_per_minute=1000, burst_size=1000))
@@ -584,6 +634,8 @@ async def test_send_message_rejects_concurrent_runtime_turn(tmp_path) -> None:
             settings=_settings(),
             agent_manager=manager,  # type: ignore[arg-type]
             store=store,
+            artifact_store=cast(Any, None),
+            config_store=await _config_store(tmp_path),
             rate_limiter=rate_limiter,
             scope=SessionScope({}),
         )
@@ -600,6 +652,7 @@ async def test_completion_callback_emits_durable_delivery_events(tmp_path) -> No
         session_id="session-callback-events",
         thread_id="thread-callback-events",
         config=SessionConfig(),
+        agent_name="test-agent",
     )
     manager = _FakeAgentManager(
         _FakeService([TokenEvent(content="done"), DoneEvent()]),
@@ -632,6 +685,8 @@ async def test_completion_callback_emits_durable_delivery_events(tmp_path) -> No
             settings=_settings(),
             agent_manager=manager,  # type: ignore[arg-type]
             store=store,
+            artifact_store=cast(Any, None),
+            config_store=await _config_store(tmp_path),
             rate_limiter=rate_limiter,
             scope=SessionScope({}),
         )

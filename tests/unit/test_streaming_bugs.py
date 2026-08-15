@@ -20,14 +20,19 @@ Bug 3 — model in usage event reports gpt-4o regardless of provider:
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncGenerator
+from pathlib import Path
 from typing import Any, Literal
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from server.app.agent.runtime import (
+    ArtifactEvent,
     DoneEvent,
+    ErrorEvent,
+    ModelUsageEvent,
     TokenEvent,
     UsageEvent,
 )
@@ -54,7 +59,8 @@ def _make_settings(
 
     s = MagicMock(spec=Settings)
     # These remain in Settings (infrastructure config)
-    s.trusted_tool_namespaces = ["server.app.tools"]
+    s.persistence_backend = "memory"
+    s.workspace_path = Path("/tmp/ws")
     return s
 
 
@@ -64,6 +70,7 @@ def _make_session(
 ) -> Session:
     return Session(
         id="sess-stream-test",
+        agent_name="default",
         workspace_path="/tmp/ws",
         title="Stream Test",
         thread_id="thread-stream-test",
@@ -154,6 +161,13 @@ async def _runtime_raises(exc: Exception) -> AsyncGenerator[Any, None]:
     raise exc
 
 
+async def _runtime_never_finishes() -> AsyncGenerator[Any, None]:
+    """Model a provider stream that opens but never terminates."""
+    if False:
+        yield None
+    await asyncio.Event().wait()
+
+
 # ---------------------------------------------------------------------------
 # Bug 1 — exactly one DoneEvent reaches the caller
 # ---------------------------------------------------------------------------
@@ -226,6 +240,32 @@ class TestExactlyOneDoneEvent:
             f"Last event should be DoneEvent, got {type(collected[-1]).__name__}"
         )
 
+    @pytest.mark.asyncio
+    async def test_structured_artifact_passes_through_shared_service(self):
+        """Structured runtime output must reach native and protocol adapters."""
+        from server.app.llm.deep_agent_service import DeepAgentStreamingService
+
+        session = _make_session()
+        artifact = ArtifactEvent(
+            artifact_id="structured-response",
+            name="structured-response",
+            kind="data",
+            value={"answer": 42},
+            media_type="application/json",
+        )
+        mock_runtime = _make_mock_runtime(artifact, DoneEvent())
+        service = DeepAgentStreamingService(_make_settings())
+        service.storage_backend = MagicMock()
+        service.storage_backend.get_session = AsyncMock(return_value=session)
+        service.storage_backend.get_checkpointer = AsyncMock(return_value=MagicMock())
+        service.storage_backend.get_store = AsyncMock(return_value=MagicMock())
+
+        p1, p2, p3, p4 = _stream_patches(mock_runtime, session)
+        with p1, p2, p3, p4:
+            collected = await _collect(service, session)
+
+        assert artifact in collected
+
 
 # ---------------------------------------------------------------------------
 # Bug 2 — accumulated content is not doubled
@@ -266,12 +306,49 @@ class TestContentNotDoubled:
         )
 
     @pytest.mark.asyncio
-    async def test_usage_event_output_tokens_not_doubled(self):
-        """output_tokens uses the shared Deep Agents-aligned counter once."""
-        from server.app.agent.token_counter import count_text_tokens
+    async def test_usage_event_uses_provider_metadata_not_output_text(self):
+        """output_tokens comes from provider metadata, not streamed text length."""
         from server.app.llm.deep_agent_service import DeepAgentStreamingService
 
-        # Two chunks should be counted as their assembled output once.
+        session = _make_session()
+        mock_runtime = _make_mock_runtime(
+            TokenEvent(content="Hello"),
+            TokenEvent(content="World"),
+            ModelUsageEvent(
+                call_id="call-1",
+                provider="mock",
+                model="mock-model",
+                usage_metadata={
+                    "input_tokens": 12,
+                    "output_tokens": 3,
+                    "total_tokens": 15,
+                },
+            ),
+            DoneEvent(),
+        )
+        service = DeepAgentStreamingService(_make_settings())
+        service.storage_backend = MagicMock()
+        service.storage_backend.get_session = AsyncMock(return_value=session)
+        service.storage_backend.get_checkpointer = AsyncMock(return_value=MagicMock())
+        service.storage_backend.get_store = AsyncMock(return_value=MagicMock())
+
+        p1, p2, p3, p4 = _stream_patches(mock_runtime, session)
+        with p1, p2, p3, p4:
+            collected = await _collect(service, session)
+
+        usage_events = [e for e in collected if isinstance(e, UsageEvent)]
+        assert len(usage_events) == 1
+        assert usage_events[0].status == "complete"
+        assert usage_events[0].input_tokens == 12
+        assert usage_events[0].output_tokens == 3
+        assert usage_events[0].total_tokens == 15
+        assert usage_events[0].estimated_cost is None
+
+    @pytest.mark.asyncio
+    async def test_usage_event_unavailable_without_provider_metadata(self):
+        """Missing provider metadata remains unavailable instead of estimated."""
+        from server.app.llm.deep_agent_service import DeepAgentStreamingService
+
         session = _make_session()
         mock_runtime = _make_mock_runtime(
             TokenEvent(content="Hello"),
@@ -290,11 +367,11 @@ class TestContentNotDoubled:
 
         usage_events = [e for e in collected if isinstance(e, UsageEvent)]
         assert len(usage_events) == 1
-        expected = count_text_tokens("HelloWorld")
-        assert usage_events[0].output_tokens == expected, (
-            f"output_tokens should match shared counter ({expected}), "
-            f"got {usage_events[0].output_tokens}"
-        )
+        assert usage_events[0].status == "unavailable"
+        assert usage_events[0].input_tokens is None
+        assert usage_events[0].output_tokens is None
+        assert usage_events[0].estimated_cost is None
+        assert usage_events[0].unreported_model_calls == 1
 
 
 # ---------------------------------------------------------------------------
@@ -380,3 +457,55 @@ class TestRuntimeErrorsSurface:
         error_events = [e for e in collected if getattr(e, "code", None) == "STREAMING_ERROR"]
         assert len(error_events) == 1
         assert "graph blew up" in error_events[0].message
+
+
+class TestExecutionTimeout:
+    """Configured agent deadlines must terminate stalled provider streams."""
+
+    @pytest.mark.asyncio
+    async def test_timeout_aborts_runtime_and_emits_stable_error(self):
+        from server.app.agent.definition import AgentConfig, AgentDefinition
+        from server.app.llm.deep_agent_service import (
+            DeepAgentStreamingService,
+            ResolvedAgentConfig,
+        )
+
+        session = _make_session()
+        mock_runtime = MagicMock()
+        mock_runtime.astream_events = MagicMock(return_value=_runtime_never_finishes())
+        mock_runtime.abort = AsyncMock(return_value=True)
+        service = DeepAgentStreamingService(_make_settings())
+        service.storage_backend = MagicMock()
+        service.storage_backend.get_session = AsyncMock(return_value=session)
+        service.storage_backend.get_checkpointer = AsyncMock(return_value=MagicMock())
+        service.storage_backend.get_store = AsyncMock(return_value=MagicMock())
+
+        agent_definition = AgentDefinition(
+            name="timeout-agent",
+            system_prompt="Remain bounded",
+            config=AgentConfig(timeout_seconds=0.01),
+        )
+        resolved = ResolvedAgentConfig(agent_def=agent_definition)
+        p1, p2, p3, p4 = _stream_patches(mock_runtime, session)
+        with (
+            p1,
+            p2,
+            p3,
+            p4,
+            patch.object(
+                service,
+                "_resolve_agent_config",
+                new=AsyncMock(return_value=(resolved, [])),
+            ),
+        ):
+            collected = await _collect(service, session)
+
+        timeout_events = [
+            event
+            for event in collected
+            if isinstance(event, ErrorEvent) and event.code == "EXECUTION_TIMEOUT"
+        ]
+        assert len(timeout_events) == 1
+        assert "0.01 second deadline" in timeout_events[0].message
+        mock_runtime.abort.assert_awaited_once_with(session.thread_id)
+        assert not any(isinstance(event, DoneEvent) for event in collected)

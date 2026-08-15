@@ -22,7 +22,7 @@ from collections.abc import AsyncIterator, Mapping
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Protocol, cast, runtime_checkable
+from typing import Any, Literal, Protocol, cast, runtime_checkable
 
 import structlog
 
@@ -35,8 +35,12 @@ from langgraph.types import Command
 
 from server.app.agent.cognition_agent import CognitionAgentParams, create_cognition_agent
 from server.app.agent.definition import AgentDefinition
-from server.app.observability import HITL_DECISION_COUNT
-from server.app.observability import span as trace_span
+from server.app.observability import (
+    HITL_DECISION_COUNT,
+    add_span_event,
+    agent_run_trace_context,
+    langchain_metrics_callbacks,
+)
 from server.app.settings import Settings, get_settings
 from server.app.storage.factory import create_storage_backend
 
@@ -197,6 +201,29 @@ class DoneEvent(AgentEvent):
 
 
 @dataclass
+class DirectMessageEvent(AgentEvent):
+    """A message-only response that does not expose a task to the caller."""
+
+    content: str
+    media_type: str = "text/plain"
+
+
+@dataclass
+class ArtifactEvent(AgentEvent):
+    """Protocol-neutral task artifact or artifact chunk."""
+
+    artifact_id: str
+    name: str
+    kind: Literal["text", "data", "raw", "url"]
+    value: Any
+    media_type: str | None = None
+    filename: str | None = None
+    description: str | None = None
+    append: bool = False
+    last_chunk: bool = True
+
+
+@dataclass
 class ErrorEvent(AgentEvent):
     """Error during execution."""
 
@@ -205,14 +232,42 @@ class ErrorEvent(AgentEvent):
 
 
 @dataclass
+class RejectedEvent(AgentEvent):
+    """Agent rejected the requested task without executing it."""
+
+    reason: str = "Rejected"
+
+
+@dataclass
 class UsageEvent(AgentEvent):
     """Token usage information."""
 
-    input_tokens: int
-    output_tokens: int
-    estimated_cost: float = 0.0
-    provider: str = "unknown"
-    model: str = "unknown"
+    type: Literal["usage"] = "usage"
+    input_tokens: int | None = None
+    output_tokens: int | None = None
+    total_tokens: int | None = None
+    estimated_cost: float | None = None
+    provider: str | None = None
+    model: str | None = None
+    source: str = "provider_usage_metadata"
+    status: Literal["complete", "partial", "unavailable"] = "unavailable"
+    cache_read_tokens: int | None = None
+    cache_write_tokens: int | None = None
+    reasoning_tokens: int | None = None
+    model_calls: int = 0
+    reported_model_calls: int = 0
+    unreported_model_calls: int = 0
+    by_model: list[dict[str, Any]] = field(default_factory=list)
+
+
+@dataclass
+class ModelUsageEvent(AgentEvent):
+    """Internal provider usage metadata observed on a LangChain model message."""
+
+    call_id: str
+    provider: str | None = None
+    model: str | None = None
+    usage_metadata: dict[str, Any] | None = None
 
 
 @dataclass
@@ -337,8 +392,12 @@ StreamEvent = (
     | ContextEvent
     | StatusEvent
     | DoneEvent
+    | DirectMessageEvent
+    | ArtifactEvent
     | ErrorEvent
+    | RejectedEvent
     | UsageEvent
+    | ModelUsageEvent
     | PlanningEvent
     | StepCompleteEvent
     | InterruptEvent
@@ -496,6 +555,62 @@ def _runtime_context_value(context: Any, field_name: str) -> Any:
     return getattr(context, field_name, None)
 
 
+def _message_usage_metadata(message: Any) -> dict[str, Any] | None:
+    usage_metadata = getattr(message, "usage_metadata", None)
+    if not isinstance(usage_metadata, Mapping):
+        return None
+    return dict(usage_metadata)
+
+
+def _message_response_metadata(message: Any) -> Mapping[str, Any]:
+    response_metadata = getattr(message, "response_metadata", None)
+    if isinstance(response_metadata, Mapping):
+        return response_metadata
+    return {}
+
+
+def _metadata_value(metadata: Any, *keys: str) -> str | None:
+    if not isinstance(metadata, Mapping):
+        return None
+    for key in keys:
+        value = metadata.get(key)
+        if value is not None and str(value):
+            return str(value)
+    return None
+
+
+def _model_usage_call_id(message: Any, metadata: Any, ns: tuple[str, ...]) -> str:
+    """Return a stable-enough model call id for usage deduplication."""
+    message_id = getattr(message, "id", None)
+    if message_id:
+        return str(message_id)
+    response_metadata = _message_response_metadata(message)
+    response_id = response_metadata.get("id") or response_metadata.get("response_id")
+    if response_id:
+        return str(response_id)
+    metadata_id = _metadata_value(metadata, "run_id", "ls_run_id", "message_id")
+    if metadata_id:
+        return metadata_id
+    node = _metadata_value(metadata, "langgraph_node", "checkpoint_ns") or "unknown"
+    namespace = ".".join(ns) if ns else "main"
+    return f"{namespace}:{node}"
+
+
+def _model_usage_identity(message: Any, metadata: Any) -> tuple[str | None, str | None]:
+    response_metadata = _message_response_metadata(message)
+    provider = _metadata_value(metadata, "ls_provider", "provider")
+    if provider is None and response_metadata.get("provider"):
+        provider = str(response_metadata["provider"])
+    model = _metadata_value(metadata, "ls_model_name", "model_name", "model", "model_id")
+    if model is None and response_metadata.get("model_name"):
+        model = str(response_metadata["model_name"])
+    if model is None and response_metadata.get("model"):
+        model = str(response_metadata["model"])
+    if model is None and response_metadata.get("model_id"):
+        model = str(response_metadata["model_id"])
+    return provider, model
+
+
 def _hitl_decision_event(
     *,
     context: Any,
@@ -537,20 +652,19 @@ def _audit_hitl_decision(event: HitlDecisionEvent) -> None:
         edited_arg_keys=event.edited_arg_keys,
         has_rejection_message=event.has_rejection_message,
     )
-    HITL_DECISION_COUNT.labels(decision=event.decision, tool_name=event.tool_name).inc()
-    with trace_span(
+    HITL_DECISION_COUNT.labels(decision=event.decision).inc()
+    add_span_event(
         "cognition.hitl_decision",
         {
             "cognition.hitl.decision": event.decision,
             "tool.name": event.tool_name,
-            "cognition.session_id": event.session_id or "",
-            "cognition.run_id": event.run_id or "",
-            "cognition.scope_keys": ",".join(event.scope_keys),
+            "session.id": event.session_id or "",
+            "cognition.run.id": event.run_id or "",
+            "cognition.scope.keys": ",".join(event.scope_keys),
             "cognition.hitl.edited_arg_keys": ",".join(event.edited_arg_keys),
             "cognition.hitl.has_rejection_message": event.has_rejection_message,
         },
-    ):
-        pass
+    )
 
 
 @runtime_checkable
@@ -575,6 +689,7 @@ class AgentRuntime(Protocol):
         self,
         input_data: str | dict[str, Any] | Command,
         thread_id: str | None = None,
+        trace_parent_span: Any | None = None,
     ) -> AsyncIterator[AgentEvent]:
         """Stream agent execution events.
 
@@ -591,6 +706,7 @@ class AgentRuntime(Protocol):
         self,
         input_data: str | dict[str, Any],
         thread_id: str | None = None,
+        trace_parent_span: Any | None = None,
     ) -> dict[str, Any]:
         """Execute agent and return final result.
 
@@ -655,6 +771,7 @@ class DeepAgentRuntime:
         thread_id: str | None = None,
         recursion_limit: int = 1000,
         context: Any | None = None,
+        trace_parent_span: Any | None = None,
     ):
         """Initialize the DeepAgentRuntime.
 
@@ -667,6 +784,8 @@ class DeepAgentRuntime:
                 Store namespace scoping. Forwarded to astream() and ainvoke()
                 so that ``runtime.context`` is available inside nodes and
                 middleware.
+            trace_parent_span: Active Cognition run span to restore at the
+                LangGraph invocation boundary.
         """
         self._agent = agent
         self._checkpointer = checkpointer
@@ -674,6 +793,18 @@ class DeepAgentRuntime:
         self._recursion_limit = recursion_limit
         self._aborted: set[str] = set()
         self._context = context
+        self._trace_parent_span = trace_parent_span
+
+    def _invocation_config(self, thread_id: str) -> dict[str, Any]:
+        """Build one LangGraph config with automatic GenAI metric callbacks."""
+        config: dict[str, Any] = {
+            "configurable": {"thread_id": thread_id},
+            "recursion_limit": self._recursion_limit,
+        }
+        callbacks = langchain_metrics_callbacks()
+        if callbacks:
+            config["callbacks"] = callbacks
+        return config
 
     async def resume(
         self,
@@ -681,10 +812,11 @@ class DeepAgentRuntime:
         tool_name: str,
         args: dict[str, Any] | None = None,
         thread_id: str | None = None,
+        trace_parent_span: Any | None = None,
     ) -> dict[str, Any]:
         """Resume an interrupted Deep Agents run using LangGraph Command."""
         tid = thread_id or self._thread_id or "default"
-        config = {"configurable": {"thread_id": tid}, "recursion_limit": self._recursion_limit}
+        config = self._invocation_config(tid)
 
         resume_decision: dict[str, Any] = {"type": decision}
         if decision == "edit":
@@ -694,14 +826,15 @@ class DeepAgentRuntime:
         elif decision != "approve":
             raise ValueError(f"Unsupported resume decision: {decision}")
 
-        return cast(
-            dict[str, Any],
-            await self._agent.ainvoke(
-                Command(resume={"decisions": [resume_decision]}),
-                config=config,
-                context=self._context,
-            ),
-        )
+        with agent_run_trace_context(trace_parent_span or self._trace_parent_span):
+            return cast(
+                dict[str, Any],
+                await self._agent.ainvoke(
+                    Command(resume={"decisions": [resume_decision]}),
+                    config=config,
+                    context=self._context,
+                ),
+            )
 
     async def astream_resume_events(
         self,
@@ -709,6 +842,7 @@ class DeepAgentRuntime:
         tool_name: str,
         args: dict[str, Any] | None = None,
         thread_id: str | None = None,
+        trace_parent_span: Any | None = None,
     ) -> AsyncIterator[AgentEvent]:
         """Stream events while resuming an interrupted Deep Agents run."""
         tid = thread_id or self._thread_id or "default"
@@ -732,6 +866,7 @@ class DeepAgentRuntime:
         async for event in self.astream_events(
             Command(resume={"decisions": [resume_decision]}),
             thread_id=tid,
+            trace_parent_span=trace_parent_span,
         ):
             yield event
 
@@ -739,6 +874,7 @@ class DeepAgentRuntime:
         self,
         input_data: str | dict[str, Any] | Command,
         thread_id: str | None = None,
+        trace_parent_span: Any | None = None,
     ) -> AsyncIterator[AgentEvent]:
         """Stream agent execution events using the LangGraph v2 astream format.
 
@@ -792,7 +928,7 @@ class DeepAgentRuntime:
             else:
                 agent_input = input_data
 
-            config = {"configurable": {"thread_id": tid}, "recursion_limit": self._recursion_limit}
+            config = self._invocation_config(tid)
 
             # Accumulator for streaming tool call chunks.
             # Maps tool_call_id -> {"name": str, "args": str} so we can emit
@@ -806,15 +942,21 @@ class DeepAgentRuntime:
             previous_todos: list[dict[str, Any]] = []
             emitted_initial_plan = False
             interrupt_emitted = False
+            async def graph_chunks() -> AsyncIterator[dict[str, Any]]:
+                with agent_run_trace_context(
+                    trace_parent_span or self._trace_parent_span
+                ):
+                    async for graph_chunk in self._agent.astream(
+                        agent_input,
+                        config=config,
+                        context=self._context,
+                        stream_mode=["messages", "updates", "custom"],
+                        subgraphs=True,
+                        version="v2",
+                    ):
+                        yield cast(dict[str, Any], graph_chunk)
 
-            async for chunk in self._agent.astream(
-                agent_input,
-                config=config,
-                context=self._context,
-                stream_mode=["messages", "updates", "custom"],
-                subgraphs=True,
-                version="v2",
-            ):
+            async for chunk in graph_chunks():
                 # Check if aborted mid-stream
                 if tid in self._aborted:
                     self._aborted.discard(tid)
@@ -832,6 +974,15 @@ class DeepAgentRuntime:
                 #   ToolMessage     → tool execution result
                 if chunk_type == "messages":
                     msg, _metadata = data
+
+                    if isinstance(msg, AIMessageChunk):
+                        provider_name, model_name = _model_usage_identity(msg, _metadata)
+                        yield ModelUsageEvent(
+                            call_id=_model_usage_call_id(msg, _metadata, ns),
+                            provider=provider_name,
+                            model=model_name,
+                            usage_metadata=_message_usage_metadata(msg),
+                        )
 
                     # ── Token streaming ──────────────────────────────────────
                     # AIMessageChunk with text content → TokenEvent
@@ -976,9 +1127,7 @@ class DeepAgentRuntime:
                                     else None
                                 ),
                                 run_id=(
-                                    str(data["run_id"])
-                                    if data.get("run_id") is not None
-                                    else None
+                                    str(data["run_id"]) if data.get("run_id") is not None else None
                                 ),
                                 scope_keys=[
                                     str(key)
@@ -989,9 +1138,7 @@ class DeepAgentRuntime:
                         elif event_name == "tool_argument_validation_failed":
                             raw_errors = data.get("errors", [])
                             errors = [
-                                dict(error)
-                                for error in raw_errors
-                                if isinstance(error, Mapping)
+                                dict(error) for error in raw_errors if isinstance(error, Mapping)
                             ]
                             yield ToolSafetyEvent(
                                 action="argument_validation_failed",
@@ -1009,9 +1156,7 @@ class DeepAgentRuntime:
                                     else None
                                 ),
                                 run_id=(
-                                    str(data["run_id"])
-                                    if data.get("run_id") is not None
-                                    else None
+                                    str(data["run_id"]) if data.get("run_id") is not None else None
                                 ),
                                 scope_keys=[
                                     str(key)
@@ -1035,9 +1180,7 @@ class DeepAgentRuntime:
                                     else None
                                 ),
                                 run_id=(
-                                    str(data["run_id"])
-                                    if data.get("run_id") is not None
-                                    else None
+                                    str(data["run_id"]) if data.get("run_id") is not None else None
                                 ),
                                 scope_keys=[
                                     str(key)
@@ -1082,6 +1225,7 @@ class DeepAgentRuntime:
         self,
         input_data: str | dict[str, Any],
         thread_id: str | None = None,
+        trace_parent_span: Any | None = None,
     ) -> dict[str, Any]:
         """Execute agent and return final result.
 
@@ -1112,10 +1256,17 @@ class DeepAgentRuntime:
             else:
                 agent_input = input_data
 
-            config = {"configurable": {"thread_id": tid}, "recursion_limit": self._recursion_limit}
+            config = self._invocation_config(tid)
 
             # Invoke the agent
-            result = await self._agent.ainvoke(agent_input, config=config, context=self._context)
+            with agent_run_trace_context(
+                trace_parent_span or self._trace_parent_span
+            ):
+                result = await self._agent.ainvoke(
+                    agent_input,
+                    config=config,
+                    context=self._context,
+                )
 
             return {
                 "output": result,
@@ -1267,7 +1418,7 @@ async def create_agent_runtime(
     declarative agent definition.
 
     Args:
-        definition: AgentDefinition with tools, skills, config, etc.
+        definition: AgentDefinition with tools, MCP, and runtime configuration.
         workspace_path: Path to the project workspace
         thread_id: Optional thread ID for state persistence
         settings: Optional settings override
@@ -1294,52 +1445,6 @@ async def create_agent_runtime(
         storage_backend = create_storage_backend(settings)
         checkpointer = await storage_backend.get_checkpointer()
 
-    # Resolve tool paths with namespace validation
-    tools: list[Any] = []
-    trusted_namespaces = (
-        getattr(settings, "trusted_tool_namespaces", ["server.app.tools"])
-        if settings
-        else ["server.app.tools"]
-    )
-    for tool_path in definition.tools:
-        try:
-            module_path, tool_name = tool_path.rsplit(".", 1)
-
-            # Validate namespace allowlist
-            is_trusted = any(
-                module_path == ns or module_path.startswith(ns + ".") for ns in trusted_namespaces
-            )
-            if not is_trusted:
-                from server.app.exceptions import CognitionError
-
-                raise CognitionError(
-                    f"Tool path '{tool_path}' is not in a trusted namespace. "
-                    f"Allowed namespaces: {trusted_namespaces}"
-                )
-
-            module = __import__(module_path, fromlist=[tool_name])
-            tool = getattr(module, tool_name)
-            tools.append(tool)
-        except ImportError as e:
-            import structlog
-
-            logger = structlog.get_logger(__name__)
-            logger.warning(f"Failed to import tool: {tool_path}", error=str(e))
-        except AttributeError as e:
-            import structlog
-
-            logger = structlog.get_logger(__name__)
-            logger.warning(f"Tool not found in module: {tool_path}", error=str(e))
-        except Exception as e:
-            # Check if this is a CognitionError by checking module
-            if hasattr(e, "__module__") and "exceptions" in str(e.__module__):
-                # Re-raise our own errors
-                raise
-            import structlog
-
-            logger = structlog.get_logger(__name__)
-            logger.warning(f"Failed to load tool: {tool_path}", error=str(e))
-
     # Resolve middleware with upstream support
     resolved_middleware: list[Any] = []
     for mw_spec in definition.middleware:
@@ -1352,9 +1457,7 @@ async def create_agent_runtime(
         CognitionAgentParams(
             project_path=workspace_path,
             system_prompt=definition.system_prompt,
-            tools=tools if tools else None,
             memory=definition.memory,
-            skills=definition.skills,
             async_subagents=definition.async_subagents,
             middleware=resolved_middleware if resolved_middleware else None,
             checkpointer=checkpointer,
@@ -1395,5 +1498,6 @@ __all__ = [
     "InterruptEvent",
     "HitlDecisionEvent",
     "UsageEvent",
+    "ModelUsageEvent",
     "AgentRuntimeType",
 ]

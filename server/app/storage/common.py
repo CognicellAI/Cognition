@@ -2,17 +2,22 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 from datetime import UTC, datetime
+from itertools import combinations
 from typing import Any, Literal
 
 from server.app.models import (
     Message,
     RunStatus,
+    RuntimeTask,
     Session,
     SessionConfig,
     SessionEvent,
     SessionRun,
     SessionStatus,
+    TaskStatus,
     ToolCall,
 )
 
@@ -23,6 +28,46 @@ def now_utc() -> datetime:
 
 def now_utc_iso() -> str:
     return now_utc().isoformat()
+
+
+def effective_scope_key(scope: dict[str, str] | None) -> str:
+    """Return a stable non-secret hash for exact-scope database indexes."""
+    canonical = json.dumps(scope or {}, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def inherited_scope_candidates(scope: dict[str, str] | None) -> list[dict[str, str]]:
+    """Return all scope subsets that may be inherited by ``scope``.
+
+    Exact runtime resources use only the complete effective scope. Generic
+    configuration such as providers, tools, skills, MCP servers, sandbox
+    profiles, and global defaults may inherit from broader scopes. SQL backends
+    use these candidates to constrain reads by indexed ``scope_key`` values
+    before verifying the stored scope JSON.
+    """
+    target = scope or {}
+    keys = sorted(target)
+    candidates: list[dict[str, str]] = [{}]
+    for size in range(1, len(keys) + 1):
+        for names in combinations(keys, size):
+            candidates.append({name: target[name] for name in names})
+    return candidates
+
+
+def inherited_scope_keys(scope: dict[str, str] | None) -> list[str]:
+    """Return indexed lookup keys for all inherited scope candidates."""
+    return [effective_scope_key(candidate) for candidate in inherited_scope_candidates(scope)]
+
+
+def canonical_json_digest(value: Any) -> str:
+    """Return a stable SHA-256 digest for a JSON-compatible value."""
+    canonical = json.dumps(
+        value,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+    )
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
 def merge_session_config(existing: SessionConfig, incoming: SessionConfig) -> SessionConfig:
@@ -57,9 +102,9 @@ def make_session(
     workspace_path: str,
     thread_id: str,
     config: SessionConfig,
+    agent_name: str,
     title: str | None = None,
     scopes: dict[str, str] | None = None,
-    agent_name: str = "default",
     metadata: dict[str, str] | None = None,
     created_at: str | None = None,
     updated_at: str | None = None,
@@ -120,6 +165,9 @@ def make_session_run(
     thread_id: str,
     status: RunStatus = RunStatus.QUEUED,
     effective_scope: dict[str, str] | None = None,
+    agent_revision: int = 1,
+    runtime_manifest: dict[str, Any] | None = None,
+    manifest_digest: str | None = None,
     attempt: int = 1,
     idempotency_key: str | None = None,
     parent_run_id: str | None = None,
@@ -132,6 +180,7 @@ def make_session_run(
     metadata: dict[str, Any] | None = None,
     created_at: str | None = None,
     updated_at: str | None = None,
+    task_id: str | None = None,
 ) -> SessionRun:
     """Create a SessionRun with consistent timestamps."""
     created = created_at or now_utc_iso()
@@ -142,6 +191,9 @@ def make_session_run(
         thread_id=thread_id,
         status=status,
         effective_scope=effective_scope or {},
+        agent_revision=agent_revision,
+        runtime_manifest=dict(runtime_manifest or {}),
+        manifest_digest=manifest_digest or canonical_json_digest(runtime_manifest or {}),
         attempt=attempt,
         idempotency_key=idempotency_key,
         parent_run_id=parent_run_id,
@@ -154,6 +206,42 @@ def make_session_run(
         metadata=metadata or {},
         created_at=created,
         updated_at=updated,
+        task_id=task_id,
+    )
+
+
+def make_runtime_task(
+    *,
+    task_id: str,
+    context_id: str,
+    session_id: str,
+    agent_name: str,
+    status: TaskStatus = TaskStatus.SUBMITTED,
+    effective_scope: dict[str, str] | None = None,
+    current_run_id: str | None = None,
+    last_run_id: str | None = None,
+    idempotency_key: str | None = None,
+    status_reason: str | None = None,
+    metadata: dict[str, Any] | None = None,
+    created_at: str | None = None,
+    updated_at: str | None = None,
+) -> RuntimeTask:
+    """Create a RuntimeTask with consistent timestamps and copied scope."""
+    created = created_at or now_utc_iso()
+    return RuntimeTask(
+        id=task_id,
+        context_id=context_id,
+        session_id=session_id,
+        agent_name=agent_name,
+        status=status,
+        effective_scope=dict(effective_scope or {}),
+        current_run_id=current_run_id,
+        last_run_id=last_run_id,
+        idempotency_key=idempotency_key,
+        status_reason=status_reason,
+        metadata=dict(metadata or {}),
+        created_at=created,
+        updated_at=updated_at or created,
     )
 
 
@@ -170,6 +258,7 @@ def make_session_event(
     trace_id: str | None = None,
     span_id: str | None = None,
     created_at: str | None = None,
+    task_id: str | None = None,
 ) -> SessionEvent:
     """Create a SessionEvent with consistent timestamps."""
     return SessionEvent(
@@ -184,6 +273,7 @@ def make_session_event(
         trace_id=trace_id,
         span_id=span_id,
         created_at=created_at or now_utc_iso(),
+        task_id=task_id,
     )
 
 

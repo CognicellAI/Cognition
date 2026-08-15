@@ -21,10 +21,14 @@ exporters:
   otlphttp/mlflow:
     endpoint: http://mlflow:5000
     headers:
-      x-mlflow-experiment-id: "1"
-    compression: none
+      x-mlflow-experiment-id: ${env:MLFLOW_EXPERIMENT_ID}
+    compression: gzip
     # MLflow uses OTLP/HTTP for trace ingestion
     # The exporter appends /v1/traces to the endpoint automatically
+
+  prometheus:
+    endpoint: 0.0.0.0:9464
+    namespace: cognition_otel
 
   # Debug exporter for troubleshooting (optional, logs to stdout)
   debug:
@@ -36,6 +40,10 @@ service:
       receivers: [otlp]
       processors: [batch]
       exporters: [otlphttp/mlflow]
+    metrics:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [prometheus]
 
   # Enable telemetry about the collector itself
   telemetry:

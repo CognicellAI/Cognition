@@ -2,21 +2,15 @@
 
 from __future__ import annotations
 
-import importlib
-import importlib.util
-import inspect
 import json
 import os
-import sys
-from collections.abc import Iterator
-from dataclasses import dataclass
-from pathlib import Path
+from collections.abc import Iterator, Mapping
+from dataclasses import asdict, dataclass
 from typing import Any, cast
 
 import structlog
 from langchain.chat_models import init_chat_model
 from langchain_core.language_models import BaseChatModel
-from langchain_core.tools import BaseTool
 
 from server.app.agent.definition import AgentDefinition
 from server.app.exceptions import LLMProviderConfigError
@@ -39,6 +33,36 @@ class SelectedModelTarget:
     api_key_env: str | None = None
     max_retries: int | None = None
     timeout: int | None = None
+
+    def to_safe_manifest(self) -> dict[str, Any]:
+        """Return credential-free provider selection data for run manifests."""
+        return {k: v for k, v in asdict(self).items() if v is not None}
+
+    @classmethod
+    def from_manifest(cls, data: Any) -> SelectedModelTarget:
+        """Rebuild a selected target from a persisted run manifest."""
+        if not isinstance(data, dict):
+            raise LLMProviderConfigError(
+                provider="manifest",
+                reason="Pinned provider target is missing or invalid.",
+            )
+        try:
+            return cls(
+                provider=str(data["provider"]),
+                model_id=str(data["model_id"]),
+                provider_id=data.get("provider_id"),
+                base_url=data.get("base_url"),
+                region=data.get("region"),
+                role_arn=data.get("role_arn"),
+                api_key_env=data.get("api_key_env"),
+                max_retries=data.get("max_retries"),
+                timeout=data.get("timeout"),
+            )
+        except KeyError as exc:
+            raise LLMProviderConfigError(
+                provider="manifest",
+                reason=f"Pinned provider target is missing {exc.args[0]!r}.",
+            ) from exc
 
 
 @dataclass(frozen=True)
@@ -110,90 +134,9 @@ class RuntimeResolver:
         self._store = config_store
         self._settings = settings
 
-    # ------------------------------------------------------------------
-    # Tool resolution
-    # ------------------------------------------------------------------
-
-    async def build_tools(
-        self,
-        scope: dict[str, str] | None = None,
-        extra_tools: list[Any] | None = None,
-        allowed_tool_names: list[str] | None = None,
-    ) -> list[Any]:
-        """Build BaseTool instances from all sources.
-
-        Sources (in priority order):
-        1. extra_tools: Programmatically provided tools
-        2. ConfigStore tools: API-registered tools (code or module path)
-
-        Args:
-            scope: Scope dict for ConfigStore lookup.
-            extra_tools: Additional tools to include.
-
-        Returns:
-            List of BaseTool instances.
-        """
-        tools: list[Any] = list(extra_tools) if extra_tools else []
-        if self._store is None:
-            return tools
-
-        try:
-            registrations = await self._store.list_tools(scope)
-        except Exception:
-            logger.debug("ConfigStore unavailable — skipping API-registered tools")
-            return tools
-
-        allowed = set(allowed_tool_names or [])
-
-        for reg_tool in registrations:
-            if not reg_tool.enabled:
-                continue
-            if allowed and reg_tool.name not in allowed:
-                continue
-            try:
-                if reg_tool.code:
-                    namespace: dict[str, Any] = {}
-                    exec(compile(reg_tool.code, reg_tool.name, "exec"), namespace)  # noqa: S102
-                    for obj in namespace.values():
-                        if (
-                            isinstance(obj, BaseTool)
-                            or callable(obj)
-                            and hasattr(obj, "name")
-                            and hasattr(obj, "run")
-                        ):
-                            tools.append(obj)
-                elif reg_tool.path:
-                    path = Path(reg_tool.path)
-                    if path.is_absolute() or "/" in reg_tool.path or reg_tool.path.endswith(".py"):
-                        base = self._settings.workspace_path
-                        tool_file = path if path.is_absolute() else (base / path)
-                        if not tool_file.exists() and not tool_file.suffix:
-                            tool_file = tool_file.with_suffix(".py")
-                        module_name = f"_cognition_registry_tool_{tool_file.stem}"
-                        spec = importlib.util.spec_from_file_location(module_name, str(tool_file))
-                        if spec and spec.loader:
-                            module = importlib.util.module_from_spec(spec)
-                            if module_name in sys.modules:
-                                del sys.modules[module_name]
-                            sys.modules[module_name] = module
-                            spec.loader.exec_module(module)
-                            for _, obj in inspect.getmembers(module):
-                                if isinstance(obj, BaseTool):
-                                    tools.append(obj)
-                    else:
-                        module = importlib.import_module(reg_tool.path)
-                        for _, obj in inspect.getmembers(module):
-                            if isinstance(obj, BaseTool):
-                                tools.append(obj)
-            except Exception:
-                logger.warning(
-                    "Failed to load ConfigStore tool — skipping",
-                    tool_name=reg_tool.name,
-                    source_type="api_code" if reg_tool.code else "api_path",
-                    exc_info=True,
-                )
-
-        return tools
+    def _test_provider_allowed(self, provider: str) -> bool:
+        """Return whether a test-only provider is allowed for this deployment."""
+        return provider not in _TEST_ONLY_PROVIDERS or self._settings.unsafe_local_execution
 
     # ------------------------------------------------------------------
     # Agent definition resolution
@@ -252,6 +195,7 @@ class RuntimeResolver:
                 if not resolved_key and self._settings.openai_api_key:
                     resolved_key = self._settings.openai_api_key.get_secret_value()
                 kwargs: dict[str, Any] = {"model_provider": "openai"}
+                kwargs["stream_usage"] = True
                 if resolved_key:
                     kwargs["api_key"] = resolved_key
                 if base_url or self._settings.openai_api_base:
@@ -305,6 +249,7 @@ class RuntimeResolver:
                     "model_provider": "openai",
                     "base_url": resolved_base_url,
                     "api_key": resolved_key,
+                    "stream_usage": True,
                 }
                 if temperature is not None:
                     compat_kwargs["temperature"] = temperature
@@ -435,36 +380,6 @@ class RuntimeResolver:
 
         return cast(BaseChatModel, ChatBedrock(**kwargs))
 
-    async def resolve_mcp_configs(self, scope: dict[str, str] | None = None) -> list[Any]:
-        """Load MCP server registrations from ConfigStore as McpServerConfig objects.
-
-        Args:
-            scope: Scope dict for ConfigStore lookup.
-
-        Returns:
-            List of McpServerConfig instances for enabled servers.
-        """
-        if self._store is None:
-            return []
-        try:
-            from server.app.agent.mcp_client import McpServerConfig
-
-            servers = await self._store.list_mcp_servers(scope)
-            return [
-                McpServerConfig(
-                    name=s.name,
-                    url=s.url,
-                    headers=s.headers,
-                    enabled=s.enabled,
-                    transport=s.transport,
-                )
-                for s in servers
-                if s.enabled
-            ]
-        except RuntimeError:
-            logger.warning("ConfigStore not initialized — MCP servers will not be available")
-            return []
-
     async def resolve_runtime_model_for_session(
         self,
         session: Any,
@@ -493,12 +408,14 @@ class RuntimeResolver:
             agent_def=agent_def,
         )
 
-        if resolved.provider in _TEST_ONLY_PROVIDERS:
+        if not self._test_provider_allowed(resolved.provider):
             raise LLMProviderConfigError(
                 provider=resolved.provider,
                 reason=(
                     f"Provider '{resolved.provider}' is reserved for testing and cannot be used in "
-                    "production. Configure a real provider via POST /models/providers."
+                    "production. Set COGNITION_ALLOW_UNSAFE_LOCAL_EXECUTION=true only for "
+                    "standalone development, or configure a real provider via "
+                    "POST /models/providers."
                 ),
             )
 
@@ -538,6 +455,20 @@ class RuntimeResolver:
             scope=scope,
             agent_def=agent_def,
         )
+        return self.resolve_model_config_for_target(
+            target,
+            session=session,
+            agent_def=agent_def,
+        )
+
+    def resolve_model_config_for_target(
+        self,
+        target: SelectedModelTarget,
+        *,
+        session: Any,
+        agent_def: Any | None = None,
+    ) -> ResolvedModelConfig:
+        """Resolve a model config from an already-selected provider target."""
         recursion_limit = self._resolve_recursion_limit(session=session, agent_def=agent_def)
         return ResolvedModelConfig(
             provider=target.provider,
@@ -551,6 +482,90 @@ class RuntimeResolver:
             timeout=target.timeout,
             temperature=self._resolve_temperature(session=session, agent_def=agent_def),
             max_tokens=self._resolve_max_tokens(session=session, agent_def=agent_def),
+        )
+
+    def resolve_model_config_from_manifest(
+        self,
+        manifest: Mapping[str, Any],
+        *,
+        session: Any,
+        agent_def: Any | None = None,
+    ) -> ResolvedModelConfig:
+        """Resolve a model config from a run-pinned provider target."""
+        dependencies = manifest.get("dependencies")
+        provider = dependencies.get("provider") if isinstance(dependencies, dict) else None
+        target_data = provider.get("target") if isinstance(provider, dict) else None
+        if isinstance(provider, dict) and isinstance(target_data, dict):
+            resolved_identity = provider.get("resolved")
+            if isinstance(resolved_identity, dict):
+                target_data = {
+                    **target_data,
+                    "base_url": resolved_identity.get("base_url"),
+                    "region": resolved_identity.get("region"),
+                    "role_arn": resolved_identity.get("role_arn"),
+                    "max_retries": resolved_identity.get("max_retries"),
+                    "timeout": resolved_identity.get("timeout"),
+                }
+        target = SelectedModelTarget.from_manifest(target_data)
+        recursion_raw = provider.get("recursion_limit") if isinstance(provider, dict) else None
+        recursion_limit = (
+            int(recursion_raw)
+            if isinstance(recursion_raw, (int, str))
+            else self._resolve_recursion_limit(session=session, agent_def=agent_def)
+        )
+        return ResolvedModelConfig(
+            provider=target.provider,
+            model_id=target.model_id,
+            api_key=os.environ.get(target.api_key_env) if target.api_key_env else None,
+            base_url=target.base_url,
+            region=target.region,
+            role_arn=target.role_arn,
+            recursion_limit=recursion_limit,
+            max_retries=target.max_retries,
+            timeout=target.timeout,
+            temperature=(
+                provider.get("temperature")
+                if isinstance(provider, dict)
+                else self._resolve_temperature(session=session, agent_def=agent_def)
+            ),
+            max_tokens=(
+                provider.get("max_tokens")
+                if isinstance(provider, dict)
+                else self._resolve_max_tokens(session=session, agent_def=agent_def)
+            ),
+        )
+
+    async def resolve_runtime_model_from_manifest(
+        self,
+        manifest: Mapping[str, Any],
+        *,
+        session: Any,
+        agent_def: Any | None = None,
+    ) -> ResolvedRuntimeModel:
+        """Build a model from a run-pinned provider target."""
+        resolved = self.resolve_model_config_from_manifest(
+            manifest,
+            session=session,
+            agent_def=agent_def,
+        )
+        if not self._test_provider_allowed(resolved.provider):
+            raise LLMProviderConfigError(
+                provider=resolved.provider,
+                reason=(
+                    f"Provider '{resolved.provider}' is reserved for testing and cannot be used in "
+                    "production. Set COGNITION_ALLOW_UNSAFE_LOCAL_EXECUTION=true only for "
+                    "standalone development, or configure a real provider via "
+                    "POST /models/providers."
+                ),
+            )
+        model = resolved.build_model(self)
+        await self._warn_if_no_tool_call_support(resolved.provider, resolved.model_id)
+        return ResolvedRuntimeModel(
+            model=model,
+            provider=resolved.provider,
+            model_id=resolved.model_id,
+            recursion_limit=resolved.recursion_limit,
+            cache_key=resolved.cache_key(),
         )
 
     def _settings_str(self, name: str) -> str | None:

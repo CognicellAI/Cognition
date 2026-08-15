@@ -79,11 +79,25 @@ POSTGRES_DB=cognition
 COGNITION_SANDBOX_BACKEND=docker
 
 # Observability (optional but recommended)
-COGNITION_OTEL_ENABLED=true
-COGNITION_OTEL_ENDPOINT=http://otel-collector:4317
-COGNITION_MLFLOW_ENABLED=true
-COGNITION_MLFLOW_TRACKING_URI=http://mlflow:5000
+# NOTE: COGNITION_OTLP_ENDPOINT, OTLP metric export, and trace detail/content
+# settings are proposed for v0.13 curated tracing pending ADR-0002 acceptance.
+COGNITION_LOG_FORMAT=json
+COGNITION_METRICS_ENABLED=true
+COGNITION_METRICS_PORT=9090
+COGNITION_TRACING_ENABLED=true
+COGNITION_OTLP_ENDPOINT=http://otel-collector:4317
+COGNITION_OTLP_MAX_EXPORT_BYTES=3670016
+COGNITION_OTLP_QUEUE_SIZE=2048
+COGNITION_OTLP_EXPORT_TIMEOUT_MS=30000
+COGNITION_OTLP_METRIC_EXPORT_INTERVAL_MS=60000
+COGNITION_TRACE_SAMPLE_RATIO=0.10
+COGNITION_TRACE_DETAIL=standard
 ```
+
+MLflow trace routing is configured on the OpenTelemetry Collector, not on the
+Cognition server. Set the Collector's MLflow exporter endpoint and
+`x-mlflow-experiment-id` header, or use the local Compose default:
+`MLFLOW_EXPERIMENT_ID=0`.
 
 ---
 
@@ -124,7 +138,18 @@ curl -s http://localhost:3000/api/health
 
 ## Step 5 — Database Migrations
 
-Cognition uses Alembic for schema management. Migrations run automatically at startup — the `SqliteStorageBackend` and `PostgresStorageBackend` both call `metadata.create_all()` during `initialize()`.
+Cognition uses Alembic for schema management. Run migrations explicitly before
+starting code that requires a newer schema. Server startup creates missing
+tables for fresh development environments, but it does not replace ordered
+Alembic upgrades for staging or production.
+
+For the v0.13 multi-tenancy migration, drain active writes before upgrading.
+The migration backfills canonical `scope_key` values and Agent revision
+metadata for sessions, runs, events, artifacts, and config entities. Mixed
+v0.12 and v0.13 writers are unsupported because v0.13 runtime isolation depends
+on exact-scope columns and pinned run manifests. Existing sessions that
+referenced removed built-in default Agents need compatible builder-provisioned
+Agent definitions before cutover.
 
 For explicit migration management:
 
@@ -217,7 +242,7 @@ COGNITION_DOCKER_TIMEOUT=300
 
 ### Session Scoping
 
-Enable multi-tenant isolation with builder-defined scope keys:
+Enable exact runtime isolation for a multi-tenant host application with builder-defined scope keys:
 
 ```env
 COGNITION_SCOPING_ENABLED=true

@@ -40,20 +40,6 @@ All request and response bodies are JSON unless noted. Streaming endpoints retur
   - [`PUT /agents/{name}`](#put-agentsname)
   - [`PATCH /agents/{name}`](#patch-agentsname)
   - [`DELETE /agents/{name}`](#delete-agentsname)
-- [Skills](#skills)
-  - [`GET /skills`](#get-skills)
-  - [`GET /skills/{name}`](#get-skillsname)
-  - [`POST /skills`](#post-skills)
-  - [`PUT /skills/{name}`](#put-skillsname)
-  - [`PATCH /skills/{name}`](#patch-skillsname)
-  - [`DELETE /skills/{name}`](#delete-skillsname)
-- [Tools](#tools)
-  - [`GET /tools`](#get-tools)
-  - [`GET /tools/{name}`](#get-toolsname)
-  - [`GET /tools/errors`](#get-toolserrors)
-  - [`POST /tools`](#post-tools)
-  - [`DELETE /tools/{name}`](#delete-toolsname)
-  - [`POST /tools/reload`](#post-toolsreload)
 - [Models](#models)
   - [`GET /models`](#get-models)
   - [`GET /models/providers`](#get-modelsproviders)
@@ -66,12 +52,6 @@ All request and response bodies are JSON unless noted. Streaming endpoints retur
   - [`GET /config`](#get-config)
   - [`PATCH /config`](#patch-config)
   - [`POST /config/rollback`](#post-configrollback)
-- [MCP Servers](#mcp-servers)
-  - [`GET /mcp-servers`](#get-mcp-servers)
-  - [`POST /mcp-servers`](#post-mcp-servers)
-  - [`GET /mcp-servers/{name}`](#get-mcp-serversname)
-  - [`PATCH /mcp-servers/{name}`](#patch-mcp-serversname)
-  - [`DELETE /mcp-servers/{name}`](#delete-mcp-serversname)
 - [Sandbox Profiles](#sandbox-profiles)
   - [`GET /sandbox/profiles`](#get-sandboxprofiles)
   - [`POST /sandbox/profiles`](#post-sandboxprofiles)
@@ -90,7 +70,7 @@ All request and response bodies are JSON unless noted. Streaming endpoints retur
 - [A2A Protocol](#a2a-protocol)
   - [`GET /.well-known/agent-card.json`](#get-well-knownagent-cardjson)
   - [`POST /a2a/{agent_name}`](#post-a2aagent_name)
-- [Multi-Tenant Scoping](#multi-tenant-scoping)
+  - [Builder-Defined Runtime Scoping](#builder-defined-runtime-scoping)
 - [Rate Limiting](#rate-limiting)
 - [Error Format](#error-format)
 
@@ -139,7 +119,7 @@ the session to `idle` so the same session can receive follow-up messages.
 ```json
 {
   "title": "My session",
-  "agent_name": "default",
+  "agent_name": "support-agent",
   "metadata": {
     "repository": "myorg/myrepo",
     "pr_number": "42"
@@ -150,7 +130,7 @@ the session to `idle` so the same session can receive follow-up messages.
 | Field | Type | Required | Description |
 |---|---|---|---|
 | `title` | string (max 200) | No | Human-readable label |
-| `agent_name` | string | No | Agent to bind; must be a known `primary` or `all` agent. Defaults to `"default"`. Returns `422` if name is unknown. |
+| `agent_name` | string | Yes | Explicit builder-provisioned Agent to bind; must be a known `primary` or `all` Agent at the trusted request scope. Returns `422` if name is unknown. |
 | `metadata` | object | No | Arbitrary builder-defined flat key-value metadata attached to the session |
 
 **Headers (when scoping enabled):**
@@ -166,7 +146,7 @@ X-Cognition-Scope-Project: proj-123
   "title": "My session",
   "thread_id": "7f3e4a12-...",
   "status": "idle",
-  "agent_name": "default",
+  "agent_name": "support-agent",
   "metadata": {"repository": "myorg/myrepo", "pr_number": "42"},
   "created_at": "2026-03-02T12:00:00Z",
   "updated_at": "2026-03-02T12:00:00Z",
@@ -337,7 +317,7 @@ Send a user message and receive the agent's streaming response via Server-Sent E
 | `content` | string (min 1) | Yes | The user's message |
 | `model` | string | No | Override model for this message only |
 | `parent_id` | string | No | Parent message ID for threaded context |
-| `callback_url` | URL | No | Best-effort completion callback URL for a final POST after the run finishes |
+| `callback_url` | URL | No | Best-effort completion callback URL for a final POST after the run finishes. Denied unless the URL has an operator-approved HTTPS origin. |
 
 **Headers:**
 ```
@@ -373,7 +353,7 @@ List messages in a session with pagination.
     {
       "id": "msg-uuid",
       "session_id": "session-uuid",
-      "role": "user",
+      "role": "ROLE_USER",
       "content": "List files.",
       "created_at": "2026-03-02T12:00:00Z",
       "tool_calls": [],
@@ -387,7 +367,7 @@ List messages in a session with pagination.
       "tool_calls": [
         {"name": "bash", "args": {"command": "ls -la"}, "id": "call_xyz"}
       ],
-      "token_count": 142,
+      "token_count": null,
       "model_used": "gpt-4o"
     }
   ],
@@ -524,15 +504,34 @@ Use this payload with `POST /sessions/{session_id}/resume`.
 
 ### `usage`
 
-Token usage and estimated cost for this response.
+!!! note "v0.13 implementation note"
+
+    The shape below is the authoritative Usage Event contract from
+    [ADR-0002](../architecture/decisions/0002-curated-opentelemetry-agent-tracing.md).
+    Local observability validation remains a release gate.
+
+Provider-reported token usage for this terminal run. Cognition never estimates
+missing tokens or costs; unavailable provider metadata is represented with
+`status: "unavailable"` and nullable token fields.
 
 ```json
 {
+  "type": "usage",
+  "source": "provider_usage_metadata",
+  "status": "complete",
   "input_tokens": 245,
   "output_tokens": 380,
-  "estimated_cost": 0.0038,
+  "total_tokens": 625,
+  "cache_read_tokens": null,
+  "cache_write_tokens": null,
+  "reasoning_tokens": null,
+  "model_calls": 1,
+  "reported_model_calls": 1,
+  "unreported_model_calls": 0,
+  "estimated_cost": null,
   "provider": "openai",
-  "model": "gpt-4o"
+  "model": "gpt-4o",
+  "by_model": []
 }
 ```
 
@@ -604,7 +603,7 @@ The session remains reusable unless it has moved to a terminal session state.
     "role": "assistant",
     "content": "Here are the files in your workspace...",
     "tool_calls": [...],
-    "token_count": 380,
+    "token_count": null,
     "model_used": "gpt-4o",
     "created_at": "2026-03-02T12:00:01Z"
   }
@@ -625,11 +624,18 @@ List all non-hidden agents available in the registry.
   "agents": [
     {
       "name": "default",
+      "display_name": null,
       "description": "Full-access coding agent with all tools enabled",
       "mode": "primary",
       "hidden": false,
       "native": true,
-      "a2a_exposed": false,
+      "a2a": {
+        "exposed": false,
+        "public_interface_url": null,
+        "default_input_modes": ["text/plain", "application/json"],
+        "default_output_modes": ["text/plain", "application/json"],
+        "skills": []
+      },
       "provider": null,
       "model": null,
       "temperature": null,
@@ -695,14 +701,26 @@ Create or replace an agent definition in the ConfigRegistry.
 ```json
 {
   "name": "security-auditor",
+  "display_name": "Security Auditor",
   "system_prompt": "You are a security expert. Audit code for vulnerabilities.",
   "description": "Audits code for security issues",
   "mode": "subagent",
-  "tools": ["run_semgrep"],
-  "skills": ["python-review"],
+  "skills": [
+    {
+      "name": "python-review",
+      "content": "---\nname: python-review\ndescription: Review Python changes\n---\n\n# Python review",
+      "files": {"references/checklist.md": "# Checklist"}
+    }
+  ],
   "memory": ["AGENTS.md"],
   "interrupt_on": {},
-  "a2a_exposed": false,
+  "a2a": {
+    "exposed": false,
+    "public_interface_url": "https://agents.example.com/security-auditor/a2a",
+    "default_input_modes": ["text/plain", "application/json"],
+    "default_output_modes": ["text/plain", "application/json"],
+    "skills": []
+  },
   "model": "gpt-4o",
   "temperature": 0.1,
   "max_tokens": 4096,
@@ -718,13 +736,13 @@ Create or replace an agent definition in the ConfigRegistry.
 | Field | Type | Description |
 |---|---|---|
 | `name` | string | Agent identifier (1–100 chars) |
+| `display_name` | string | Optional human-readable name used for public Agent presentation without changing runtime lookup |
 | `system_prompt` | string | Agent's system prompt |
 | `description` | string | Human-readable description |
 | `mode` | `"primary"` \| `"subagent"` \| `"all"` | Whether agent can own sessions, be delegated to, or both |
 | `hidden` | boolean | Hide the agent from `GET /agents` list results |
-| `a2a_exposed` | boolean | Expose eligible `primary` or `all` agents through the A2A protocol |
-| `tools` | list[string] | Registry tool names to attach to this agent |
-| `skills` | list[string] | Registry skill names to attach to this agent |
+| `a2a` | object | A2A exposure and public Agent Card presentation. See the [A2A Builder Guide](a2a.md). |
+| `skills` | list[object] | Complete `{name, content, files}` bundles owned by this Agent revision |
 | `memory` | list[string] | Paths to instruction files (e.g. AGENTS.md) |
 | `interrupt_on` | dict | Tool names mapped to `true` for HITL confirmation |
 | `permissions` | list[object] | Deep Agents filesystem permission rules |
@@ -738,10 +756,11 @@ Create or replace an agent definition in the ConfigRegistry.
 | `context_policy` | object | Context and summarization policy configuration |
 | `excluded_tools` | list[string] | Tool names removed from the model-visible tool list for this agent |
 | `blocked_tools` | list[string] | Tool names denied at execution time for this agent in addition to global `COGNITION_BLOCKED_TOOLS` |
-| `timeout_seconds` | float | Per-agent model request timeout |
+| `timeout_seconds` | float | Per-agent execution deadline. A stalled provider or agent run is aborted and reported as failed when the deadline expires. |
 | `middleware` | list | Middleware names or middleware config dicts |
 | `subagents` | list[object] | In-process subagent definitions |
 | `async_subagents` | list[object] | Experimental remote Agent Protocol async subagent definitions |
+| `mcp` | object | Agent-owned remote MCP server configuration. See [MCP Tool Servers](./extending-agents.md#6-mcp-tool-servers). |
 | `sandbox_profile` | string | Trusted sandbox profile selected for this agent |
 | `sandbox_execution_role_arn` | string | Trusted IAM role ARN assigned to this agent's sandbox runtime |
 | `scope` | dict | Scope restriction; empty `{}` = global |
@@ -783,237 +802,9 @@ For scoped agents, use the same `X-Cognition-Scope-*` headers used to create or 
 
 Delete an agent definition from the ConfigRegistry.
 
-**Response `204 No Content`**  
-**Response `404 Not Found`:** Agent not found  
-**Response `400 Bad Request`:** Attempt to delete a built-in (native) agent
-
----
-
-## Skills
-
-Skills are SKILL.md files stored in the ConfigRegistry. When an agent loads, its configured skills are injected progressively as the context window fills.
-
-File-managed skills (seeded from `skill_sources` directories at startup) have `source: "file"` and cannot be modified or deleted via the API (returns `409 Conflict`). API-created skills have `source: "api"`.
-
-### `GET /skills`
-
-List all registered skills.
-
-**Query parameters:**
-
-| Parameter | Type | Description |
-|---|---|---|
-| `scope` | dict (via headers) | Filtered by scope when scoping is enabled |
-
-**Response `200 OK`:**
-```json
-{
-  "skills": [
-    {
-      "name": "python-testing",
-      "path": "/skills/api/python-testing",
-      "enabled": true,
-      "description": "pytest patterns and fixtures",
-      "content": "# Python Testing\n\n...",
-      "scope": {},
-      "source": "api"
-    }
-  ],
-  "count": 1
-}
-```
-
-### `GET /skills/{name}`
-
-Get a specific skill by name, including full content.
-
-**Response `200 OK`:** Skill object  
-**Response `404 Not Found`**
-
-### `POST /skills`
-
-Create or replace a skill in the ConfigRegistry.
-
-**Request body:**
-```json
-{
-  "name": "python-testing",
-  "content": "# Python Testing\n\nUse pytest. Write tests in tests/. Run with `pytest`.",
-  "description": "pytest patterns for this project",
-  "enabled": true,
-  "scope": {}
-}
-```
-
-| Field | Type | Description |
-|---|---|---|
-| `name` | string | Skill identifier (1–100 chars) |
-| `content` | string | Full SKILL.md content (YAML frontmatter + Markdown body) |
-| `path` | string | Filesystem path alternative to inline content |
-| `description` | string | Short description |
-| `enabled` | bool | Whether this skill is active (default `true`) |
-| `scope` | dict | Scope restriction; empty `{}` = global |
-
-**Response `201 Created`:** Skill object  
-**Response `422 Unprocessable Entity`:** Validation error
-
-### `PUT /skills/{name}`
-
-Replace a skill entirely.
-
-**Request body:** Same as `POST /skills`  
-**Response `200 OK`:** Updated skill object  
-**Response `404 Not Found`**
-
-### `PATCH /skills/{name}`
-
-Partially update a skill. Only provided fields are changed.
-
-**Request body (all fields optional):**
-```json
-{
-  "content": "# Updated content...",
-  "enabled": false
-}
-```
-
-**Response `200 OK`:** Updated skill object  
-**Response `404 Not Found`**
-
-### `DELETE /skills/{name}`
-
-Delete a skill from the ConfigRegistry.
-
-**Response `204 No Content`**  
-**Response `404 Not Found`**
-
----
-
-## Tools
-
-### `GET /tools`
-
-List all registered tools from both file discovery (AgentRegistry) and API registration (ConfigRegistry).
-
-**Response `200 OK`:**
-```json
-{
-  "tools": [
-    {
-      "name": "bash",
-      "source_type": "file",
-      "source": "file",
-      "module": "server.app.agent.tools",
-      "description": null,
-      "enabled": true,
-      "interrupt_on": false
-    },
-    {
-      "name": "search-jira",
-      "source_type": "api_code",
-      "source": "api_code",
-      "module": null,
-      "description": "Search Jira issues",
-      "enabled": true,
-      "interrupt_on": true
-    },
-    {
-      "name": "run_analysis",
-      "source_type": "api_path",
-      "source": "api_path",
-      "module": "myapp.tools.analysis",
-      "description": null,
-      "enabled": true
-    }
-  ],
-  "count": 3
-}
-```
-
-`source_type` values:
-- `"file"` — auto-discovered from `.cognition/tools/` or built-in
-- `"api_code"` — registered via `POST /tools` with `code` field (Python source stored in DB)
-- `"api_path"` — registered via `POST /tools` with `path` field (module path)
-
-File-managed tools (seeded from `tool_sources` directories at startup) have `source: "file"` and cannot be modified or deleted via the API (returns `409 Conflict`).
-
-### `GET /tools/{name}`
-
-Get a specific tool by name. Checks file-discovered tools first, then ConfigRegistry.
-
-**Response `200 OK`:** Tool object  
-**Response `404 Not Found`**
-
-### `GET /tools/errors`
-
-Get any errors that occurred during tool discovery or reload.
-
-**Response `200 OK`:**
-```json
-[
-  {
-    "file": ".cognition/tools/broken_tool.py",
-    "error_type": "ImportError",
-    "error": "No module named 'missing_dep'",
-    "timestamp": 1711972800.0
-  }
-]
-```
-
-### `POST /tools`
-
-Register a tool in the ConfigRegistry. Exactly one of `code` or `path` must be provided.
-
-**Request body — inline source code:**
-```json
-{
-  "name": "search-jira",
-  "code": "from langchain_core.tools import tool\n\n@tool\ndef search_jira(query: str) -> str:\n    \"\"\"Search Jira issues by query string.\"\"\"\n    ...",
-  "enabled": true,
-  "description": "Search Jira issues",
-  "scope": {}
-}
-```
-
-**Request body — module path:**
-```json
-{
-  "name": "jira-tools",
-  "path": "mycompany.cognition_tools.jira",
-  "enabled": true
-}
-```
-
-| Field | Type | Description |
-|---|---|---|
-| `name` | string | Tool identifier (1–100 chars) |
-| `code` | string | Full Python source containing `@tool`-decorated functions or `BaseTool` subclasses |
-| `path` | string | Dotted module path importable by the server process |
-| `enabled` | bool | Whether this tool is active (default `true`) |
-| `description` | string | Optional description |
-| `interrupt_on` | bool | Whether this tool should require approval by default in builders that consume tool metadata |
-| `scope` | dict | Scope restriction; empty `{}` = global |
-
-**Response `201 Created`:** Tool object with `source_type`  
-**Response `422 Unprocessable Entity`:** Neither `code` nor `path` provided; or both provided
-
-> **Security:** Tool code executes with full Python privileges inside the sandbox backend. Restrict this endpoint to authorized administrators at the Gateway/proxy layer.
-
-### `DELETE /tools/{name}`
-
-Remove an API-registered tool from the ConfigRegistry.
-
-**Response `204 No Content`**  
-**Response `404 Not Found`:** Tool not in ConfigRegistry
-
-### `POST /tools/reload`
-
-Trigger a manual reload of file-discovered tools from `.cognition/tools/`.
-
-**Response `200 OK`:**
-```json
-{"tools_loaded": 5, "errors": 0}
-```
+- **Response `204 No Content`**
+- **Response `404 Not Found`:** Agent not found in the exact request scope
+- **Response `412 Precondition Failed`:** Stale `If-Match` revision
 
 ---
 
@@ -1263,7 +1054,7 @@ Get the current server configuration (infrastructure only). Secrets are redacted
 
 Update infrastructure configuration at runtime. Changes are persisted to `.cognition/config.yaml`.
 
-**Allowed paths:** `rate_limit.per_minute`, `rate_limit.burst`, `observability.otel_enabled`, `observability.metrics_port`, `observability.otel_endpoint`, `mlflow.enabled`, `mlflow.experiment_name`.
+**Allowed paths:** `rate_limit.per_minute`, `rate_limit.burst`, `observability.otel_enabled`, `observability.otel_max_export_bytes`, `observability.otlp_queue_size`, `observability.otlp_export_timeout_ms`, `observability.otlp_metric_export_interval_ms` (proposed), `observability.trace_sample_ratio`, `observability.trace_detail` (proposed), `observability.metrics_enabled`, `observability.metrics_port`, `observability.otel_endpoint`, `observability.log_format`.
 
 **Request body:**
 ```json
@@ -1296,95 +1087,6 @@ Roll back to the previous configuration backup.
 ```
 
 **Response `404 Not Found`:** No backup exists.
-
----
-
-## MCP Servers
-
-Manage remote MCP (Model Context Protocol) tool servers at runtime. File-managed servers (from `.cognition/config.yaml`) have `source: "file"` and cannot be modified via the API (returns `409 Conflict`).
-
-### `GET /mcp-servers`
-
-List all registered MCP servers visible in the current scope.
-
-**Response `200 OK`:**
-```json
-{
-  "servers": [
-    {
-      "name": "github-tools",
-      "url": "https://mcp.github.example.com/sse",
-      "headers": {},
-      "enabled": true,
-      "transport": "sse",
-      "scope": {},
-      "source": "api"
-    }
-  ],
-  "count": 1
-}
-```
-
-> **Note:** `headers` is always returned as an empty `{}` to prevent credential leakage.
-
-### `POST /mcp-servers`
-
-Register a new MCP server.
-
-**Request body:**
-```json
-{
-  "name": "my-tools",
-  "url": "https://tools.example.com/sse",
-  "transport": "sse",
-  "enabled": true,
-  "headers": {"Authorization": "Bearer ..."},
-  "scope": {}
-}
-```
-
-| Field | Type | Required | Default | Description |
-|---|---|---|---|---|
-| `name` | string (1–100) | Yes | — | Unique server identifier |
-| `url` | string | Yes | — | HTTP/HTTPS URL (stdio not supported) |
-| `transport` | `"sse"` \| `"streamable_http"` | No | `"sse"` | Transport protocol |
-| `enabled` | bool | No | `true` | Whether to connect |
-| `headers` | dict | No | `{}` | HTTP headers sent with requests |
-| `scope` | dict | No | `{}` | Scope restriction |
-
-**Response `201 Created`:** MCP server object  
-**Response `422 Unprocessable Entity`:** Validation error
-
-### `GET /mcp-servers/{name}`
-
-Get a specific MCP server by name.
-
-**Response `200 OK`:** MCP server object  
-**Response `404 Not Found`**
-
-### `PATCH /mcp-servers/{name}`
-
-Partially update an MCP server.
-
-**Request body (all fields optional):**
-```json
-{
-  "enabled": false,
-  "url": "https://new-url.example.com/sse"
-}
-```
-
-**Response `200 OK`:** Updated MCP server object  
-**Response `404 Not Found`**  
-**Response `409 Conflict`:** Server is file-managed
-
-### `DELETE /mcp-servers/{name}`
-
-Delete an MCP server.
-
-**Response `204 No Content`**  
-**Response `404 Not Found`**  
-**Response `409 Conflict`:** Server is file-managed
 
 ---
 
@@ -1533,7 +1235,7 @@ Related: [Lambda MicroVM Sandbox Profiles](../concepts/sandboxes/aws-lambda-micr
 
 Artifacts are durable, scope-aware files that agents and builders can read, write, list, and diff. They provide explicit state outside the model context window for long-running agent handoffs.
 
-Artifact types: `scratch` (thread-scoped), `artifact` (user-visible), `contract` (done criteria), `eval` (evaluator results), `memory` (scoped memory), `policy` (read-only org policy).
+Artifact types: `scratch` (thread-scoped), `artifact` (user-visible), `file` (general durable file), `contract` (done criteria), `eval` (evaluator results), `memory` (scoped memory), `policy` (read-only org policy).
 
 Visibilities: `private` (session-scoped), `run` (run-scoped), `public` (scope-visible).
 
@@ -1595,7 +1297,7 @@ Create a new artifact.
 |---|---|---|---|
 | `id` | string | Yes | Unique identifier |
 | `name` | string | Yes | Human-readable name |
-| `artifact_type` | string | Yes | `scratch`, `artifact`, `contract`, `eval`, `memory`, `policy` |
+| `artifact_type` | string | Yes | `scratch`, `artifact`, `file`, `contract`, `eval`, `memory`, `policy` |
 | `content` | string | Yes | Artifact content |
 | `content_type` | string | No | MIME type (e.g. `text/markdown`, `application/json`) |
 | `path` | string | No | Logical path |
@@ -1741,13 +1443,36 @@ Returns the deployment's runtime feature set, package versions, and configuratio
 
 ## A2A Protocol
 
-Cognition exposes agents via the [Agent-to-Agent (A2A)](https://a2a-protocol.org/latest/) protocol. Only agents with `a2a_exposed: true` on their definition are visible. The adapter is implemented in `server/app/protocols/a2a/` and uses the `a2a-sdk` for protocol compliance.
+Cognition exposes agents as strict [A2A 1.0](https://a2a-protocol.org/latest/)
+JSON-RPC servers. Only agents with `a2a.exposed: true` are visible. Cognition
+implements the execution data plane: the embedding application authenticates and
+authorizes callers, then supplies trusted `X-Cognition-Scope-*` headers. Cognition
+carries that opaque builder-defined scope and isolates agents, tasks, contexts,
+messages, events, and artifacts exactly by it; it does not own tenant or IAM models.
+See [A2A in Cognition](../concepts/a2a/index.md) for the implementation model and
+the [A2A Builder Guide](a2a.md) for configuration and invocation steps.
 
 The A2A protocol surface can be disabled entirely by setting `COGNITION_A2A_ENABLED=false`. When disabled, the `/.well-known/agent-card.json` and `/a2a/{agent_name}` endpoints are not mounted, and `GET /capabilities` reports `a2a: false`.
 
+`SendMessage` and `SendStreamingMessage` accept all A2A 1.0 Part content
+variants. Text and structured data are normalized into ordered model context;
+inline raw bytes and URL references become opaque, task-linked artifacts under
+the request's exact `effective_scope`. URL Parts are not fetched implicitly.
+See [A2A Message Parts](../concepts/a2a/message-parts.md) for persistence,
+idempotency, sandbox, and failure semantics.
+
+For endpoints protected by builder-owned ingress, configure public authentication
+discovery with `COGNITION_A2A_SECURITY_SCHEMES` and
+`COGNITION_A2A_SECURITY_REQUIREMENTS`. Both values use canonical A2A ProtoJSON.
+Cognition validates them during startup and publishes them on every generated
+card; it does not enforce the advertised authentication scheme.
+
 ### `GET /.well-known/agent-card.json`
 
-Discover available agents. Returns A2A `AgentCard` objects filtered by the request's scope.
+Return one scope-visible A2A `AgentCard`. Use `?assistant_id={agent_name}` when a
+deployment exposes more than one agent. The deterministic first visible agent is
+returned when the query parameter is omitted. A specific card is also available at
+`GET /a2a/{agent_name}/.well-known/agent-card.json`.
 
 **Headers:**
 ```
@@ -1757,28 +1482,66 @@ X-Cognition-Scope-User: alice
 **Response `200 OK`:**
 ```json
 {
-  "cards": [
+  "name": "Deployment Assistant",
+  "description": "Handles deployment workflows",
+  "supportedInterfaces": [
     {
-      "name": "deploy-agent",
+      "url": "https://agents.example.com/deployment/a2a",
+      "protocolBinding": "JSONRPC",
+      "protocolVersion": "1.0"
+    }
+  ],
+  "version": "0.12.0-rc.5",
+  "capabilities": {
+    "streaming": true,
+    "pushNotifications": false,
+    "extendedAgentCard": false
+  },
+  "securitySchemes": {
+    "oauth2": {
+      "oauth2SecurityScheme": {
+        "description": "Machine credentials",
+        "flows": {
+          "clientCredentials": {
+            "tokenUrl": "https://auth.example.com/oauth/token",
+            "scopes": {
+              "a2a.invoke": "Invoke the agent"
+            }
+          }
+        },
+        "oauth2MetadataUrl": "https://auth.example.com/.well-known/openid-configuration"
+      }
+    }
+  },
+  "securityRequirements": [
+    {"schemes": {"oauth2": {}}}
+  ],
+  "defaultInputModes": ["text/plain", "application/json"],
+  "defaultOutputModes": ["text/plain", "application/json"],
+  "skills": [
+    {
+      "id": "primary",
+      "name": "Deployment Assistant",
       "description": "Handles deployment workflows",
-      "url": "http://localhost:8000/a2a/deploy-agent",
-      "version": "1.0",
-      "capabilities": {
-        "streaming": true,
-        "pushNotifications": false
-      },
-      "skills": [
-        {
-          "name": "deploy",
-          "description": "Deploy applications to production"
-        }
-      ]
+      "tags": ["primary"],
+      "inputModes": ["text/plain", "application/json"],
+      "outputModes": ["text/plain", "application/json"]
     }
   ]
 }
 ```
 
-Only agents visible in the caller's scope with `a2a_exposed=True` are returned. Built-in agents are not exposed by default.
+When the agent definition includes `a2a.public_interface_url`, Cognition uses
+that value exactly for `supportedInterfaces[].url`. Otherwise it derives the
+URL from the incoming request and `/a2a/{agent_name}`. `display_name` affects only public presentation; internal lookup
+and the fallback route continue to use `name`.
+
+Only agents visible in the exact supplied scope with `a2a.exposed=true` are
+returned. Built-in agents are not exposed by default.
+
+Builders configure default MIME modes and public Agent Card skills under the
+nested `a2a` object. See the [A2A Builder Guide](a2a.md) for the complete
+discovery contract and the distinction between public and runtime skills.
 
 ### `POST /a2a/{agent_name}`
 
@@ -1799,14 +1562,24 @@ X-Cognition-Scope-User: alice
   "method": "SendMessage",
   "params": {
     "message": {
-      "role": "user",
+      "role": "ROLE_USER",
+      "messageId": "msg-123",
       "parts": [
-        {"type": "text", "text": "Deploy the staging environment"}
+        {"text": "Deploy the staging environment", "mediaType": "text/plain"},
+        {"data": {"changeTicket": "CHG-42"}, "mediaType": "application/json"},
+        {"raw": "cmVsZWFzZTogdjEuMg==", "filename": "release.txt", "mediaType": "text/plain"},
+        {"url": "https://example.com/runbook.pdf", "filename": "runbook.pdf", "mediaType": "application/pdf"}
       ]
     }
   }
 }
 ```
+
+Parts are processed in wire order. `data` is rendered as a delimited JSON block.
+`raw` and `url` become artifact references in the normalized user message; their
+payload or remote content is not inserted into the prompt. Part metadata cannot
+override trusted request scope. A Part with no content variant is rejected before
+the model run starts.
 
 **Supported methods:**
 
@@ -1814,6 +1587,10 @@ X-Cognition-Scope-User: alice
 |---|---|
 | `SendMessage` | Send a message and get the complete response |
 | `SendStreamingMessage` | Send a message and stream the response (SSE) |
+| `GetTask` | Read one task by `id` |
+| `ListTasks` | List exact-agent, exact-scope tasks with cursor pagination |
+| `CancelTask` | Atomically cancel one non-terminal task |
+| `SubscribeToTask` | Replay and follow one non-terminal task over SSE |
 
 **Response `200 OK` (SendMessage):**
 ```json
@@ -1821,42 +1598,121 @@ X-Cognition-Scope-User: alice
   "jsonrpc": "2.0",
   "id": "1",
   "result": {
-    "taskId": "task-abc123",
-    "status": {
-      "state": "completed",
-      "message": {
-        "role": "agent",
-        "parts": [
-          {"type": "text", "text": "Staging environment deployed successfully."}
-        ]
-      }
+    "task": {
+      "id": "task-abc123",
+      "contextId": "context-456",
+      "status": {
+        "state": "TASK_STATE_COMPLETED"
+      },
+      "history": [],
+      "artifacts": []
     }
   }
 }
 ```
 
-**Response `200 OK` (SendStreamingMessage):**  
-Content-Type: `text/event-stream` — streams A2A task state events as SSE.
+`SendMessage` returns either `result.task` for task-oriented work or
+`result.message` for a direct message response. `SendStreamingMessage` and
+`SubscribeToTask` use `Content-Type: text/event-stream`; every SSE `data` value is
+a complete JSON-RPC 2.0 response envelope containing `task`, `message`,
+`statusUpdate`, or `artifactUpdate`.
 
-**A2A task state mapping:**
+Tasks are durable and independent from execution attempts. A continuation after
+`TASK_STATE_INPUT_REQUIRED` keeps the same A2A task and context IDs while creating
+a new Cognition run. Get, list, continuation, subscription, and cancellation
+remain available after a process restart or on another replica when the deployment
+uses shared durable storage.
 
-| Cognition Event | A2A TaskState |
-|---|---|
-| `StatusEvent("thinking")` | `working` |
-| `TokenEvent` | `working` (with content part) |
-| `DoneEvent` | `completed` |
-| `ErrorEvent` | `failed` |
+Send operations may use `messageId` as an idempotency identity. Cognition
+namespaces it by selected agent and exact effective scope so a retry does not
+create a second task or run and cannot collide across application scopes.
 
 **Errors:**
-- `404 Not Found` — Agent not found or not A2A-exposed
-- `422 Unprocessable Entity` — Invalid JSON-RPC request
-- `400 Bad Request` — Unsupported A2A method
 
-For full A2A protocol details, see the [A2A SDK documentation](https://github.com/a2aproject/a2a-python).
+- HTTP `404` — agent not found, not visible in scope, or not A2A-exposed.
+- A2A protocol failures use HTTP `200` with a structured JSON-RPC `error`,
+  including `TaskNotFoundError`, `TaskNotCancelableError`,
+  `UnsupportedOperationError`, `ContentTypeNotSupportedError`, and
+  `VersionNotSupportedError`.
+- A task owned by another agent or scope is reported as not found.
+- `SubscribeToTask` and a new `SendMessage` continuation reject terminal tasks.
+
+Push notifications, gRPC, HTTP+JSON, and authenticated extended cards are not
+advertised. The JSON-RPC 1.0 MUST profile is checked with the official
+[A2A TCK](https://github.com/a2aproject/a2a-tck).
 
 ---
 
-## Multi-Tenant Scoping
+## MCP OAuth Authorization Handoff
+
+Direct `mcp_oauth` servers use a builder-facing, scope-bound authorization
+handoff. These endpoints never return access tokens, refresh tokens, dynamic
+client secrets, or authorization codes.
+
+### Start authorization
+
+```http
+POST /mcp/oauth/agents/{agent_name}/servers/{server_alias}/authorizations
+```
+
+The server must exist in the resolved Agent definition and select
+`auth.type: mcp_oauth`. The response is either already authorized or contains
+an SDK-generated URL:
+
+```json
+{
+  "flow_id": "opaque-flow-id",
+  "status": "authorization_required",
+  "authorization_url": "https://identity.example/authorize?...",
+  "expires_in_seconds": 300,
+  "failure_category": null
+}
+```
+
+### Relay callback
+
+The builder's registered redirect endpoint posts the provider response in the
+body, with the same authoritative scope headers used to start the flow:
+
+```http
+POST /mcp/oauth/callback
+Content-Type: application/json
+
+{"code":"provider-code","state":"provider-state"}
+```
+
+Do not place the code in the Cognition request URL. Unknown, cross-scope, or
+replayed state fails with a typed, redacted `400` response.
+
+### Observe flow
+
+```http
+GET /mcp/oauth/authorizations/{flow_id}
+```
+
+The result is visible only from the exact effective scope that began the flow.
+Pending authorization transactions expire and are non-durable; encrypted OAuth
+tokens are durable in SQLite/PostgreSQL and process-local in the memory backend.
+
+### Observe MCP readiness
+
+```http
+GET /agents/{agent_name}/mcp/readiness
+```
+
+This exact-scope endpoint reports discovery observations for the Agent's current
+revision. Each server includes its required/optional policy, observation and
+freshness timestamps, discovered tool count, schema digest, and a typed redacted
+failure category. A missing or expired observation reports `unknown`.
+
+Readiness is not authorization truth. In particular, a `ready` observation does
+not bypass live authorization at a builder-controlled gateway on the next MCP
+operation. Credentials, authorization headers, raw scope values, tool arguments,
+and tool results are never included in this projection.
+
+---
+
+## Builder-Defined Runtime Scoping
 
 When `COGNITION_SCOPING_ENABLED=true`, all session endpoints require scope headers. The required headers are determined by `COGNITION_SCOPE_KEYS` — these are **builder-defined** key names. Cognition does not hardcode a vocabulary.
 
@@ -1883,7 +1739,12 @@ Missing required headers return `403 Forbidden`:
 }
 ```
 
-Sessions are automatically filtered to match the request's scope values. One tenant cannot read or write another tenant's sessions. The `effective_scope` dict propagates through the full runtime stack — ConfigRegistry CRUD, session persistence, `CognitionContext`, middleware, and tools.
+Sessions are automatically filtered to match the request's exact scope values. A
+resource in one authorized scope cannot be read or mutated from another scope. The
+`effective_scope` dict propagates through the full runtime stack — ConfigRegistry
+CRUD, session persistence, `CognitionContext`, middleware, and tools. This lets
+Cognition serve as the isolated runtime inside a multi-tenant host application;
+Cognition itself does not define tenants, memberships, roles, or entitlements.
 
 ---
 

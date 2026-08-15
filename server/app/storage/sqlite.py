@@ -7,6 +7,7 @@ database engine. Supports sessions, messages, and checkpoint persistence.
 from __future__ import annotations
 
 import json
+import sqlite3
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Literal
@@ -18,19 +19,24 @@ from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from langgraph.store.base import BaseStore
 from langgraph.store.sqlite.aio import AsyncSqliteStore
 
+from server.app.exceptions import SessionAlreadyExistsError
 from server.app.models import (
     Message,
     RunStatus,
+    RuntimeTask,
     Session,
     SessionConfig,
     SessionEvent,
     SessionRun,
     SessionStatus,
+    TaskStatus,
     ToolCall,
 )
 from server.app.storage.backend import StorageBackend
 from server.app.storage.common import (
+    effective_scope_key,
     make_message,
+    make_runtime_task,
     make_session,
     make_session_event,
     make_session_run,
@@ -109,12 +115,33 @@ class SqliteStorageBackend:
         )
 
         async with aiosqlite.connect(self.db_path) as db:
-            try:
-                await db.execute("ALTER TABLE sessions ADD COLUMN metadata JSON DEFAULT '{}' ")
-                await db.commit()
-            except aiosqlite.OperationalError as exc:
-                if "duplicate column name" not in str(exc).lower():
-                    raise
+            async with db.execute("PRAGMA table_info(sessions)") as cursor:
+                session_columns = {str(row[1]) async for row in cursor}
+            if "metadata" not in session_columns:
+                await db.execute("ALTER TABLE sessions ADD COLUMN metadata JSON DEFAULT '{}'")
+
+            async with db.execute("PRAGMA table_info(session_runs)") as cursor:
+                run_columns = {str(row[1]) async for row in cursor}
+            if "task_id" not in run_columns:
+                await db.execute("ALTER TABLE session_runs ADD COLUMN task_id VARCHAR(36)")
+
+            async with db.execute("PRAGMA table_info(session_events)") as cursor:
+                event_columns = {str(row[1]) async for row in cursor}
+            if "task_id" not in event_columns:
+                await db.execute("ALTER TABLE session_events ADD COLUMN task_id VARCHAR(36)")
+            await db.execute(
+                "CREATE INDEX IF NOT EXISTS idx_session_runs_task "
+                "ON session_runs(task_id, created_at)"
+            )
+            await db.execute(
+                "CREATE INDEX IF NOT EXISTS idx_session_events_task_sequence "
+                "ON session_events(task_id, sequence)"
+            )
+            await db.execute(
+                "CREATE INDEX IF NOT EXISTS idx_runtime_tasks_scope_page "
+                "ON runtime_tasks(agent_name, scope_key, created_at, id)"
+            )
+            await db.commit()
 
         logger.info(
             "SQLite storage initialized",
@@ -133,9 +160,9 @@ class SqliteStorageBackend:
         session_id: str,
         thread_id: str,
         config: SessionConfig,
+        agent_name: str,
         title: str | None = None,
         scopes: dict[str, str] | None = None,
-        agent_name: str = "default",
         metadata: dict[str, str] | None = None,
         workspace_path: str | None = None,
     ) -> Session:
@@ -166,30 +193,35 @@ class SqliteStorageBackend:
         scopes_json = json.dumps(scopes or {})
         metadata_json = json.dumps(metadata or {})
 
-        async with aiosqlite.connect(self.db_path) as db:
-            await db.execute(
-                """
-                INSERT INTO sessions (
-                    id, workspace_path, title, thread_id, status,
-                    config, scopes, metadata, message_count, agent_name, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    session.id,
-                    session.workspace_path,
-                    session.title,
-                    session.thread_id,
-                    session.status.value,
-                    config_json,
-                    scopes_json,
-                    metadata_json,
-                    session.message_count,
-                    session.agent_name,
-                    session.created_at,
-                    session.updated_at,
-                ),
-            )
-            await db.commit()
+        try:
+            async with aiosqlite.connect(self.db_path) as db:
+                await db.execute(
+                    """
+                    INSERT INTO sessions (
+                        id, workspace_path, title, thread_id, status,
+                        config, scopes, scope_key, metadata, message_count, agent_name,
+                        created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        session.id,
+                        session.workspace_path,
+                        session.title,
+                        session.thread_id,
+                        session.status.value,
+                        config_json,
+                        scopes_json,
+                        effective_scope_key(scopes),
+                        metadata_json,
+                        session.message_count,
+                        session.agent_name,
+                        session.created_at,
+                        session.updated_at,
+                    ),
+                )
+                await db.commit()
+        except sqlite3.IntegrityError as exc:
+            raise SessionAlreadyExistsError(session_id) from exc
 
         logger.info(
             "Session created",
@@ -199,13 +231,22 @@ class SqliteStorageBackend:
 
         return session
 
-    async def get_session(self, session_id: str) -> Session | None:
-        """Get a session by ID."""
+    async def get_session(
+        self,
+        session_id: str,
+        effective_scope: dict[str, str] | None = None,
+    ) -> Session | None:
+        """Get a session only at the exact effective scope."""
         async with aiosqlite.connect(self.db_path) as db:
             db.row_factory = aiosqlite.Row
-            async with db.execute("SELECT * FROM sessions WHERE id = ?", (session_id,)) as cursor:
+            async with db.execute(
+                "SELECT * FROM sessions WHERE id = ? AND scope_key = ?",
+                (session_id, effective_scope_key(effective_scope)),
+            ) as cursor:
                 row = await cursor.fetchone()
-                if row:
+                if row and (json.loads(row["scopes"]) if row["scopes"] else {}) == (
+                    effective_scope or {}
+                ):
                     return self._row_to_session(row)
         return None
 
@@ -213,14 +254,17 @@ class SqliteStorageBackend:
         self,
         filter_scopes: dict[str, str] | None = None,
         metadata_filters: dict[str, str] | None = None,
+        limit: int | None = None,
+        offset: int = 0,
     ) -> list[Session]:
         """List all sessions."""
         sessions = []
         async with aiosqlite.connect(self.db_path) as db:
             db.row_factory = aiosqlite.Row
             query = "SELECT * FROM sessions"
-            params: list[str] = []
-            where_clauses: list[str] = []
+            exact_scope = filter_scopes or {}
+            params: list[Any] = [effective_scope_key(exact_scope)]
+            where_clauses: list[str] = ["scope_key = ?"]
 
             if metadata_filters:
                 for key, value in metadata_filters.items():
@@ -229,16 +273,15 @@ class SqliteStorageBackend:
 
             if where_clauses:
                 query += " WHERE " + " AND ".join(where_clauses)
-            query += " ORDER BY updated_at DESC"
+            query += " ORDER BY updated_at DESC, id DESC"
+            if limit is not None:
+                query += " LIMIT ? OFFSET ?"
+                params.extend([limit, offset])
 
             async with db.execute(query, params) as cursor:
                 async for row in cursor:
                     session = self._row_to_session(row)
-                    # Filter by scopes if specified
-                    if filter_scopes:
-                        if all(session.scopes.get(k) == v for k, v in filter_scopes.items()):
-                            sessions.append(session)
-                    else:
+                    if session.scopes == exact_scope:
                         sessions.append(session)
         return sessions
 
@@ -250,9 +293,10 @@ class SqliteStorageBackend:
         config: SessionConfig | None = None,
         agent_name: str | None = None,
         metadata: dict[str, str] | None = None,
+        effective_scope: dict[str, str] | None = None,
     ) -> Session | None:
         """Update a session."""
-        session = await self.get_session(session_id)
+        session = await self.get_session(session_id, effective_scope)
         if not session:
             return None
 
@@ -305,28 +349,46 @@ class SqliteStorageBackend:
         params.append(now)
         session.updated_at = now
 
-        params.append(session_id)
+        params.extend([session_id, effective_scope_key(effective_scope)])
 
         async with aiosqlite.connect(self.db_path) as db:
-            await db.execute(f"UPDATE sessions SET {', '.join(updates)} WHERE id = ?", params)
+            await db.execute(
+                f"UPDATE sessions SET {', '.join(updates)} WHERE id = ? AND scope_key = ?",
+                params,
+            )
             await db.commit()
 
         return session
 
-    async def update_message_count(self, session_id: str, count: int) -> None:
+    async def update_message_count(
+        self,
+        session_id: str,
+        count: int,
+        effective_scope: dict[str, str] | None = None,
+    ) -> None:
         """Update the message count for a session."""
         now = now_utc_iso()
         async with aiosqlite.connect(self.db_path) as db:
             await db.execute(
-                "UPDATE sessions SET message_count = ?, updated_at = ? WHERE id = ?",
-                (count, now, session_id),
+                """
+                UPDATE sessions SET message_count = ?, updated_at = ?
+                WHERE id = ? AND scope_key = ?
+                """,
+                (count, now, session_id, effective_scope_key(effective_scope)),
             )
             await db.commit()
 
-    async def delete_session(self, session_id: str) -> bool:
-        """Delete a session."""
+    async def delete_session(
+        self,
+        session_id: str,
+        effective_scope: dict[str, str] | None = None,
+    ) -> bool:
+        """Delete a session only at the exact effective scope."""
         async with aiosqlite.connect(self.db_path) as db:
-            cursor = await db.execute("DELETE FROM sessions WHERE id = ?", (session_id,))
+            cursor = await db.execute(
+                "DELETE FROM sessions WHERE id = ? AND scope_key = ?",
+                (session_id, effective_scope_key(effective_scope)),
+            )
             await db.commit()
             if cursor.rowcount > 0:
                 logger.info(
@@ -350,8 +412,11 @@ class SqliteStorageBackend:
         token_count: int | None = None,
         model_used: str | None = None,
         metadata: dict[str, Any] | None = None,
+        effective_scope: dict[str, str] | None = None,
     ) -> Message:
         """Create a new message."""
+        if await self.get_session(session_id, effective_scope) is None:
+            raise ValueError("Session not found at exact message scope")
         message = make_message(
             message_id=message_id,
             session_id=session_id,
@@ -400,21 +465,38 @@ class SqliteStorageBackend:
 
         return message
 
-    async def get_message(self, message_id: str) -> Message | None:
-        """Get a message by ID."""
+    async def get_message(
+        self,
+        message_id: str,
+        effective_scope: dict[str, str] | None = None,
+    ) -> Message | None:
+        """Get a message after an exact-scoped session join."""
         async with aiosqlite.connect(self.db_path) as db:
             db.row_factory = aiosqlite.Row
-            async with db.execute("SELECT * FROM messages WHERE id = ?", (message_id,)) as cursor:
+            async with db.execute(
+                """
+                SELECT messages.* FROM messages
+                JOIN sessions ON sessions.id = messages.session_id
+                WHERE messages.id = ? AND sessions.scope_key = ?
+                """,
+                (message_id, effective_scope_key(effective_scope)),
+            ) as cursor:
                 row = await cursor.fetchone()
                 if row:
                     return self._row_to_message(row)
         return None
 
     async def get_messages_by_session(
-        self, session_id: str, limit: int = 50, offset: int = 0
+        self,
+        session_id: str,
+        limit: int = 50,
+        offset: int = 0,
+        effective_scope: dict[str, str] | None = None,
     ) -> tuple[list[Message], int]:
         """Get messages for a session with pagination."""
-        messages = []
+        messages: list[Message] = []
+        if await self.get_session(session_id, effective_scope) is None:
+            return [], 0
 
         async with aiosqlite.connect(self.db_path) as db:
             db.row_factory = aiosqlite.Row
@@ -444,9 +526,15 @@ class SqliteStorageBackend:
 
         return messages, total
 
-    async def list_messages_for_session(self, session_id: str) -> list[Message]:
+    async def list_messages_for_session(
+        self,
+        session_id: str,
+        effective_scope: dict[str, str] | None = None,
+    ) -> list[Message]:
         """List all messages for a session."""
-        messages = []
+        messages: list[Message] = []
+        if await self.get_session(session_id, effective_scope) is None:
+            return messages
         async with aiosqlite.connect(self.db_path) as db:
             db.row_factory = aiosqlite.Row
             async with db.execute(
@@ -466,9 +554,12 @@ class SqliteStorageBackend:
         session_id: str,
         thread_id: str,
         checkpoint_messages: list[Any],
+        effective_scope: dict[str, str] | None = None,
     ) -> int:
         """Rebuild API message projection from authoritative checkpoint messages."""
         del thread_id
+        if await self.get_session(session_id, effective_scope) is None:
+            return 0
 
         projected_messages = project_checkpoint_messages(session_id, checkpoint_messages)
 
@@ -504,22 +595,36 @@ class SqliteStorageBackend:
 
             now = now_utc_iso()
             await db.execute(
-                "UPDATE sessions SET message_count = ?, updated_at = ? WHERE id = ?",
-                (len(projected_messages), now, session_id),
+                """
+                UPDATE sessions SET message_count = ?, updated_at = ?
+                WHERE id = ? AND scope_key = ?
+                """,
+                (
+                    len(projected_messages),
+                    now,
+                    session_id,
+                    effective_scope_key(effective_scope),
+                ),
             )
             await db.commit()
 
         return len(projected_messages)
 
-    async def delete_messages_for_session(self, session_id: str) -> int:
+    async def delete_messages_for_session(
+        self,
+        session_id: str,
+        effective_scope: dict[str, str] | None = None,
+    ) -> int:
         """Delete all messages for a session."""
+        if await self.get_session(session_id, effective_scope) is None:
+            return 0
         async with aiosqlite.connect(self.db_path) as db:
             cursor = await db.execute(
                 "DELETE FROM messages WHERE session_id = ?",
                 (session_id,),
             )
             await db.commit()
-            deleted = cursor.rowcount
+            deleted = int(cursor.rowcount)
 
             if deleted > 0:
                 logger.info(
@@ -530,6 +635,218 @@ class SqliteStorageBackend:
             return deleted
 
     # Runtime operations
+    async def create_task(
+        self,
+        task_id: str,
+        context_id: str,
+        session_id: str,
+        agent_name: str,
+        effective_scope: dict[str, str],
+        status: TaskStatus = TaskStatus.SUBMITTED,
+        idempotency_key: str | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> RuntimeTask:
+        """Create a durable task with exact scope ownership."""
+        task = make_runtime_task(
+            task_id=task_id,
+            context_id=context_id,
+            session_id=session_id,
+            agent_name=agent_name,
+            status=status,
+            effective_scope=effective_scope,
+            idempotency_key=idempotency_key,
+            metadata=metadata,
+        )
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute(
+                """
+                INSERT INTO runtime_tasks (
+                    id, context_id, session_id, agent_name, status,
+                    effective_scope, scope_key, current_run_id, last_run_id,
+                    idempotency_key, status_reason, metadata, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    task.id,
+                    task.context_id,
+                    task.session_id,
+                    task.agent_name,
+                    task.status.value,
+                    json.dumps(task.effective_scope, sort_keys=True),
+                    effective_scope_key(task.effective_scope),
+                    task.current_run_id,
+                    task.last_run_id,
+                    task.idempotency_key,
+                    task.status_reason,
+                    json.dumps(task.metadata),
+                    task.created_at,
+                    task.updated_at,
+                ),
+            )
+            await db.commit()
+        return task
+
+    async def get_task(
+        self,
+        task_id: str,
+        effective_scope: dict[str, str],
+        agent_name: str | None = None,
+    ) -> RuntimeTask | None:
+        """Get a task only for its exact scope and optional agent."""
+        query = "SELECT * FROM runtime_tasks WHERE id = ? AND scope_key = ?"
+        params: list[Any] = [task_id, effective_scope_key(effective_scope)]
+        if agent_name is not None:
+            query += " AND agent_name = ?"
+            params.append(agent_name)
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            async with db.execute(query, params) as cursor:
+                row = await cursor.fetchone()
+        if row is None:
+            return None
+        task = self._row_to_task(row)
+        return task if task.effective_scope == effective_scope else None
+
+    async def get_task_by_idempotency_key(
+        self,
+        agent_name: str,
+        effective_scope: dict[str, str],
+        idempotency_key: str,
+    ) -> RuntimeTask | None:
+        """Get a task by its exact agent/scope idempotency namespace."""
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            async with db.execute(
+                """
+                SELECT * FROM runtime_tasks
+                WHERE agent_name = ? AND scope_key = ? AND idempotency_key = ?
+                LIMIT 1
+                """,
+                (agent_name, effective_scope_key(effective_scope), idempotency_key),
+            ) as cursor:
+                row = await cursor.fetchone()
+        if row is None:
+            return None
+        task = self._row_to_task(row)
+        return task if task.effective_scope == effective_scope else None
+
+    async def list_tasks(
+        self,
+        agent_name: str,
+        effective_scope: dict[str, str],
+        context_id: str | None = None,
+        statuses: set[TaskStatus] | None = None,
+        limit: int = 100,
+        cursor: str | None = None,
+    ) -> tuple[list[RuntimeTask], str | None]:
+        """List tasks for an exact agent/scope with stable cursor pagination."""
+        query = "SELECT * FROM runtime_tasks WHERE agent_name = ? AND scope_key = ?"
+        params: list[Any] = [agent_name, effective_scope_key(effective_scope)]
+        if context_id is not None:
+            query += " AND context_id = ?"
+            params.append(context_id)
+        if statuses:
+            placeholders = ", ".join("?" for _ in statuses)
+            query += f" AND status IN ({placeholders})"
+            params.extend(status.value for status in sorted(statuses, key=str))
+        if cursor is not None:
+            query += (
+                " AND (created_at, id) < (SELECT created_at, id FROM runtime_tasks WHERE id = ?)"
+            )
+            params.append(cursor)
+        page_size = max(1, min(limit, 1000))
+        query += " ORDER BY created_at DESC, id DESC LIMIT ?"
+        params.append(page_size + 1)
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            async with db.execute(query, params) as db_cursor:
+                rows = await db_cursor.fetchall()
+        tasks = [self._row_to_task(row) for row in rows]
+        tasks = [task for task in tasks if task.effective_scope == effective_scope]
+        has_more = len(tasks) > page_size
+        page = tasks[:page_size]
+        return page, page[-1].id if page and has_more else None
+
+    async def update_task(
+        self,
+        task_id: str,
+        effective_scope: dict[str, str],
+        expected_statuses: set[TaskStatus] | None = None,
+        status: TaskStatus | None = None,
+        current_run_id: str | None = None,
+        last_run_id: str | None = None,
+        status_reason: str | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> RuntimeTask | None:
+        """Conditionally update a task while preserving terminal immutability."""
+        current = await self.get_task(task_id, effective_scope)
+        if current is None or (
+            expected_statuses is not None and current.status not in expected_statuses
+        ):
+            return None
+        if status is not None and not TaskStatus.can_transition(current.status, status):
+            return None
+        updates: list[str] = []
+        params: list[Any] = []
+        if status is not None:
+            updates.append("status = ?")
+            params.append(status.value)
+        if current_run_id is not None:
+            updates.append("current_run_id = ?")
+            params.append(current_run_id)
+        if last_run_id is not None:
+            updates.append("last_run_id = ?")
+            params.append(last_run_id)
+        if status_reason is not None:
+            updates.append("status_reason = ?")
+            params.append(status_reason)
+        if metadata is not None:
+            updates.append("metadata = ?")
+            params.append(json.dumps(metadata))
+        if not updates:
+            return current
+        updates.append("updated_at = ?")
+        params.append(now_utc_iso())
+        params.extend([task_id, effective_scope_key(effective_scope), current.status.value])
+        async with aiosqlite.connect(self.db_path) as db:
+            cursor_result = await db.execute(
+                f"""
+                UPDATE runtime_tasks SET {", ".join(updates)}
+                WHERE id = ? AND scope_key = ? AND status = ?
+                """,
+                params,
+            )
+            await db.commit()
+        if cursor_result.rowcount != 1:
+            return None
+        return await self.get_task(task_id, effective_scope)
+
+    async def delete_task_data(self, task_id: str, effective_scope: dict[str, str]) -> bool:
+        """Delete only terminal, exact-scope data owned by one task."""
+        current = await self.get_task(task_id, effective_scope)
+        if current is None or not TaskStatus.is_terminal(current.status):
+            return False
+        scope_key = effective_scope_key(effective_scope)
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute(
+                "DELETE FROM session_events WHERE task_id = ? AND scope_key = ?",
+                (task_id, scope_key),
+            )
+            await db.execute(
+                "DELETE FROM messages WHERE json_extract(metadata, '$.task_id') = ?",
+                (task_id,),
+            )
+            await db.execute(
+                "DELETE FROM session_runs WHERE task_id = ? AND scope_key = ?",
+                (task_id, scope_key),
+            )
+            cursor = await db.execute(
+                "DELETE FROM runtime_tasks WHERE id = ? AND scope_key = ?",
+                (task_id, scope_key),
+            )
+            await db.commit()
+        return cursor.rowcount == 1
+
     async def create_run(
         self,
         run_id: str,
@@ -541,9 +858,16 @@ class SqliteStorageBackend:
         parent_run_id: str | None = None,
         trace_id: str | None = None,
         metadata: dict[str, Any] | None = None,
+        task_id: str | None = None,
+        agent_revision: int = 1,
+        runtime_manifest: dict[str, Any] | None = None,
+        manifest_digest: str | None = None,
     ) -> SessionRun:
         """Create a durable run for a session."""
-        runs = await self.list_runs(session_id)
+        exact_scope = effective_scope or {}
+        if await self.get_session(session_id, exact_scope) is None:
+            raise ValueError("Session not found at exact run scope")
+        runs = await self.list_runs(session_id, exact_scope)
         now = now_utc_iso()
         run = make_session_run(
             run_id=run_id,
@@ -551,6 +875,9 @@ class SqliteStorageBackend:
             thread_id=thread_id,
             status=status,
             effective_scope=effective_scope,
+            agent_revision=agent_revision,
+            runtime_manifest=runtime_manifest,
+            manifest_digest=manifest_digest,
             attempt=len(runs) + 1,
             idempotency_key=idempotency_key,
             parent_run_id=parent_run_id,
@@ -558,23 +885,30 @@ class SqliteStorageBackend:
             metadata=metadata,
             started_at=now if status in {RunStatus.STARTING, RunStatus.ACTIVE} else None,
             last_activity_at=now,
+            task_id=task_id,
         )
         async with aiosqlite.connect(self.db_path) as db:
             await db.execute(
                 """
                 INSERT INTO session_runs (
-                    id, session_id, thread_id, status, effective_scope,
+                    id, session_id, thread_id, task_id, status, effective_scope,
+                    scope_key, agent_revision, runtime_manifest, manifest_digest,
                     idempotency_key, attempt, parent_run_id, started_at,
                     last_activity_at, completed_at, error_code, status_reason,
                     trace_id, metadata, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     run.id,
                     run.session_id,
                     run.thread_id,
+                    run.task_id,
                     run.status.value,
                     json.dumps(run.effective_scope),
+                    effective_scope_key(run.effective_scope),
+                    run.agent_revision,
+                    json.dumps(run.runtime_manifest),
+                    run.manifest_digest,
                     run.idempotency_key,
                     run.attempt,
                     run.parent_run_id,
@@ -592,13 +926,22 @@ class SqliteStorageBackend:
             await db.commit()
         return run
 
-    async def get_run(self, run_id: str) -> SessionRun | None:
-        """Get a run by ID."""
+    async def get_run(
+        self,
+        run_id: str,
+        effective_scope: dict[str, str] | None = None,
+    ) -> SessionRun | None:
+        """Get a run by ID only at the exact scope."""
         async with aiosqlite.connect(self.db_path) as db:
             db.row_factory = aiosqlite.Row
-            async with db.execute("SELECT * FROM session_runs WHERE id = ?", (run_id,)) as cursor:
+            async with db.execute(
+                "SELECT * FROM session_runs WHERE id = ? AND scope_key = ?",
+                (run_id, effective_scope_key(effective_scope)),
+            ) as cursor:
                 row = await cursor.fetchone()
-                if row:
+                if row and (
+                    json.loads(row["effective_scope"]) if row["effective_scope"] else {}
+                ) == (effective_scope or {}):
                     return self._row_to_run(row)
         return None
 
@@ -606,6 +949,7 @@ class SqliteStorageBackend:
         self,
         session_id: str,
         idempotency_key: str,
+        effective_scope: dict[str, str] | None = None,
     ) -> SessionRun | None:
         """Get an existing run by session and idempotency key."""
         async with aiosqlite.connect(self.db_path) as db:
@@ -613,18 +957,22 @@ class SqliteStorageBackend:
             async with db.execute(
                 """
                 SELECT * FROM session_runs
-                WHERE session_id = ? AND idempotency_key = ?
+                WHERE session_id = ? AND idempotency_key = ? AND scope_key = ?
                 ORDER BY created_at DESC
                 LIMIT 1
                 """,
-                (session_id, idempotency_key),
+                (session_id, idempotency_key, effective_scope_key(effective_scope)),
             ) as cursor:
                 row = await cursor.fetchone()
                 if row:
                     return self._row_to_run(row)
         return None
 
-    async def list_runs(self, session_id: str) -> list[SessionRun]:
+    async def list_runs(
+        self,
+        session_id: str,
+        effective_scope: dict[str, str] | None = None,
+    ) -> list[SessionRun]:
         """List runs for a session, newest first."""
         runs = []
         async with aiosqlite.connect(self.db_path) as db:
@@ -632,16 +980,20 @@ class SqliteStorageBackend:
             async with db.execute(
                 """
                 SELECT * FROM session_runs
-                WHERE session_id = ?
+                WHERE session_id = ? AND scope_key = ?
                 ORDER BY created_at DESC
                 """,
-                (session_id,),
+                (session_id, effective_scope_key(effective_scope)),
             ) as cursor:
                 async for row in cursor:
                     runs.append(self._row_to_run(row))
         return runs
 
-    async def get_active_run(self, session_id: str) -> SessionRun | None:
+    async def get_active_run(
+        self,
+        session_id: str,
+        effective_scope: dict[str, str] | None = None,
+    ) -> SessionRun | None:
         """Get the active foreground run for a session."""
         active_statuses = (
             RunStatus.QUEUED.value,
@@ -657,11 +1009,11 @@ class SqliteStorageBackend:
             async with db.execute(
                 f"""
                 SELECT * FROM session_runs
-                WHERE session_id = ? AND status IN ({placeholders})
+                WHERE session_id = ? AND scope_key = ? AND status IN ({placeholders})
                 ORDER BY created_at DESC
                 LIMIT 1
                 """,
-                (session_id, *active_statuses),
+                (session_id, effective_scope_key(effective_scope), *active_statuses),
             ) as cursor:
                 row = await cursor.fetchone()
                 if row:
@@ -677,9 +1029,11 @@ class SqliteStorageBackend:
         error_code: str | None = None,
         status_reason: str | None = None,
         metadata: dict[str, Any] | None = None,
+        trace_id: str | None = None,
+        effective_scope: dict[str, str] | None = None,
     ) -> SessionRun | None:
         """Update durable run state."""
-        run = await self.get_run(run_id)
+        run = await self.get_run(run_id, effective_scope)
         if run is None:
             return None
 
@@ -710,15 +1064,21 @@ class SqliteStorageBackend:
         if metadata is not None:
             updates.append("metadata = ?")
             params.append(json.dumps(metadata))
+        if trace_id is not None:
+            updates.append("trace_id = ?")
+            params.append(trace_id)
         if not updates:
             return run
         updates.append("updated_at = ?")
         params.append(now)
-        params.append(run_id)
+        params.extend([run_id, effective_scope_key(effective_scope)])
         async with aiosqlite.connect(self.db_path) as db:
-            await db.execute(f"UPDATE session_runs SET {', '.join(updates)} WHERE id = ?", params)
+            await db.execute(
+                f"UPDATE session_runs SET {', '.join(updates)} WHERE id = ? AND scope_key = ?",
+                params,
+            )
             await db.commit()
-        return await self.get_run(run_id)
+        return await self.get_run(run_id, effective_scope)
 
     async def append_event(
         self,
@@ -731,12 +1091,21 @@ class SqliteStorageBackend:
         effective_scope: dict[str, str] | None = None,
         trace_id: str | None = None,
         span_id: str | None = None,
+        task_id: str | None = None,
     ) -> SessionEvent:
         """Append a durable runtime event."""
+        if task_id is None:
+            run = await self.get_run(run_id, effective_scope)
+            task_id = run.task_id if run is not None else None
+        if await self.get_run(run_id, effective_scope) is None:
+            raise ValueError("Run not found at exact event scope")
         async with aiosqlite.connect(self.db_path) as db:
             async with db.execute(
-                "SELECT COALESCE(MAX(sequence), 0) + 1 FROM session_events WHERE session_id = ?",
-                (session_id,),
+                """
+                SELECT COALESCE(MAX(sequence), 0) + 1 FROM session_events
+                WHERE session_id = ? AND scope_key = ?
+                """,
+                (session_id, effective_scope_key(effective_scope)),
             ) as cursor:
                 row = await cursor.fetchone()
                 sequence = int(row[0]) if row else 1
@@ -751,23 +1120,26 @@ class SqliteStorageBackend:
                 effective_scope=effective_scope,
                 trace_id=trace_id,
                 span_id=span_id,
+                task_id=task_id,
             )
             await db.execute(
                 """
                 INSERT INTO session_events (
-                    id, session_id, run_id, sequence, event_type, visibility,
-                    payload, effective_scope, trace_id, span_id, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    id, session_id, run_id, task_id, sequence, event_type, visibility,
+                    payload, effective_scope, scope_key, trace_id, span_id, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     event.id,
                     event.session_id,
                     event.run_id,
+                    event.task_id,
                     event.sequence,
                     event.event_type,
                     event.visibility,
                     json.dumps(event.payload),
                     json.dumps(event.effective_scope),
+                    effective_scope_key(event.effective_scope),
                     event.trace_id,
                     event.span_id,
                     event.created_at,
@@ -778,16 +1150,32 @@ class SqliteStorageBackend:
                 "latest_event_type": event_type,
                 "last_activity_at": event.created_at,
             }
-            session = await self.get_session(session_id)
+            session = await self.get_session(session_id, effective_scope)
             if session is not None:
                 metadata = {**session.metadata, **metadata_patch}
                 await db.execute(
-                    "UPDATE sessions SET metadata = ?, updated_at = ? WHERE id = ?",
-                    (json.dumps(metadata), event.created_at, session_id),
+                    """
+                    UPDATE sessions SET metadata = ?, updated_at = ?
+                    WHERE id = ? AND scope_key = ?
+                    """,
+                    (
+                        json.dumps(metadata),
+                        event.created_at,
+                        session_id,
+                        effective_scope_key(effective_scope),
+                    ),
                 )
             await db.execute(
-                "UPDATE session_runs SET last_activity_at = ?, updated_at = ? WHERE id = ?",
-                (event.created_at, event.created_at, run_id),
+                """
+                UPDATE session_runs SET last_activity_at = ?, updated_at = ?
+                WHERE id = ? AND scope_key = ?
+                """,
+                (
+                    event.created_at,
+                    event.created_at,
+                    run_id,
+                    effective_scope_key(effective_scope),
+                ),
             )
             await db.commit()
         return event
@@ -800,10 +1188,12 @@ class SqliteStorageBackend:
         limit: int = 100,
         visibility: Literal["internal", "builder", "end_user"] | None = None,
         event_type: str | None = None,
+        task_id: str | None = None,
+        effective_scope: dict[str, str] | None = None,
     ) -> list[SessionEvent]:
         """List runtime events for a session using cursor-style filters."""
-        query = "SELECT * FROM session_events WHERE session_id = ?"
-        params: list[Any] = [session_id]
+        query = "SELECT * FROM session_events WHERE session_id = ? AND scope_key = ?"
+        params: list[Any] = [session_id, effective_scope_key(effective_scope)]
         if run_id is not None:
             query += " AND run_id = ?"
             params.append(run_id)
@@ -816,6 +1206,9 @@ class SqliteStorageBackend:
         if event_type is not None:
             query += " AND event_type = ?"
             params.append(event_type)
+        if task_id is not None:
+            query += " AND task_id = ?"
+            params.append(task_id)
         query += " ORDER BY sequence ASC LIMIT ?"
         params.append(limit)
 
@@ -903,7 +1296,7 @@ class SqliteStorageBackend:
             created_at=row["created_at"],
             updated_at=row["updated_at"],
             message_count=row["message_count"],
-            agent_name=row["agent_name"] if "agent_name" in row.keys() else "default",
+            agent_name=row["agent_name"],
             scopes=scopes_data,
             metadata=json.loads(row["metadata"]) if row["metadata"] else {},
         )
@@ -952,6 +1345,11 @@ class SqliteStorageBackend:
             thread_id=row["thread_id"],
             status=RunStatus(row["status"]),
             effective_scope=json.loads(row["effective_scope"]) if row["effective_scope"] else {},
+            agent_revision=int(row["agent_revision"]),
+            runtime_manifest=(
+                json.loads(row["runtime_manifest"]) if row["runtime_manifest"] else {}
+            ),
+            manifest_digest=row["manifest_digest"],
             attempt=row["attempt"],
             idempotency_key=row["idempotency_key"],
             parent_run_id=row["parent_run_id"],
@@ -961,6 +1359,25 @@ class SqliteStorageBackend:
             error_code=row["error_code"],
             status_reason=row["status_reason"],
             trace_id=row["trace_id"],
+            metadata=json.loads(row["metadata"]) if row["metadata"] else {},
+            created_at=row["created_at"],
+            updated_at=row["updated_at"],
+            task_id=row["task_id"],
+        )
+
+    def _row_to_task(self, row: aiosqlite.Row) -> RuntimeTask:
+        """Convert a database row to a RuntimeTask."""
+        return make_runtime_task(
+            task_id=row["id"],
+            context_id=row["context_id"],
+            session_id=row["session_id"],
+            agent_name=row["agent_name"],
+            status=TaskStatus(row["status"]),
+            effective_scope=json.loads(row["effective_scope"]),
+            current_run_id=row["current_run_id"],
+            last_run_id=row["last_run_id"],
+            idempotency_key=row["idempotency_key"],
+            status_reason=row["status_reason"],
             metadata=json.loads(row["metadata"]) if row["metadata"] else {},
             created_at=row["created_at"],
             updated_at=row["updated_at"],
@@ -980,6 +1397,7 @@ class SqliteStorageBackend:
             trace_id=row["trace_id"],
             span_id=row["span_id"],
             created_at=row["created_at"],
+            task_id=row["task_id"],
         )
 
 

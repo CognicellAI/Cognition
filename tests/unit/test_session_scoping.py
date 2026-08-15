@@ -99,6 +99,7 @@ class TestSessionModel:
 
         session = Session(
             id="test-id",
+            agent_name="test-agent",
             workspace_path="/workspace",
             title="Test Session",
             thread_id="thread-123",
@@ -120,6 +121,7 @@ class TestSessionModel:
 
         session = Session(
             id="test-id",
+            agent_name="test-agent",
             workspace_path="/workspace",
             title="Test Session",
             thread_id="thread-123",
@@ -138,6 +140,7 @@ class TestSessionModel:
         """Test that from_dict restores scopes."""
         data = {
             "id": "test-id",
+            "agent_name": "test-agent",
             "workspace_path": "/workspace",
             "title": "Test Session",
             "thread_id": "thread-123",
@@ -159,6 +162,7 @@ class TestSessionModel:
 
         session = Session(
             id="test-id",
+            agent_name="test-agent",
             workspace_path="/workspace",
             title="Test Session",
             thread_id="thread-123",
@@ -186,6 +190,7 @@ class TestStorageBackendScoping:
             session_id="sess-123",
             thread_id="thread-123",
             config=config,
+            agent_name="test-agent",
             title="Test Session",
             scopes=scopes,
         )
@@ -193,7 +198,7 @@ class TestStorageBackendScoping:
         assert session.scopes == scopes
 
         # Verify stored correctly
-        retrieved = await store.get_session("sess-123")
+        retrieved = await store.get_session("sess-123", scopes)
         assert retrieved is not None
         assert retrieved.scopes == scopes
 
@@ -208,6 +213,7 @@ class TestStorageBackendScoping:
             session_id="sess-user1",
             thread_id="thread-1",
             config=config,
+            agent_name="test-agent",
             title="User 1 Session",
             scopes={"user_id": "user1"},
         )
@@ -216,6 +222,7 @@ class TestStorageBackendScoping:
             session_id="sess-user2",
             thread_id="thread-2",
             config=config,
+            agent_name="test-agent",
             title="User 2 Session",
             scopes={"user_id": "user2"},
         )
@@ -224,6 +231,7 @@ class TestStorageBackendScoping:
             session_id="sess-no-scope",
             thread_id="thread-3",
             config=config,
+            agent_name="test-agent",
             title="No Scope Session",
             scopes={},
         )
@@ -238,9 +246,9 @@ class TestStorageBackendScoping:
         assert len(user2_sessions) == 1
         assert user2_sessions[0].id == "sess-user2"
 
-        # No filter - all sessions
+        # Empty scope can only see the empty-scope session.
         all_sessions = await store.list_sessions()
-        assert len(all_sessions) == 3
+        assert [session.id for session in all_sessions] == ["sess-no-scope"]
 
     @pytest.mark.asyncio
     async def test_list_sessions_multi_dimensional_scoping(self, session_store):
@@ -253,6 +261,7 @@ class TestStorageBackendScoping:
             session_id="sess-1",
             thread_id="thread-1",
             config=config,
+            agent_name="test-agent",
             scopes={"user_id": "user1", "project": "proj1"},
         )
 
@@ -260,6 +269,7 @@ class TestStorageBackendScoping:
             session_id="sess-2",
             thread_id="thread-2",
             config=config,
+            agent_name="test-agent",
             scopes={"user_id": "user1", "project": "proj2"},
         )
 
@@ -267,6 +277,7 @@ class TestStorageBackendScoping:
             session_id="sess-3",
             thread_id="thread-3",
             config=config,
+            agent_name="test-agent",
             scopes={"user_id": "user2", "project": "proj1"},
         )
 
@@ -275,15 +286,13 @@ class TestStorageBackendScoping:
         assert len(filtered) == 1
         assert filtered[0].id == "sess-1"
 
-        # Filter by user only
+        # Partial scope lookup cannot see more-specific sessions.
         user1_sessions = await store.list_sessions(filter_scopes={"user_id": "user1"})
-        assert len(user1_sessions) == 2
-        assert {s.id for s in user1_sessions} == {"sess-1", "sess-2"}
+        assert user1_sessions == []
 
-        # Filter by project only
+        # A different partial scope also fails closed.
         proj1_sessions = await store.list_sessions(filter_scopes={"project": "proj1"})
-        assert len(proj1_sessions) == 2
-        assert {s.id for s in proj1_sessions} == {"sess-1", "sess-3"}
+        assert proj1_sessions == []
 
     @pytest.mark.asyncio
     async def test_get_session_retrieves_scopes(self, session_store):
@@ -296,10 +305,11 @@ class TestStorageBackendScoping:
             session_id="sess-123",
             thread_id="thread-123",
             config=config,
+            agent_name="test-agent",
             scopes=scopes,
         )
 
-        retrieved = await store.get_session("sess-123")
+        retrieved = await store.get_session("sess-123", scopes)
         assert retrieved is not None
         assert retrieved.scopes == scopes
 
@@ -314,6 +324,7 @@ class TestStorageBackendScoping:
             session_id="sess-a",
             thread_id="thread-a",
             config=config,
+            agent_name="test-agent",
             scopes={"user_id": "alice"},
         )
 
@@ -321,6 +332,7 @@ class TestStorageBackendScoping:
             session_id="sess-b",
             thread_id="thread-b",
             config=config,
+            agent_name="test-agent",
             scopes={"user_id": "bob"},
         )
 
@@ -346,6 +358,7 @@ class TestStorageBackendScoping:
             session_id="sess-123",
             thread_id="thread-123",
             config=config,
+            agent_name="test-agent",
             title="No Scope Session",
         )
 
@@ -366,6 +379,7 @@ class TestStorageBackendScoping:
             session_id="sess-1",
             thread_id="thread-1",
             config=config,
+            agent_name="test-agent",
             scopes={"user_id": "user1"},
         )
 
@@ -374,6 +388,7 @@ class TestStorageBackendScoping:
             session_id="sess-2",
             thread_id="thread-2",
             config=config,
+            agent_name="test-agent",
             scopes={"user_id": "user1", "project": "proj1"},
         )
 
@@ -382,9 +397,9 @@ class TestStorageBackendScoping:
         assert len(filtered) == 1
         assert filtered[0].id == "sess-2"
 
-        # Filter by user_id only - both match
+        # Filter by user_id only returns only the exact-scope session.
         user_only = await store.list_sessions(filter_scopes={"user_id": "user1"})
-        assert len(user_only) == 2
+        assert [session.id for session in user_only] == ["sess-1"]
 
 
 class TestScopeDependency:
@@ -466,6 +481,7 @@ class TestScopingIntegration:
             session_id="sess-alice-1",
             thread_id="thread-1",
             config=config,
+            agent_name="test-agent",
             title="Alice's Session",
             scopes=user_scope,
         )
@@ -474,7 +490,7 @@ class TestScopingIntegration:
         assert session.scopes == user_scope
 
         # User lists sessions and sees only theirs
-        alice_sessions = await store.list_sessions(filter_scopes={"user_id": "alice"})
+        alice_sessions = await store.list_sessions(filter_scopes=user_scope)
         assert len(alice_sessions) == 1
         assert alice_sessions[0].id == "sess-alice-1"
 
@@ -483,7 +499,7 @@ class TestScopingIntegration:
         assert len(bob_sessions) == 0
 
         # Get session with scope verification
-        retrieved = await store.get_session("sess-alice-1")
+        retrieved = await store.get_session("sess-alice-1", user_scope)
         assert retrieved is not None
         assert retrieved.scopes == user_scope
 

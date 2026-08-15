@@ -17,26 +17,31 @@ import hashlib
 import json
 import time
 from collections import deque
-from collections.abc import AsyncGenerator, Mapping
+from collections.abc import AsyncGenerator, AsyncIterator, Mapping
 from dataclasses import dataclass, field
-from typing import Any, cast
+from typing import Any, TypeVar, cast
 
 import structlog
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from server.app.agent.cognition_agent import CognitionAgentParams, create_cognition_agent
+from server.app.agent.definition import AgentDefinition
 from server.app.agent.resolver import ResolvedRuntimeModel, RuntimeResolver
 from server.app.agent.runtime import (
+    ArtifactEvent,  # noqa: F401 — re-exported for custom runtimes
     CallbackEvent,  # noqa: F401 — re-exported for consumers of this module
     ContextEvent,
     DeepAgentRuntime,
     DelegationEvent,
+    DirectMessageEvent,  # noqa: F401 — re-exported for custom runtimes
     DoneEvent,
     ErrorEvent,
     HeartbeatEvent,  # noqa: F401 — re-exported for consumers of this module
     HitlDecisionEvent,
     InterruptEvent,
+    ModelUsageEvent,
     PlanningEvent,
+    RejectedEvent,  # noqa: F401 — re-exported for custom runtimes
     RunStateEvent,  # noqa: F401 — re-exported for consumers of this module
     SandboxLifecycleEvent,
     StatusEvent,
@@ -51,15 +56,23 @@ from server.app.agent.runtime import (
 from server.app.agent.runtime import (
     _resolve_middleware as _resolve_single_middleware,
 )
-from server.app.agent.token_counter import count_text_tokens
+from server.app.agent.usage import ProviderUsageAggregator
 from server.app.exceptions import LLMProviderConfigError
-from server.app.observability import CONTEXT_EVENT_COUNT
-from server.app.observability import span as trace_span
+from server.app.observability import (
+    CONTEXT_EVENT_COUNT,
+    RUNTIME_CACHE_EVICTIONS_TOTAL,
+    RUNTIME_CACHE_SIZE,
+    add_span_event,
+)
 from server.app.settings import Settings
+from server.app.storage.common import canonical_json_digest
+from server.app.storage.config_models import SandboxProfile
 from server.app.storage.config_store import ConfigStore
 from server.app.storage.factory import create_storage_backend
 
 logger = structlog.get_logger(__name__)
+
+_EventT = TypeVar("_EventT")
 
 
 class AgentDefinitionUnavailableError(Exception):
@@ -97,6 +110,24 @@ def _effective_context_policy(
     return effective
 
 
+def _pinned_sandbox_profile(
+    runtime_manifest: Mapping[str, Any] | None,
+) -> SandboxProfile | None:
+    """Return a validated immutable SandboxProfile snapshot from a run manifest."""
+    if not isinstance(runtime_manifest, Mapping):
+        return None
+    dependencies = runtime_manifest.get("dependencies")
+    profile = dependencies.get("sandbox_profile") if isinstance(dependencies, Mapping) else None
+    definition = profile.get("definition") if isinstance(profile, Mapping) else None
+    expected_digest = profile.get("digest") if isinstance(profile, Mapping) else None
+    if not isinstance(definition, Mapping):
+        return None
+    sandbox_profile = SandboxProfile.model_validate(dict(definition))
+    if canonical_json_digest(sandbox_profile.model_dump(mode="json")) != expected_digest:
+        raise RuntimeError("Pinned SandboxProfile manifest is invalid")
+    return sandbox_profile
+
+
 def _audit_context_event(event: ContextEvent) -> None:
     """Record context signals without raw content or raw scope values."""
     logger.info(
@@ -117,13 +148,13 @@ def _audit_context_event(event: ContextEvent) -> None:
         artifact_id=event.artifact_id,
     )
     CONTEXT_EVENT_COUNT.labels(action=event.action).inc()
-    with trace_span(
+    add_span_event(
         "cognition.context",
         {
             "cognition.context.action": event.action,
-            "cognition.session_id": event.session_id or "",
-            "cognition.run_id": event.run_id or "",
-            "cognition.scope_keys": ",".join(event.scope_keys),
+            "session.id": event.session_id or "",
+            "cognition.run.id": event.run_id or "",
+            "cognition.scope.keys": ",".join(event.scope_keys),
             "cognition.context.policy_keys": ",".join(sorted(event.policy)),
             "cognition.context.input_tokens": event.input_tokens or 0,
             "cognition.context.output_tokens": event.output_tokens or 0,
@@ -133,8 +164,7 @@ def _audit_context_event(event: ContextEvent) -> None:
             "cognition.context.summarized_messages": event.summarized_messages or 0,
             "cognition.context.offloaded_messages": event.offloaded_messages or 0,
         },
-    ):
-        pass
+    )
 
 
 def _model_cache_key_from_resolved(
@@ -177,7 +207,6 @@ class ResolvedAgentConfig:
     """Fields resolved from an AgentDefinition, ready for CognitionAgentParams."""
 
     system_prompt: str | None = None
-    skills: list[str] = field(default_factory=list)
     memory: list[str] | None = None
     interrupt_on: dict[str, Any] | None = None
     permissions: list[Any] | None = None
@@ -191,21 +220,19 @@ class ResolvedAgentConfig:
     blocked_tools: list[str] = field(default_factory=list)
     subagents: list[Any] = field(default_factory=list)
     async_subagents: list[Any] = field(default_factory=list)
+    mcp_configs: list[Any] = field(default_factory=list)
     agent_def: Any = None
 
 
 @dataclass
 class StreamAccumulator:
-    """Tracks token counts and accumulated content during streaming."""
+    """Tracks accumulated content and tool-call state during streaming."""
 
-    input_tokens: int = 0
-    output_tokens: int = 0
     accumulated_content: str = ""
     _current_tool_call: str | None = field(default=None, repr=False)
 
     def record_token(self, content: str) -> None:
         self.accumulated_content += content
-        self.output_tokens = count_text_tokens(self.accumulated_content)
 
     def set_tool_call(self, tool_call_id: str | None) -> None:
         self._current_tool_call = tool_call_id
@@ -213,6 +240,21 @@ class StreamAccumulator:
     @property
     def in_tool_call(self) -> bool:
         return self._current_tool_call is not None
+
+
+async def _with_execution_timeout(
+    events: AsyncIterator[_EventT],
+    timeout_seconds: float | None,
+) -> AsyncIterator[_EventT]:
+    """Yield runtime events while enforcing the configured turn deadline."""
+    if timeout_seconds is None:
+        async for event in events:
+            yield event
+        return
+
+    async with asyncio.timeout(timeout_seconds):
+        async for event in events:
+            yield event
 
 
 def _has_explicit_agent_field(agent_def: Any, field_name: str) -> bool:
@@ -264,11 +306,15 @@ class DeepAgentStreamingService:
         settings: Settings,
         runtime_resolver: RuntimeResolver | None = None,
         config_store: ConfigStore | None = None,
+        mcp_oauth_repository: Any | None = None,
+        mcp_readiness_repository: Any | None = None,
     ) -> None:
         self.settings = settings
         self.storage_backend = create_storage_backend(settings)
         self._runtime_resolver = runtime_resolver
         self._config_store = config_store
+        self._mcp_oauth_repository = mcp_oauth_repository
+        self._mcp_readiness_repository = mcp_readiness_repository
 
     def _get_runtime_resolver(self) -> RuntimeResolver:
         if self._runtime_resolver is None:
@@ -298,13 +344,15 @@ class DeepAgentStreamingService:
         project_path: str,
         system_prompt: str | None = None,
         scope: Mapping[str, str] | None = None,
+        runtime_manifest: Mapping[str, Any] | None = None,
     ) -> tuple[ResolvedAgentConfig, list[Any]]:
-        """Resolve agent definition fields and custom tools from ConfigStore.
+        """Resolve agent definition fields from ConfigStore.
 
         Returns:
             (ResolvedAgentConfig, custom_tools) tuple. The config holds all
-            agent_def-derived overrides; custom_tools includes any
-            agent_def-resolved tools.
+            agent_def-derived overrides. ``custom_tools`` is retained for
+            programmatic tools supplied by tests or callers, not ConfigStore
+            Python tool loading.
         """
         custom_tools: list[Any] = []
 
@@ -315,7 +363,30 @@ class DeepAgentStreamingService:
             return resolved, custom_tools
 
         effective_scope = _effective_session_scope(session, scope)
-        agent_def = await cs.get_agent_definition(session.agent_name, effective_scope)
+        pinned_agent = (
+            runtime_manifest.get("agent") if isinstance(runtime_manifest, Mapping) else None
+        )
+        pinned_definition = (
+            pinned_agent.get("definition") if isinstance(pinned_agent, Mapping) else None
+        )
+        agent_def: AgentDefinition | None
+        if isinstance(pinned_definition, Mapping):
+            agent_def = AgentDefinition.model_validate(dict(pinned_definition))
+            expected_digest = (
+                pinned_agent.get("definition_digest") if isinstance(pinned_agent, Mapping) else None
+            )
+            actual_digest = canonical_json_digest(agent_def.model_dump(mode="json"))
+            if agent_def.name != session.agent_name or expected_digest != actual_digest:
+                raise AgentDefinitionUnavailableError(
+                    session.agent_name,
+                    "pinned manifest Agent identity is invalid",
+                    effective_scope,
+                )
+        else:
+            agent_def = await cs.get_agent_definition(
+                session.agent_name,
+                effective_scope,
+            )
         if agent_def is None:
             logger.warning(
                 "Agent definition not found for session execution",
@@ -345,18 +416,24 @@ class DeepAgentStreamingService:
         if resolved.system_prompt is None:
             resolved.system_prompt = agent_def.system_prompt
 
-        if agent_def.skills:
-            resolved.skills = list(agent_def.skills)
-
-        all_defs = await cs.list_agent_definitions(
-            include_hidden=True,
-            scope=effective_scope,
-        )
-        workspace_base = str(self.settings.workspace_path)
+        # Only explicitly declared inline subagents are attached. Enumerating
+        # every Agent in a tenant scope would silently widen capabilities.
         resolved.subagents = [
-            s.to_subagent(base_path=workspace_base)
-            for s in all_defs
-            if s.name != agent_def.name
+            {
+                "name": subagent.name,
+                "description": subagent.description or "",
+                "system_prompt": subagent.system_prompt,
+                **(
+                    {
+                        "permissions": [
+                            permission.model_dump() for permission in subagent.permissions
+                        ]
+                    }
+                    if subagent.permissions
+                    else {}
+                ),
+            }
+            for subagent in agent_def.subagents
         ]
 
         if agent_def.async_subagents:
@@ -406,6 +483,25 @@ class DeepAgentStreamingService:
         if agent_def.middleware:
             resolved.middleware = _resolve_middleware(agent_def.middleware)
 
+        if agent_def.mcp.servers:
+            from server.app.agent.mcp_client import McpServerConfig
+
+            pinned_revision = (
+                pinned_agent.get("revision") if isinstance(pinned_agent, Mapping) else None
+            )
+            agent_revision = pinned_revision if isinstance(pinned_revision, int) else 1
+            resolved.mcp_configs = [
+                McpServerConfig.from_agent_config(
+                    alias,
+                    config,
+                    self.settings,
+                    agent_name=agent_def.name,
+                    agent_revision=agent_revision,
+                    effective_scope=effective_scope or {},
+                )
+                for alias, config in agent_def.mcp.servers.items()
+            ]
+
         return resolved, custom_tools
 
     async def stream_response(
@@ -418,23 +514,39 @@ class DeepAgentStreamingService:
         manager: SessionAgentManager | None = None,
         scope: dict[str, str] | None = None,
         run_id: str | None = None,
+        trace_parent_span: Any | None = None,
     ) -> AsyncGenerator[StreamEvent, None]:
         """Stream LLM response using DeepAgents with multi-step support."""
         runtime: DeepAgentRuntime | None = None
         try:
             # Get session for config / agent_name resolution
-            session = await self.storage_backend.get_session(session_id)
+            session = await self.storage_backend.get_session(session_id, scope)
             effective_scope = _effective_session_scope(session, scope)
+            manifest_digest = ""
+            pinned_manifest: Mapping[str, Any] | None = None
+            if run_id is not None:
+                pinned_run = await self.storage_backend.get_run(
+                    run_id,
+                    effective_scope,
+                )
+                if pinned_run is None:
+                    raise RuntimeError("Pinned run manifest was not found at exact scope")
+                manifest_digest = pinned_run.manifest_digest
+                pinned_manifest = pinned_run.runtime_manifest
 
             agent_cfg, custom_tools = await self._resolve_agent_config(
                 session=session,
                 project_path=project_path,
                 system_prompt=system_prompt,
                 scope=effective_scope,
+                runtime_manifest=pinned_manifest,
             )
 
             resolved_model = await self._resolve_model(
-                session=session, scope=effective_scope, agent_def=agent_cfg.agent_def
+                session=session,
+                scope=effective_scope,
+                agent_def=agent_cfg.agent_def,
+                runtime_manifest=pinned_manifest,
             )
             model, provider, model_id, recursion_limit = resolved_model
             model_cache_key = _model_cache_key_from_resolved(
@@ -446,28 +558,29 @@ class DeepAgentStreamingService:
             # Get checkpointer from storage backend
             checkpointer = await self.storage_backend.get_checkpointer()
 
-            # Load tools registered via POST /tools from ConfigStore.
-            config_store_tools = await self._get_runtime_resolver().build_tools(
-                scope=effective_scope,
-                extra_tools=custom_tools if custom_tools else None,
-                allowed_tool_names=agent_cfg.agent_def.tools if agent_cfg.agent_def else None,
-            )
-            if config_store_tools:
-                custom_tools = config_store_tools
-
             store = await self.storage_backend.get_store()
 
             from server.app.agent.cognition_agent import CognitionContext
 
+            execution_timeout_seconds = (
+                agent_cfg.agent_def.config.timeout_seconds
+                if agent_cfg.agent_def is not None
+                else None
+            )
+            request_deadline = (
+                int((time.time() + execution_timeout_seconds) * 1000)
+                if execution_timeout_seconds is not None
+                else None
+            )
             invocation_context = CognitionContext.from_scope(
                 effective_scope,
                 session_id=session.id if session else session_id,
                 thread_id=session.thread_id if session else thread_id,
                 agent_name=session.agent_name if session else None,
                 metadata=session.metadata if session else None,
+                request_deadline=request_deadline,
             )
 
-            mcp_configs = await self._resolve_mcp_configs(scope=effective_scope)
             context_policy = _effective_context_policy(
                 agent_cfg.context_policy,
                 agent_cfg.tool_token_limit_before_evict,
@@ -478,7 +591,6 @@ class DeepAgentStreamingService:
                 run_id=thread_id,
                 scope_keys=sorted((effective_scope or {}).keys()),
                 policy=context_policy,
-                input_tokens=count_text_tokens(content),
                 message_count=getattr(session, "message_count", None),
             )
             _audit_context_event(context_event)
@@ -488,12 +600,12 @@ class DeepAgentStreamingService:
                 project_path=project_path,
                 model=model,
                 model_cache_key=model_cache_key,
+                manifest_digest=manifest_digest,
                 store=store,
                 checkpointer=checkpointer,
                 settings=self.settings,
                 tools=custom_tools if custom_tools else None,
                 system_prompt=agent_cfg.system_prompt,
-                skills=agent_cfg.skills if agent_cfg.skills else None,
                 subagents=agent_cfg.subagents,
                 async_subagents=agent_cfg.async_subagents,
                 memory=agent_cfg.memory,
@@ -508,13 +620,17 @@ class DeepAgentStreamingService:
                 excluded_tools=agent_cfg.excluded_tools,
                 blocked_tools=agent_cfg.blocked_tools,
                 middleware=agent_cfg.middleware,
-                mcp_configs=mcp_configs or None,
+                mcp_configs=agent_cfg.mcp_configs or None,
+                mcp_oauth_repository=self._mcp_oauth_repository,
+                mcp_readiness_repository=self._mcp_readiness_repository,
                 scope=effective_scope,
                 config_store=self._get_config_store(),
                 sandbox_profile=agent_cfg.sandbox_profile,
                 sandbox_execution_role_arn=agent_cfg.sandbox_execution_role_arn,
+                pinned_sandbox_profile_config=_pinned_sandbox_profile(pinned_manifest),
             )
             agent = await create_cognition_agent(agent_params)
+            invocation_context.sandbox_backend = agent.sandbox_backend
 
             if manager and agent.sandbox_backend is not None:
                 manager.register_sandbox_backend(
@@ -533,6 +649,7 @@ class DeepAgentStreamingService:
                 thread_id=thread_id,
                 recursion_limit=recursion_limit,
                 context=invocation_context,
+                trace_parent_span=trace_parent_span,
             )
             if manager:
                 manager.register_runtime(session_id, runtime)
@@ -540,19 +657,33 @@ class DeepAgentStreamingService:
             # Build message input (system prompt already embedded in agent graph)
             messages = self._build_messages(content, None)
 
-            acc = StreamAccumulator(input_tokens=count_text_tokens(content))
-
+            acc = StreamAccumulator()
+            usage_aggregator = ProviderUsageAggregator(
+                default_provider=provider,
+                default_model=model_id,
+            )
             runtime_exception: Exception | None = None
 
             try:
                 try:
-                    async for event in runtime.astream_events(
-                        {"messages": messages},
-                        thread_id=thread_id,
+                    async for event in _with_execution_timeout(
+                        runtime.astream_events(
+                            {"messages": messages},
+                            thread_id=thread_id,
+                        ),
+                        execution_timeout_seconds,
                     ):
                         if isinstance(event, TokenEvent):
                             acc.record_token(event.content)
                             yield event
+
+                        elif isinstance(event, ModelUsageEvent):
+                            usage_aggregator.observe_usage_metadata(
+                                event.call_id,
+                                event.usage_metadata,
+                                provider=event.provider,
+                                model=event.model,
+                            )
 
                         elif isinstance(event, ToolCallEvent):
                             acc.set_tool_call(event.tool_call_id)
@@ -572,6 +703,7 @@ class DeepAgentStreamingService:
                             event,
                             (
                                 DelegationEvent,
+                                ArtifactEvent,
                                 StatusEvent,
                                 StepCompleteEvent,
                                 InterruptEvent,
@@ -589,6 +721,22 @@ class DeepAgentStreamingService:
 
                     # DoneEvent from the runtime is absorbed here; we emit our own below.
 
+                except TimeoutError:
+                    await runtime.abort(thread_id)
+                    logger.warning(
+                        "Agent execution deadline exceeded",
+                        session_id=session_id,
+                        thread_id=thread_id,
+                        timeout_seconds=execution_timeout_seconds,
+                    )
+                    yield ErrorEvent(
+                        message=(
+                            "Agent execution exceeded the configured "
+                            f"{execution_timeout_seconds:g} second deadline"
+                        ),
+                        code="EXECUTION_TIMEOUT",
+                    )
+                    return
                 except asyncio.CancelledError:
                     raise
                 except Exception as exc:
@@ -607,29 +755,10 @@ class DeepAgentStreamingService:
                     )
                     return
 
-                yield UsageEvent(
-                    input_tokens=acc.input_tokens,
-                    output_tokens=acc.output_tokens,
-                    estimated_cost=self._estimate_cost(acc.input_tokens, acc.output_tokens, provider),
-                    provider=provider,
-                    model=model_id,
-                )
-                usage_context_event = ContextEvent(
-                    action="usage_snapshot",
-                    session_id=session.id if session else session_id,
-                    run_id=thread_id,
-                    scope_keys=sorted((effective_scope or {}).keys()),
-                    policy=context_policy,
-                    input_tokens=acc.input_tokens,
-                    output_tokens=acc.output_tokens,
-                    message_count=getattr(session, "message_count", None),
-                    retained_messages=getattr(session, "message_count", None),
-                    evicted_messages=0,
-                    summarized_messages=0,
-                    offloaded_messages=0,
-                )
-                _audit_context_event(usage_context_event)
-                yield usage_context_event
+                if acc.accumulated_content:
+                    usage_aggregator.mark_unreported_fallback()
+                usage_report = usage_aggregator.build_report()
+                yield UsageEvent(**usage_report.to_payload())
                 yield DoneEvent()
 
             finally:
@@ -669,23 +798,34 @@ class DeepAgentStreamingService:
         tool_name: str,
         args: dict[str, Any] | None = None,
         scope: dict[str, str] | None = None,
+        trace_parent_span: Any | None = None,
     ) -> AsyncGenerator[StreamEvent, None]:
         """Resume an interrupted Deep Agents run from persisted checkpoint state."""
         try:
-            session = await self.storage_backend.get_session(session_id)
+            session = await self.storage_backend.get_session(session_id, scope)
             if session is None:
                 yield ErrorEvent(message=f"Session not found: {session_id}", code="NOT_FOUND")
                 return
             effective_scope = _effective_session_scope(session, scope)
+            active_run = await self.storage_backend.get_active_run(
+                session.id,
+                effective_scope,
+            )
+            if active_run is None:
+                raise RuntimeError("Pinned active run manifest was not found at exact scope")
 
             agent_cfg, custom_tools = await self._resolve_agent_config(
                 session=session,
                 project_path=project_path,
                 scope=effective_scope,
+                runtime_manifest=active_run.runtime_manifest,
             )
 
             resolved_model = await self._resolve_model(
-                session=session, scope=effective_scope, agent_def=agent_cfg.agent_def
+                session=session,
+                scope=effective_scope,
+                agent_def=agent_cfg.agent_def,
+                runtime_manifest=active_run.runtime_manifest,
             )
             model, provider, model_id, recursion_limit = resolved_model
             model_cache_key = _model_cache_key_from_resolved(
@@ -694,13 +834,6 @@ class DeepAgentStreamingService:
                 model_id,
             )
             checkpointer = await self.storage_backend.get_checkpointer()
-            config_store_tools = await self._get_runtime_resolver().build_tools(
-                scope=effective_scope,
-                extra_tools=custom_tools if custom_tools else None,
-                allowed_tool_names=agent_cfg.agent_def.tools if agent_cfg.agent_def else None,
-            )
-            if config_store_tools:
-                custom_tools = config_store_tools
             store = await self.storage_backend.get_store()
 
             from server.app.agent.cognition_agent import CognitionContext
@@ -712,7 +845,6 @@ class DeepAgentStreamingService:
                 agent_name=session.agent_name,
                 metadata=session.metadata,
             )
-            mcp_configs = await self._resolve_mcp_configs(scope=effective_scope)
             context_policy = _effective_context_policy(
                 agent_cfg.context_policy,
                 agent_cfg.tool_token_limit_before_evict,
@@ -723,7 +855,6 @@ class DeepAgentStreamingService:
                 run_id=thread_id,
                 scope_keys=sorted((effective_scope or {}).keys()),
                 policy=context_policy,
-                input_tokens=0,
                 message_count=getattr(session, "message_count", None),
             )
             _audit_context_event(context_event)
@@ -733,12 +864,12 @@ class DeepAgentStreamingService:
                 project_path=project_path,
                 model=model,
                 model_cache_key=model_cache_key,
+                manifest_digest=active_run.manifest_digest,
                 store=store,
                 checkpointer=checkpointer,
                 settings=self.settings,
                 tools=custom_tools if custom_tools else None,
                 system_prompt=agent_cfg.system_prompt,
-                skills=agent_cfg.skills if agent_cfg.skills else None,
                 subagents=agent_cfg.subagents,
                 async_subagents=agent_cfg.async_subagents,
                 memory=agent_cfg.memory,
@@ -751,13 +882,17 @@ class DeepAgentStreamingService:
                 excluded_tools=agent_cfg.excluded_tools,
                 blocked_tools=agent_cfg.blocked_tools,
                 middleware=agent_cfg.middleware,
-                mcp_configs=mcp_configs or None,
+                mcp_configs=agent_cfg.mcp_configs or None,
+                mcp_oauth_repository=self._mcp_oauth_repository,
+                mcp_readiness_repository=self._mcp_readiness_repository,
                 scope=effective_scope,
                 config_store=self._get_config_store(),
                 sandbox_profile=agent_cfg.sandbox_profile,
                 sandbox_execution_role_arn=agent_cfg.sandbox_execution_role_arn,
+                pinned_sandbox_profile_config=_pinned_sandbox_profile(active_run.runtime_manifest),
             )
             agent = await create_cognition_agent(agent_params)
+            invocation_context.sandbox_backend = agent.sandbox_backend
 
             resume_decision: dict[str, Any] = {"type": decision}
             if decision == "edit":
@@ -772,17 +907,30 @@ class DeepAgentStreamingService:
                 thread_id=thread_id,
                 recursion_limit=recursion_limit,
                 context=invocation_context,
+                trace_parent_span=trace_parent_span,
             )
 
-            acc = StreamAccumulator(input_tokens=0)
+            acc = StreamAccumulator()
+            usage_aggregator = ProviderUsageAggregator(
+                default_provider=provider,
+                default_model=model_id,
+            )
             async for event in runtime.astream_resume_events(
                 decision=decision,
                 tool_name=tool_name,
                 args=args,
                 thread_id=thread_id,
+                trace_parent_span=trace_parent_span,
             ):
                 if isinstance(event, TokenEvent):
                     acc.record_token(event.content)
+                if isinstance(event, ModelUsageEvent):
+                    usage_aggregator.observe_usage_metadata(
+                        event.call_id,
+                        event.usage_metadata,
+                        provider=event.provider,
+                        model=event.model,
+                    )
                 if isinstance(event, InterruptEvent):
                     continue
                 if isinstance(event, DoneEvent):
@@ -799,20 +947,20 @@ class DeepAgentStreamingService:
                         StatusEvent,
                         ErrorEvent,
                         UsageEvent,
+                        ModelUsageEvent,
                         PlanningEvent,
                         StepCompleteEvent,
                         DelegationEvent,
                     ),
                 ):
+                    if isinstance(event, ModelUsageEvent):
+                        continue
                     yield cast(StreamEvent, event)
 
-            yield UsageEvent(
-                input_tokens=0,
-                output_tokens=acc.output_tokens,
-                estimated_cost=self._estimate_cost(0, acc.output_tokens, provider),
-                provider=provider,
-                model=model_id,
-            )
+            if acc.accumulated_content:
+                usage_aggregator.mark_unreported_fallback()
+            usage_report = usage_aggregator.build_report()
+            yield UsageEvent(**usage_report.to_payload())
             yield DoneEvent()
 
         except LLMProviderConfigError as e:
@@ -843,6 +991,7 @@ class DeepAgentStreamingService:
         self,
         session_id: str,
         thread_id: str,
+        scope: dict[str, str] | None = None,
     ) -> int:
         """Rebuild the API message projection from authoritative checkpoint state."""
         checkpointer = await self.storage_backend.get_checkpointer()
@@ -855,7 +1004,8 @@ class DeepAgentStreamingService:
             return 0
         if not checkpoint_messages:
             existing_messages = await self.storage_backend.list_messages_for_session(
-                session_id
+                session_id,
+                scope,
             )
             return len(existing_messages)
 
@@ -863,6 +1013,7 @@ class DeepAgentStreamingService:
             session_id=session_id,
             thread_id=thread_id,
             checkpoint_messages=checkpoint_messages,
+            effective_scope=scope,
         )
         return int(rebuilt_count)
 
@@ -871,21 +1022,21 @@ class DeepAgentStreamingService:
         session: Any,
         scope: dict[str, str] | None,
         agent_def: Any | None = None,
+        runtime_manifest: Mapping[str, Any] | None = None,
     ) -> ResolvedRuntimeModel:
         """Resolve provider config and build a LangChain BaseChatModel.
 
         Delegates to RuntimeResolver.resolve_runtime_model_for_session().
         """
+        if runtime_manifest is not None:
+            return await self._get_runtime_resolver().resolve_runtime_model_from_manifest(
+                runtime_manifest,
+                session=session,
+                agent_def=agent_def,
+            )
         return await self._get_runtime_resolver().resolve_runtime_model_for_session(
             session=session, scope=scope, agent_def=agent_def
         )
-
-    async def _resolve_mcp_configs(self, scope: dict[str, str] | None) -> list[Any]:
-        """Load MCP server registrations from ConfigStore.
-
-        Delegates to RuntimeResolver.resolve_mcp_configs().
-        """
-        return await self._get_runtime_resolver().resolve_mcp_configs(scope=scope)
 
     def _build_messages(self, user_content: str, custom_system_prompt: str | None = None) -> list:
         """Build message list with optional system prompt.
@@ -907,26 +1058,6 @@ class DeepAgentStreamingService:
         messages.append(HumanMessage(content=user_content))
         return messages
 
-    def _estimate_cost(
-        self,
-        input_tokens: int,
-        output_tokens: int,
-        provider: str,
-    ) -> float:
-        """Estimate cost based on provider pricing (rough approximation)."""
-        pricing: dict[str, dict[str, float]] = {
-            "openai": {"input": 0.0025, "output": 0.01},
-            "anthropic": {"input": 0.003, "output": 0.015},
-            "bedrock": {"input": 0.003, "output": 0.015},
-            "openai_compatible": {"input": 0.001, "output": 0.002},
-            "google_genai": {"input": 0.0005, "output": 0.0015},
-            "google_vertexai": {"input": 0.0005, "output": 0.0015},
-        }
-        rates = pricing.get(provider, pricing["openai"])
-        input_cost = (input_tokens / 1000) * rates["input"]
-        output_cost = (output_tokens / 1000) * rates["output"]
-        return round(input_cost + output_cost, 6)
-
 
 class SessionAgentManager:
     """Manages DeepAgent services per session.
@@ -941,6 +1072,8 @@ class SessionAgentManager:
         storage_backend: Any | None = None,
         runtime_resolver: RuntimeResolver | None = None,
         config_store: ConfigStore | None = None,
+        mcp_oauth_repository: Any | None = None,
+        mcp_readiness_repository: Any | None = None,
     ) -> None:
         """Initialize the session manager.
 
@@ -954,8 +1087,12 @@ class SessionAgentManager:
         self._storage_backend = storage_backend
         self._runtime_resolver = runtime_resolver
         self._config_store = config_store
+        self._mcp_oauth_repository = mcp_oauth_repository
+        self._mcp_readiness_repository = mcp_readiness_repository
         self._services: dict[str, DeepAgentStreamingService] = {}
         self._project_paths: dict[str, str] = {}
+        self._service_access: dict[str, float] = {}
+        self._service_cache_evictions = 0
         self._active_runtimes: dict[str, list[Any]] = {}
         self._sandbox_backends: dict[str, Any] = {}
         self._sandbox_events: dict[str, asyncio.Queue[SandboxLifecycleEvent]] = {}
@@ -978,15 +1115,25 @@ class SessionAgentManager:
         Returns:
             Configured DeepAgentStreamingService for the session.
         """
+        self._evict_session_services()
+        existing = self._services.get(session_id)
+        if existing is not None:
+            self._service_access[session_id] = time.monotonic()
+            return existing
         service = DeepAgentStreamingService(
             settings=self.settings,
             runtime_resolver=self._runtime_resolver,
             config_store=self._config_store,
+            mcp_oauth_repository=self._mcp_oauth_repository,
+            mcp_readiness_repository=self._mcp_readiness_repository,
         )
         if self._storage_backend is not None:
             service.storage_backend = self._storage_backend
         self._services[session_id] = service
         self._project_paths[session_id] = project_path
+        self._service_access[session_id] = time.monotonic()
+        self._evict_session_services()
+        RUNTIME_CACHE_SIZE.labels(cache="session_service").set(len(self._services))
         logger.info(
             "Session registered with DeepAgents",
             session_id=session_id,
@@ -996,11 +1143,55 @@ class SessionAgentManager:
 
     def get_service(self, session_id: str) -> DeepAgentStreamingService | None:
         """Get the agent service for a session."""
-        return self._services.get(session_id)
+        self._evict_session_services()
+        service = self._services.get(session_id)
+        if service is not None:
+            self._service_access[session_id] = time.monotonic()
+        return service
 
     def get_project_path(self, session_id: str) -> str | None:
         """Get the project path for a session."""
+        if session_id in self._services:
+            self._service_access[session_id] = time.monotonic()
         return self._project_paths.get(session_id)
+
+    def _evict_session_services(self) -> None:
+        """Evict expired/oldest idle services and their sandbox resources."""
+        now = time.monotonic()
+        ttl = self.settings.session_service_cache_ttl_seconds
+        candidates = sorted(
+            (
+                (last_access, session_id)
+                for session_id, last_access in self._service_access.items()
+                if not self._active_runtimes.get(session_id)
+            ),
+        )
+        expired = [session_id for last_access, session_id in candidates if now - last_access > ttl]
+        for session_id in expired:
+            self.unregister_session(session_id)
+            self._service_cache_evictions += 1
+            RUNTIME_CACHE_EVICTIONS_TOTAL.labels(cache="session_service", reason="ttl").inc()
+
+        while len(self._services) > self.settings.session_service_cache_max_entries:
+            idle = sorted(
+                (
+                    (last_access, session_id)
+                    for session_id, last_access in self._service_access.items()
+                    if not self._active_runtimes.get(session_id)
+                ),
+            )
+            if not idle:
+                break
+            self.unregister_session(idle[0][1])
+            self._service_cache_evictions += 1
+            RUNTIME_CACHE_EVICTIONS_TOTAL.labels(cache="session_service", reason="capacity").inc()
+
+    def get_service_cache_stats(self) -> dict[str, int]:
+        """Return safe cache cardinality/eviction metrics."""
+        return {
+            "size": len(self._services),
+            "evictions": self._service_cache_evictions,
+        }
 
     def get_runtime(self, session_id: str) -> Any | None:
         """Get the active runtime for a session, if any."""
@@ -1318,9 +1509,7 @@ class SessionAgentManager:
                 metadata=self._sandbox_runtime_metadata(backend, session_id=session_id),
             ),
         )
-        self._sandbox_emitted_lifecycle_phases.setdefault(session_id, set()).add(
-            "teardown_started"
-        )
+        self._sandbox_emitted_lifecycle_phases.setdefault(session_id, set()).add("teardown_started")
         if hasattr(backend, "terminate"):
             try:
                 backend.terminate()
@@ -1364,11 +1553,13 @@ class SessionAgentManager:
         """Unregister a session and clean up resources."""
         self._services.pop(session_id, None)
         self._project_paths.pop(session_id, None)
+        self._service_access.pop(session_id, None)
         self._active_runtimes.pop(session_id, None)
 
         self.release_sandbox_backend(session_id)
         self._sandbox_events.pop(session_id, None)
         self._sandbox_emitted_lifecycle_phases.pop(session_id, None)
+        RUNTIME_CACHE_SIZE.labels(cache="session_service").set(len(self._services))
         logger.info("Session unregistered", session_id=session_id)
 
     def _emit_sandbox_event(self, session_id: str, event: SandboxLifecycleEvent) -> None:

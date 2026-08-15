@@ -7,7 +7,7 @@ It is not meant to be copied unchanged into production. Instead, use it to answe
 - What can go in `.cognition/config.yaml`?
 - Which settings belong in `.env` instead?
 - What does a file-based agent look like?
-- How are skills, tools, and middleware laid out?
+- How are skills, MCP servers, and middleware laid out?
 - Which config entities are API-managed instead of file-managed?
 
 ## Included Sections
@@ -26,9 +26,6 @@ It is not meant to be copied unchanged into production. Instead, use it to answe
 
 - `.cognition/skills/`
   - a sample skill with real structure
-
-- `.cognition/tools/`
-  - a file-based tool example
 
 - `.cognition/middleware/`
   - a custom middleware scaffold
@@ -54,17 +51,14 @@ File configuration is best for:
 - project defaults
 - checked-in examples
 - initial provider bootstrap
-- `skill_sources` and `tool_sources` directories (seeded into the ConfigRegistry at startup as `source: "file"`)
+- `skill_sources` directories where still used by local/development setup
 
 API-managed configuration is best for:
 - user- or project-scoped provider configs
-- dynamic tools and skills (`source: "api"`)
 - global provider and agent defaults
 - programmatic builder/UIs
 
-Agent definitions reference skills and tools by **registry name** only — not by filesystem path. File-based skills/tools are discovered from `skill_sources`/`tool_sources` directories and seeded at startup; API-based skills/tools are created at runtime via the REST API. Both are stored in the ConfigRegistry and looked up by name when an agent loads.
-
-File-managed skills and tools (those with `source: "file"`) are locked from API mutation — `PATCH` and `DELETE` return `409 Conflict`.
+Agent definitions own their MCP server declarations directly. Cognition v0.14 does not load Python tools from `.cognition/tools/`, `/tools`, or ConfigRegistry tool records.
 
 ## Provider Notes
 

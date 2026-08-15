@@ -11,6 +11,7 @@ Covers:
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -264,7 +265,7 @@ class TestRuntimeContextForwarding:
 
 class TestServiceStoreWiring:
     @pytest.mark.asyncio
-    async def test_store_obtained_from_storage_backend(self):
+    async def test_store_obtained_from_storage_backend(self, tmp_path: Path):
         """stream_response obtains store from storage_backend.get_store()."""
         from server.app.agent.runtime import DoneEvent
         from server.app.llm.deep_agent_service import DeepAgentStreamingService
@@ -292,6 +293,7 @@ class TestServiceStoreWiring:
         # We patch the service's storage_backend directly for session lookup,
         # get_checkpointer, and get_store.
         s = MagicMock(spec=Settings)
+        s.workspace_path = tmp_path
         service = DeepAgentStreamingService(s)
         service.storage_backend = MagicMock()
         service.storage_backend.get_session = AsyncMock(return_value=session)

@@ -60,7 +60,6 @@ spec:
               WS="/home/cognition"
               echo "Initializing workspace at ${WS}..."
               mkdir -p "${WS}/.cognition/skills"
-              mkdir -p "${WS}/.cognition/tools"
               mkdir -p "${WS}/.cognition/middleware"
               mkdir -p "${WS}/.cognition/agents"
               mkdir -p "${WS}/.cognition/sandboxes"
@@ -123,6 +122,15 @@ spec:
               value: "{{ .Values.config.logLevel }}"
             
             # Database settings
+            # Database password must be defined before COGNITION_PERSISTENCE_URI
+            # so Kubernetes can expand $(DB_PASSWORD) inside the URI value.
+            {{- if not .Values.database.existingSecretName }}
+            - name: DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "cognition.fullname" . }}-db-credentials
+                  key: password
+            {{- end }}
             - name: COGNITION_PERSISTENCE_BACKEND
               value: "postgres"
             - name: COGNITION_PERSISTENCE_URI
@@ -186,7 +194,7 @@ spec:
             - name: COGNITION_OTEL_ENABLED
               value: "{{ .Values.config.observability.enabled }}"
             {{- if .Values.config.observability.enabled }}
-            - name: COGNITION_OTEL_ENDPOINT
+            - name: COGNITION_OTLP_ENDPOINT
               value: "{{ .Values.config.observability.otelEndpoint }}"
             - name: COGNITION_METRICS_PORT
               value: "{{ .Values.service.metricsPort }}"
@@ -215,7 +223,13 @@ spec:
               value: "{{ .Values.config.sandbox.k8s.warmPool }}"
             {{- end }}
             {{- end }}
-            
+
+            # MCP outbound transport admission
+            - name: COGNITION_MCP_OUTBOUND_TRANSPORT_ENABLED
+              value: "{{ .Values.config.mcp.outboundTransportEnabled }}"
+            - name: COGNITION_MCP_ALLOWED_ORIGINS
+              value: '{{ toJson .Values.config.mcp.allowedOrigins }}'
+
             # Session scoping
             - name: COGNITION_SCOPING_ENABLED
               value: "{{ .Values.config.scoping.enabled }}"
@@ -229,15 +243,6 @@ spec:
               value: "{{ .Values.config.rateLimit.perMinute }}"
             - name: COGNITION_RATE_LIMIT_BURST
               value: "{{ .Values.config.rateLimit.burst }}"
-            
-            # Database password from secret (if not using existing secret with full URI)
-            {{- if not .Values.database.existingSecretName }}
-            - name: DB_PASSWORD
-              valueFrom:
-                secretKeyRef:
-                  name: {{ include "cognition.fullname" . }}-db-credentials
-                  key: password
-            {{- end }}
             
           ports:
             - name: http

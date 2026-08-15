@@ -7,15 +7,11 @@ __all__ = [
     "CognitionAgentParams",
     "CognitionAgentResult",
     "CognitionLocalSandboxBackend",
-    "BrowserTool",
-    "InspectPackageTool",
-    "SearchTool",
     "AgentConfig",
     "AgentDefinition",
     "SubagentDefinition",
     "load_agent_definition",
     "load_agent_definition_from_markdown",
-    "create_default_agent_definition",
     "AgentRuntime",
     "DeepAgentRuntime",
     "create_agent_runtime",
@@ -48,7 +44,6 @@ def __getattr__(name: str) -> object:
         "AgentConfig",
         "AgentDefinition",
         "SubagentDefinition",
-        "create_default_agent_definition",
         "load_agent_definition",
         "load_agent_definition_from_markdown",
     }:
@@ -56,7 +51,6 @@ def __getattr__(name: str) -> object:
             AgentConfig,
             AgentDefinition,
             SubagentDefinition,
-            create_default_agent_definition,
             load_agent_definition,
             load_agent_definition_from_markdown,
         )
@@ -65,7 +59,6 @@ def __getattr__(name: str) -> object:
             "AgentConfig": AgentConfig,
             "AgentDefinition": AgentDefinition,
             "SubagentDefinition": SubagentDefinition,
-            "create_default_agent_definition": create_default_agent_definition,
             "load_agent_definition": load_agent_definition,
             "load_agent_definition_from_markdown": load_agent_definition_from_markdown,
         }[name]
@@ -115,14 +108,5 @@ def __getattr__(name: str) -> object:
         from server.app.agent.sandbox_backend import CognitionLocalSandboxBackend
 
         return CognitionLocalSandboxBackend
-
-    if name in {"BrowserTool", "InspectPackageTool", "SearchTool"}:
-        from server.app.agent.tools import BrowserTool, InspectPackageTool, SearchTool
-
-        return {
-            "BrowserTool": BrowserTool,
-            "InspectPackageTool": InspectPackageTool,
-            "SearchTool": SearchTool,
-        }[name]
 
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

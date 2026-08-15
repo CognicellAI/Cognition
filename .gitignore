@@ -78,3 +78,6 @@ mlflow.db
 localdocs/
 claurst
 .vercel
+
+# Generated MkDocs site
+site/

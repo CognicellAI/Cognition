@@ -8,6 +8,9 @@ Layer: 3 (Execution)
 
 from __future__ import annotations
 
+import io
+import json
+import tarfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -50,6 +53,7 @@ class DockerExecutionBackend:
         memory_limit: str = "512m",
         cpu_limit: float = 1.0,
         host_workspace: str = "",
+        workspace_root: str = "/workspace",
     ):
         """Initialize Docker execution backend.
 
@@ -72,6 +76,7 @@ class DockerExecutionBackend:
         self.memory_limit = memory_limit
         self.cpu_limit = cpu_limit
         self.host_workspace = host_workspace or str(self.root_dir)
+        self.workspace_root = workspace_root.rstrip("/") or "/"
         self._container: Any = None
 
     def _ensure_container(self) -> None:
@@ -106,8 +111,9 @@ class DockerExecutionBackend:
                 network_mode=self.network_mode,
                 mem_limit=self.memory_limit,
                 cpu_quota=int(self.cpu_limit * 100000),
-                volumes={self.host_workspace: {"bind": "/workspace", "mode": "rw"}},
-                working_dir="/workspace",
+                volumes={self.host_workspace: {"bind": self.workspace_root, "mode": "rw"}},
+                working_dir=self.workspace_root,
+                environment={"COGNITION_WORKSPACE_ROOT": self.workspace_root},
                 stdin_open=True,
                 tty=True,
                 cap_drop=["ALL"],
@@ -119,6 +125,23 @@ class DockerExecutionBackend:
 
     def execute(self, command: str, timeout: float | None = 300.0) -> ExecutionResult:
         """Execute command in Docker container."""
+        return self._execute_command(["sh", "-c", command], timeout=timeout)
+
+    def execute_argv(
+        self,
+        command: list[str],
+        timeout: float | None = 300.0,
+    ) -> ExecutionResult:
+        """Execute a fixed argv without invoking a shell."""
+        return self._execute_command(command, timeout=timeout)
+
+    def _execute_command(
+        self,
+        command: list[str],
+        *,
+        timeout: float | None,
+    ) -> ExecutionResult:
+        """Execute an argv in the container and normalize its response."""
         import structlog
 
         logger = structlog.get_logger(__name__)
@@ -126,8 +149,8 @@ class DockerExecutionBackend:
         self._ensure_container()
         try:
             exit_code, output = self._container.exec_run(
-                cmd=["sh", "-c", command],
-                workdir="/workspace",
+                cmd=command,
+                workdir=self.workspace_root,
             )
 
             if isinstance(output, bytes):
@@ -143,52 +166,198 @@ class DockerExecutionBackend:
             return ExecutionResult(output=f"Error: {e}", exit_code=-1, truncated=False)
 
     def read_file(self, path: str) -> str:
-        """Read file from container."""
-        self._ensure_container()
-        import subprocess
-        import tempfile
+        """Read a UTF-8 file through the container archive API."""
+        return self.read_file_bytes(path).decode("utf-8")
 
-        with tempfile.TemporaryDirectory() as tmpdir:
-            temp_file = Path(tmpdir) / "file"
-            subprocess.run(
-                ["docker", "cp", f"{self._container.id}:/workspace/{path}", str(temp_file)],
-                check=True,
-                capture_output=True,
-            )
-            return temp_file.read_text()
+    def read_file_bytes(self, path: str) -> bytes:
+        """Read bytes from the sandbox without touching the host filesystem."""
+        self._ensure_container()
+        stream, _stat = self._container.get_archive(f"{self.workspace_root}/{path}")
+        archive = io.BytesIO(b"".join(stream))
+        with tarfile.open(fileobj=archive, mode="r:*") as tar:
+            members = tar.getmembers()
+            if len(members) != 1 or not members[0].isfile():
+                raise IsADirectoryError(path)
+            extracted = tar.extractfile(members[0])
+            if extracted is None:
+                raise FileNotFoundError(path)
+            return extracted.read()
 
     def write_file(self, path: str, content: str) -> None:
-        """Write file to container."""
-        self._ensure_container()
-        import subprocess
-        import tempfile
+        """Write a UTF-8 file through the container archive API."""
+        self.write_file_bytes(path, content.encode("utf-8"))
 
-        with tempfile.TemporaryDirectory() as tmpdir:
-            temp_file = Path(tmpdir) / "file"
-            temp_file.write_text(content)
-            dir_path = Path(path).parent
-            if str(dir_path) != ".":
-                self.execute(f"mkdir -p /workspace/{dir_path}")
-            subprocess.run(
-                ["docker", "cp", str(temp_file), f"{self._container.id}:/workspace/{path}"],
-                check=True,
-                capture_output=True,
-            )
+    def write_file_bytes(self, path: str, content: bytes) -> None:
+        """Write bytes into the sandbox without a host temporary file."""
+        self._ensure_container()
+        relative = Path(path)
+        parent = relative.parent.as_posix()
+        destination = self.workspace_root if parent == "." else f"{self.workspace_root}/{parent}"
+        mkdir_result = self.execute_argv(["mkdir", "-p", destination])
+        if mkdir_result.exit_code != 0:
+            raise OSError(mkdir_result.output)
+
+        archive = io.BytesIO()
+        with tarfile.open(fileobj=archive, mode="w") as tar:
+            info = tarfile.TarInfo(relative.name)
+            info.size = len(content)
+            info.mode = 0o644
+            tar.addfile(info, io.BytesIO(content))
+        archive.seek(0)
+        if not self._container.put_archive(destination, archive.read()):
+            raise OSError(f"Container rejected file upload: {path}")
 
     def list_files(self, path: str = ".") -> list[dict]:
-        """List files in container directory."""
-        result = self.execute(f"ls -la /workspace/{path}")
-        files = []
-        for line in result.output.split("\n")[1:]:
-            parts = line.split()
-            if len(parts) >= 9:
-                name = parts[-1]
-                if name not in (".", ".."):
-                    files.append(
-                        {
-                            "path": f"{path}/{name}".replace("./", ""),
-                            "is_dir": parts[0].startswith("d"),
-                            "size": int(parts[4]) if parts[0].startswith("-") else 0,
-                        }
-                    )
-        return files
+        """List files by running a fixed inspection script in the sandbox."""
+        script = """
+import json
+import pathlib
+import sys
+
+root = pathlib.Path(sys.argv[2])
+target = (root / sys.argv[1]).resolve()
+if root != target and root not in target.parents:
+    raise SystemExit(2)
+if not target.exists():
+    raise SystemExit(3)
+if not target.is_dir():
+    raise SystemExit(4)
+rows = []
+for child in target.iterdir():
+    resolved = child.resolve()
+    if root != resolved and root not in resolved.parents:
+        continue
+    relative = child.relative_to(root).as_posix()
+    rows.append({
+        "path": "/" + relative + ("/" if child.is_dir() else ""),
+        "is_dir": child.is_dir(),
+        "size": child.stat().st_size if child.is_file() else 0,
+    })
+print(json.dumps(sorted(rows, key=lambda row: row["path"])))
+"""
+        result = self.execute_argv(["python", "-c", script, path, self.workspace_root])
+        if result.exit_code == 3:
+            raise FileNotFoundError(path)
+        if result.exit_code == 4:
+            raise NotADirectoryError(path)
+        if result.exit_code != 0:
+            raise OSError(result.output)
+        value = json.loads(result.output)
+        if not isinstance(value, list):
+            raise OSError("Invalid sandbox listing response")
+        return value
+
+    def path_exists(self, path: str) -> bool:
+        """Return whether a sandbox path exists without host path inspection."""
+        script = """
+import pathlib
+import sys
+
+root = pathlib.Path(sys.argv[2])
+target = (root / sys.argv[1]).resolve()
+if root != target and root not in target.parents:
+    raise SystemExit(2)
+raise SystemExit(0 if target.exists() else 1)
+"""
+        return self.execute_argv(["python", "-c", script, path, self.workspace_root]).exit_code == 0
+
+    def glob_files(self, pattern: str, path: str = ".") -> list[dict[str, Any]]:
+        """Run glob discovery inside the sandbox."""
+        script = """
+import json
+import pathlib
+import sys
+
+root = pathlib.Path(sys.argv[3])
+base = (root / sys.argv[2]).resolve()
+if root != base and root not in base.parents:
+    raise SystemExit(2)
+rows = []
+if base.is_dir():
+    for child in base.glob(sys.argv[1]):
+        resolved = child.resolve()
+        if root != resolved and root not in resolved.parents:
+            continue
+        relative = child.relative_to(root).as_posix()
+        rows.append({
+            "path": "/" + relative + ("/" if child.is_dir() else ""),
+            "is_dir": child.is_dir(),
+            "size": child.stat().st_size if child.is_file() else 0,
+        })
+print(json.dumps(sorted(rows, key=lambda row: row["path"])))
+"""
+        result = self.execute_argv(
+            ["python", "-c", script, pattern, path, self.workspace_root]
+        )
+        if result.exit_code != 0:
+            raise OSError(result.output)
+        value = json.loads(result.output)
+        if not isinstance(value, list):
+            raise OSError("Invalid sandbox glob response")
+        return value
+
+    def grep_files(
+        self,
+        pattern: str,
+        path: str = ".",
+        glob: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """Run bounded literal text search inside the sandbox."""
+        script = """
+import fnmatch
+import json
+import pathlib
+import sys
+
+root = pathlib.Path(sys.argv[4])
+base = (root / sys.argv[2]).resolve()
+if root != base and root not in base.parents:
+    raise SystemExit(2)
+file_glob = sys.argv[3] or None
+files = [base] if base.is_file() else base.rglob("*") if base.is_dir() else []
+rows = []
+for child in files:
+    if not child.is_file() or (file_glob and not fnmatch.fnmatch(child.name, file_glob)):
+        continue
+    resolved = child.resolve()
+    if root != resolved and root not in resolved.parents:
+        continue
+    try:
+        text = child.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        continue
+    for number, line in enumerate(text.splitlines(), start=1):
+        if sys.argv[1] in line:
+            rows.append({
+                "path": "/" + child.relative_to(root).as_posix(),
+                "line": number,
+                "text": line,
+            })
+            if len(rows) >= 1000:
+                break
+    if len(rows) >= 1000:
+        break
+print(json.dumps(rows))
+"""
+        result = self.execute_argv(
+            ["python", "-c", script, pattern, path, glob or "", self.workspace_root]
+        )
+        if result.exit_code != 0:
+            raise OSError(result.output)
+        value = json.loads(result.output)
+        if not isinstance(value, list):
+            raise OSError("Invalid sandbox grep response")
+        return value
+
+    def terminate(self) -> None:
+        """Stop and remove the per-session container deterministically."""
+        if self._container is None:
+            return
+        container = self._container
+        self._container = None
+        try:
+            container.remove(force=True)
+        except Exception:
+            # Surface teardown failures to the lifecycle manager.
+            self._container = container
+            raise

@@ -63,6 +63,7 @@ services:
       - COGNITION_LOG_LEVEL=info
       - COGNITION_LOG_FORMAT=json
       - COGNITION_WORKSPACE_ROOT=/workspace
+      - COGNITION_METRICS_ENABLED=true
       - COGNITION_METRICS_PORT=9090
 
       # LLM Provider
@@ -76,28 +77,39 @@ services:
       - COGNITION_PERSISTENCE_BACKEND=postgres
       - COGNITION_PERSISTENCE_URI=postgresql+asyncpg://${POSTGRES_USER:-cognition}:${POSTGRES_PASSWORD:-cognition}@postgres:5432/${POSTGRES_DB:-cognition}
 
-      # MLflow — Tracing & Evaluation
-      - COGNITION_MLFLOW_ENABLED=true
-      - COGNITION_MLFLOW_TRACKING_URI=http://mlflow:5000
-      - COGNITION_MLFLOW_EXPERIMENT_NAME=cognition
-
-      # Sandbox — Local backend (commands execute inside this container)
+      # Sandbox — explicitly unsafe standalone development backend.
+      # Commands execute inside this container, not in a production sandbox.
       # For isolated Docker sandbox execution, run Cognition on the host
       # with COGNITION_SANDBOX_BACKEND=docker instead.
       - COGNITION_SANDBOX_BACKEND=local
+      - COGNITION_ALLOW_UNSAFE_LOCAL_EXECUTION=true
+      - COGNITION_MCP_OUTBOUND_TRANSPORT_ENABLED=false
+      - COGNITION_MCP_ALLOWED_ORIGINS=[]
 
       # Session Scoping — Multi-tenant isolation
       - COGNITION_SCOPING_ENABLED=true
       - COGNITION_SCOPE_KEYS=["user"]
 
       # OpenTelemetry — OTel Collector
-      - COGNITION_OTEL_ENABLED=true
-      - COGNITION_OTEL_ENDPOINT=http://otel-collector:4317
-      - LANGSMITH_TRACING=false
-      - OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317
-      - OTEL_EXPORTER_OTLP_PROTOCOL=grpc
+      - COGNITION_TRACING_ENABLED=true
+      - COGNITION_OTLP_ENDPOINT=http://otel-collector:4318
+      - COGNITION_OTLP_MAX_EXPORT_BYTES=3670016
+      - COGNITION_OTLP_QUEUE_SIZE=2048
+      - COGNITION_OTLP_EXPORT_TIMEOUT_MS=30000
+      - COGNITION_OTLP_METRIC_EXPORT_INTERVAL_MS=5000
+      - COGNITION_TRACE_SAMPLE_RATIO=1.0
+      - COGNITION_TRACE_DETAIL=standard
+      # LangChain's native callback tree is converted to OTel on Cognition's
+      # existing provider. OTEL_ONLY prevents a direct LangSmith export.
+      - LANGSMITH_TRACING=true
+      - LANGSMITH_OTEL_ENABLED=true
+      - LANGSMITH_OTEL_ONLY=true
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4318
+      - OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf
+      - OTEL_EXPORTER_OTLP_COMPRESSION=gzip
       - OTEL_SERVICE_NAME=cognition
       - OTEL_TRACES_EXPORTER=otlp
+      - OTEL_METRICS_EXPORTER=otlp
       - OTEL_LOG_LEVEL=debug
       
       # ISSUE-007: AWS credentials for Bedrock - uid 1000 runs as cognition user
@@ -219,9 +231,12 @@ services:
     image: otel/opentelemetry-collector-contrib:0.96.0
     container_name: cognition-otel-collector
     command: ["--config=/etc/otel-collector-config.yml"]
+    environment:
+      - MLFLOW_EXPERIMENT_ID=${MLFLOW_EXPERIMENT_ID:-0}
     ports:
       - "4317:4317"     # OTLP gRPC
       - "4318:4318"     # OTLP HTTP
+      - "9464:9464"     # Collector-exported OTel metrics for Prometheus
     volumes:
       - ./docker/otel-collector-config.yml:/etc/otel-collector-config.yml:ro
     networks:

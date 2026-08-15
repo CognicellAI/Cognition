@@ -81,13 +81,21 @@ class InterruptEvent:
 class StatusEvent:
     status: str    # "thinking" | "idle"
 
+# Proposed v0.13 shape from ADR-0002. Treat as pending until that ADR is
+# accepted and the compatibility tests land.
 @dataclass
 class UsageEvent:
-    input_tokens: int
-    output_tokens: int
-    estimated_cost: float
-    provider: str
-    model: str
+    source: str = "provider_usage_metadata"
+    status: Literal["complete", "partial", "unavailable"]
+    input_tokens: int | None
+    output_tokens: int | None
+    total_tokens: int | None
+    estimated_cost: None
+    model_calls: int
+    reported_model_calls: int
+    unreported_model_calls: int
+    provider: str | None
+    model: str | None
 
 @dataclass
 class DoneEvent:
@@ -109,10 +117,9 @@ Every consumer of the runtime (streaming endpoint, tests, evaluators) deals only
 
 ```python
 class AgentDefinition(BaseModel):
-    name: str
+    name: str                       # Stable runtime lookup identifier
+    display_name: str | None = None # Optional public presentation name
     system_prompt: str | PromptConfig | None = None
-    tools: list[str] = []           # registry tool names
-    skills: list[str] = []          # registry skill names
     memory: list[str] = []          # paths to instruction files (AGENTS.md)
     subagents: list[SubagentDefinition] = []
     interrupt_on: dict[str, bool] = {}
@@ -121,8 +128,8 @@ class AgentDefinition(BaseModel):
     mode: Literal["primary", "subagent", "all"] = "primary"
     description: str | None = None
     hidden: bool = False
-    native: bool = False            # True for built-in agents
-    a2a_exposed: bool = False       # Expose via A2A protocol (default: off)
+    native: bool = False            # Reserved for non-API runtime-owned definitions
+    a2a: A2AConfig = A2AConfig()    # Exposure and public Agent Card contract
 ```
 
 ### Agent Modes
@@ -135,20 +142,37 @@ class AgentDefinition(BaseModel):
 
 ### A2A Exposure
 
-The `a2a_exposed` field controls whether an agent is exposed via the [A2A (Agent-to-Agent)](https://a2a-protocol.org/latest/) protocol. When `True`:
+The nested `a2a.exposed` field controls whether an agent is exposed via strict [A2A 1.0](https://a2a-protocol.org/latest/) JSON-RPC. When `True`:
 
 - The agent has an Agent Card at `GET /a2a/{agent_name}/.well-known/agent-card.json`
-- The agent appears in `GET /.well-known/agent-card.json` (scope-filtered list)
+- The agent is discoverable from `GET /.well-known/agent-card.json?assistant_id={agent_name}`
 - The agent gets a dedicated JSON-RPC endpoint at `POST /a2a/{agent_name}`
 - External A2A clients can discover and invoke the agent
 
-Built-in agents (`default`, `readonly`, etc.) have `a2a_exposed=False` by default. Set it to `True` explicitly for agents you want to expose:
+Incoming A2A messages support text, structured data, inline raw bytes, and URL
+reference Parts. Text and data become model context; raw and URL Parts become
+scoped, task-linked artifact references and are never implicitly executed or
+fetched. See [A2A Message Parts](a2a/message-parts.md) for the complete contract.
+
+Set `a2a.public_interface_url` when a gateway or builder platform exposes the
+agent at a different public endpoint. Cognition advertises that absolute HTTP(S)
+URL exactly in `supportedInterfaces`. If it is omitted, Cognition derives the
+interface URL from the incoming request and its private
+`/a2a/{agent_name}` route for backward compatibility. The configured URL must
+not contain credentials or a fragment.
+
+Cognition no longer ships default Agents. Builder-provisioned Agents have
+`a2a.exposed=false` by default. Set it to `true` explicitly for agents you want
+to expose:
 
 ```yaml
 # .cognition/agents/deploy-agent.yaml
 name: deploy-agent
+display_name: Deployment Assistant
 mode: primary
-a2a_exposed: true
+a2a:
+  exposed: true
+  public_interface_url: https://agents.example.com/deployment/a2a
 system_prompt: |
   You are a deployment agent...
 ```
@@ -158,36 +182,13 @@ Or via the API:
 ```bash
 curl -X POST http://localhost:8000/agents \
   -H "Content-Type: application/json" \
-  -d '{"name": "deploy-agent", "system_prompt": "...", "a2a_exposed": true}'
+  -d '{"name": "deploy-agent", "display_name": "Deployment Assistant", "system_prompt": "...", "a2a": {"exposed": true, "public_interface_url": "https://agents.example.com/deployment/a2a"}}'
 ```
 
-### A2A Exposure
-
-The `a2a_exposed` field controls whether an agent is exposed via the [A2A (Agent-to-Agent)](https://a2a-protocol.org/latest/) protocol. When `True`:
-
-- The agent has an Agent Card at `GET /a2a/{agent_name}/.well-known/agent-card.json`
-- The agent appears in `GET /.well-known/agent-card.json` (scope-filtered list)
-- The agent gets a dedicated JSON-RPC endpoint at `POST /a2a/{agent_name}`
-- External A2A clients can discover and invoke the agent
-
-Built-in agents (`default`, `readonly`, etc.) have `a2a_exposed=False` by default. Set it to `True` explicitly for agents you want to expose:
-
-```yaml
-# .cognition/agents/deploy-agent.yaml
-name: deploy-agent
-mode: primary
-a2a_exposed: true
-system_prompt: |
-  You are a deployment agent...
-```
-
-Or via the API:
-
-```bash
-curl -X POST http://localhost:8000/agents \
-  -H "Content-Type: application/json" \
-  -d '{"name": "deploy-agent", "system_prompt": "...", "a2a_exposed": true}'
-```
+Builders can also configure default MIME modes and public Agent Card skills
+under `a2a`. See [Agent Cards and Public Skills](a2a/agent-cards.md) for the
+discovery model and the [A2A Builder Guide](../guides/a2a.md) for setup. Public
+A2A skills remain separate from sandbox-mounted runtime Skill bundles.
 
 ### System Prompt Sources
 
@@ -213,9 +214,9 @@ class AgentConfig(BaseModel):
     tool_token_limit_before_evict: int | None = None
 ```
 
-### Tool Resolution
+### Tool Capability
 
-Tools are referenced by registry name. At runtime, `RuntimeResolver.build_tools()` looks up each name in the ConfigRegistry and returns the corresponding callable. File-seeded tools (from `tool_sources`) and API-registered tools are both resolved this way. The `allowed_tool_names` parameter on `build_tools()` filters to only the tools attached to the agent definition.
+Cognition does not load Python tools from a Cognition registry in v0.14. Tool capability comes from Deep Agents-native runtime behavior, Agent-owned MCP servers, skills, middleware, and sandbox backends. The removed `/tools` API and `.cognition/tools/` discovery path are not part of the supported runtime surface.
 
 ---
 
@@ -231,9 +232,13 @@ description: Audits code for security vulnerabilities
 system_prompt: |
   You are a security expert. Audit code for vulnerabilities.
   Report findings with severity ratings.
-tools:
-  - "run_semgrep"
-  - "check_dependencies"
+mcp:
+  servers:
+    semgrep:
+      url: https://mcp-egress.internal/mcp/semgrep
+      auth:
+        type: workload_token_exchange
+        profile: production_egress
 config:
   model: gpt-4o
   temperature: 0.1
@@ -247,8 +252,12 @@ The file name becomes the agent name; the Markdown body becomes the `system_prom
 ---
 mode: subagent
 description: Read-only research assistant
-tools:
-  - "web_search"
+mcp:
+  servers:
+    search:
+      url: https://mcp-egress.internal/mcp/search
+      auth:
+        type: none
 ---
 
 You are a research assistant. Gather information from the web and summarize findings.
@@ -273,19 +282,16 @@ definition = AgentDefinition(
 
 ## Agent Registry
 
-`AgentDefinitionRegistry` (`server/app/agent/agent_definition_registry.py`) is the server-level catalog of all available agents.
+The Config Registry is the server-level catalog of available Agents. Cognition
+starts empty: builders must create API Agents or provide explicit shared file
+Agents before creating sessions.
 
-### Built-in Agents
+### Builder-Defined Agents
 
-| Name | Mode | Description |
-|---|---|---|
-| `default` | `primary` | Full-access coding agent; all built-in tools enabled |
-| `readonly` | `primary` | Analysis-only; write and execute tools disabled |
-| `hitl_test` | `primary` | Manual HITL verification agent; attempts protected tool calls immediately |
-
-### User-Defined Agents
-
-On startup, the registry scans `.cognition/agents/` for `*.md` and `*.yaml` files and loads each as an `AgentDefinition`. The file watcher (`server/app/file_watcher.py`) calls `registry.reload()` when files change, enabling hot-reload without a server restart.
+Builders can create Agents through the API or seed shared file Agents from
+`.cognition/agents/`. API-created Agents resolve only at the complete trusted
+scope. Shared file Agents are read-only fallback definitions and should be used
+deliberately for deployment-level behavior.
 
 ### Registry API
 
@@ -319,7 +325,7 @@ curl http://localhost:8000/agents
 curl http://localhost:8000/agents/readonly
 ```
 
-Response fields include `name`, `description`, `mode`, `hidden`, `native`, `a2a_exposed`, `model`, `temperature`, `response_format`, `interrupt_on`, `tools`, `skills`, and a truncated `system_prompt` (max 500 characters).
+Response fields include `name`, `description`, `mode`, `hidden`, `native`, `a2a`, `model`, `temperature`, `response_format`, `interrupt_on`, and `system_prompt`.
 
 ### Capability Discovery
 
@@ -339,14 +345,12 @@ Returns installed package versions, supported stream protocols, sandbox backends
 The factory:
 
 1. Selects the sandbox backend from settings (`local`, `docker`, `kubernetes`, or `aws_lambda_microvm`)
-2. Loads built-in tools: `BrowserTool`, `SearchTool`, `InspectPackageTool`
-3. Loads MCP tools from configured remote servers
-4. Resolves tools from the ConfigRegistry by registry name (filtered by `allowed_tool_names` from the AgentDefinition)
-5. Attaches the middleware stack:
+2. Loads Agent-owned MCP tools from configured remote servers when deployment MCP transport policy admits their origins
+3. Attaches the middleware stack:
    - `ToolSecurityMiddleware` — blocks tools on the `COGNITION_BLOCKED_TOOLS` deny-list
    - `CognitionObservabilityMiddleware` — tracks LLM and tool Prometheus metrics
    - `CognitionStreamingMiddleware` — emits `thinking`/`idle` status events
-6. Loads upstream middleware specified in the definition (see [Extending Agents](../guides/extending-agents.md))
+4. Loads upstream middleware specified in the definition (see [Extending Agents](../guides/extending-agents.md))
 7. Injects subagents as Deep Agents `SubAgent` dicts
 8. Passes `store=` (LangGraph `BaseStore`) and `context_schema=CognitionContext` for cross-thread memory
 
@@ -387,7 +391,7 @@ class CognitionContext:
 
 This context serves two purposes:
 
-1. **Store namespace scoping** — `runtime.store` (a LangGraph `BaseStore`) is available inside agent nodes and middleware. `effective_scope` is the natural key for building per-tenant memory namespaces, ensuring one tenant cannot read another's stored memories.
+1. **Store namespace scoping** — `runtime.store` (a LangGraph `BaseStore`) is available inside agent nodes and middleware. `effective_scope` is the natural key for building exact application-scope memory namespaces, preventing one builder-authorized scope from reading another's stored memories.
 
 2. **Middleware access** — any custom middleware can read `runtime.context` to branch on builder-defined scope dimensions without coupling to the HTTP layer.
 

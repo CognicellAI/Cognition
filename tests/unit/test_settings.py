@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
+from typing import Any
 
 import pytest
 from pydantic import SecretStr
@@ -51,6 +53,131 @@ class TestSettingsDefaults:
         settings = TestSettings()
         assert settings.otel_endpoint is None
         assert settings.metrics_port == 9090
+
+    def test_default_a2a_security_discovery_is_empty(self):
+        settings = TestSettings()
+        assert settings.a2a_security_schemes == {}
+        assert settings.a2a_security_requirements == []
+        assert settings.a2a_max_raw_part_bytes == 10 * 1024 * 1024
+        assert settings.a2a_max_parts == 64
+        assert settings.a2a_max_message_bytes == 16 * 1024 * 1024
+        assert settings.a2a_stream_chunk_bytes == 4096
+        assert settings.a2a_terminal_task_ttl_seconds == 0
+
+
+class TestA2ASecuritySettings:
+    """Test JSON environment parsing for public Agent Card security metadata."""
+
+    def test_parses_a2a_security_environment_json(self, monkeypatch: pytest.MonkeyPatch):
+        schemes = {
+            "oauth2": {
+                "oauth2SecurityScheme": {
+                    "flows": {
+                        "clientCredentials": {
+                            "tokenUrl": "https://auth.example.com/oauth/token",
+                            "scopes": {"a2a.invoke": "Invoke the agent"},
+                        }
+                    }
+                }
+            }
+        }
+        requirements: list[dict[str, Any]] = [{"schemes": {"oauth2": {}}}]
+        monkeypatch.setenv("COGNITION_A2A_SECURITY_SCHEMES", json.dumps(schemes))
+        monkeypatch.setenv(
+            "COGNITION_A2A_SECURITY_REQUIREMENTS",
+            json.dumps(requirements),
+        )
+
+        settings = TestSettings()
+
+        assert settings.a2a_security_schemes == schemes
+        assert settings.a2a_security_requirements == requirements
+
+    def test_default_durable_file_backend_is_local(self):
+        """Local and development profiles retain an explicit local backend."""
+        settings = TestSettings()
+        assert settings.durable_file_backend == "local"
+        assert not settings.s3_enabled
+
+    def test_s3_backend_requires_bucket_and_scope_key_at_startup(self):
+        with pytest.raises(ValueError, match="COGNITION_S3_BUCKET"):
+            TestSettings(durable_file_backend="s3").validate_deployment_storage_policy()
+
+        with pytest.raises(ValueError, match="COGNITION_S3_SCOPE_HMAC_KEY"):
+            TestSettings(
+                durable_file_backend="s3", s3_bucket="cognition"
+            ).validate_deployment_storage_policy()
+
+    def test_storage_validation_does_not_classify_builder_deployment(self):
+        settings = TestSettings(deployment_mode="production")
+        settings.validate_deployment_storage_policy()
+
+        assert settings.persistence_backend == "sqlite"
+        assert settings.durable_file_backend == "local"
+        assert settings.sandbox_backend == "local"
+
+    def test_s3_compatible_durable_file_configuration(self):
+        """Garage-style endpoint settings select the generic S3 backend."""
+        settings = TestSettings(
+            durable_file_backend="s3",
+            s3_bucket="cognition",
+            s3_endpoint_url="http://garage:3900",
+            s3_force_path_style=True,
+        )
+        assert settings.s3_enabled
+        assert settings.s3_force_path_style
+
+
+class TestMcpAuthProfiles:
+    """Deployment-owned workload token-exchange profile settings."""
+
+    def test_parses_profiles_from_environment_json(self, monkeypatch: pytest.MonkeyPatch):
+        profiles = {
+            "production_egress": {
+                "type": "oauth_token_exchange",
+                "token_endpoint": "https://identity.internal/token",
+                "subject_token_source": "workload_identity",
+                "audience": "canonical_server_uri",
+            }
+        }
+        monkeypatch.setenv("COGNITION_MCP_AUTH_PROFILES", json.dumps(profiles))
+
+        settings = TestSettings()
+        profile = settings.get_mcp_auth_profile("production_egress")
+
+        assert profile.token_endpoint == "https://identity.internal/token"
+        assert profile.audience == "canonical_server_uri"
+
+    def test_rejects_unknown_profile(self) -> None:
+        with pytest.raises(ValueError, match="Unknown MCP authentication profile"):
+            TestSettings().get_mcp_auth_profile("missing")
+
+    @pytest.mark.parametrize(
+        "profile",
+        [
+            {
+                "type": "custom_callback",
+                "token_endpoint": "https://identity.internal/token",
+                "subject_token_source": "workload_identity",
+                "audience": "canonical_server_uri",
+            },
+            {
+                "type": "oauth_token_exchange",
+                "token_endpoint": "https://user:secret@identity.internal/token",
+                "subject_token_source": "workload_identity",
+                "audience": "canonical_server_uri",
+            },
+            {
+                "type": "oauth_token_exchange",
+                "token_endpoint": "https://identity.internal/token",
+                "subject_token_source": "python_callback",
+                "audience": "canonical_server_uri",
+            },
+        ],
+    )
+    def test_rejects_invalid_profile(self, profile) -> None:
+        with pytest.raises(ValueError):
+            TestSettings.model_validate({"mcp_auth_profiles": {"egress": profile}})
 
 
 class TestSettingsSecrets:

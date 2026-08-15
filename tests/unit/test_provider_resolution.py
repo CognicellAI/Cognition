@@ -59,9 +59,10 @@ def _make_session(
     model: str | None = None,
     provider_id: str | None = None,
 ) -> Session:
-    return Session(
-        id="sess-test",
-        workspace_path="/tmp/ws",
+        return Session(
+            id="sess-test",
+            agent_name="default",
+            workspace_path="/tmp/ws",
         title="Test",
         thread_id="thread-test",
         status=SessionStatus.ACTIVE,
@@ -294,6 +295,7 @@ class TestBuildModel:
             resolver.build_model("openai", "gpt-4o")
             assert mock_init.call_args[0][0] == "gpt-4o"
             assert mock_init.call_args.kwargs["model_provider"] == "openai"
+            assert mock_init.call_args.kwargs["stream_usage"] is True
 
     def test_openai_compatible_raises_without_base_url(self) -> None:
         from server.app.exceptions import LLMProviderConfigError

@@ -4,7 +4,7 @@ End-to-end tests for P3-SEC (Security Hardening) features.
 
 ## Overview
 
-These scenarios test Cognition's security features from a business value perspective, ensuring that the real security boundaries (sandbox isolation, path protection, namespace enforcement) function correctly.
+These scenarios test Cognition's security features from a business value perspective, ensuring that the real security boundaries (sandbox isolation, path protection, MCP transport admission, and CORS) function correctly.
 
 ## Structure
 
@@ -18,22 +18,19 @@ tests/e2e/test_scenarios/p3_security/
 
 ## P3-SEC Items Covered
 
-### P3-SEC-1: Tool Loading Trust Model (`test_ast_security_scanning.py`)
-**Business Value:** Documents and validates the tool security trust model
+### P3-SEC-1: Tool Capability Trust Model (`test_ast_security_scanning.py`)
+**Business Value:** Documents and validates the v0.14 tool capability trust model
 
-**Note:** AST scanning (`SecurityASTVisitor`, `BANNED_IMPORTS`, `COGNITION_TOOL_SECURITY`) was removed. The real security boundary is Gateway-level authorization on `POST /tools`. See [AGENTS.md — Tool Security Trust Model](../../../../AGENTS.md).
+**Note:** Cognition v0.14 removes the `/tools` Python registry and `.cognition/tools/` discovery surface. Tool capability comes from Deep Agents-native behavior, MCP, skills, middleware, and sandbox backends. See [AGENTS.md — Tool Security Trust Model](../../../../AGENTS.md).
 
 **Scenarios:**
-- Tool reload completes without security scan errors (`SecurityError` entries should not appear)
-- Clean tools load successfully
-- Tool load errors have required audit fields (file, error type, timestamp)
 - `ToolSecurityMiddleware` (per-name blocklist via `COGNITION_BLOCKED_TOOLS`) still active
+- `/tools` API is no longer mounted
 
 ### P3-SEC-2: Protect .cognition/ from Agent Writes (`test_cognition_protection.py`)
 **Business Value:** Prevents self-modification attacks and privilege escalation
 
 **Scenarios:**
-- Cannot write to `.cognition/tools/`
 - Cannot write to `.cognition/agents/`
 - Cannot modify `.cognition/config.yaml`
 - Protected paths are configurable
@@ -49,16 +46,7 @@ tests/e2e/test_scenarios/p3_security/
 - Symlink traversal blocked
 - Null byte injection blocked
 
-### P3-SEC-4: Tool Module Allowlist (`test_namespace_cors_security.py`)
-**Business Value:** Prevents loading arbitrary Python modules
-
-**Scenarios:**
-- Trusted namespace configured by default (`server.app.tools`)
-- Built-in tools load from trusted namespace
-- Untrusted tool paths rejected
-- Allowlist is extensible via settings
-
-### P3-SEC-5: CORS Default Tightening (`test_namespace_cors_security.py`)
+### P3-SEC-4: CORS Default Tightening (`test_namespace_cors_security.py`)
 **Business Value:** Prevents CSRF attacks from malicious websites
 
 **Scenarios:**

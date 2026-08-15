@@ -14,6 +14,8 @@ Git-Style Workspace Model:
 
 from __future__ import annotations
 
+import json
+import time
 import uuid
 from collections.abc import AsyncGenerator
 from typing import Annotated, Any, Literal, cast
@@ -22,8 +24,9 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from fastapi.responses import StreamingResponse
 
 from server.app.agent.resolver import RuntimeResolver
-from server.app.agent.token_counter import count_text_tokens
+from server.app.agent.task_runtime import AgentTaskRuntime, ContinueTask, TaskExecution
 from server.app.api.dependencies import (
+    get_artifact_store,
     get_config_store,
     get_scope_dep,
     get_session_agent_manager_dep,
@@ -58,9 +61,17 @@ from server.app.llm.deep_agent_service import (
     ErrorEvent as ResumeErrorEvent,
 )
 from server.app.models import RunStatus, SessionConfig, SessionStatus
+from server.app.observability import (
+    STORAGE_OPERATION_DURATION,
+    STORAGE_OPERATIONS_TOTAL,
+    agent_run_span,
+    current_trace_context,
+    storage_backend_label,
+)
 from server.app.runtime_projection import RuntimeProjectionService
 from server.app.session_manager import build_session_workspace_path, ensure_session_workspace_path
 from server.app.settings import Settings
+from server.app.storage.artifact_store import ArtifactStore
 from server.app.storage.backend import StorageBackend
 from server.app.storage.config_store import ConfigStore
 
@@ -184,20 +195,23 @@ async def _get_scoped_session(
     store: StorageBackend,
     scope: SessionScope,
 ) -> Any:
-    session = await store.get_session(session_id)
+    started_at = time.monotonic()
+    backend = storage_backend_label(store)
+    session = await store.get_session(session_id, scope.get_all())
+    result = "success" if session is not None else "not_found"
+    STORAGE_OPERATIONS_TOTAL.labels(
+        backend=backend,
+        operation="get_session",
+        result=result,
+    ).inc()
+    STORAGE_OPERATION_DURATION.labels(
+        backend=backend,
+        operation="get_session",
+    ).observe(time.monotonic() - started_at)
     if session is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Session not found: {session_id}",
-        )
-    if not scope.is_empty() and not scope.matches(session.scopes):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail=(
-                f"Scope mismatch: session '{session_id}' was created with scope "
-                f"{session.scopes}, but request has scope {scope.get_all()}. "
-                "Session scope is immutable after creation."
-            ),
         )
     return session
 
@@ -275,6 +289,8 @@ async def create_session(
 async def list_sessions(
     request: Request,
     metadata_filters: Annotated[list[str] | None, Query(alias="metadata")] = None,
+    limit: int = 100,
+    offset: int = 0,
     settings: Settings = Depends(get_settings_dep),  # noqa: B008
     scope: SessionScope = Depends(get_scope_dep),  # noqa: B008
     store: StorageBackend = Depends(get_storage_backend_dep),  # noqa: B008
@@ -294,14 +310,23 @@ async def list_sessions(
     }
 
     # Filter by scope if provided
-    filter_scopes = scope.get_all() if not scope.is_empty() else None
+    filter_scopes = scope.get_all()
+    safe_limit = max(1, min(limit, 500))
+    safe_offset = max(0, offset)
     sessions = await store.list_sessions(
         filter_scopes=filter_scopes,
         metadata_filters=resolved_metadata_filters or None,
+        limit=safe_limit + 1,
+        offset=safe_offset,
     )
+    has_more = len(sessions) > safe_limit
+    page = sessions[:safe_limit]
 
     return SessionList(
-        sessions=[SessionResponse.from_core(s) for s in sessions], total=len(sessions)
+        sessions=[SessionResponse.from_core(s) for s in page],
+        total=len(page),
+        has_more=has_more,
+        next_offset=safe_offset + safe_limit if has_more else None,
     )
 
 
@@ -344,19 +369,23 @@ async def get_session_context(
     """Return scoped, redacted context policy and token-accounting metadata."""
     session = await _get_scoped_session(session_id, store, scope)
     scope_dict = scope.get_all() if not scope.is_empty() else session.scopes
-    messages = await store.list_messages_for_session(session_id)
+    messages = await store.list_messages_for_session(session_id, session.scopes)
     debug_messages = [
         ContextMessageDebug(
             id=message.id,
             role=message.role,
             token_count=message.token_count,
-            estimated_tokens=message.token_count
-            if message.token_count is not None
-            else count_text_tokens(message.content),
+            estimated_tokens=message.token_count,
             created_at=message.created_at,
         )
         for message in messages
     ]
+    debug_token_values = [message.estimated_tokens for message in debug_messages]
+    total_estimated_tokens = (
+        sum(value for value in debug_token_values if value is not None)
+        if debug_token_values and all(value is not None for value in debug_token_values)
+        else None
+    )
 
     return ContextDebugResponse(
         session_id=session.id,
@@ -365,7 +394,7 @@ async def get_session_context(
         scope_keys=sorted(scope_dict),
         policy=await _resolve_context_policy(session, config_store, scope_dict or None),
         message_count=len(messages),
-        estimated_tokens=sum(message.estimated_tokens for message in debug_messages),
+        estimated_tokens=total_estimated_tokens,
         messages=debug_messages,
     )
 
@@ -384,7 +413,7 @@ async def list_session_runs(
 ) -> SessionRunList:
     """List durable runs for a session."""
     session = await _get_scoped_session(session_id, store, scope)
-    runs = await store.list_runs(session.id)
+    runs = await store.list_runs(session.id, session.scopes)
     return SessionRunList(
         runs=[SessionRunResponse.from_core(run) for run in runs],
         total=len(runs),
@@ -406,16 +435,11 @@ async def get_session_run(
 ) -> SessionRunResponse:
     """Get durable state for one session run."""
     session = await _get_scoped_session(session_id, store, scope)
-    run = await store.get_run(run_id)
+    run = await store.get_run(run_id, session.scopes)
     if run is None or run.session_id != session.id:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Run not found: {run_id}",
-        )
-    if not scope.is_empty() and run.effective_scope != scope.get_all():
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Scope mismatch: run scope is immutable after creation.",
         )
     return SessionRunResponse.from_core(run)
 
@@ -447,14 +471,10 @@ async def list_session_events(
         limit=safe_limit + 1,
         visibility=visibility,
         event_type=event_type,
+        effective_scope=session.scopes,
     )
-    visible_events = [
-        event
-        for event in events
-        if scope.is_empty() or event.effective_scope == scope.get_all()
-    ]
-    has_more = len(visible_events) > safe_limit
-    page = visible_events[:safe_limit]
+    has_more = len(events) > safe_limit
+    page = events[:safe_limit]
     return SessionEventList(
         events=[SessionEventResponse.from_core(event) for event in page],
         total=len(page),
@@ -501,6 +521,7 @@ async def update_session(
         config=request.config,
         agent_name=request.agent_name,
         metadata=request.metadata,
+        effective_scope=scope.get_all(),
     )
 
     if session is None:
@@ -534,7 +555,7 @@ async def delete_session(
 
     agent_manager.unregister_session(session_id)
 
-    await store.delete_session(session_id)
+    await store.delete_session(session_id, scope.get_all())
 
 
 @router.post(
@@ -556,7 +577,7 @@ async def abort_session(
     Cancels any in-progress agent operation.
     """
     session = await _get_scoped_session(session_id, store, scope)
-    active_run = await store.get_active_run(session_id)
+    active_run = await store.get_active_run(session_id, session.scopes)
     projection = RuntimeProjectionService(store)
     if active_run is not None:
         await projection.transition_run(
@@ -596,6 +617,7 @@ async def resume_session(
     scope: SessionScope = Depends(get_scope_dep),
     store: StorageBackend = Depends(get_storage_backend_dep),  # noqa: B008
     agent_manager: SessionAgentManager = Depends(get_session_agent_manager_dep),  # noqa: B008
+    artifact_store: ArtifactStore = Depends(get_artifact_store),  # noqa: B008
 ) -> dict[str, str | bool] | StreamingResponse:
     """Resume an interrupted Deep Agents session using native Command(resume=...)."""
     session = await _get_scoped_session(session_id, store, scope)
@@ -610,30 +632,181 @@ async def resume_session(
     if service is None:
         service = agent_manager.register_session(session_id, session.workspace_path)
 
-    active_run = await store.get_active_run(session_id)
-    projection = RuntimeProjectionService(store)
-    if active_run is not None:
-        active_run = await projection.transition_run(
-            active_run,
-            RunStatus.ACTIVE,
-            reason="Human approval resolved",
-            session_status=SessionStatus.ACTIVE,
+    task_runtime = AgentTaskRuntime(
+        store,
+        default_workspace_path=session.workspace_path,
+        artifact_store=artifact_store,
+    )
+    projection = task_runtime.projection
+    runs = await store.list_runs(session_id, session.scopes)
+    interrupted_run = next(
+        (
+            run
+            for run in runs
+            if run.task_id is not None
+            and run.status in {RunStatus.INTERRUPTED, RunStatus.WAITING_FOR_APPROVAL}
+        ),
+        None,
+    )
+    active_run = None
+    execution: TaskExecution | None = None
+    if interrupted_run is not None:
+        if interrupted_run.status == RunStatus.WAITING_FOR_APPROVAL:
+            interrupted_run = await projection.transition_run(
+                interrupted_run,
+                RunStatus.INTERRUPTED,
+                reason="Execution attempt paused for human input",
+                session_status=SessionStatus.WAITING_FOR_APPROVAL,
+            )
+        execution = await task_runtime.continue_task(
+            ContinueTask(
+                task_id=interrupted_run.task_id or "",
+                agent_name=session.agent_name,
+                effective_scope=session.scopes,
+                content=f"Human decision: {request.decision}",
+                metadata={"source": "native-hitl-resume"},
+            )
         )
+        active_run = execution.run
+    else:
+        # Compatibility for pre-task runtime records created before v0.10.
+        legacy_run = await store.get_active_run(session_id, session.scopes)
+        if legacy_run is not None:
+            active_run = await projection.transition_run(
+                legacy_run,
+                RunStatus.ACTIVE,
+                reason="Human approval resolved",
+                session_status=SessionStatus.ACTIVE,
+            )
 
     accept_header = http_request.headers.get("accept", "")
     wants_stream = "text/event-stream" in accept_header.lower()
+    resume_run_span: Any | None = None
+
+    async def resume_events() -> AsyncGenerator[Any, None]:
+        nonlocal resume_run_span
+        with agent_run_span(
+            session_id=session_id,
+            run_id=active_run.id if active_run is not None else session.thread_id,
+            thread_id=session.thread_id,
+            scope_keys=sorted(session.scopes),
+            agent_name=session.agent_name,
+            agent_revision=active_run.agent_revision if active_run is not None else None,
+            manifest_digest=active_run.manifest_digest if active_run is not None else None,
+            parent_run_id=active_run.parent_run_id if active_run is not None else None,
+            effective_scope=session.scopes,
+            transport="rest",
+        ) as span_obj:
+            resume_run_span = span_obj
+            if resume_run_span is not None:
+                resume_run_span.set_attribute(
+                    "gen_ai.input.messages",
+                    json.dumps(
+                        [
+                            {
+                                "role": "user",
+                                "content": f"Human decision: {request.decision}",
+                            }
+                        ],
+                        ensure_ascii=False,
+                        separators=(",", ":"),
+                    ),
+                )
+                resume_run_span.add_event(
+                    "cognition.hitl.decision",
+                    {
+                        "cognition.hitl.decision": request.decision,
+                        "gen_ai.tool.name": request.tool_name,
+                    },
+                )
+            trace_id, _span_id = current_trace_context(resume_run_span)
+            if (
+                active_run is not None
+                and trace_id
+                and active_run.trace_id != trace_id
+            ):
+                updated_run = await store.update_run(
+                    active_run.id,
+                    trace_id=trace_id,
+                    effective_scope=active_run.effective_scope,
+                )
+                if updated_run is not None:
+                    active_run.trace_id = updated_run.trace_id
+            try:
+                async for runtime_event in service.resume_response(
+                    session_id=session_id,
+                    thread_id=session.thread_id,
+                    project_path=str(settings.workspace_path),
+                    decision=request.decision,
+                    tool_name=request.tool_name,
+                    args=request.args,
+                    scope=session.scopes,
+                    trace_parent_span=resume_run_span,
+                ):
+                    yield runtime_event
+            finally:
+                resume_run_span = None
+
+    def record_resume_usage(event: UsageEvent) -> None:
+        if resume_run_span is None:
+            return
+        attributes: dict[str, str | int] = {
+            "cognition.usage.source": event.source,
+            "cognition.usage.status": event.status,
+            "cognition.usage.model_calls": event.model_calls,
+            "cognition.usage.reported_model_calls": event.reported_model_calls,
+            "cognition.usage.unreported_model_calls": event.unreported_model_calls,
+        }
+        for key, token_value in (
+            ("cognition.usage.input_tokens", event.input_tokens),
+            ("cognition.usage.output_tokens", event.output_tokens),
+            ("cognition.usage.total_tokens", event.total_tokens),
+        ):
+            if token_value is not None:
+                attributes[key] = token_value
+        for key, attribute_value in attributes.items():
+            resume_run_span.set_attribute(key, attribute_value)
+        resume_run_span.add_event("cognition.usage.recorded", attributes)
+
+    def record_resume_completed(content: str) -> None:
+        if resume_run_span is None:
+            return
+        resume_run_span.set_attribute(
+            "gen_ai.output.messages",
+            json.dumps(
+                [{"role": "assistant", "content": content}],
+                ensure_ascii=False,
+                separators=(",", ":"),
+            ),
+        )
+        resume_run_span.add_event(
+            "cognition.run.completed",
+            {
+                "cognition.run.terminal_status": "done",
+                "cognition.message.output_bytes": len(content.encode("utf-8")),
+            },
+        )
+
+    def record_resume_failed(event: ResumeErrorEvent) -> None:
+        if resume_run_span is None:
+            return
+        resume_run_span.add_event(
+            "cognition.run.failed",
+            {
+                "cognition.error.code": event.code,
+                "cognition.error.message_bytes": len(event.message.encode("utf-8")),
+            },
+        )
 
     if not wants_stream:
-        async for event in service.resume_response(
-            session_id=session_id,
-            thread_id=session.thread_id,
-            project_path=str(settings.workspace_path),
-            decision=request.decision,
-            tool_name=request.tool_name,
-            args=request.args,
-            scope=session.scopes,
-        ):
+        assistant_content: list[str] = []
+        async for event in resume_events():
+            if isinstance(event, TokenEvent):
+                assistant_content.append(event.content)
+            if isinstance(event, UsageEvent):
+                record_resume_usage(event)
             if isinstance(event, ResumeErrorEvent):
+                record_resume_failed(event)
                 if active_run is not None:
                     await projection.transition_run(
                         active_run,
@@ -647,31 +820,37 @@ async def resume_session(
                     status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                     detail=event.message,
                 )
-            if isinstance(event, DoneEvent) and active_run is not None:
-                await projection.transition_run(
-                    active_run,
-                    RunStatus.DONE,
-                    session_status=SessionStatus.IDLE,
-                )
+            if isinstance(event, DoneEvent):
+                content = "".join(assistant_content)
+                record_resume_completed(content)
+                if active_run is not None:
+                    if execution is not None:
+                        await task_runtime.persist_assistant_message(
+                            execution,
+                            content=content,
+                        )
+                    await projection.transition_run(
+                        active_run,
+                        RunStatus.DONE,
+                        session_status=SessionStatus.IDLE,
+                    )
         return {"success": True, "message": "Session resumed"}
 
     sse = SSEStream.from_settings(settings)
     last_event_id = get_last_event_id(http_request)
 
     async def event_generator() -> AsyncGenerator[dict[str, object], None]:
-        await store.update_session(session_id=session_id, status=SessionStatus.ACTIVE.value)
+        assistant_content: list[str] = []
+        await store.update_session(
+            session_id=session_id,
+            status=SessionStatus.ACTIVE.value,
+            effective_scope=session.scopes,
+        )
         yield EventBuilder.status("resuming")
 
-        async for event in service.resume_response(
-            session_id=session_id,
-            thread_id=session.thread_id,
-            project_path=str(settings.workspace_path),
-            decision=request.decision,
-            tool_name=request.tool_name,
-            args=request.args,
-            scope=session.scopes,
-        ):
+        async for event in resume_events():
             if isinstance(event, TokenEvent):
+                assistant_content.append(event.content)
                 yield EventBuilder.token(event.content)
             elif isinstance(event, HitlDecisionEvent):
                 if active_run is not None:
@@ -695,12 +874,23 @@ async def resume_session(
                     has_rejection_message=event.has_rejection_message,
                 )
             elif isinstance(event, UsageEvent):
+                record_resume_usage(event)
                 yield EventBuilder.usage(
                     input_tokens=event.input_tokens,
                     output_tokens=event.output_tokens,
+                    total_tokens=event.total_tokens,
                     estimated_cost=event.estimated_cost,
                     provider=event.provider,
                     model=event.model,
+                    source=event.source,
+                    status=event.status,
+                    cache_read_tokens=event.cache_read_tokens,
+                    cache_write_tokens=event.cache_write_tokens,
+                    reasoning_tokens=event.reasoning_tokens,
+                    model_calls=event.model_calls,
+                    reported_model_calls=event.reported_model_calls,
+                    unreported_model_calls=event.unreported_model_calls,
+                    by_model=event.by_model,
                 )
             elif isinstance(event, ContextEvent):
                 yield EventBuilder.context(
@@ -720,7 +910,14 @@ async def resume_session(
                     artifact_id=event.artifact_id,
                 )
             elif isinstance(event, DoneEvent):
+                content = "".join(assistant_content)
+                record_resume_completed(content)
                 if active_run is not None:
+                    if execution is not None:
+                        await task_runtime.persist_assistant_message(
+                            execution,
+                            content=content,
+                        )
                     await projection.transition_run(
                         active_run,
                         RunStatus.DONE,
@@ -728,9 +925,14 @@ async def resume_session(
                     )
                 yield EventBuilder.done(
                     message_id="resume",
-                    assistant_data={"content": "resumed", "tool_calls": None, "token_count": 0},
+                    assistant_data={
+                        "content": content,
+                        "tool_calls": None,
+                        "token_count": None,
+                    },
                 )
             elif isinstance(event, ResumeErrorEvent):
+                record_resume_failed(event)
                 if active_run is not None:
                     await projection.transition_run(
                         active_run,
@@ -759,7 +961,10 @@ async def resume_session(
     status_code=status.HTTP_200_OK,
     responses={
         404: {"model": ErrorResponse, "description": "Session not found"},
-        409: {"model": ErrorResponse, "description": "Session cannot be cancelled in current state"},
+        409: {
+            "model": ErrorResponse,
+            "description": "Session cannot be cancelled in current state",
+        },
     },
 )
 async def cancel_session(
@@ -775,7 +980,7 @@ async def cancel_session(
     """
     session = await _get_scoped_session(session_id, store, scope)
     current = SessionStatus(session.status)
-    active_run = await store.get_active_run(session_id)
+    active_run = await store.get_active_run(session_id, session.scopes)
     projection = RuntimeProjectionService(store)
 
     if SessionStatus.is_terminal(current):
@@ -785,7 +990,13 @@ async def cancel_session(
         )
 
     # Transition to CANCELLING
-    await _transition_status(store, session_id, current, SessionStatus.ABORTING)
+    await _transition_status(
+        store,
+        session_id,
+        current,
+        SessionStatus.ABORTING,
+        session.scopes,
+    )
     if active_run is not None:
         await projection.transition_run(
             active_run,
@@ -806,7 +1017,13 @@ async def cancel_session(
             session_status=SessionStatus.ABORTED,
         )
     else:
-        await _transition_status(store, session_id, SessionStatus.ABORTING, SessionStatus.ABORTED)
+        await _transition_status(
+            store,
+            session_id,
+            SessionStatus.ABORTING,
+            SessionStatus.ABORTED,
+            session.scopes,
+        )
     agent_manager.release_sandbox_backend(session_id)
 
     return {
@@ -849,7 +1066,11 @@ async def pause_session(
             detail=f"Cannot pause session '{session_id}' from '{current.value}'",
         )
 
-    await store.update_session(session_id=session_id, status=SessionStatus.IDLE.value)
+    await store.update_session(
+        session_id=session_id,
+        status=SessionStatus.IDLE.value,
+        effective_scope=session.scopes,
+    )
     return {"success": True, "message": "Session paused", "status": SessionStatus.IDLE.value}
 
 
@@ -864,7 +1085,7 @@ async def _find_session_by_idempotency_key(
     scope: dict[str, str],
 ) -> Any | None:
     """Find an existing session by idempotency key in the given scope."""
-    sessions = await store.list_sessions()
+    sessions = await store.list_sessions(filter_scopes=scope)
     for s in sessions:
         if s.metadata and s.metadata.get("idempotency_key") == idempotency_key:
             return s
@@ -876,6 +1097,7 @@ async def _transition_status(
     session_id: str,
     from_status: SessionStatus,
     to_status: SessionStatus,
+    effective_scope: dict[str, str],
 ) -> None:
     """Transition a session to a new status if allowed."""
     if not SessionStatus.can_transition(from_status, to_status):
@@ -884,4 +1106,8 @@ async def _transition_status(
             detail=f"Cannot transition session '{session_id}' "
             f"from '{from_status.value}' to '{to_status.value}'",
         )
-    await store.update_session(session_id=session_id, status=to_status.value)
+    await store.update_session(
+        session_id=session_id,
+        status=to_status.value,
+        effective_scope=effective_scope,
+    )

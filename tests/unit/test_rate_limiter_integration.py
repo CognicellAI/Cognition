@@ -29,7 +29,9 @@ class TestRateLimiterIntegration:
         app.dependency_overrides[get_rate_limiter_dep] = lambda: mock_limiter
         try:
             # Create a session first
-            session_resp = client.post("/sessions", json={"title": "rate-limit-test"})
+            session_resp = client.post(
+                "/sessions", json={"agent_name": "default", "title": "rate-limit-test"}
+            )
             session_id = session_resp.json()["id"]
 
             # Send a message
@@ -60,7 +62,9 @@ class TestRateLimiterIntegration:
         app.dependency_overrides[get_rate_limiter_dep] = lambda: mock_limiter
         try:
             # Create a session
-            session_resp = client.post("/sessions", json={"title": "rate-limit-test"})
+            session_resp = client.post(
+                "/sessions", json={"agent_name": "default", "title": "rate-limit-test"}
+            )
             session_id = session_resp.json()["id"]
 
             # Send a message
@@ -94,7 +98,7 @@ class TestRateLimiterIntegration:
             # Create a session with scope header
             session_resp = client.post(
                 "/sessions",
-                json={"title": "scoped-rate-limit-test"},
+                json={"agent_name": "default", "title": "scoped-rate-limit-test"},
                 headers={"X-Cognition-Scope-User": "alice"},
             )
 

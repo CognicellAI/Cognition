@@ -1,11 +1,9 @@
-"""P3-SEC-4 & P3-SEC-5 Business Scenarios: Tool Namespace Security & CORS.
+"""P3-SEC-5 Business Scenarios: CORS.
 
 As a platform engineer deploying Cognition,
-I want tool loading restricted to trusted namespaces and CORS properly configured
-so that unauthorized code cannot be loaded and cross-origin attacks are prevented.
+I want CORS properly configured so that cross-origin attacks are prevented.
 
 Business Value:
-- Tool namespace allowlist prevents loading arbitrary Python modules
 - CORS tightening prevents CSRF attacks from malicious websites
 - Defense in depth for multi-tenant deployments
 """
@@ -13,67 +11,6 @@ Business Value:
 from __future__ import annotations
 
 import pytest
-
-
-@pytest.mark.asyncio
-class TestToolNamespaceAllowlist:
-    """Test P3-SEC-4: Tool Module Allowlist."""
-
-    async def test_trusted_namespace_default_configured(self, api_client) -> None:
-        """Trusted tool namespaces are configured by default."""
-        response = await api_client.get("/config")
-
-        if response.status_code == 200:
-            data = response.json()
-            # Check if trusted_tool_namespaces is exposed in config
-            config_str = str(data)
-            if "trusted" in config_str.lower() and "namespace" in config_str.lower():
-                print("\n  Trusted namespaces configured")
-
-    async def test_builtin_tools_load_from_trusted_namespace(self, api_client) -> None:
-        """Built-in tools load from trusted namespace (server.app.tools)."""
-        response = await api_client.get("/tools")
-
-        if response.status_code == 200:
-            data = response.json()
-            tools = data.get("tools", [])
-
-            for tool in tools:
-                # Tools from trusted namespace should have appropriate module
-                module = tool.get("module", "")
-                # Module should be from trusted namespace
-                if module:
-                    assert (
-                        "server" in module or ".cognition" in module or module.startswith("tools")
-                    )
-
-    async def test_untrusted_tool_path_rejected(self, api_client) -> None:
-        """Tool paths outside trusted namespaces are rejected."""
-        # This would require creating an agent definition with untrusted tool
-        # For E2E, we verify the infrastructure exists
-
-        response = await api_client.get("/agents")
-
-        if response.status_code == 200:
-            data = response.json()
-            agents = data.get("agents", [])
-
-            for agent in agents:
-                # Check that agent tools are from trusted sources
-                tools = agent.get("tools", [])
-                for tool in tools:
-                    # Should not be arbitrary system modules
-                    assert "os.system" not in tool
-                    assert "subprocess" not in tool
-
-    async def test_allowlist_extensible(self, api_client) -> None:
-        """Tool namespace allowlist is extensible via settings."""
-        response = await api_client.get("/config")
-
-        if response.status_code == 200:
-            data = response.json()
-            # Document that allowlist should be extensible
-            print("\n  Allowlist configuration available for customization")
 
 
 @pytest.mark.asyncio

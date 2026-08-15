@@ -1,0 +1,139 @@
+name: A2A v1 Conformance
+
+on:
+  workflow_call:
+    inputs:
+      suite:
+        description: "Official TCK suite: must for PRs, full for releases"
+        required: true
+        type: string
+      artifact-name:
+        description: "Name of the uploaded evidence artifact"
+        required: true
+        type: string
+
+env:
+  A2A_TCK_REVISION: 5996b79f9cefa6fc390980e383e358a66fb9e49e
+
+jobs:
+  conformance:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Install Cognition
+        run: uv sync --all-extras --dev
+
+      - name: Check out unchanged official A2A TCK
+        uses: actions/checkout@v4
+        with:
+          repository: a2aproject/a2a-tck
+          ref: ${{ env.A2A_TCK_REVISION }}
+          path: .a2a-tck
+
+      - name: Install official A2A TCK
+        run: uv sync --project .a2a-tck
+
+      - name: Start deterministic Cognition fixture
+        run: |
+          nohup uv run uvicorn tests.support.a2a_tck_sut:create_app \
+            --factory --host 127.0.0.1 --port 9999 \
+            > /tmp/cognition-a2a-tck.log 2>&1 &
+          echo $! > /tmp/cognition-a2a-tck.pid
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent \
+              http://127.0.0.1:9999/.well-known/agent-card.json > /dev/null; then
+              exit 0
+            fi
+            sleep 1
+          done
+          cat /tmp/cognition-a2a-tck.log
+          exit 1
+
+      - name: Run official card-driven A2A v1 TCK
+        id: tck
+        working-directory: .a2a-tck
+        run: |
+          set +e
+          if test "${{ inputs.suite }}" = "must"; then
+            uv run python run_tck.py \
+              --sut-host http://127.0.0.1:9999 --level must
+            status=$?
+          else
+            uv run python run_tck.py \
+              --sut-host http://127.0.0.1:9999
+            status=$?
+          fi
+          set -e
+          echo "$status" > /tmp/a2a-tck-exit-code
+
+      - name: Stop deterministic Cognition fixture
+        if: always()
+        run: |
+          if test -f /tmp/cognition-a2a-tck.pid; then
+            kill "$(cat /tmp/cognition-a2a-tck.pid)" || true
+          fi
+
+      - name: Build permanent conformance evidence
+        if: always()
+        run: |
+          version="$(uv run python -c 'from server.version import VERSION; print(VERSION)')"
+          status="$(cat /tmp/a2a-tck-exit-code 2>/dev/null || echo 2)"
+          if test "${{ inputs.suite }}" = "must"; then
+            command="uv run python run_tck.py --sut-host http://127.0.0.1:9999 --level must"
+          else
+            command="uv run python run_tck.py --sut-host http://127.0.0.1:9999"
+          fi
+          set +e
+          uv run python scripts/a2a_tck_evidence.py \
+            --reports-dir .a2a-tck/reports \
+            --fixture-log /tmp/cognition-a2a-tck.log \
+            --output-dir a2a-tck-evidence \
+            --cognition-version "$version" \
+            --cognition-sha "${{ github.sha }}" \
+            --tck-sha "${{ env.A2A_TCK_REVISION }}" \
+            --command "$command" \
+            --suite "${{ inputs.suite }}" \
+            --workflow-url "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
+            --tck-exit-code "$status"
+          evidence_status=$?
+          set -e
+          if test "$evidence_status" = "0"; then
+            echo "$status" > /tmp/a2a-conformance-exit-code
+          else
+            echo "2" > /tmp/a2a-conformance-exit-code
+          fi
+
+      - name: Upload conformance evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ inputs.artifact-name }}
+          path: |
+            a2a-tck-evidence/*.zip
+            a2a-tck-evidence/*.sha256
+            a2a-tck-evidence/cognition-*/
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Summarize advisory conformance result
+        if: always()
+        run: |
+          result="$(cat /tmp/a2a-conformance-exit-code 2>/dev/null || echo 2)"
+          if test "$result" = "0"; then
+            echo "### A2A v1 compatibility: no applicable MUST gaps" >> "$GITHUB_STEP_SUMMARY"
+          elif test "$result" = "1"; then
+            echo "### A2A v1 compatibility: gaps reported (advisory)" >> "$GITHUB_STEP_SUMMARY"
+            echo "Review the uploaded evidence archive before release." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "A2A evidence generation failed; no valid compatibility report was produced."
+            exit "$result"
+          fi

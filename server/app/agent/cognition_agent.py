@@ -23,6 +23,8 @@ from __future__ import annotations
 
 import importlib
 import json
+import time
+from collections import OrderedDict
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -33,7 +35,7 @@ from deepagents import create_deep_agent as _create_deep_agent
 
 logger = structlog.get_logger(__name__)
 
-from server.app.agent.mcp_client import McpServerConfig, create_mcp_client  # noqa: E402
+from server.app.agent.mcp_client import McpServerConfig, load_mcp_tools_per_server  # noqa: E402
 from server.app.agent.middleware import (  # noqa: E402
     CognitionObservabilityMiddleware,
     CognitionStreamingMiddleware,
@@ -44,7 +46,14 @@ from server.app.agent.middleware import (  # noqa: E402
 )
 from server.app.agent.prompts import SYSTEM_PROMPT  # noqa: E402
 from server.app.agent.sandbox_backend import create_sandbox_backend  # noqa: E402
-from server.app.agent.tools import BrowserTool, InspectPackageTool, SearchTool  # noqa: E402
+from server.app.observability import (  # noqa: E402
+    RUNTIME_CACHE_EVICTIONS_TOTAL,
+    RUNTIME_CACHE_LOOKUPS_TOTAL,
+    RUNTIME_CACHE_SIZE,
+    SANDBOX_LIFECYCLE_DURATION,
+    SANDBOX_LIFECYCLE_TOTAL,
+    STRICT_EXECUTION_REJECTIONS_TOTAL,
+)
 from server.app.settings import Settings, get_settings  # noqa: E402
 from server.app.storage.config_models import SandboxProfile  # noqa: E402
 from server.app.storage.config_store import ConfigStore  # noqa: E402
@@ -69,6 +78,7 @@ class CognitionContext:
         thread_id: LangGraph checkpoint thread id, when available.
         agent_name: Agent definition bound to the session, when available.
         metadata: Builder-provided session metadata. This is not a secret channel.
+        request_deadline: Absolute Unix-millisecond execution deadline, when configured.
     """
 
     effective_scope: dict[str, str] = field(default_factory=dict)
@@ -76,6 +86,10 @@ class CognitionContext:
     thread_id: str | None = None
     agent_name: str | None = None
     metadata: dict[str, str] = field(default_factory=dict)
+    request_deadline: int | None = None
+    # Process-local invocation state. This field is supplied for every run and
+    # is intentionally absent from durable checkpoints and manifests.
+    sandbox_backend: Any | None = field(default=None, repr=False)
 
     @classmethod
     def from_scope(
@@ -86,6 +100,8 @@ class CognitionContext:
         thread_id: str | None = None,
         agent_name: str | None = None,
         metadata: dict[str, str] | None = None,
+        request_deadline: int | None = None,
+        sandbox_backend: Any | None = None,
     ) -> CognitionContext:
         return cls(
             effective_scope=dict(scope or {}),
@@ -93,6 +109,8 @@ class CognitionContext:
             thread_id=thread_id,
             agent_name=agent_name,
             metadata=dict(metadata or {}),
+            request_deadline=request_deadline,
+            sandbox_backend=sandbox_backend,
         )
 
 
@@ -111,7 +129,6 @@ class RuntimeContext:
     store_type: str
     system_prompt: str
     memory: tuple[str, ...]
-    skills: tuple[str, ...]
     subagent_count: int
     async_subagents: tuple[tuple[str, str, str, str], ...]
     interrupt_on: tuple[tuple[str, str], ...]
@@ -127,6 +144,9 @@ class RuntimeContext:
     sandbox_profile: str
     sandbox_execution_role_arn: str
     scope: tuple[tuple[str, str], ...]
+    manifest_digest: str
+    cache_max_entries: int
+    cache_ttl_seconds: float
 
     @classmethod
     def from_params(
@@ -136,7 +156,6 @@ class RuntimeContext:
         store: Any,
         system_prompt: str | None,
         memory: Sequence[str] | None,
-        skills: Sequence[str] | None,
         subagents: Sequence[Any] | None,
         async_subagents: Sequence[Any] | None,
         interrupt_on: Mapping[str, Any] | None,
@@ -153,14 +172,17 @@ class RuntimeContext:
         sandbox_profile: str | None = None,
         sandbox_execution_role_arn: str | None = None,
         model_cache_key: str | None = None,
+        manifest_digest: str | None = None,
     ) -> RuntimeContext:
         return cls(
-            project_path=str(project_path.resolve()),
+            # File routing is resolved from CognitionContext at invocation
+            # time. Never make the per-session host path part of a reusable
+            # compiled graph.
+            project_path="<runtime-sandbox>",
             model_key=model_cache_key or _model_cache_key(model),
             store_type=store.__class__.__name__ if store else "None",
             system_prompt=system_prompt or "default",
             memory=tuple(sorted(memory)) if memory else (),
-            skills=tuple(sorted(skills)) if skills else (),
             subagent_count=len(subagents) if subagents else 0,
             async_subagents=_async_subagents_cache_key(async_subagents),
             interrupt_on=_mapping_cache_key(interrupt_on),
@@ -182,10 +204,14 @@ class RuntimeContext:
             sandbox_profile=sandbox_profile or settings.aws_lambda_microvm_default_profile,
             sandbox_execution_role_arn=sandbox_execution_role_arn or "",
             scope=tuple(sorted((scope or {}).items())),
+            manifest_digest=manifest_digest or "",
+            cache_max_entries=settings.agent_cache_max_entries,
+            cache_ttl_seconds=settings.agent_cache_ttl_seconds,
         )
 
 
-_agent_cache: dict[RuntimeContext, Any] = {}
+_agent_cache: OrderedDict[RuntimeContext, tuple[float, Any]] = OrderedDict()
+_agent_cache_evictions = 0
 
 
 def _model_cache_key(model: Any) -> str:
@@ -320,22 +346,58 @@ def _resolve_filesystem_permissions(permissions: Sequence[Any] | None) -> list[A
 
     from deepagents.middleware.filesystem import FilesystemPermission
 
-    return [
-        FilesystemPermission(**_permission_dict(permission))
-        for permission in permissions
-    ]
+    return [FilesystemPermission(**_permission_dict(permission)) for permission in permissions]
 
 
 def get_cached_agent(ctx: RuntimeContext) -> Any | None:
-    return _agent_cache.get(ctx)
+    global _agent_cache_evictions
+    entry = _agent_cache.get(ctx)
+    if entry is None:
+        RUNTIME_CACHE_LOOKUPS_TOTAL.labels(
+            cache="agent_graph",
+            outcome="miss",
+            reason="absent",
+        ).inc()
+        return None
+    created_at, agent = entry
+    if time.monotonic() - created_at > ctx.cache_ttl_seconds:
+        del _agent_cache[ctx]
+        _agent_cache_evictions += 1
+        RUNTIME_CACHE_LOOKUPS_TOTAL.labels(
+            cache="agent_graph",
+            outcome="stale",
+            reason="ttl",
+        ).inc()
+        RUNTIME_CACHE_EVICTIONS_TOTAL.labels(cache="agent_graph", reason="ttl").inc()
+        RUNTIME_CACHE_SIZE.labels(cache="agent_graph").set(len(_agent_cache))
+        return None
+    _agent_cache.move_to_end(ctx)
+    RUNTIME_CACHE_LOOKUPS_TOTAL.labels(
+        cache="agent_graph",
+        outcome="hit",
+        reason="fresh",
+    ).inc()
+    return agent
 
 
 def cache_agent(ctx: RuntimeContext, agent: Any) -> None:
-    _agent_cache[ctx] = agent
+    global _agent_cache_evictions
+    _agent_cache[ctx] = (time.monotonic(), agent)
+    _agent_cache.move_to_end(ctx)
+    while len(_agent_cache) > ctx.cache_max_entries:
+        _agent_cache.popitem(last=False)
+        _agent_cache_evictions += 1
+        RUNTIME_CACHE_EVICTIONS_TOTAL.labels(cache="agent_graph", reason="capacity").inc()
+    RUNTIME_CACHE_SIZE.labels(cache="agent_graph").set(len(_agent_cache))
 
 
 def invalidate_agent_cache(ctx: RuntimeContext) -> None:
-    _agent_cache.pop(ctx, None)
+    if _agent_cache.pop(ctx, None) is not None:
+        RUNTIME_CACHE_EVICTIONS_TOTAL.labels(
+            cache="agent_graph",
+            reason="manual",
+        ).inc()
+    RUNTIME_CACHE_SIZE.labels(cache="agent_graph").set(len(_agent_cache))
 
 
 def invalidate_agent_cache_for_scope(scope: dict[str, str]) -> int:
@@ -343,16 +405,27 @@ def invalidate_agent_cache_for_scope(scope: dict[str, str]) -> int:
     to_remove = [ctx for ctx in _agent_cache if ctx.scope == scope_items]
     for ctx in to_remove:
         del _agent_cache[ctx]
-    logger.info("Agent cache cleared on config change", scope=scope, cleared=len(to_remove))
+    if to_remove:
+        RUNTIME_CACHE_EVICTIONS_TOTAL.labels(
+            cache="agent_graph",
+            reason="config_change",
+        ).inc(len(to_remove))
+    RUNTIME_CACHE_SIZE.labels(cache="agent_graph").set(len(_agent_cache))
+    logger.info(
+        "Agent cache cleared on config change",
+        scope_keys=sorted(scope),
+        cleared=len(to_remove),
+    )
     return len(to_remove)
 
 
 def clear_agent_cache() -> None:
     _agent_cache.clear()
+    RUNTIME_CACHE_SIZE.labels(cache="agent_graph").set(0)
 
 
 def get_agent_cache_stats() -> dict[str, int]:
-    return {"size": len(_agent_cache)}
+    return {"size": len(_agent_cache), "evictions": _agent_cache_evictions}
 
 
 class CognitionAgentResult(NamedTuple):
@@ -375,7 +448,6 @@ class CognitionAgentParams:
     checkpointer: Any = None
     system_prompt: str | None = None
     memory: Sequence[str] | None = None
-    skills: Sequence[str] | None = None
     subagents: Sequence[Any] | None = None
     async_subagents: Sequence[Any] | None = None
     interrupt_on: Mapping[str, Any] | None = None
@@ -389,11 +461,15 @@ class CognitionAgentParams:
     tools: Sequence[Any] | None = None
     settings: Settings | None = None
     mcp_configs: Sequence[McpServerConfig] | None = None
+    mcp_oauth_repository: Any | None = None
+    mcp_readiness_repository: Any | None = None
     scope: dict[str, str] | None = None
     config_store: ConfigStore | None = None
     sandbox_profile: str | None = None
     sandbox_execution_role_arn: str | None = None
     model_cache_key: str | None = None
+    manifest_digest: str | None = None
+    pinned_sandbox_profile_config: SandboxProfile | None = None
 
 
 def _create_sandbox(
@@ -405,26 +481,59 @@ def _create_sandbox(
     sandbox_execution_role_arn: str | None = None,
     sandbox_profile_config: SandboxProfile | None = None,
 ) -> Any:
+    start = time.monotonic()
+    outcome = "success"
+    if settings.sandbox_backend == "local" and not settings.unsafe_local_execution:
+        outcome = "rejected"
+        STRICT_EXECUTION_REJECTIONS_TOTAL.labels(reason="local_execution").inc()
+        SANDBOX_LIFECYCLE_TOTAL.labels(
+            backend=settings.sandbox_backend,
+            stage="create",
+            outcome=outcome,
+        ).inc()
+        SANDBOX_LIFECYCLE_DURATION.labels(
+            backend=settings.sandbox_backend,
+            stage="create",
+        ).observe(time.monotonic() - start)
+        raise RuntimeError(
+            "Local execution is disabled. Select a production sandbox backend or "
+            "set COGNITION_ALLOW_UNSAFE_LOCAL_EXECUTION=true for standalone development."
+        )
     resolved_profile = sandbox_profile or settings.aws_lambda_microvm_default_profile
-    return create_sandbox_backend(
-        root_dir=project_path,
-        sandbox_id=sandbox_id,
-        sandbox_backend=settings.sandbox_backend,
-        docker_image=settings.docker_image,
-        docker_network=settings.docker_network,
-        docker_memory_limit=settings.docker_memory_limit,
-        docker_cpu_limit=settings.docker_cpu_limit,
-        docker_host_workspace="",
-        k8s_template=settings.k8s_sandbox_template,
-        k8s_namespace=settings.k8s_sandbox_namespace,
-        k8s_router_url=settings.k8s_sandbox_router_url,
-        k8s_ttl=settings.k8s_sandbox_ttl,
-        k8s_warm_pool=settings.k8s_sandbox_warm_pool,
-        labels=k8s_labels or None,
-        aws_lambda_microvm_profile=resolved_profile,
-        aws_lambda_microvm_execution_role_arn=sandbox_execution_role_arn,
-        aws_lambda_microvm_profile_config=sandbox_profile_config,
-    )
+    try:
+        return create_sandbox_backend(
+            root_dir=project_path,
+            sandbox_id=sandbox_id,
+            sandbox_backend=settings.sandbox_backend,
+            docker_image=settings.docker_image,
+            docker_network=settings.docker_network,
+            docker_memory_limit=settings.docker_memory_limit,
+            docker_cpu_limit=settings.docker_cpu_limit,
+            docker_host_workspace="",
+            sandbox_workspace_root=settings.sandbox_workspace_root,
+            k8s_template=settings.k8s_sandbox_template,
+            k8s_namespace=settings.k8s_sandbox_namespace,
+            k8s_router_url=settings.k8s_sandbox_router_url,
+            k8s_ttl=settings.k8s_sandbox_ttl,
+            k8s_warm_pool=settings.k8s_sandbox_warm_pool,
+            labels=k8s_labels or None,
+            aws_lambda_microvm_profile=resolved_profile,
+            aws_lambda_microvm_execution_role_arn=sandbox_execution_role_arn,
+            aws_lambda_microvm_profile_config=sandbox_profile_config,
+        )
+    except Exception:
+        outcome = "failure"
+        raise
+    finally:
+        SANDBOX_LIFECYCLE_TOTAL.labels(
+            backend=settings.sandbox_backend,
+            stage="create",
+            outcome=outcome,
+        ).inc()
+        SANDBOX_LIFECYCLE_DURATION.labels(
+            backend=settings.sandbox_backend,
+            stage="create",
+        ).observe(time.monotonic() - start)
 
 
 async def _resolve_sandbox_profile_config(
@@ -513,53 +622,15 @@ async def create_cognition_agent(params: CognitionAgentParams) -> CognitionAgent
         except RuntimeError:
             config_store = None
 
-    runtime_ctx = RuntimeContext.from_params(
-        project_path=project_path,
-        model=getattr(params.model, "model_name", None)
-        or getattr(params.model, "model_id", None)
-        or getattr(params.model, "model", None)
-        or str(params.model),
-        store=params.store,
-        system_prompt=params.system_prompt,
-        memory=params.memory,
-        skills=params.skills,
-        subagents=params.subagents,
-        async_subagents=params.async_subagents,
-        interrupt_on=params.interrupt_on,
-        permissions=params.permissions,
-        response_format=params.response_format,
-        tool_token_limit_before_evict=params.tool_token_limit_before_evict,
-        context_policy=params.context_policy,
-        excluded_tools=params.excluded_tools,
-        blocked_tools=params.blocked_tools,
-        middleware=params.middleware,
-        tools=params.tools,
-        settings=settings,
-        scope=params.scope,
-        sandbox_profile=params.sandbox_profile,
-        sandbox_execution_role_arn=params.sandbox_execution_role_arn,
-        model_cache_key=params.model_cache_key,
-    )
     resolved_sandbox_profile = params.sandbox_profile or settings.aws_lambda_microvm_default_profile
-    sandbox_profile_config = await _resolve_sandbox_profile_config(
-        settings=settings,
-        config_store=config_store,
-        profile_name=resolved_sandbox_profile,
-        scope=params.scope,
-    )
-
-    cached_agent = get_cached_agent(runtime_ctx)
-    if cached_agent is not None:
-        sandbox_backend = _create_sandbox(
-            project_path,
-            sandbox_id,
-            settings,
-            k8s_labels,
-            sandbox_profile=resolved_sandbox_profile,
-            sandbox_execution_role_arn=params.sandbox_execution_role_arn,
-            sandbox_profile_config=sandbox_profile_config,
+    sandbox_profile_config = params.pinned_sandbox_profile_config
+    if sandbox_profile_config is None:
+        sandbox_profile_config = await _resolve_sandbox_profile_config(
+            settings=settings,
+            config_store=config_store,
+            profile_name=resolved_sandbox_profile,
+            scope=params.scope,
         )
-        return CognitionAgentResult(agent=cached_agent, sandbox_backend=sandbox_backend)
 
     sandbox_backend = _create_sandbox(
         project_path,
@@ -587,56 +658,45 @@ async def create_cognition_agent(params: CognitionAgentParams) -> CognitionAgent
         defaults = await _defaults()
         agent_memory = defaults.memory if defaults else ["AGENTS.md"]
 
-    if params.skills is not None:
-        attached_skill_names = list(params.skills)
-    else:
-        defaults = await _defaults()
-        attached_skill_names = defaults.skills if defaults else []
+    agent_skills = [sandbox_backend.skills_root]
 
-    agent_skills = ["/skills/api/"] if attached_skill_names else []
-
-    from deepagents.backends.protocol import BackendProtocol
-
-    backend: BackendProtocol
+    routes: dict[str, Any] = {}
     if config_store is not None:
-        from deepagents.backends.composite import CompositeBackend
-
         from server.app.agent.artifacts_backend import ArtifactBackend
-        from server.app.agent.skills_backend import ConfigRegistrySkillsBackend
         from server.app.api.dependencies import get_artifact_store
 
         reg = getattr(config_store, "config_registry", None)
         if reg is not None:
-            db_skills_backend = ConfigRegistrySkillsBackend(
-                registry=reg,
-                scope=params.scope,
-                allowed_skill_names=attached_skill_names,
-            )
             try:
                 artifact_store = get_artifact_store()
             except RuntimeError:
                 artifact_store = None
 
-            routes: dict[str, BackendProtocol] = {"/skills/api/": db_skills_backend}
             if artifact_store is not None:
                 artifact_backend = ArtifactBackend(
                     artifact_store=artifact_store,
                     scope=params.scope,
                 )
-                routes.update({
-                    "/scratch/": artifact_backend,
-                    "/artifacts/": artifact_backend,
-                    "/contracts/": artifact_backend,
-                    "/evals/": artifact_backend,
-                    "/memories/": artifact_backend,
-                    "/policies/": artifact_backend,
-                })
-            backend = CompositeBackend(
-                default=sandbox_backend,
-                routes=routes,
-            )
-        else:
-            backend = sandbox_backend
+                routes.update(
+                    {
+                        "/scratch/": artifact_backend,
+                        "/artifacts/": artifact_backend,
+                        "/files/": artifact_backend,
+                        "/contracts/": artifact_backend,
+                        "/evals/": artifact_backend,
+                        "/memories/": artifact_backend,
+                        "/policies/": artifact_backend,
+                    }
+                )
+
+    # Deep Agents 0.7 deliberately accepts only initialized backend instances,
+    # not runtime factories. A compiled graph therefore captures its sandbox;
+    # caching that graph would cross a session's execution boundary. Build each
+    # run with its assigned sandbox instead of retaining a stale graph.
+    if routes:
+        from deepagents.backends.composite import CompositeBackend
+
+        backend = CompositeBackend(default=sandbox_backend, routes=routes)
     else:
         backend = sandbox_backend
 
@@ -661,7 +721,9 @@ async def create_cognition_agent(params: CognitionAgentParams) -> CognitionAgent
         agent_permissions = list(params.permissions)
     else:
         defaults = await _defaults()
-        agent_permissions = list(defaults.permissions) if defaults and defaults.permissions else None
+        agent_permissions = (
+            list(defaults.permissions) if defaults and defaults.permissions else None
+        )
 
     if params.interrupt_on is not None:
         agent_interrupt_on = dict(params.interrupt_on)
@@ -705,31 +767,35 @@ async def create_cognition_agent(params: CognitionAgentParams) -> CognitionAgent
         }
     )
 
-    built_in_tools = [BrowserTool(), SearchTool(), InspectPackageTool()]
     agent_tools = list(params.tools) if params.tools else []
-    agent_tools.extend(built_in_tools)
 
     if params.mcp_configs:
         from server.app.agent.mcp_client import (
             _build_mcp_callbacks,
-            _build_mcp_interceptors,
         )
 
-        enabled_configs = [c for c in params.mcp_configs if c.enabled]
-        if enabled_configs:
+        if params.mcp_configs:
+            if not settings.mcp_outbound_transport_enabled:
+                STRICT_EXECUTION_REJECTIONS_TOTAL.labels(reason="mcp_outbound_transport").inc()
+                raise RuntimeError(
+                    "Outbound MCP transport is disabled. Set "
+                    "COGNITION_MCP_OUTBOUND_TRANSPORT_ENABLED=true and configure "
+                    "COGNITION_MCP_ALLOWED_ORIGINS for approved MCP origins."
+                )
             try:
                 mcp_callbacks = _build_mcp_callbacks()
-                mcp_interceptors = _build_mcp_interceptors(params.scope)
-                mcp_client = create_mcp_client(
-                    enabled_configs,
+                mcp_tools = await load_mcp_tools_per_server(
+                    params.mcp_configs,
+                    settings,
                     callbacks=mcp_callbacks,
-                    tool_interceptors=mcp_interceptors,
+                    oauth_repository=params.mcp_oauth_repository,
+                    readiness_repository=params.mcp_readiness_repository,
                 )
-                mcp_tools = await mcp_client.get_tools()
                 agent_tools.extend(mcp_tools)
                 logger.info("MCP tools loaded", count=len(mcp_tools))
             except Exception as e:
-                logger.error("Failed to initialize MCP tools", error=str(e))
+                logger.error("Failed to initialize MCP tools", error_type=type(e).__name__)
+                raise RuntimeError("Configured MCP tools failed to initialize") from e
 
     if _context_policy_enables_summarization_tool(agent_context_policy):
         try:
@@ -737,11 +803,12 @@ async def create_cognition_agent(params: CognitionAgentParams) -> CognitionAgent
                 create_summarization_tool_middleware,
             )
 
-            agent_middleware.append(
-                create_summarization_tool_middleware(params.model, backend)
-            )
+            agent_middleware.append(create_summarization_tool_middleware(params.model, backend))
         except Exception as e:
-            logger.warning("Failed to add Deep Agents summarization tool", error=str(e))
+            logger.warning(
+                "Failed to add Deep Agents summarization tool",
+                error_type=type(e).__name__,
+            )
 
     agent_middleware.extend(
         [
@@ -754,10 +821,13 @@ async def create_cognition_agent(params: CognitionAgentParams) -> CognitionAgent
         ]
     )
 
-    agent_subagents = [
-        {**s, "description": s.get("description", "")} if isinstance(s, dict) else s
-        for s in raw_subagents
-    ]
+    agent_subagents: list[Any] = []
+    for subagent in raw_subagents:
+        if not isinstance(subagent, dict):
+            agent_subagents.append(subagent)
+            continue
+        spec = {**subagent, "description": subagent.get("description", "")}
+        agent_subagents.append(spec)
     agent_subagents.extend(_resolve_async_subagents(raw_async_subagents))
 
     agent_subagents = _inject_subagent_middleware(agent_subagents, agent_middleware)
@@ -765,9 +835,8 @@ async def create_cognition_agent(params: CognitionAgentParams) -> CognitionAgent
     logger.debug(
         "creating_deep_agent",
         skills=agent_skills,
-        backend_type=type(backend).__name__,
-        has_composite_routes=hasattr(backend, "routes")
-        and getattr(backend, "routes", None) is not None,
+        backend_type="runtime_factory",
+        has_composite_routes=bool(routes),
     )
 
     resolved_response_format: DeepAgentResponseFormat = _resolve_response_format(
@@ -798,7 +867,6 @@ async def create_cognition_agent(params: CognitionAgentParams) -> CognitionAgent
     agent = cast(Any, create_deep_agent)(**create_kwargs)
 
     result = CognitionAgentResult(agent=agent, sandbox_backend=sandbox_backend)
-    cache_agent(runtime_ctx, agent)
 
     return result
 

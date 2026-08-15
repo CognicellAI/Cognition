@@ -5,7 +5,9 @@ This module provides shared fixtures and helper functions for all P2 scenario te
 
 from __future__ import annotations
 
+import asyncio
 import os
+import re
 import time
 from collections.abc import AsyncGenerator
 from typing import Any
@@ -13,6 +15,13 @@ from typing import Any
 import httpx
 import pytest
 import pytest_asyncio
+
+from tests.e2e.conftest import (
+    E2E_DEFAULT_AGENT_NAME,
+    E2E_READONLY_AGENT_NAME,
+    ensure_e2e_agent,
+    ensure_e2e_provider,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -64,6 +73,7 @@ class ScenarioTestClient:
         self.base_url = base_url
         self.client = httpx.AsyncClient(timeout=TEST_TIMEOUT)
         self.scope_header: dict[str, str] = {}
+        self.default_agent_name = E2E_DEFAULT_AGENT_NAME
 
     async def check_scoping(self) -> bool:
         """Check if session scoping is enabled."""
@@ -76,10 +86,43 @@ class ScenarioTestClient:
             pass
         return False
 
+    async def check_available(self) -> bool:
+        """Return whether the external scenario server is reachable."""
+        try:
+            response = await self.client.get(f"{self.base_url}/ready")
+            return response.status_code in {200, 503}
+        except httpx.HTTPError:
+            return False
+
     async def setup_scoping(self) -> None:
         """Setup scoping header if enabled."""
         if await self.check_scoping():
             self.scope_header = {"X-Cognition-Scope-User": "test-user"}
+
+    async def ensure_test_agents(self) -> None:
+        """Provision shared builder-owned Agents used by the scenario suite."""
+        await ensure_e2e_provider(
+            self.client,
+            self.base_url,
+            headers=self.scope_header,
+        )
+        await ensure_e2e_agent(
+            self.client,
+            self.base_url,
+            E2E_DEFAULT_AGENT_NAME,
+            headers=self.scope_header,
+        )
+        await ensure_e2e_agent(
+            self.client,
+            self.base_url,
+            E2E_READONLY_AGENT_NAME,
+            headers=self.scope_header,
+        )
+
+    async def use_scope(self, headers: dict[str, str]) -> None:
+        """Switch to an exact test scope and provision fixture Agents there."""
+        self.scope_header = dict(headers)
+        await self.ensure_test_agents()
 
     async def get(self, path: str, **kwargs) -> httpx.Response:
         """Make GET request with optional scoping."""
@@ -91,6 +134,12 @@ class ScenarioTestClient:
         headers = {**self.scope_header, **kwargs.pop("headers", {})}
         if "json" in kwargs:
             headers["Content-Type"] = "application/json"
+        if path == "/sessions" and isinstance(kwargs.get("json"), dict):
+            payload = dict(kwargs["json"])
+            payload.setdefault("agent_name", self.default_agent_name)
+            kwargs["json"] = payload
+            if payload["agent_name"] in {E2E_DEFAULT_AGENT_NAME, E2E_READONLY_AGENT_NAME}:
+                await self.ensure_test_agents()
         return await self.client.post(f"{self.base_url}{path}", headers=headers, **kwargs)
 
     async def patch(self, path: str, **kwargs) -> httpx.Response:
@@ -138,7 +187,25 @@ class ScenarioTestClient:
         except Exception:
             pass
 
+        match = re.match(r"^/sessions/([^/]+)/messages$", path)
+        if match:
+            await self.wait_for_session_idle(match.group(1))
+
         return events
+
+    async def wait_for_session_idle(self, session_id: str, timeout: float = 10.0) -> None:
+        """Wait until the session is stably ready for another turn."""
+        deadline = asyncio.get_running_loop().time() + timeout
+        observed_idle = False
+        while True:
+            response = await self.get(f"/sessions/{session_id}")
+            is_idle = response.status_code == 200 and response.json().get("status") == "idle"
+            if is_idle and observed_idle:
+                return
+            observed_idle = is_idle
+            if asyncio.get_running_loop().time() >= deadline:
+                return
+            await asyncio.sleep(0.1)
 
     async def create_session(
         self,
@@ -148,8 +215,7 @@ class ScenarioTestClient:
     ) -> str:
         """Create a new session and return its ID."""
         payload: dict[str, Any] = {"title": title}
-        if agent_name is not None:
-            payload["agent_name"] = agent_name
+        payload["agent_name"] = agent_name or self.default_agent_name
         if metadata is not None:
             payload["metadata"] = metadata
         response = await self.post("/sessions", json=payload)
@@ -163,11 +229,20 @@ class ScenarioTestClient:
         if stream:
             return await self.stream_sse(f"/sessions/{session_id}/messages", {"content": content})
         else:
-            return await self.post(
+            await self.wait_for_session_idle(session_id)
+            response = await self.post(
                 f"/sessions/{session_id}/messages",
                 json={"content": content},
                 headers={**self.scope_header, "Accept": "application/json"},
             )
+            if response.status_code == 409:
+                await self.wait_for_session_idle(session_id)
+                response = await self.post(
+                    f"/sessions/{session_id}/messages",
+                    json={"content": content},
+                    headers={**self.scope_header, "Accept": "application/json"},
+                )
+            return response
 
     async def get_messages(self, session_id: str, **params) -> list[dict[str, Any]]:
         """Get messages for a session."""
@@ -184,7 +259,14 @@ class ScenarioTestClient:
 async def api_client() -> AsyncGenerator[ScenarioTestClient, None]:
     """Fixture providing a configured API test client."""
     client = ScenarioTestClient()
+    if not await client.check_available():
+        await client.close()
+        pytest.skip(
+            "Scenario E2E server is not reachable; set COGNITION_E2E_URL or "
+            "start the docker-compose E2E environment."
+        )
     await client.setup_scoping()
+    await client.ensure_test_agents()
     yield client
     await client.close()
 

@@ -7,6 +7,301 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [Unreleased]
+
+## [0.14.0] — 2026-08-14
+
+### Changed
+
+- Replaced Cognition-owned inline Skill bundles and the custom Skills backend
+  with Deep Agents native discovery from the builder-mounted sandbox workspace
+  `skills/` directory.
+- Added the explicit remote sandbox workspace-root contract and limited
+  S3-compatible storage to durable artifact/file bodies behind authoritative
+  database manifests.
+
+## [0.14.0-rc.3] — 2026-08-04
+
+### Fixed
+
+- Aligned the Agent-owned Skills backend with the current Deep Agents backend
+  protocol so embedded Skill bundles are discovered and loaded through the
+  pinned Agent revision.
+- Added concurrent two-server workload token-exchange coverage to verify that
+  one deployment profile obtains and uses distinct exact-audience tokens for
+  each canonical MCP server.
+
+## [0.14.0-rc.2] — 2026-08-03
+
+### Highlights
+
+- Updated Cognition to Deep Agents 0.7 and aligned Agent Skills, MCP tools,
+  sandbox binding, and backend composition with Deep Agents-native extension
+  points.
+- Made Skills and MCP server declarations part of immutable, scope-owned Agent
+  revisions so every run executes against one pinned capability snapshot.
+- Added four standards-oriented MCP authentication modes: anonymous transport,
+  standard MCP OAuth, workload token exchange, and static bearer credentials.
+- Added S3-compatible durable storage for file and artifact bodies while keeping
+  authoritative metadata and runtime state in the configured database.
+
+### Breaking Changes
+
+- Removed the global MCP server registry and its API. MCP servers are now
+  declared on Agent definitions, with no compatibility layer.
+- Removed the standalone Skill registry and API. Skill bundles are now stored
+  in complete Agent revisions, with no compatibility layer.
+- Production deployments no longer implicitly fall back to host-local durable
+  storage. Builders must configure durable database and S3-compatible storage;
+  SQLite, in-memory storage, and local filesystems remain supported deployment
+  choices when explicitly selected.
+- Raw MCP authorization headers and provider credentials are not part of Agent
+  configuration. Authentication behavior is selected by typed server auth
+  configuration and deployment-owned profiles.
+
+### Added
+
+- Added direct MCP OAuth discovery and authorization handoff, encrypted and
+  scope-partitioned OAuth token persistence, refresh handling, and canonical
+  server-resource isolation.
+- Added workload token exchange using ambient workload identity, exact
+  audience-bound tokens, trusted model-invisible runtime context, and
+  builder-controlled live gateway authorization.
+- Added static bearer authentication as a supported but not recommended MCP
+  transport option for deployments that require it.
+- Added per-server MCP discovery, canonical tool identities, required and
+  optional server failure semantics, and durable scope-aware readiness
+  observations with freshness state.
+- Added digest-addressed S3 object publication, read-after-write verification,
+  persisted SHA-256 and size metadata, and checksum verification on every read.
+- Added startup and readiness verification for the selected S3-compatible
+  backend, including Garage-backed integration coverage.
+
+### Security
+
+- Updated vulnerable transitive and direct dependencies, including MCP,
+  GitPython, Pillow, pyasn1, Click, and langgraph-checkpoint, and verified the
+  resolved project environment with `pip-audit`.
+- Kept MCP credentials, tokens, authorization headers, scopes, tool arguments,
+  and results out of persisted Agent configuration and bounded their exposure
+  in telemetry and readiness projections.
+
+## [0.13.1] — 2026-07-29
+
+### Added
+
+- Added release-bound A2A v1 compatibility evidence: one pinned, unchanged
+  official TCK workflow records applicable `MUST`, `SHOULD`, and `MAY` findings
+  without blocking v0.13.1, and attaches versioned reports plus Cognition's
+  interpretation to every GitHub release.
+
+### Fixed
+
+- Avoid duplicate CI runs when a release branch has both a push and an open
+  pull request.
+
+- Reject inbound A2A Parts whose explicit `mediaType` is not advertised by the
+  selected Agent Card before model execution, returning the protocol content
+  type error consistently for unary and streaming sends.
+
+## [0.13.0] — 2026-07-27
+
+### Highlights
+
+- Reworked Cognition into a stricter multi-tenant Agent CRUD runtime: deployments start without built-in platform Agents, builders explicitly provision every Agent, and runtime data access is enforced at exact effective-scope boundaries.
+- Added v0.13 runtime identity primitives for safer shared deployments, including canonical `scope_key` values, Agent revisions, definition digests, pinned run manifests, scope-aware graph-cache keys, and bounded runtime caches.
+- Rebuilt Agent observability around canonical OpenTelemetry: one durable `cognition.agent.run` trace per run attempt, native LangGraph/model/tool/subagent spans under the same trace, byte-bounded OTLP export, and MLflow routing through the Collector instead of Cognition-owned autologging.
+- Replaced Cognition's estimated token accounting with provider-authoritative Usage Events sourced only from LangChain `AIMessage.usage_metadata`; Cognition no longer tokenizes text, fabricates zeroes, or calculates costs.
+- Preserved Cognition's backend mission by keeping tenant IAM, billing, trace retention, redaction, MLflow experiment ownership, and publishing UX as builder/operator responsibilities.
+
+### Breaking Changes
+
+- Removed implicit default Agent provisioning. New projects must create Agents before starting sessions, and `POST /sessions` now requires an explicit `agent_name`.
+- Removed the reserved-name behavior for formerly built-in Agents. Names such as `default` are now ordinary builder-owned Agent names when explicitly provisioned.
+- Removed the Cognition token counter and all character/text-derived token estimates from billable usage. Legacy usage fields remain for compatibility but are nullable when provider metadata is unavailable.
+- Removed the Cognition MLflow startup shim and `COGNITION_MLFLOW_*` tracing configuration. MLflow is now configured as an OpenTelemetry Collector destination.
+- Removed the pre-release `COGNITION_NATIVE_AGENT_TRACING` destination switch. Direct MLflow or LangSmith destination modes are no longer Cognition runtime settings.
+- Mixed v0.12/v0.13 writers are unsupported during migration. Operators should drain writes before applying the scope-key, Agent-revision, and runtime-manifest migration path.
+
+### Added
+
+- Added exact-scope API Agent CRUD identity using canonical `scope_key`, monotonically increasing Agent `revision`, and stable `definition_digest` values.
+- Added `revision` and `definition_digest` to Agent responses, plus ETag/conditional mutation support for stale-write detection.
+- Added persistent run-manifest resolution so each run pins the Agent revision and dependency digests once at creation; later Agent or dependency updates affect only future runs.
+- Added scope-aware runtime isolation for sessions, runs, events, tasks, messages, checkpoints, artifacts, cleanup, mutation, and deletion paths across memory, SQLite, and PostgreSQL storage.
+- Added composite scope indexes and storage-side pagination for scoped Agent/config and runtime lookups, with CI-sized PostgreSQL validation coverage for 10,000 config rows, 1,000 scopes, and 50,000 sessions.
+- Added bounded LRU/TTL caches for compiled Agent graphs and per-session services, including eviction metrics and deterministic terminal cleanup.
+- Added strict production execution settings that fail closed for unsupported host/local execution, attached Python tools, unsafe callbacks, and sandbox fallback paths unless explicit development flags are enabled.
+- Added operator-controlled callback origin allow-listing; per-message callbacks are denied unless their HTTPS origin is explicitly approved.
+- Added provider-authoritative `usage.recorded` events with `complete`, `partial`, and `unavailable` statuses, per-model aggregation, streaming deduplication, cache-token fields, and subagent/mixed-model support.
+- Added OpenTelemetry `MeterProvider` wiring for auto-instrumented GenAI token and operation-duration metrics, exported through the Collector to Prometheus.
+- Added byte-bounded OTLP trace export with configurable maximum encoded request size, queue size, export timeout, batch splitting, oversize-span accounting, and telemetry health metrics.
+- Added curated OpenTelemetry Agent tracing docs, ADR-0002, and a detailed tracing/usage proposal covering builder responsibilities, Collector fan-out, MLflow behavior, and validation expectations.
+
+### Changed
+
+- Agent runtime resolution now separates exact-scope API-created Agents from explicitly shared file-based fallback definitions; broader API-Agent inheritance is not used for runtime execution.
+- Graph cache identity now includes scope fingerprint, Agent revision, manifest digest, sandbox backend identity, model identity, and relevant runtime settings; cached graphs resolve the current run's sandbox dynamically.
+- Runtime metrics and logs now avoid high-cardinality tenant/session/run/tool/model/path labels and expose bounded operational evidence for scope denials, manifest pinning, cache decisions, sandbox lifecycle, strict-execution rejection, and telemetry export health.
+- Request logging and metrics middleware now use pure ASGI timing so streaming durations cover the full response body.
+- LangSmith's OpenTelemetry-only bridge is used as the LangGraph/LangChain span adapter on Cognition's global tracer provider; it does not create a direct LangSmith export path.
+- OpenLLMetry LangChain instrumentation is retained only for standard GenAI metrics. Duplicate metric-adapter spans are filtered before OTLP export.
+- MLflow local Compose support now routes through the Collector's `otlphttp/mlflow` exporter with gzip compression and an operator-provided `MLFLOW_EXPERIMENT_ID`.
+- CLI usage display now reports exact, partial, or unavailable provider usage instead of estimated values or fabricated zeroes.
+- The architecture documentation set now treats the code-derived architecture docs and ADR index as the official future-tracking surface.
+
+### Fixed
+
+- Fixed cross-scope runtime access so wrong-scope identifiers return not-found for sessions, runs, events, tasks, messages, checkpoints, artifacts, cleanup, mutation, and deletion paths.
+- Fixed API-created Agent lookup so same-name Agents in sibling, partial, empty, and exact scopes cannot bleed into one another at runtime.
+- Fixed stale graph reuse by binding cache identity to pinned runtime manifests and exact runtime identity instead of mutable process-level service objects.
+- Fixed long-run telemetry drops caused by OTLP requests exceeding common Collector payload limits.
+- Fixed trace splitting where Cognition and LangGraph spans could appear as separate semantic traces for the same run attempt.
+- Fixed duplicated trace noise from framework hook wrappers, ASGI send/receive spans, probe endpoints, and duplicate GenAI instrumentation.
+- Fixed incorrect usage projection where Cognition text estimates could disagree with provider-reported token metadata.
+- Fixed misleading final-message token attribution by no longer writing run totals into the assistant message's `token_count`.
+- Fixed `/context` fallback usage estimation so `estimated_tokens` remains `null` unless authoritative persisted usage exists.
+- Fixed MLflow configuration ownership by removing Cognition startup experiment creation and placing endpoint/experiment routing in the Collector.
+- Fixed release image packaging so the documented `cognition db upgrade`, `cognition db current`, and related Alembic migration commands are installed in the container alongside the required migration dependencies.
+- Fixed SQLite Alembic migration URLs to use SQLAlchemy's async SQLite driver so documented migration commands can run against disposable and development SQLite databases.
+
+### Security
+
+- Hardened multi-tenant runtime storage boundaries with fail-closed exact-scope checks for every persisted runtime resource touched by v0.13 work.
+- Restricted model-directed execution so production deployments do not silently fall back to host-local paths when sandbox execution is unavailable.
+- Prevented builder-controlled callback URLs from being used unless their HTTPS origin is operator-approved.
+- Kept trace redaction, trace retention, trace access control, MLflow experiment ownership, credentials, tenant authorization, and billing policy outside Cognition and under builder/operator control.
+
+### Validation
+
+- Added regression coverage for same-name Agent isolation, storage-level scope failures, runtime manifest pinning, graph-cache invalidation, strict execution rejection, callback origin denial, bounded OTLP batching, provider usage aggregation, auto-instrumented GenAI metrics, and curated trace shape.
+- Validated the branch with full unit tests, Ruff, strict mypy, strict MkDocs, Collector configuration validation, local Compose observability smoke testing, and `git diff --check`.
+
+## [0.12.0] — 2026-07-22
+
+### Highlights
+
+- Replaced Cognition's preview A2A adapter with an A2A 1.0 JSON-RPC runtime backed by the same durable, scope-aware execution lifecycle as the native API.
+- Added bidirectional `text`, `data`, `raw`, and `url` Part handling, durable coalesced artifact streaming, reconnect-safe replay, and bounded resource consumption for production A2A integrations.
+- Expanded Agent Card configuration so builders can publish human-readable names, externally routed interface URLs, authentication discovery metadata, skills, and supported MIME modes without exposing private runtime identifiers.
+
+### Breaking Changes
+
+- Removed the preview A2A v0.3 translation layer. A2A clients must use the A2A 1.0 JSON-RPC methods, wire representations, and streaming envelopes.
+- Replaced process-local A2A task state with durable runtime tasks. Task state created by older preview releases is not migrated into the v0.12.0 lifecycle.
+- Consolidated A2A agent configuration under the typed `a2a` object. The pre-release flat `a2a_exposed` and `a2a_public_interface_url` fields are no longer supported.
+
+### Added
+
+- Added durable `RuntimeTask` persistence for memory, SQLite, and PostgreSQL backends, including A2A send, streaming send, get, list, cancel, and subscribe operations.
+- Added message-id idempotency with request-fingerprint conflict detection, interrupted-task continuation, cancellation-race handling, and deterministic terminal task projection.
+- Added durable, coalesced artifact-update events with ordered replay, multiple-subscriber isolation, slow-consumer protection, and terminal-state recovery after reconnects or restarts.
+- Added configurable inbound and generated-output limits, terminal-task retention cleanup, A2A Prometheus metrics, OpenTelemetry spans, and structured correlation fields.
+- Added ordered inbound normalization for A2A 1.0 `text`, `data`, `raw`, and `url` Parts. Inline content and URL references are persisted as inert, task-linked artifacts under the exact effective scope; Cognition does not fetch URL Parts implicitly.
+- Added builder-configurable Agent Card display names, public interface URLs, authentication schemes and requirements, public skills, and default or per-skill MIME modes.
+- Added official A2A 1.0 JSON-RPC TCK coverage to CI and the pre-release image validation workflow.
+
+### Fixed
+
+- Preserved every DataPart JSON value and all inbound Part and Message context through task persistence, model rendering, and durable artifact replay.
+- Enforced exact effective-scope isolation for public A2A route resolution and persisted task, message, event, and artifact access.
+- Enforced each agent's configured execution timeout across native and A2A streaming, producing a durable `EXECUTION_TIMEOUT` failure when a provider stalls.
+- Ensured replayed subscriptions terminate with the persisted terminal task state after all artifact updates have been delivered.
+- Removed the A2A-specific `response_format` projection so generic A2A response typing is not coupled to a deployed Pydantic model.
+
+### Security
+
+- Added fail-closed scope checks, bounded Part and output sizes, and non-fetching URL Part semantics to prevent cross-scope fallback and unbounded or implicit external input processing.
+
+### Changed
+
+- Native REST/SSE and A2A execution now share `AgentTaskRuntime`, persistence, timeout, and observability primitives instead of maintaining separate task truth.
+- Synthesized Agent Card skills use a public `primary` identifier and display metadata rather than Cognition's private runtime lookup name.
+
+## [0.12.0-rc.7] — 2026-07-22
+
+### Fixed
+
+- Removed the A2A-specific `response_format` projection: a deployed Pydantic model no longer determines whether a generic A2A response becomes a DataPart.
+- Preserved every A2A DataPart JSON value and all inbound Part and Message context through canonical task persistence, model rendering, and durable artifact replay.
+
+## [0.12.0-rc.6] — 2026-07-21
+
+### Added
+
+- Added durable, coalesced A2A artifact streaming with replay-safe subscriptions, request fingerprint conflict detection, inbound and generated-output limits, scope-aware terminal-task retention cleanup, and A2A runtime telemetry.
+
+### Fixed
+
+- Projected validated Deep Agents `structured_response` state as an outbound A2A data artifact and added bidirectional wire coverage for text, data, raw, and URL Parts.
+- Enforced `agent.config.timeout_seconds` as a shared execution deadline. Stalled provider streams are aborted and native or A2A callers now receive a terminal `EXECUTION_TIMEOUT` failure instead of an indefinitely open response.
+- Ensured replayed A2A task subscriptions end with the durable terminal task state after artifact-update events.
+
+## [0.12.0-rc.5] — 2026-07-19
+
+### Added
+
+- Added ordered inbound A2A 1.0 `text`, `data`, `raw`, and `url` Part normalization. Inline bytes and URL references become inert, task-linked artifacts under the request's exact scope; URL Parts are never fetched implicitly.
+- Added `COGNITION_A2A_MAX_RAW_PART_BYTES` to reject oversized inline inputs before model execution, and advertised generic `application/json` input support in generated Agent Cards.
+- Added builder-configurable public A2A skills and default/per-skill MIME modes for Agent Card discovery.
+
+### Changed
+
+- Consolidated all A2A-only agent configuration under the typed `a2a` object: `exposed`, `public_interface_url`, `default_input_modes`, `default_output_modes`, and `skills`. The pre-release flat `a2a_exposed` and `a2a_public_interface_url` fields are replaced by this nested contract.
+
+## [0.12.0-rc.4] — 2026-07-18
+
+### Added
+
+- Added deployment-level `COGNITION_A2A_SECURITY_SCHEMES` and `COGNITION_A2A_SECURITY_REQUIREMENTS` configuration for canonical A2A authentication discovery metadata.
+
+### Fixed
+
+- Generated Agent Cards now publish validated security schemes and requirements for gateway-protected A2A endpoints, fail startup on invalid metadata or undeclared scheme references, and retain unauthenticated defaults when the settings are omitted.
+- Updated the reported Cognition version to `0.12.0-rc.4` for the new release candidate.
+
+## [0.12.0-rc.3] — 2026-07-18
+
+### Added
+
+- Added optional `display_name` agent configuration for human-readable A2A Agent Card and synthesized skill presentation without changing the stable runtime lookup name.
+- Added optional `a2a_public_interface_url` agent configuration for builder-routed public A2A endpoints.
+
+### Fixed
+
+- Agent Cards now advertise the configured public A2A interface URL exactly when supplied, while preserving the request-derived `/a2a/{agent_name}` fallback for existing definitions.
+- Updated the reported Cognition version to `0.12.0-rc.3` so card and health metadata match the published release candidate.
+
+## [0.12.0-rc.1] — 2026-07-15
+
+### Highlights
+
+- Replaced Cognition's preview A2A adapter internals with a strict A2A 1.0 JSON-RPC server backed by the same durable execution lifecycle used by native APIs.
+- Added a protocol-neutral `RuntimeTask` aggregate so task identity and state remain durable while each `SessionRun` represents one execution attempt.
+- Preserved exact builder-authorized `effective_scope` isolation across A2A agents, tasks, contexts, messages, events, artifacts, cancellation, and subscription.
+
+### Breaking Changes
+
+- Removed the previous A2A v0.3 compatibility translation and the internal `server.app.protocols.a2a.wire` module. A2A clients must use the A2A 1.0 JSON-RPC contract, version negotiation, ProtoJSON field representations, and stream envelopes.
+- Replaced the process-local A2A task store and `taskId`-to-`run_id` mapping with durable runtime tasks. Preview task state created by older processes is not carried into the new task model.
+- Terminal A2A tasks now reject continuation and subscription according to the strict lifecycle contract instead of accepting ambiguous follow-up work.
+
+### Added
+
+- Durable runtime-task storage for memory, SQLite, and PostgreSQL backends, with Alembic migration `004_add_runtime_tasks`.
+- Strict A2A operations for send, streaming send, get, list, cancel, and subscribe, including cursor pagination and structured protocol errors.
+- Message-id idempotency, interrupted-task continuation, cancellation-race handling, durable artifact projection, and reconnect-safe task subscription.
+- A2A 1.0 Agent Cards and response version headers for every explicitly exposed agent.
+- A TCK system-under-test harness and CI coverage for the strict JSON-RPC surface.
+
+### Changed
+
+- Native REST/SSE and A2A execution now share `AgentTaskRuntime` lifecycle and persistence primitives instead of maintaining independent task truth.
+- Added direct SQLAlchemy and Alembic runtime dependencies required by Cognition's existing schema and migration surfaces.
+- Generated MkDocs output under `site/` is ignored so local documentation builds do not dirty release worktrees.
+
+---
+
 ## [0.11.0] — 2026-07-10
 
 ### Highlights

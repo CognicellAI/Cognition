@@ -11,10 +11,9 @@ class TestAgentSwitching:
 
     async def test_switch_agent_in_session(self, api_client):
         """Test that updating session agent_name changes the active agent."""
-        # Use built-in agents: "default" and "readonly"
-        # Both should be available in the server's registry
+        # Use fixture-provisioned builder Agents: "default" and "readonly".
 
-        # 1. Create session (defaults to "default")
+        # 1. Create session with the fixture default Agent.
         response = await api_client.post("/sessions", json={"title": "Switch Test"})
         if response.status_code == 403:
             pytest.skip("Server requires scoping headers - skipping test")

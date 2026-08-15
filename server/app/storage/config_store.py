@@ -1,8 +1,8 @@
 """ConfigStore: unified configuration interface for Cognition.
 
 ConfigStore is the single persistence-facing interface for all hot-reloadable
-agent configuration. It combines CRUD persistence with built-in, file-backed,
-and DB-backed agent definition resolution.
+agent configuration. It combines CRUD persistence with file-backed and
+DB-backed agent definition resolution.
 
 Layer: 2 (Persistence)
 
@@ -10,7 +10,7 @@ Design:
 - ``ConfigStore`` Protocol defines the unified async interface.
 - ``DefaultConfigStore`` implements it by delegating to a ``ConfigRegistry``
   for DB CRUD and maintaining its own in-memory agent definition cache for
-  built-in + file + DB agent definitions.
+  file + DB agent definitions.
 - Route handlers and services receive ConfigStore via FastAPI Depends().
 
 The old direct registry globals are replaced by this single
@@ -25,35 +25,25 @@ from pathlib import Path
 from typing import Any, Protocol, cast, runtime_checkable
 
 from server.app.agent.definition import (
-    AgentConfig,
     AgentDefinition,
-    HumanInTheLoopConfig,
     load_agent_definition,
     load_agent_definition_from_markdown,
 )
-from server.app.agent.prompts import SYSTEM_PROMPT
 from server.app.storage.config_models import (
+    AgentConfigRecord,
     ConfigChange,
     ConfigChangeEvent,
     EntityType,
     GlobalAgentDefaults,
     GlobalProviderDefaults,
-    McpServerRegistration,
     ProviderConfig,
     SandboxProfile,
-    SkillDefinition,
     ToolRegistration,
 )
 
 logger = logging.getLogger(__name__)
 
 _default_store: DefaultConfigStore | None = None
-
-
-def _full_hitl_config() -> HumanInTheLoopConfig:
-    return HumanInTheLoopConfig(
-        allowed_decisions=["approve", "edit", "reject", "respond"]
-    )
 
 
 def set_default_config_store(store: DefaultConfigStore) -> None:
@@ -113,22 +103,6 @@ class ConfigStore(Protocol):
     async def delete_tool(self, name: str, scope: dict[str, str] | None = None) -> bool: ...
 
     # ------------------------------------------------------------------
-    # Skill CRUD
-    # ------------------------------------------------------------------
-
-    async def get_skill(
-        self, name: str, scope: dict[str, str] | None = None
-    ) -> SkillDefinition | None: ...
-
-    async def list_skills(self, scope: dict[str, str] | None = None) -> list[SkillDefinition]: ...
-
-    async def upsert_skill(self, skill: SkillDefinition) -> None: ...
-
-    async def upsert_skill_from_dict(self, data: dict[str, Any]) -> None: ...
-
-    async def delete_skill(self, name: str, scope: dict[str, str] | None = None) -> bool: ...
-
-    # ------------------------------------------------------------------
     # Agent CRUD
     # ------------------------------------------------------------------
 
@@ -138,7 +112,13 @@ class ConfigStore(Protocol):
         scope: dict[str, str],
         definition: dict[str, Any],
         source: str = "api",
-    ) -> None: ...
+        expected_revision: int | None = None,
+        create_only: bool = False,
+    ) -> AgentConfigRecord: ...
+
+    async def get_agent_record(
+        self, name: str, scope: dict[str, str] | None = None
+    ) -> AgentConfigRecord | None: ...
 
     async def get_agent_raw(
         self, name: str, scope: dict[str, str] | None = None
@@ -148,39 +128,36 @@ class ConfigStore(Protocol):
         self, name: str, scope: dict[str, str] | None = None
     ) -> tuple[dict[str, Any], dict[str, str]] | None: ...
 
-    async def delete_agent(self, name: str, scope: dict[str, str] | None = None) -> bool: ...
+    async def delete_agent(
+        self,
+        name: str,
+        scope: dict[str, str] | None = None,
+        expected_revision: int | None = None,
+    ) -> bool: ...
 
     async def get_agent_definition(
         self, name: str, scope: dict[str, str] | None = None
     ) -> AgentDefinition | None:
         """Resolve an agent definition by name.
 
-        Checks built-in/file agents first, then DB-seeded agents.
+        Resolves scoped registry Agents with file-defined Agents as fallback.
         Returns None if not found.
         """
         ...
 
     async def list_agent_definitions(
-        self, include_hidden: bool = False, scope: dict[str, str] | None = None
+        self,
+        include_hidden: bool = False,
+        scope: dict[str, str] | None = None,
+        limit: int | None = None,
+        offset: int = 0,
     ) -> list[AgentDefinition]:
-        """List all agent definitions (built-in + file + DB-seeded)."""
+        """List all registry and file-defined Agent definitions."""
         ...
 
     async def is_valid_primary(self, name: str, scope: dict[str, str] | None = None) -> bool:
         """Check if an agent name is a valid primary agent."""
         ...
-
-    # ------------------------------------------------------------------
-    # MCP server CRUD
-    # ------------------------------------------------------------------
-
-    async def list_mcp_servers(
-        self, scope: dict[str, str] | None = None
-    ) -> list[McpServerRegistration]: ...
-
-    async def upsert_mcp_server(self, server: McpServerRegistration) -> None: ...
-
-    async def delete_mcp_server(self, name: str, scope: dict[str, str] | None = None) -> bool: ...
 
     # ------------------------------------------------------------------
     # Sandbox profile CRUD
@@ -248,7 +225,7 @@ class DefaultConfigStore:
     """Default ConfigStore implementation.
 
     Delegates to a ConfigRegistry for DB CRUD and keeps an in-memory cache of
-    built-in, file-backed, and DB-backed agent definitions.
+    file-backed agent definitions.
     """
 
     def __init__(
@@ -260,90 +237,14 @@ class DefaultConfigStore:
         self._workspace_path = Path(workspace_path) if workspace_path else Path.cwd()
         self._agent_definitions: dict[str, AgentDefinition] = {}
         self._file_agent_names: set[str] = set()
-        self._init_builtin_agents()
         self.reload_file_agents()
 
     @property
     def config_registry(self) -> Any:
         return self._config_registry
 
-    def _init_builtin_agents(self) -> None:
-        default_agent = AgentDefinition(
-            name="default",
-            system_prompt=SYSTEM_PROMPT,
-            description="Full-access coding assistant. Can read, write, edit files and execute commands.",
-            mode="primary",
-            hidden=False,
-            native=True,
-            tools=[],
-            skills=[],
-            memory=["AGENTS.md"],
-            subagents=[],
-            interrupt_on={},
-            response_format=None,
-            middleware=[],
-            config=AgentConfig(),
-        )
-        self._agent_definitions["default"] = default_agent
-
-        readonly_agent = AgentDefinition(
-            name="readonly",
-            system_prompt=SYSTEM_PROMPT
-            + """
-
-RESTRICTION: You are in READ-ONLY mode. You cannot write files, edit files, or execute commands.
-You can only read files, search, and provide analysis.""",
-            description="Analysis-only agent. Can read files and search but cannot write or execute.",
-            mode="primary",
-            hidden=False,
-            native=True,
-            tools=[],
-            skills=[],
-            memory=["AGENTS.md"],
-            subagents=[],
-            interrupt_on={
-                "write_file": _full_hitl_config(),
-                "edit_file": _full_hitl_config(),
-                "execute": _full_hitl_config(),
-            },
-            response_format=None,
-            middleware=[],
-            config=AgentConfig(),
-        )
-        self._agent_definitions["readonly"] = readonly_agent
-
-        hitl_test_agent = AgentDefinition(
-            name="hitl_test",
-            system_prompt=SYSTEM_PROMPT
-            + """
-
-HITL TESTING MODE: You should actively use tools when a task requires changing files or executing commands.
-If the user asks you to create, edit, or execute something, do not refuse or describe the steps first.
-Attempt the exact protected tool call immediately so that human-in-the-loop approval can be exercised.
-""",
-            description="Manual HITL verification agent. Attempts protected tool calls immediately so interrupt_on can be tested.",
-            mode="primary",
-            hidden=False,
-            native=True,
-            tools=[],
-            skills=[],
-            memory=["AGENTS.md"],
-            subagents=[],
-            interrupt_on={
-                "write_file": _full_hitl_config(),
-                "edit_file": _full_hitl_config(),
-                "execute": _full_hitl_config(),
-            },
-            response_format=None,
-            middleware=[],
-            config=AgentConfig(),
-        )
-        self._agent_definitions["hitl_test"] = hitl_test_agent
-
     def reload_file_agents(self) -> None:
-        self._agent_definitions = {
-            name: agent for name, agent in self._agent_definitions.items() if agent.native
-        }
+        self._agent_definitions.clear()
         self._file_agent_names.clear()
         agents_dir = self._workspace_path / ".cognition" / "agents"
         if not agents_dir.exists():
@@ -389,12 +290,12 @@ Attempt the exact protected tool call immediately so that human-in-the-loop appr
             return
         if event.operation == "delete":
             existing = self._agent_definitions.get(event.name)
-            if existing and not existing.native and event.name not in self._file_agent_names:
+            if existing and event.name not in self._file_agent_names:
                 del self._agent_definitions[event.name]
             return
 
         existing = self._agent_definitions.get(event.name)
-        if existing and not existing.native and event.name not in self._file_agent_names:
+        if existing and event.name not in self._file_agent_names:
             del self._agent_definitions[event.name]
 
     # ------------------------------------------------------------------
@@ -409,7 +310,8 @@ Attempt the exact protected tool call immediately so that human-in-the-loop appr
         )
 
     async def list_providers(self, scope: dict[str, str] | None = None) -> list[ProviderConfig]:
-        return cast(list[ProviderConfig], await self._config_registry.list_providers(scope))
+        providers = cast(list[ProviderConfig], await self._config_registry.list_providers(scope))
+        return sorted(providers, key=lambda provider: (provider.priority, provider.id))
 
     async def upsert_provider(self, config: ProviderConfig) -> None:
         await self._config_registry.upsert_provider(config)
@@ -444,28 +346,6 @@ Attempt the exact protected tool call immediately so that human-in-the-loop appr
         return bool(await self._config_registry.delete_tool(name, scope))
 
     # ------------------------------------------------------------------
-    # Skill CRUD
-    # ------------------------------------------------------------------
-
-    async def get_skill(
-        self, name: str, scope: dict[str, str] | None = None
-    ) -> SkillDefinition | None:
-        return cast(SkillDefinition | None, await self._config_registry.get_skill(name, scope))
-
-    async def list_skills(self, scope: dict[str, str] | None = None) -> list[SkillDefinition]:
-        return cast(list[SkillDefinition], await self._config_registry.list_skills(scope))
-
-    async def upsert_skill(self, skill: SkillDefinition) -> None:
-        await self._config_registry.upsert_skill(skill)
-
-    async def upsert_skill_from_dict(self, data: dict[str, Any]) -> None:
-        skill = SkillDefinition.model_validate(data)
-        await self._config_registry.upsert_skill(skill)
-
-    async def delete_skill(self, name: str, scope: dict[str, str] | None = None) -> bool:
-        return bool(await self._config_registry.delete_skill(name, scope))
-
-    # ------------------------------------------------------------------
     # Agent CRUD (raw dict for DB)
     # ------------------------------------------------------------------
 
@@ -475,14 +355,27 @@ Attempt the exact protected tool call immediately so that human-in-the-loop appr
         scope: dict[str, str],
         definition: dict[str, Any],
         source: str = "api",
-    ) -> None:
+        expected_revision: int | None = None,
+        create_only: bool = False,
+    ) -> AgentConfigRecord:
         AgentDefinition.model_validate(definition)
-        existing = self._agent_definitions.get(name)
-        if existing and existing.native:
-            return
-        await self._config_registry.upsert_agent(name, scope, definition, source)
+        record = await self._config_registry.upsert_agent(
+            name,
+            scope,
+            definition,
+            source,
+            expected_revision=expected_revision,
+            create_only=create_only,
+        )
         if name not in self._file_agent_names:
             self._agent_definitions.pop(name, None)
+        return cast(AgentConfigRecord, record)
+
+    async def get_agent_record(
+        self, name: str, scope: dict[str, str] | None = None
+    ) -> AgentConfigRecord | None:
+        record = await self._config_registry.get_agent_record(name, scope)
+        return cast(AgentConfigRecord | None, record)
 
     async def get_agent_raw(
         self, name: str, scope: dict[str, str] | None = None
@@ -498,11 +391,22 @@ Attempt the exact protected tool call immediately so that human-in-the-loop appr
         data, matched_scope = result
         return (dict(data), dict(matched_scope))
 
-    async def delete_agent(self, name: str, scope: dict[str, str] | None = None) -> bool:
-        result = bool(await self._config_registry.delete_agent(name, scope))
+    async def delete_agent(
+        self,
+        name: str,
+        scope: dict[str, str] | None = None,
+        expected_revision: int | None = None,
+    ) -> bool:
+        result = bool(
+            await self._config_registry.delete_agent(
+                name,
+                scope,
+                expected_revision=expected_revision,
+            )
+        )
         if result:
             existing = self._agent_definitions.get(name)
-            if existing and not existing.native and name not in self._file_agent_names:
+            if existing and name not in self._file_agent_names:
                 del self._agent_definitions[name]
         return result
 
@@ -513,57 +417,46 @@ Attempt the exact protected tool call immediately so that human-in-the-loop appr
     async def get_agent_definition(
         self, name: str, scope: dict[str, str] | None = None
     ) -> AgentDefinition | None:
-        existing = self._agent_definitions.get(name)
-        if existing and existing.native:
-            return existing
-
         raw = await self._config_registry.get_agent_raw(name, scope)
         if raw is not None:
             definition = AgentDefinition.model_validate(raw)
             definition.native = False
             return definition
 
-        return existing
+        return self._agent_definitions.get(name)
 
     async def list_agent_definitions(
-        self, include_hidden: bool = False, scope: dict[str, str] | None = None
+        self,
+        include_hidden: bool = False,
+        scope: dict[str, str] | None = None,
+        limit: int | None = None,
+        offset: int = 0,
     ) -> list[AgentDefinition]:
         agents_by_name = dict(self._agent_definitions)
-        for definition in await self._config_registry.list_agents(scope):
+        registry_limit = (
+            None
+            if limit is None
+            else limit + offset + len(self._agent_definitions)
+        )
+        for definition in await self._config_registry.list_agents(
+            scope,
+            limit=registry_limit,
+        ):
             if definition.name.startswith("__"):
-                continue
-            existing = agents_by_name.get(definition.name)
-            if existing and existing.native:
                 continue
             definition.native = False
             agents_by_name[definition.name] = definition
         agents = list(agents_by_name.values())
         if not include_hidden:
             agents = [agent for agent in agents if not agent.hidden]
-        return sorted(agents, key=lambda agent: agent.name)
+        ordered = sorted(agents, key=lambda agent: agent.name)
+        return ordered[offset:] if limit is None else ordered[offset : offset + limit]
 
     async def is_valid_primary(self, name: str, scope: dict[str, str] | None = None) -> bool:
         agent = await self.get_agent_definition(name, scope)
         if agent is None or agent.hidden:
             return False
         return agent.mode in ("primary", "all")
-
-    # ------------------------------------------------------------------
-    # MCP server CRUD
-    # ------------------------------------------------------------------
-
-    async def list_mcp_servers(
-        self, scope: dict[str, str] | None = None
-    ) -> list[McpServerRegistration]:
-        return cast(
-            list[McpServerRegistration], await self._config_registry.list_mcp_servers(scope)
-        )
-
-    async def upsert_mcp_server(self, server: McpServerRegistration) -> None:
-        await self._config_registry.upsert_mcp_server(server)
-
-    async def delete_mcp_server(self, name: str, scope: dict[str, str] | None = None) -> bool:
-        return bool(await self._config_registry.delete_mcp_server(name, scope))
 
     # ------------------------------------------------------------------
     # Sandbox profile CRUD

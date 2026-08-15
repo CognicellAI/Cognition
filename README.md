@@ -65,7 +65,7 @@ cognition-server
 - **Sandboxed Execution** — Pluggable backends: local subprocess or Docker container. No `shell=True`; commands parsed with `shlex` for safety.
 - **Durable Sessions** — StorageBackend protocol: SQLite (dev) or PostgreSQL (prod). Every agent step checkpointed; survives crashes and restarts.
 - **Full Observability** — OpenTelemetry traces, Prometheus metrics, MLflow experiments. Toggle independently; zero-config when disabled.
-- **Multi-Tenant Isolation** — Session scoping via `X-Cognition-Scope-*` headers. Rate limiting, CORS, and circuit breaker built in.
+- **Builder-Defined Scope Isolation** — Exact runtime isolation via trusted `X-Cognition-Scope-*` headers, suitable for embedding in multi-tenant applications without moving IAM into Cognition. Rate limiting, CORS, and circuit breaker built in.
 - **Multi-Agent Registry** — Built-in agents (`default`, `readonly`) plus user-defined agents in `.cognition/agents/`. Session-agent binding via `agent_name`.
 
 ## Model And Provider Configuration
@@ -132,7 +132,8 @@ graph TD
     Router --> Prom
 ```
 
-See [Architecture](./docs/concepts/architecture.md) for a full breakdown of each layer, dependency rules, and the startup sequence.
+See [Architecture](./docs/architecture/index.md) for the code-derived C4 model,
+runtime flows, deployment topology, decision records, and risk register.
 
 ## Extend Your Agent
 
@@ -141,7 +142,7 @@ Cognition uses a convention-over-configuration model. Most customizations requir
 | Level | Mechanism | Effort | Example |
 |---|---|---|---|
 | **Memory** | `AGENTS.md` | No Code | Project-specific rules & style |
-| **Skills** | `.cognition/skills/` | No Code | Reusable runbooks (e.g., "how to deploy") |
+| **Skills** | Agent-owned bundles | No Code | Reusable runbooks pinned with the Agent revision |
 | **Agents** | `.cognition/agents/` | Config | Delegated specialists (e.g., "security-expert") |
 | **Tools** | Python Functions | Code | Proprietary API integrations |
 | **Middleware** | Python Classes | Code | Approval gates, custom telemetry |
@@ -153,7 +154,7 @@ See [Extending Agents](./docs/guides/extending-agents.md) for code examples and 
 | Feature | Description |
 |---------|-------------|
 | **Message Persistence** | SQLite/PostgreSQL message storage with pagination |
-| **Session Scoping** | Multi-tenant isolation via HTTP headers |
+| **Session Scoping** | Exact builder-authorized runtime isolation via HTTP headers |
 | **Rate Limiting** | Token bucket with scope-aware keys |
 | **Abort** | Cancel streaming tasks gracefully |
 | **Observability** | Toggle OTel/MLflow independently |
@@ -182,7 +183,7 @@ The CLI is one example of what you can build on Cognition. See the [Blueprints](
 | [Documentation Index](./docs/README.md) | All concepts and guides |
 | [Getting Started](./docs/guides/getting-started.md) | Install, configure, and send your first message |
 | [Core vs App Layer](./docs/guides/core-vs-app-layer.md) | Builder boundaries: what Cognition owns versus what your app owns |
-| [Architecture](./docs/concepts/architecture.md) | 7-layer architecture and design principles |
+| [Architecture](./docs/architecture/index.md) | Code-derived C4 views, runtime flows, deployment topology, risks, and decisions |
 | [Extending Agents](./docs/guides/extending-agents.md) | Memory, skills, tools, subagents, middleware, and per-agent tool policy |
 | [Configuration Reference](./docs/guides/configuration.md) | All YAML keys and environment variables |
 | [Examples](./examples/README.md) | Exhaustive `.cognition` examples, `.env` examples, and API payload samples |

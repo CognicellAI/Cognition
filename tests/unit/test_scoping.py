@@ -94,7 +94,7 @@ class TestScopingIntegration:
         try:
             response = client.post(
                 "/sessions",
-                json={"title": "Scoped Session"},
+                json={"agent_name": "default", "title": "Scoped Session"},
                 headers={"X-Cognition-Scope-User": "alice"},
             )
 
@@ -112,7 +112,7 @@ class TestScopingIntegration:
         try:
             response = client.post(
                 "/sessions",
-                json={"title": "Scoped Session"},
+                json={"agent_name": "default", "title": "Scoped Session"},
             )
 
             assert response.status_code == 403
@@ -130,7 +130,7 @@ class TestScopingIntegration:
         try:
             response = client.post(
                 "/sessions",
-                json={"title": "Unscoped Session"},
+                json={"agent_name": "default", "title": "Unscoped Session"},
             )
 
             assert response.status_code == 201
@@ -147,7 +147,7 @@ class TestScopingIntegration:
         try:
             response = client.post(
                 "/sessions",
-                json={"title": "Multi-scoped Session"},
+                json={"agent_name": "default", "title": "Multi-scoped Session"},
                 headers={
                     "X-Cognition-Scope-User": "alice",
                     "X-Cognition-Scope-Project": "proj1",
@@ -168,7 +168,7 @@ class TestScopingIntegration:
         try:
             response = client.post(
                 "/sessions",
-                json={"title": "Partially Scoped Session"},
+                json={"agent_name": "default", "title": "Partially Scoped Session"},
                 headers={
                     "X-Cognition-Scope-User": "alice",
                 },

@@ -13,8 +13,12 @@ from fastapi.testclient import TestClient
 
 from server.app.api.dependencies import get_config_store, get_settings_dep, set_config_store
 from server.app.main import app
-from server.app.settings import Settings
+from server.app.settings import Settings, get_settings
 from server.app.storage.config_store import DefaultConfigStore
+from server.app.storage.mcp_readiness import (
+    McpReadinessObservation,
+    MemoryMcpReadinessRepository,
+)
 
 client = TestClient(app)
 
@@ -30,6 +34,31 @@ def setup_registry(tmp_path_factory):
         config_registry=config_registry,
         workspace_path=tmpdir,
     )
+    asyncio.run(
+        config_store.upsert_agent(
+            "fixture-agent",
+            {},
+            {
+                "name": "fixture-agent",
+                "system_prompt": "Explicitly provisioned fixture Agent.",
+                "mode": "primary",
+            },
+            "api",
+        )
+    )
+    asyncio.run(
+        config_store.upsert_agent(
+            "hidden-agent",
+            {},
+            {
+                "name": "hidden-agent",
+                "system_prompt": "Hidden fixture Agent.",
+                "mode": "primary",
+                "hidden": True,
+            },
+            "api",
+        )
+    )
     set_config_store(config_store)
     yield
 
@@ -41,7 +70,7 @@ class TestListAgents:
         data = response.json()
         assert "agents" in data
 
-    def test_list_includes_default_agent(self):
+    def test_list_includes_explicitly_provisioned_agent(self):
         response = client.get("/agents")
         agents = response.json()["agents"]
         names = [a["name"] for a in agents]
@@ -50,14 +79,13 @@ class TestListAgents:
     def test_list_excludes_hidden_agents(self):
         """Only agents that are not hidden appear in the listing.
 
-        Neither 'default' nor 'readonly' are hidden, so both appear.
+        The explicitly hidden fixture Agent must not appear.
         """
         response = client.get("/agents")
         agents = response.json()["agents"]
         names = [a["name"] for a in agents]
-        # Both built-ins are visible (hidden=False)
         assert "default" in names
-        assert "readonly" in names
+        assert "hidden-agent" not in names
 
 
 class TestGetAgent:
@@ -75,16 +103,184 @@ class TestGetAgent:
         assert response.status_code == 404
 
     def test_get_hidden_agent_returns_404(self):
-        """Hidden agents cannot be retrieved via GET /agents/{name}.
+        """Hidden Agents cannot be retrieved via GET /agents/{name}."""
+        response = client.get("/agents/hidden-agent")
+        assert response.status_code == 404
 
-        'readonly' is not hidden (hidden=False), so it returns 200.
-        """
-        response = client.get("/agents/readonly")
+    def test_mcp_readiness_is_scoped_and_freshness_qualified(self):
+        from datetime import UTC, datetime, timedelta
+
+        from server.app.api.dependencies import set_mcp_readiness_repository
+
+        store = get_config_store()
+        asyncio.run(
+            store.upsert_agent(
+                "readiness-agent",
+                {},
+                {
+                    "name": "readiness-agent",
+                    "system_prompt": "Use MCP.",
+                    "mcp": {
+                        "servers": {
+                            "github": {
+                                "url": "https://github.test/mcp",
+                                "required": True,
+                            },
+                            "docs": {
+                                "url": "https://docs.test/mcp",
+                                "required": False,
+                            },
+                        }
+                    },
+                },
+                "api",
+            )
+        )
+        record = asyncio.run(store.get_agent_record("readiness-agent", {}))
+        assert record is not None
+        now = datetime.now(UTC)
+        repository = MemoryMcpReadinessRepository()
+        asyncio.run(
+            repository.record(
+                McpReadinessObservation(
+                    agent_name="readiness-agent",
+                    agent_revision=record.revision,
+                    server_alias="github",
+                    required=True,
+                    status="ready",
+                    tool_count=2,
+                    schema_digest="a" * 64,
+                    observed_at=now - timedelta(minutes=10),
+                    fresh_until=now - timedelta(minutes=5),
+                ),
+                {},
+            )
+        )
+        set_mcp_readiness_repository(repository)
+
+        response = client.get("/agents/readiness-agent/mcp/readiness")
+
         assert response.status_code == 200
-        assert response.json()["name"] == "readonly"
+        servers = {item["server_alias"]: item for item in response.json()["servers"]}
+        assert servers["github"]["status"] == "unknown"
+        assert servers["github"]["failure_category"] == "observation_stale"
+        assert servers["github"]["authorization_truth"] is False
+        assert servers["docs"]["status"] == "unknown"
+        assert servers["docs"]["failure_category"] == "not_observed"
 
 
 class TestCreateAgent:
+    def test_create_agent_persists_public_a2a_interface_url(self):
+        public_url = "https://opaque.agents.example.com/a2a"
+        response = client.post(
+            "/agents",
+            json={
+                "name": "ka_create_public_a2a_url",
+                "system_prompt": "Help customers.",
+                "a2a": {"exposed": True, "public_interface_url": public_url},
+            },
+        )
+
+        assert response.status_code == 201
+        assert response.json()["a2a"]["public_interface_url"] == public_url
+
+        get_response = client.get("/agents/ka_create_public_a2a_url")
+        assert get_response.status_code == 200
+        assert get_response.json()["a2a"]["public_interface_url"] == public_url
+
+        raw = asyncio.run(get_config_store().get_agent_raw("ka_create_public_a2a_url"))
+        assert raw is not None
+        assert raw["a2a"]["public_interface_url"] == public_url
+
+    def test_create_agent_persists_public_a2a_modes_and_skills(self):
+        a2a = {
+            "exposed": True,
+            "public_interface_url": None,
+            "default_input_modes": ["text/plain", "application/pdf"],
+            "default_output_modes": ["application/json"],
+            "skills": [
+                {
+                    "id": "document-analysis",
+                    "name": "Document Analysis",
+                    "description": "Extracts and summarizes PDF documents.",
+                    "tags": ["documents", "pdf"],
+                    "examples": ["Summarize the attached contract."],
+                    "input_modes": ["application/pdf"],
+                    "output_modes": ["text/plain", "application/json"],
+                }
+            ],
+        }
+        response = client.post(
+            "/agents",
+            json={
+                "name": "document-agent",
+                "system_prompt": "Analyze documents.",
+                "a2a": a2a,
+            },
+        )
+
+        assert response.status_code == 201
+        assert response.json()["a2a"] == a2a
+
+        raw = asyncio.run(get_config_store().get_agent_raw("document-agent"))
+        assert raw is not None
+        assert raw["a2a"] == a2a
+
+    @pytest.mark.parametrize(
+        "public_url",
+        [
+            "opaque.agents.example.com/a2a",
+            "ftp://opaque.agents.example.com/a2a",
+            "https://user:secret@opaque.agents.example.com/a2a",
+            "https://opaque.agents.example.com/a2a#fragment",
+        ],
+    )
+    def test_create_agent_rejects_invalid_public_a2a_interface_url(self, public_url: str) -> None:
+        response = client.post(
+            "/agents",
+            json={
+                "name": "ka_invalid_public_a2a_url",
+                "system_prompt": "Help customers.",
+                "a2a": {"public_interface_url": public_url},
+            },
+        )
+
+        assert response.status_code == 422
+
+    def test_create_agent_rejects_removed_flat_a2a_fields(self) -> None:
+        response = client.post(
+            "/agents",
+            json={
+                "name": "legacy-a2a-agent",
+                "system_prompt": "Help customers.",
+                "a2a_exposed": True,
+            },
+        )
+
+        assert response.status_code == 422
+
+    def test_create_agent_persists_display_name(self):
+        response = client.post(
+            "/agents",
+            json={
+                "name": "ka_create_display_name",
+                "display_name": "Customer Support Concierge",
+                "system_prompt": "Help customers.",
+            },
+        )
+
+        assert response.status_code == 201
+        assert response.json()["name"] == "ka_create_display_name"
+        assert response.json()["display_name"] == "Customer Support Concierge"
+
+        get_response = client.get("/agents/ka_create_display_name")
+        assert get_response.status_code == 200
+        assert get_response.json()["display_name"] == "Customer Support Concierge"
+
+        raw = asyncio.run(get_config_store().get_agent_raw("ka_create_display_name"))
+        assert raw is not None
+        assert raw["display_name"] == "Customer Support Concierge"
+
     def test_create_new_agent(self):
         payload = {
             "name": "test-create-agent",
@@ -212,21 +408,228 @@ class TestCreateAgent:
         r2 = client.post("/agents", json=payload)
         assert r2.status_code == 201
 
-    def test_create_overwriting_native_agent_returns_409(self):
-        """Trying to overwrite a built-in agent should return 409."""
+    def test_former_default_name_is_builder_owned(self):
+        """Formerly reserved Agent names are ordinary builder-owned names."""
         payload = {
             "name": "default",
             "system_prompt": "override attempt",
         }
         response = client.post("/agents", json=payload)
-        assert response.status_code == 409
+        assert response.status_code == 201
+        assert response.json()["name"] == "default"
+        assert response.json()["native"] is False
 
     def test_create_agent_missing_name_returns_422(self):
         response = client.post("/agents", json={"system_prompt": "no name"})
         assert response.status_code == 422
 
 
+class TestExactScopeAndRevisions:
+    """v0.13 Agent identity is the name plus the complete trusted scope."""
+
+    @staticmethod
+    def _scope_headers(**scope: str) -> dict[str, str]:
+        return {
+            f"x-cognition-scope-{key.replace('_', '-')}": value
+            for key, value in scope.items()
+        }
+
+    @pytest.fixture(autouse=True)
+    def configure_two_dimensional_scope(self):
+        settings = get_settings()
+        previous = (list(settings.scope_keys), settings.scoping_enabled)
+        settings.scope_keys = ["tenant", "project"]
+        # Keep optional headers in these tests so empty and partial scopes can
+        # be exercised deliberately.
+        settings.scoping_enabled = False
+        yield
+        settings.scope_keys, settings.scoping_enabled = previous
+
+    def test_same_name_isolated_across_empty_partial_sibling_and_exact_scopes(self):
+        name = "scope-isolation-agent"
+        exact_red = self._scope_headers(tenant="acme", project="red")
+        exact_blue = self._scope_headers(tenant="acme", project="blue")
+        partial = self._scope_headers(tenant="acme")
+
+        for headers, prompt in (
+            ({}, "global"),
+            (partial, "partial"),
+            (exact_red, "red"),
+            (exact_blue, "blue"),
+        ):
+            response = client.post(
+                "/agents",
+                headers=headers,
+                json={"name": name, "system_prompt": prompt},
+            )
+            assert response.status_code == 201
+
+        assert client.get(f"/agents/{name}").json()["system_prompt"] == "global"
+        assert (
+            client.get(f"/agents/{name}", headers=partial).json()["system_prompt"]
+            == "partial"
+        )
+        assert (
+            client.get(f"/agents/{name}", headers=exact_red).json()["system_prompt"]
+            == "red"
+        )
+        assert (
+            client.get(f"/agents/{name}", headers=exact_blue).json()["system_prompt"]
+            == "blue"
+        )
+
+        # A broader API Agent is never inherited into a complete runtime scope.
+        partial_only = "partial-only-agent"
+        assert (
+            client.post(
+                "/agents",
+                headers=partial,
+                json={"name": partial_only, "system_prompt": "partial only"},
+            ).status_code
+            == 201
+        )
+        assert (
+            client.get(f"/agents/{partial_only}", headers=exact_red).status_code
+            == 404
+        )
+
+    def test_etag_guards_create_replace_patch_and_delete(self):
+        headers = self._scope_headers(tenant="etag-co", project="api")
+        payload = {"name": "etag-agent", "system_prompt": "revision one"}
+        created = client.post(
+            "/agents",
+            headers={**headers, "If-None-Match": "*"},
+            json=payload,
+        )
+        assert created.status_code == 201
+        assert created.json()["revision"] == 1
+        first_digest = created.json()["definition_digest"]
+        first_etag = created.headers["etag"]
+
+        duplicate = client.post(
+            "/agents",
+            headers={**headers, "If-None-Match": "*"},
+            json=payload,
+        )
+        assert duplicate.status_code == 412
+
+        patched = client.patch(
+            "/agents/etag-agent",
+            headers={**headers, "If-Match": first_etag},
+            json={"system_prompt": "revision two"},
+        )
+        assert patched.status_code == 200
+        assert patched.json()["revision"] == 2
+        assert patched.json()["definition_digest"] != first_digest
+        second_etag = patched.headers["etag"]
+
+        stale_patch = client.patch(
+            "/agents/etag-agent",
+            headers={**headers, "If-Match": first_etag},
+            json={"system_prompt": "must not win"},
+        )
+        assert stale_patch.status_code == 412
+        assert (
+            client.delete(
+                "/agents/etag-agent",
+                headers={**headers, "If-Match": first_etag},
+            ).status_code
+            == 412
+        )
+        assert (
+            client.delete(
+                "/agents/etag-agent",
+                headers={**headers, "If-Match": second_etag},
+            ).status_code
+            == 204
+        )
+        assert client.get("/agents/etag-agent", headers=headers).status_code == 404
+
+    def test_body_scope_must_match_authoritative_headers(self):
+        headers = self._scope_headers(tenant="scope-co", project="docs")
+        matching = client.post(
+            "/agents",
+            headers=headers,
+            json={
+                "name": "matching-body-scope",
+                "system_prompt": "valid",
+                "scope": {"tenant": "scope-co", "project": "docs"},
+            },
+        )
+        assert matching.status_code == 201
+        assert "deprecated" in matching.headers["warning"].lower()
+
+        conflicting = client.post(
+            "/agents",
+            headers=headers,
+            json={
+                "name": "conflicting-body-scope",
+                "system_prompt": "invalid",
+                "scope": {"tenant": "other", "project": "docs"},
+            },
+        )
+        assert conflicting.status_code == 400
+
+
 class TestUpdateAgent:
+    def test_patch_agent_updates_and_clears_public_a2a_interface_url(self):
+        original_url = "https://original.agents.example.com/a2a"
+        updated_url = "https://updated.agents.example.com/a2a"
+        client.post(
+            "/agents",
+            json={
+                "name": "ka_patch_public_a2a_url",
+                "system_prompt": "Help customers.",
+                "a2a": {"public_interface_url": original_url},
+            },
+        )
+
+        update_response = client.patch(
+            "/agents/ka_patch_public_a2a_url",
+            json={"a2a": {"public_interface_url": updated_url}},
+        )
+        assert update_response.status_code == 200
+        assert update_response.json()["a2a"]["public_interface_url"] == updated_url
+
+        clear_response = client.patch(
+            "/agents/ka_patch_public_a2a_url",
+            json={"a2a": None},
+        )
+        assert clear_response.status_code == 200
+        assert clear_response.json()["a2a"]["public_interface_url"] is None
+
+        raw = asyncio.run(get_config_store().get_agent_raw("ka_patch_public_a2a_url"))
+        assert raw is not None
+        assert raw["a2a"]["public_interface_url"] is None
+
+    def test_patch_agent_updates_and_clears_display_name(self):
+        client.post(
+            "/agents",
+            json={
+                "name": "ka_patch_display_name",
+                "display_name": "Original Name",
+                "system_prompt": "Help customers.",
+            },
+        )
+
+        update_response = client.patch(
+            "/agents/ka_patch_display_name",
+            json={"display_name": "Updated Name"},
+        )
+        assert update_response.status_code == 200
+        assert update_response.json()["display_name"] == "Updated Name"
+
+        clear_response = client.patch(
+            "/agents/ka_patch_display_name",
+            json={"display_name": None},
+        )
+        assert clear_response.status_code == 200
+        assert clear_response.json()["display_name"] is None
+
+        raw = asyncio.run(get_config_store().get_agent_raw("ka_patch_display_name"))
+        assert raw is not None
+        assert raw["display_name"] is None
+
     def test_put_agent_updates_definition(self):
         """PUT should fully replace the agent definition."""
         # Create
@@ -477,12 +880,8 @@ class TestUpdateAgent:
         )
         assert response.status_code == 404
 
-    def test_patch_agent_tools_with_simple_names(self):
-        """PATCH with simple tool names (no dots) should persist correctly.
-
-        Regression: validate_tools used to reject names without at least one
-        dot, causing silent data loss in the PATCH handler.
-        """
+    def test_patch_agent_tools_field_rejected(self):
+        """The removed Cognition tool attachment field is rejected."""
         client.post(
             "/agents",
             json={
@@ -494,32 +893,10 @@ class TestUpdateAgent:
             "/agents/test-patch-tools-agent",
             json={"tools": ["directorate_get_change_set_context", "my_custom_tool"]},
         )
-        assert response.status_code == 200
-        data = response.json()
-        assert data["tools"] == ["directorate_get_change_set_context", "my_custom_tool"]
+        assert response.status_code == 422
 
-        # Verify round-trip via GET
-        get_resp = client.get("/agents/test-patch-tools-agent")
-        assert get_resp.status_code == 200
-        assert get_resp.json()["tools"] == ["directorate_get_change_set_context", "my_custom_tool"]
-
-    def test_patch_agent_tools_with_module_paths_rejected(self):
-        """Agent tool attachments must be registry tool names, not module paths."""
-        client.post(
-            "/agents",
-            json={
-                "name": "test-patch-module-tools-agent",
-                "system_prompt": "module tools test",
-            },
-        )
-        response = client.patch(
-            "/agents/test-patch-module-tools-agent",
-            json={"tools": ["server.app.tools.file_tools"]},
-        )
-        assert response.status_code == 500
-
-    def test_patch_agent_skills(self):
-        """PATCH with attached skill names should persist correctly."""
+    def test_patch_agent_rejects_inline_skill_bundles(self):
+        """Runtime Skills are builder-mounted sandbox files, not API payloads."""
         client.post(
             "/agents",
             json={
@@ -530,15 +907,16 @@ class TestUpdateAgent:
         response = client.patch(
             "/agents/test-patch-skills-agent",
             json={
-                "skills": ["clean-code", "directorate-github-developer-workflow"],
+                "skills": [
+                    {"name": "clean-code", "content": "# Clean code"},
+                    {"name": "github-workflow", "content": "# GitHub workflow"},
+                ],
             },
         )
-        assert response.status_code == 200
-        data = response.json()
-        assert data["skills"] == ["clean-code", "directorate-github-developer-workflow"]
+        assert response.status_code == 422
 
     def test_patch_agent_empty_tool_name_rejected(self):
-        """Empty tool names should still be rejected by the validator."""
+        """Removed tools field is rejected before legacy value validation."""
         client.post(
             "/agents",
             json={
@@ -550,23 +928,20 @@ class TestUpdateAgent:
             "/agents/test-patch-empty-tool-agent",
             json={"tools": [""]},
         )
-        assert response.status_code == 500
+        assert response.status_code == 422
 
-    def test_create_agent_with_tools_and_skills(self):
-        """POST with tools and skills should persist and round-trip."""
+    def test_create_agent_with_removed_fields_rejected(self):
+        """POST cannot configure removed tool or inline Skill fields."""
         response = client.post(
             "/agents",
             json={
                 "name": "test-create-with-tools",
                 "system_prompt": "create with tools test",
                 "tools": ["my_tool"],
-                "skills": ["clean-code"],
+                "skills": [{"name": "clean-code", "content": "# Clean code"}],
             },
         )
-        assert response.status_code == 201
-        data = response.json()
-        assert data["tools"] == ["my_tool"]
-        assert data["skills"] == ["clean-code"]
+        assert response.status_code == 422
 
 
 class TestDeleteAgent:
@@ -578,10 +953,14 @@ class TestDeleteAgent:
         response = client.delete("/agents/test-delete-agent")
         assert response.status_code == 204
 
-    def test_delete_native_agent_returns_409(self):
-        """Built-in agents cannot be deleted."""
+    def test_delete_former_default_name(self):
+        """Formerly reserved names can be created and deleted normally."""
+        client.post(
+            "/agents",
+            json={"name": "default", "system_prompt": "Builder-owned Agent."},
+        )
         response = client.delete("/agents/default")
-        assert response.status_code == 409
+        assert response.status_code == 204
 
     def test_delete_missing_agent_returns_404(self):
         response = client.delete("/agents/no-such-agent-delete")

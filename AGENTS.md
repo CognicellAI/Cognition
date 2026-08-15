@@ -98,9 +98,11 @@ cognition/
 ### Extending Cognition
 Cognition is designed to be highly pluggable using native `deepagents` extension points. Deep Agents is the higher-level abstraction that Cognition is built on — it wraps LangGraph and provides its own primitives (tools, middleware, skills, subagents, memory, sandbox backends). We should prefer Deep Agents' API surface over reaching down to raw LangGraph.
 
-#### Custom Tools
-1. Define your tool as a plain Python callable or LangChain `BaseTool`.
-2. Register it in `.cognition/config.yaml` under `agent.tools` or pass it to `create_cognition_agent(tools=[...])`.
+#### Tool Capability
+1. Prefer Agent-owned MCP servers for builder-managed external tools.
+2. Use skills for reusable procedures and sandbox-backed scripts.
+3. Use middleware for runtime policy, telemetry, retries, approvals, and request shaping.
+4. Do not add a Cognition-managed Python tool registry surface; v0.14 removes `/tools`, `.cognition/tools`, and `AgentDefinition.tools`.
 
 #### Agent Middleware
 1. Implement `deepagents.middleware.AgentMiddleware` for lifecycle hooks (observability, status streaming, etc.).
@@ -139,22 +141,15 @@ Cognition is designed to be highly pluggable using native `deepagents` extension
 
 ### Tool Security Trust Model
 
-Cognition does **not** perform AST scanning or Python-level restrictions on tool source
-code. This is a deliberate design decision, not an oversight.
-
-**Why AST scanning was removed:**
-AST scanning is a blocklist approach that catches accidental mistakes but not intentional
-abuse — it is bypassable via reflection (`getattr(__builtins__, '__import__')('subprocess')`).
-It also creates an inconsistency: file-discovered tools were scanned, API-registered
-source-in-DB tools were not. The consistent model is: trust is established at the API
-authentication boundary.
+Cognition v0.14 does not expose a Cognition-managed Python tool registry, file-discovered tool loading, or `/tools` API. Tool capability comes from Deep Agents-native runtime behavior, Agent-owned MCP servers, skills, middleware, and sandbox backends.
 
 **The real security boundaries are:**
 
 | Boundary | Mechanism |
 |----------|-----------|
 | API authentication | Gateway/proxy (OAuth, API keys, mTLS) — Cognition assumes authenticated callers |
-| Multi-tenant tool isolation | `ToolSecurityMiddleware` — `COGNITION_BLOCKED_TOOLS` blocklists specific tool names per deployment |
+| MCP transport admission | `COGNITION_MCP_OUTBOUND_TRANSPORT_ENABLED` plus exact `COGNITION_MCP_ALLOWED_ORIGINS` |
+| Tool-call deny-list | `ToolSecurityMiddleware` — `COGNITION_BLOCKED_TOOLS` blocklists specific tool names per deployment |
 | Process isolation | Docker sandbox backend — container per session, separate network namespace |
 | Network isolation | `network_mode="none"` on Docker sandbox backend |
 | Filesystem isolation | `CognitionLocalSandboxBackend` protected paths; `virtual_mode=True` |
@@ -162,16 +157,12 @@ authentication boundary.
 | Memory isolation | LangGraph Store namespaces derived from `effective_scope` via `CognitionContext` |
 
 **What this means for builders:**
-- `POST /tools` executes arbitrary Python with full privileges inside the sandbox.
-  Restrict this endpoint to authorized administrators at the Gateway layer.
-- Tools registered via the API are equivalent in trust to tools placed in `.cognition/tools/`.
-- If you need strict tool sandboxing (e.g., multi-tenant SaaS where untrusted users can
-  register tools), use the Docker sandbox backend with `network_mode="none"` and resource
-  limits. Do not rely on Python-level restrictions.
+- Put external tool capability behind MCP servers, not Cognition-managed Python tool loading.
+- Admit only deployment-approved MCP origins. Origin matching is scheme + host + optional port.
+- If you need strict execution isolation, use the Docker/Kubernetes sandbox backend with network and resource limits.
+- Builder authorization remains outside Cognition; Cognition carries trusted `effective_scope` and enforces configured runtime policy.
 
-**`COGNITION_BLOCKED_TOOLS` (per-name blocklist) is still supported** — this is real
-multi-tenant security enforced by `ToolSecurityMiddleware` at the middleware layer.
-It prevents specific tool names from being called regardless of who registered them.
+**`COGNITION_BLOCKED_TOOLS` (per-name blocklist) is still supported** — this is a generic deny-list enforced by `ToolSecurityMiddleware` at the middleware layer. It prevents specific tool names from being called across Deep Agents/MCP tools, but it is not the primary multi-tenant authorization boundary.
 
 ### Canonical Scope Propagation
 

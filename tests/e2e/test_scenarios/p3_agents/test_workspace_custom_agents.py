@@ -15,6 +15,21 @@ from __future__ import annotations
 import pytest
 
 
+@pytest.fixture(autouse=True)
+async def _ensure_researcher_agent(api_client) -> None:
+    """Provision the custom Agent explicitly for v0.13 builder-owned runtimes."""
+    response = await api_client.post(
+        "/agents",
+        json={
+            "name": "researcher",
+            "description": "Research specialist for workspace custom Agent scenarios.",
+            "system_prompt": "You are a careful research subagent.",
+            "mode": "subagent",
+        },
+    )
+    assert response.status_code in {200, 201, 409}, response.text
+
+
 @pytest.mark.asyncio
 class TestWorkspaceCustomAgents:
     """Test workspace author experience with custom agents."""
@@ -83,22 +98,22 @@ class TestWorkspaceCustomAgents:
         assert data["hidden"] is False
         assert data["native"] is False
 
-    async def test_builtin_agents_still_present(self, api_client) -> None:
-        """Built-in agents remain available alongside custom agents."""
+    async def test_fixture_agents_still_present(self, api_client) -> None:
+        """Fixture-provisioned agents remain available alongside custom agents."""
         response = await api_client.get("/agents")
 
         assert response.status_code == 200
         data = response.json()
         agent_names = [a["name"] for a in data["agents"]]
 
-        # Built-ins should still be there
+        # Shared fixture Agents should still be there
         assert "default" in agent_names
         assert "readonly" in agent_names
         # Plus our custom agent
         assert "researcher" in agent_names
 
     async def test_agent_count_increased(self, api_client) -> None:
-        """Total agent count is 2 built-ins + 1 custom = 3."""
+        """Total agent count includes fixture Agents and custom Agents."""
         response = await api_client.get("/agents")
 
         assert response.status_code == 200

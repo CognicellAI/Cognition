@@ -12,9 +12,9 @@ from server.app.observability import (
     LLM_CALL_DURATION,
     TOOL_CALL_COUNT,
     TOOL_SAFETY_EVENT_COUNT,
+    add_span_event,
     get_logger,
 )
-from server.app.observability import span as trace_span
 
 logger = get_logger(__name__)
 
@@ -116,9 +116,9 @@ def _tool_safety_attributes(
         "cognition.tool_safety.action": action,
         "tool.name": tool_name,
         "tool.call_id": tool_call_id or "",
-        "cognition.session_id": str(safe_context.get("session_id") or ""),
-        "cognition.run_id": str(safe_context.get("run_id") or ""),
-        "cognition.scope_keys": ",".join(scope_keys) if isinstance(scope_keys, list) else "",
+        "session.id": str(safe_context.get("session_id") or ""),
+        "cognition.run.id": str(safe_context.get("run_id") or ""),
+        "cognition.scope.keys": ",".join(scope_keys) if isinstance(scope_keys, list) else "",
         "cognition.tool_safety.fields": ",".join(fields or []),
         "cognition.tool_safety.overwritten_fields": ",".join(overwritten_fields or []),
         "cognition.tool_safety.error_count": len(errors or []),
@@ -151,9 +151,9 @@ def _audit_tool_safety(
     else:
         logger.info("tool_safety", **log_payload)
 
-    TOOL_SAFETY_EVENT_COUNT.labels(action=action, tool_name=tool_name).inc()
+    TOOL_SAFETY_EVENT_COUNT.labels(action=action).inc()
 
-    with trace_span(
+    add_span_event(
         "cognition.tool_safety",
         _tool_safety_attributes(
             action=action,
@@ -164,8 +164,7 @@ def _audit_tool_safety(
             overwritten_fields=overwritten_fields,
             errors=errors,
         ),
-    ):
-        pass
+    )
 
 
 def _tool_schema_field_names(tool: Any) -> set[str]:
@@ -206,10 +205,9 @@ class TrustedRuntimeContextMiddleware(AgentMiddleware):
 
         trusted_values = _trusted_context_values(getattr(request, "runtime", None))
         schema_fields = _tool_schema_field_names(getattr(request, "tool", None))
-        target_fields = (
-            set(args).intersection(_TRUSTED_CONTEXT_ARG_NAMES)
-            | schema_fields.intersection(_TRUSTED_CONTEXT_ARG_NAMES)
-        )
+        target_fields = set(args).intersection(
+            _TRUSTED_CONTEXT_ARG_NAMES
+        ) | schema_fields.intersection(_TRUSTED_CONTEXT_ARG_NAMES)
         if not target_fields:
             return await handler(request)
 
@@ -493,36 +491,21 @@ class CognitionObservabilityMiddleware(AgentMiddleware):
     async def awrap_model_call(self, request: Any, handler: Any) -> Any:
         """Track LLM call duration and usage."""
         start = time.time()
-        # Handle different model types gracefully
-        provider = "unknown"
-        model_name = "unknown"
-
-        if hasattr(request.model, "provider"):
-            provider = request.model.provider
-        elif hasattr(request.model, "__class__"):
-            provider = request.model.__class__.__name__
-
-        if hasattr(request.model, "model_name"):
-            model_name = request.model.model_name
-        elif hasattr(request.model, "model"):
-            model_name = str(request.model.model)
-
         try:
             response = await handler(request)
             return response
         finally:
             duration = time.time() - start
-            LLM_CALL_DURATION.labels(provider=provider, model=model_name).observe(duration)
+            LLM_CALL_DURATION.observe(duration)
 
     async def awrap_tool_call(self, request: Any, handler: Any) -> Any:
         """Track tool call frequency and success rate."""
-        tool_name = request.tool_call.get("name", "unknown")
         try:
             result = await handler(request)
-            TOOL_CALL_COUNT.labels(tool_name=tool_name, status="success").inc()
+            TOOL_CALL_COUNT.labels(status="success").inc()
             return result
         except Exception:
-            TOOL_CALL_COUNT.labels(tool_name=tool_name, status="error").inc()
+            TOOL_CALL_COUNT.labels(status="error").inc()
             raise
 
 

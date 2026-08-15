@@ -2,7 +2,7 @@ name: CI/CD
 
 on:
   push:
-    branches: [main, pivot, "release/**"]
+    branches: [main, pivot]
   pull_request:
     branches: [main, pivot, "release/**"]
   release:
@@ -46,6 +46,35 @@ jobs:
       - name: Run linting
         run: uv run ruff check .
 
+  a2a-conformance:
+    uses: ./.github/workflows/a2a-conformance.yml
+    with:
+      suite: ${{ github.event_name == 'release' && 'full' || 'must' }}
+      artifact-name: a2a-v1-tck-${{ github.sha }}
+
+  publish-a2a-conformance-evidence:
+    needs: a2a-conformance
+    if: always() && github.event_name == 'release'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download conformance evidence
+        uses: actions/download-artifact@v4
+        with:
+          name: a2a-v1-tck-${{ github.sha }}
+          path: a2a-tck-evidence
+
+      - name: Attach evidence to GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release upload "${{ github.event.release.tag_name }}" \
+            a2a-tck-evidence/*.zip \
+            a2a-tck-evidence/*.sha256 \
+            --repo "${{ github.repository }}" \
+            --clobber
+
   # ─── Cache warm-up (every push to main) ───────────────────────────────────
   # Builds without pushing on every push to main so that layer caches are
   # warm when a release fires. Scoped per-image to avoid eviction conflicts.
@@ -77,7 +106,7 @@ jobs:
 
   # ─── Build amd64 app image (native x86 runner) ────────────────────────────
   build-amd64-app:
-    needs: test
+    needs: [test, a2a-conformance]
     if: github.event_name == 'release'
     runs-on: ubuntu-latest
     permissions:
@@ -114,7 +143,7 @@ jobs:
 
   # ─── Build amd64 sandbox image (native x86 runner) ────────────────────────
   build-amd64-sandbox:
-    needs: test
+    needs: [test, a2a-conformance]
     if: github.event_name == 'release'
     runs-on: ubuntu-latest
     permissions:
@@ -151,7 +180,7 @@ jobs:
 
   # ─── Build arm64 app image (native ARM runner — no QEMU) ──────────────────
   build-arm64-app:
-    needs: test
+    needs: [test, a2a-conformance]
     if: github.event_name == 'release'
     runs-on: ubuntu-24.04-arm  # Native ARM64 — eliminates QEMU emulation overhead
     permissions:
@@ -188,7 +217,7 @@ jobs:
 
   # ─── Build arm64 sandbox image (native ARM runner — no QEMU) ──────────────
   build-arm64-sandbox:
-    needs: test
+    needs: [test, a2a-conformance]
     if: github.event_name == 'release'
     runs-on: ubuntu-24.04-arm  # Native ARM64 — eliminates QEMU emulation overhead
     permissions:

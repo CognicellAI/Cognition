@@ -90,7 +90,7 @@ Each storage backend also exposes `get_store()`, which returns a LangGraph `Base
 | `SqliteStorageBackend` | `AsyncSqliteStore` (persisted to same database file as checkpointer) |
 | `PostgresStorageBackend` | `AsyncPostgresStore` (separate psycopg connection to same Postgres instance) |
 
-The Store is passed to `create_deep_agent()` and available inside agent nodes and middleware via `runtime.store`. Namespace scoping (via `CognitionContext.effective_scope`) ensures one tenant cannot read another's stored data. See [CognitionContext and Cross-Thread Memory](./agent-runtime.md#cognitioncontext-and-cross-thread-memory) for details.
+The Store is passed to `create_deep_agent()` and available inside agent nodes and middleware via `runtime.store`. Namespace scoping (via `CognitionContext.effective_scope`) ensures one authorized application scope cannot read another's stored data. See [CognitionContext and Cross-Thread Memory](./agent-runtime.md#cognitioncontext-and-cross-thread-memory) for details.
 
 ### Unified StorageBackend
 
@@ -235,7 +235,8 @@ File operations run directly on the host filesystem (for performance); command e
 - Requires Docker daemon and `cognition-sandbox:latest` image
 - `host_workspace` setting maps the workspace path into the container
 
-Best for: production, multi-tenant deployments, any untrusted code.
+Best for: production, runtimes embedded in multi-tenant host applications, and any
+untrusted code.
 
 ```env
 COGNITION_SANDBOX_BACKEND=docker
@@ -323,17 +324,9 @@ The storage and execution backends never call each other. Composition happens on
 
 ---
 
-## Built-in Tools
+## Tool Capability
 
-Beyond the sandbox backends, the agent has three built-in tools provided by `server/app/agent/tools.py`:
-
-| Tool | Class | Description |
-|---|---|---|
-| `browser` | `BrowserTool` | Fetch web pages as text, markdown, or HTML via `httpx` |
-| `search` | `SearchTool` | DuckDuckGo web search, returns titles, links, and snippets |
-| `inspect_package` | `InspectPackageTool` | Inspect Python packages: list submodules, classes, and functions |
-
-These run in the local process (not inside the Docker sandbox) and are always available regardless of `sandbox_backend` setting.
+Cognition v0.14 does not ship host-process Browser/Search/package-inspection tools and does not load Python tools from `.cognition/tools/` or `/tools`. Tool capability comes from Deep Agents-native runtime behavior, Agent-owned MCP servers, skills, middleware, and sandbox backends. Remote MCP transport must be explicitly enabled and constrained by deployment-approved origins.
 
 ---
 
