@@ -209,6 +209,13 @@ class DirectMessageEvent(AgentEvent):
 
 
 @dataclass
+class StructuredResponseEvent(AgentEvent):
+    """Typed final structured response produced by the agent runtime."""
+
+    value: Any
+
+
+@dataclass
 class ArtifactEvent(AgentEvent):
     """Protocol-neutral task artifact or artifact chunk."""
 
@@ -219,6 +226,7 @@ class ArtifactEvent(AgentEvent):
     media_type: str | None = None
     filename: str | None = None
     description: str | None = None
+    extensions: tuple[str, ...] = ()
     append: bool = False
     last_chunk: bool = True
 
@@ -393,6 +401,7 @@ StreamEvent = (
     | StatusEvent
     | DoneEvent
     | DirectMessageEvent
+    | StructuredResponseEvent
     | ArtifactEvent
     | ErrorEvent
     | RejectedEvent
@@ -451,6 +460,19 @@ def _extract_summarization_event_from_update(update: Any) -> Mapping[str, Any] |
         event = candidate.get("_summarization_event")
         if isinstance(event, Mapping):
             return event
+    return None
+
+
+def _extract_structured_response_from_update(update: Any) -> Any | None:
+    """Extract Deep Agents structured_response from an updates-mode chunk."""
+    if not isinstance(update, Mapping):
+        return None
+
+    candidates: list[Any] = [update]
+    candidates.extend(value for value in update.values() if isinstance(value, Mapping))
+    for candidate in candidates:
+        if isinstance(candidate, Mapping) and "structured_response" in candidate:
+            return candidate.get("structured_response")
     return None
 
 
@@ -1062,6 +1084,10 @@ class DeepAgentRuntime:
                         for step_event in _completed_step_events(previous_todos, todos):
                             yield step_event
                         previous_todos = todos
+
+                    structured_response = _extract_structured_response_from_update(data)
+                    if structured_response is not None:
+                        yield StructuredResponseEvent(value=structured_response)
 
                     summarization_event = _extract_summarization_event_from_update(data)
                     if summarization_event is not None:

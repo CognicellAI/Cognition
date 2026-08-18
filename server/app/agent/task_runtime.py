@@ -505,6 +505,7 @@ class AgentTaskRuntime:
         media_type: str | None = None,
         filename: str | None = None,
         description: str | None = None,
+        extensions: Sequence[str] = (),
         append: bool = False,
         last_chunk: bool = True,
     ) -> RuntimeTask:
@@ -537,6 +538,7 @@ class AgentTaskRuntime:
                 "artifact_id": artifact_id,
                 "name": name,
                 "description": description,
+                "extensions": [],
                 "parts": [],
                 "last_chunk": False,
             }
@@ -547,6 +549,7 @@ class AgentTaskRuntime:
             descriptor["parts"] = [part]
         descriptor["name"] = name
         descriptor["description"] = description
+        descriptor["extensions"] = [str(value) for value in extensions]
         descriptor["last_chunk"] = last_chunk
         metadata["artifacts"] = artifacts
         updated = await self._store.update_task(

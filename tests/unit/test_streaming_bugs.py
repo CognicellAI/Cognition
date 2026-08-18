@@ -33,10 +33,16 @@ from server.app.agent.runtime import (
     DoneEvent,
     ErrorEvent,
     ModelUsageEvent,
+    StructuredResponseEvent,
     TokenEvent,
     UsageEvent,
 )
-from server.app.models import Session, SessionConfig, SessionStatus
+from server.app.models import RunStatus, Session, SessionConfig, SessionRun, SessionStatus
+from server.app.protocols.a2a.a2ui import (
+    A2UI_EXTENSION_URI,
+    A2UI_MEDIA_TYPE,
+    BASIC_CATALOG_ID,
+)
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -81,6 +87,20 @@ def _make_session(
     )
 
 
+def _make_run(session: Session, metadata: dict[str, Any] | None = None) -> SessionRun:
+    return SessionRun(
+        id="run-stream-test",
+        session_id=session.id,
+        thread_id=session.thread_id,
+        status=RunStatus.ACTIVE,
+        effective_scope={},
+        attempt=1,
+        created_at="2026-01-01T00:00:00",
+        updated_at="2026-01-01T00:00:00",
+        metadata=metadata or {},
+    )
+
+
 async def _runtime_events(*events: Any) -> AsyncGenerator[Any, None]:
     """Async generator that yields the provided events, mimicking the runtime."""
     for event in events:
@@ -90,7 +110,9 @@ async def _runtime_events(*events: Any) -> AsyncGenerator[Any, None]:
 def _make_mock_runtime(*events: Any) -> MagicMock:
     """Build a MagicMock DeepAgentRuntime that streams the given events."""
     mock_runtime = MagicMock()
-    mock_runtime.astream_events = MagicMock(return_value=_runtime_events(*events))
+    mock_runtime.astream_events = MagicMock(
+        side_effect=lambda *_args, **_kwargs: _runtime_events(*events)
+    )
     return mock_runtime
 
 
@@ -150,6 +172,20 @@ async def _collect(service: Any, session: Session) -> list[Any]:
         thread_id=session.thread_id,
         project_path=session.workspace_path,
         content="hello",
+    ):
+        collected.append(event)
+    return collected
+
+
+async def _collect_with_run(service: Any, session: Session, run_id: str) -> list[Any]:
+    """Drive stream_response for a pinned run and return all events."""
+    collected: list[Any] = []
+    async for event in service.stream_response(
+        session_id=session.id,
+        thread_id=session.thread_id,
+        project_path=session.workspace_path,
+        content="hello",
+        run_id=run_id,
     ):
         collected.append(event)
     return collected
@@ -265,6 +301,183 @@ class TestExactlyOneDoneEvent:
             collected = await _collect(service, session)
 
         assert artifact in collected
+
+    @pytest.mark.asyncio
+    async def test_a2ui_structured_response_becomes_text_and_data_artifact(self):
+        """A2UI typed runtime output is projected as text plus an A2UI artifact."""
+        from server.app.llm.deep_agent_service import DeepAgentStreamingService
+
+        session = _make_session()
+        run = _make_run(
+            session,
+            metadata={
+                "a2ui": {
+                    "extension_uri": A2UI_EXTENSION_URI,
+                    "catalog_ids": [BASIC_CATALOG_ID],
+                    "catalog_digests": {BASIC_CATALOG_ID: "digest"},
+                }
+            },
+        )
+        mock_runtime = _make_mock_runtime(
+            TokenEvent(content='{"messages": "intermediate model text"}'),
+            StructuredResponseEvent(
+                value={
+                    "text": "Here is a surface.",
+                    "messages": [
+                        {
+                            "version": "v1.0",
+                            "createSurface": {
+                                "surfaceId": "main",
+                                "catalogId": BASIC_CATALOG_ID,
+                            },
+                        },
+                        {
+                            "version": "v1.0",
+                            "updateComponents": {
+                                "surfaceId": "main",
+                                "components": [
+                                    {
+                                        "id": "root",
+                                        "component": "Text",
+                                        "text": "Hello from A2UI",
+                                    }
+                                ],
+                            },
+                        },
+                    ],
+                }
+            ),
+            DoneEvent(),
+        )
+        service = DeepAgentStreamingService(_make_settings())
+        service.storage_backend = MagicMock()
+        service.storage_backend.get_session = AsyncMock(return_value=session)
+        service.storage_backend.get_run = AsyncMock(return_value=run)
+        service.storage_backend.get_checkpointer = AsyncMock(return_value=MagicMock())
+        service.storage_backend.get_store = AsyncMock(return_value=MagicMock())
+
+        p1, p2, p3, p4 = _stream_patches(mock_runtime, session)
+        with p1, p2, p3, p4:
+            collected = await _collect_with_run(service, session, run.id)
+
+        token_events = [event for event in collected if isinstance(event, TokenEvent)]
+        assert [event.content for event in token_events] == ["Here is a surface."]
+        artifacts = [event for event in collected if isinstance(event, ArtifactEvent)]
+        assert len(artifacts) == 1
+        artifact = artifacts[0]
+        assert artifact.kind == "data"
+        assert artifact.media_type == A2UI_MEDIA_TYPE
+        assert artifact.extensions == (A2UI_EXTENSION_URI,)
+        assert isinstance(artifact.value, list)
+        assert artifact.value[0]["version"] == "v1.0"
+
+    @pytest.mark.asyncio
+    async def test_a2ui_invalid_structured_response_is_rejected(self):
+        """Invalid A2UI structured output yields a bounded error event."""
+        from server.app.llm.deep_agent_service import DeepAgentStreamingService
+
+        session = _make_session()
+        run = _make_run(
+            session,
+            metadata={
+                "a2ui": {
+                    "extension_uri": A2UI_EXTENSION_URI,
+                    "catalog_ids": [BASIC_CATALOG_ID],
+                    "catalog_digests": {BASIC_CATALOG_ID: "digest"},
+                }
+            },
+        )
+        mock_runtime = _make_mock_runtime(
+            StructuredResponseEvent(
+                value={
+                    "text": "bad",
+                    "messages": [{"version": "v1.0", "kind": "legacy"}],
+                }
+            ),
+            DoneEvent(),
+        )
+        service = DeepAgentStreamingService(_make_settings())
+        service.storage_backend = MagicMock()
+        service.storage_backend.get_session = AsyncMock(return_value=session)
+        service.storage_backend.get_run = AsyncMock(return_value=run)
+        service.storage_backend.get_checkpointer = AsyncMock(return_value=MagicMock())
+        service.storage_backend.get_store = AsyncMock(return_value=MagicMock())
+
+        p1, p2, p3, p4 = _stream_patches(mock_runtime, session)
+        with p1, p2, p3, p4:
+            collected = await _collect_with_run(service, session, run.id)
+
+        errors = [event for event in collected if isinstance(event, ErrorEvent)]
+        assert len(errors) == 1
+        assert errors[0].code == "A2UI_OUTPUT_INVALID"
+        assert not any(isinstance(event, ArtifactEvent) for event in collected)
+        assert mock_runtime.astream_events.call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_a2ui_invalid_structured_response_gets_one_repair_attempt(self):
+        """A2UI structured output can be repaired once before it reaches the client."""
+        from server.app.llm.deep_agent_service import DeepAgentStreamingService
+
+        session = _make_session()
+        run = _make_run(
+            session,
+            metadata={
+                "a2ui": {
+                    "extension_uri": A2UI_EXTENSION_URI,
+                    "catalog_ids": [BASIC_CATALOG_ID],
+                    "catalog_digests": {BASIC_CATALOG_ID: "digest"},
+                }
+            },
+        )
+        mock_runtime = MagicMock()
+        mock_runtime.astream_events = MagicMock(
+            side_effect=[
+                _runtime_events(
+                    StructuredResponseEvent(
+                        value={
+                            "text": "bad",
+                            "messages": [{"version": "v1.0", "kind": "legacy"}],
+                        }
+                    ),
+                    DoneEvent(),
+                ),
+                _runtime_events(
+                    StructuredResponseEvent(
+                        value={
+                            "text": "Repaired surface.",
+                            "messages": [
+                                {
+                                    "version": "v1.0",
+                                    "createSurface": {
+                                        "surfaceId": "main",
+                                        "catalogId": BASIC_CATALOG_ID,
+                                    },
+                                }
+                            ],
+                        }
+                    ),
+                    DoneEvent(),
+                ),
+            ]
+        )
+        service = DeepAgentStreamingService(_make_settings())
+        service.storage_backend = MagicMock()
+        service.storage_backend.get_session = AsyncMock(return_value=session)
+        service.storage_backend.get_run = AsyncMock(return_value=run)
+        service.storage_backend.get_checkpointer = AsyncMock(return_value=MagicMock())
+        service.storage_backend.get_store = AsyncMock(return_value=MagicMock())
+
+        p1, p2, p3, p4 = _stream_patches(mock_runtime, session)
+        with p1, p2, p3, p4:
+            collected = await _collect_with_run(service, session, run.id)
+
+        assert mock_runtime.astream_events.call_count == 2
+        assert not any(isinstance(event, ErrorEvent) for event in collected)
+        token_events = [event for event in collected if isinstance(event, TokenEvent)]
+        assert [event.content for event in token_events] == ["Repaired surface."]
+        artifacts = [event for event in collected if isinstance(event, ArtifactEvent)]
+        assert len(artifacts) == 1
+        assert artifacts[0].media_type == A2UI_MEDIA_TYPE
 
 
 # ---------------------------------------------------------------------------

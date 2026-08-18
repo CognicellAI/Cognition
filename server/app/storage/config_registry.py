@@ -554,7 +554,7 @@ class SqliteConfigRegistry:
             "DELETE FROM config_entities WHERE entity_type=? AND name=? AND scope_key=?",
             (entity_type, name, scope_key),
         )
-        deleted = cursor.rowcount > 0
+        deleted = bool(cursor.rowcount > 0)
         if deleted:
             await self._record_change(conn, entity_type, name, exact_scope, "delete")
         await conn.commit()
@@ -1080,7 +1080,8 @@ class PostgresConfigRegistry:
         conn: psycopg.AsyncConnection[dict[str, Any]], query: str, params: tuple[Any, ...]
     ) -> dict[str, Any] | None:
         cursor = await conn.execute(query, params)
-        return await cursor.fetchone()
+        row = await cursor.fetchone()
+        return dict(row) if row is not None else None
 
     # ------------------------------------------------------------------
     # Internal helpers

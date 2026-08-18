@@ -9,6 +9,18 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.15.0] — 2026-08-17
+
+### Added
+
+- Added optional per-Agent A2UI v1.0 support for A2A v1 Agents, including
+  Agent Card extension discovery, request-scoped extension negotiation, typed
+  structured runtime output, canonical `application/a2ui+json` data Parts, and
+  renderer-to-Agent input validation.
+- Bundled and pinned the A2UI v1.0 Candidate schemas and Basic catalog for
+  offline validation without remote catalog fetching or the pre-A2A-v1
+  `a2ui-agent-sdk` dependency.
+
 ## [0.14.0] — 2026-08-14
 
 ### Changed

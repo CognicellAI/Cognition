@@ -89,6 +89,7 @@ See AGENTS.md for category definitions, DoD requirements, and precedence rules.
 
 | Date | Description | Layer | Migration Plan | Status |
 |------|-------------|-------|----------------|--------|
+| 2026-08-16 | **v0.15.0 optional A2UI v1.0 support for A2A Agents** — add per-Agent `a2a.a2ui` capability configuration, pinned A2UI v1.0 candidate schemas and Basic catalog, Agent Card extension advertisement, request-scoped A2UI negotiation, typed Deep Agents structured output conversion to A2A data Parts, renderer input validation, bounded telemetry, persistence, replay, and scope isolation. | 1/2/4/5/6/7 | Non-breaking opt-in. Existing Agents omit `a2a.a2ui` and keep their current Agent Cards and conversational runtime path. Builders that want A2UI add `a2a.a2ui.version: "1.0"` and `catalogs: ["basic"]`, update renderers to send A2A v1 `A2A-Extensions` or `message.metadata.a2uiRendererCapabilities`, and validate against the pinned candidate asset revision until A2UI v1.0 reaches GA. | In Progress on `release/v0.15.0` |
 | 2026-08-10 | **Native sandbox Skills and durable object storage boundary** — make Skills builder-mounted files under the selected sandbox workspace, use Deep Agents native discovery, remove inline Agent Skill bundles and the custom Skills/S3 filesystem backends, and retain optional S3-compatible storage only beneath database-authoritative artifact/file manifests. | 2/3/4/6 | Breaking change: Agent Skill bundle payloads and `/skills/api/` are removed. Builders mount selected bundles under `<sandbox workspace>/skills`; `COGNITION_SANDBOX_WORKSPACE_ROOT` selects the remote path and `COGNITION_LOCAL_WORKSPACE_ROOT` replaces the old host setting. Existing artifact manifest migration remains. | In Progress |
 | 2026-08-03 | **v0.14.0 Agent-owned MCP configuration boundary** — move MCP server definitions from global ConfigRegistry/server CRUD into immutable Agent definitions; load tools per server from the pinned runtime Agent snapshot; remove model-visible scope injection; make optional server discovery failures non-fatal while required failures surface typed, redacted errors; reject duplicate canonical tool identities; and support `none`, `mcp_oauth`, `workload_token_exchange`, and `static_bearer` transport authentication. | 2/4/6/7 | Breaking change: remove `/mcp-servers` as a runtime management surface. Builders compile approved routes into each Agent and own endpoint/mode admission. Cognition provides standard MCP OAuth, built-in workload exchange through opaque deployment profiles, and environment-backed bearer authentication (supported but not recommended), with no raw credentials, arbitrary headers, or Python authentication callbacks in Agent configuration. | Implemented on `release/v0.14.0`; release validation pending |
 | 2026-08-04 | **Remove Cognition custom tool runtime and split MCP transport admission** — remove built-in host tools, `/tools`, `.cognition/tools` discovery, API/file Python tool runtime loading, `AgentDefinition.tools`, `COGNITION_ALLOW_HOST_TOOLS`, and `COGNITION_ALLOW_API_PYTHON_TOOLS`; keep MCP tools behind explicit outbound transport enablement and exact origin allowlisting; keep `ToolSecurityMiddleware` as a generic tool-call deny-list. | 4/6/7 | Breaking change: existing persisted tool records are ignored and no compatibility layer is provided. Builders move external capability to MCP, skills, middleware, sandbox backends, or Deep Agents-native extension points. Deployments enabling MCP set `COGNITION_MCP_OUTBOUND_TRANSPORT_ENABLED=true` and `COGNITION_MCP_ALLOWED_ORIGINS` to approved origins. | Implemented on `release/v0.14.0`; release validation pending |
@@ -101,6 +102,62 @@ See AGENTS.md for category definitions, DoD requirements, and precedence rules.
 | 2026-04-09 | **Defer runtime-controlled repo bootstrap for strict git isolation** — current local backend now provides session-scoped sandbox roots, but successful agent runs can still choose a shared clone destination like `/workspace/Cognition-Gateway`. Future work should move repo bootstrap under runtime control or per-session Docker sandboxes so clone destination is enforced structurally instead of via prompt guidance. | 4, 3 | Follow-on change after local sandbox rollout: introduce runtime-managed clone/bootstrap into `<session.workspace_path>/<repo>` or migrate to per-session Docker sandboxes. Keep current prompt guidance as a temporary mitigation until structural enforcement exists. | Planned |
 | 2026-04-12 | **Refactor `create_cognition_agent()` into `CognitionAgentParams` + `RuntimeContext`** — replace the 17-arg agent construction path with a structured parameter object, use runtime-context cache keys instead of MD5, and ensure subagent security middleware is injected into nested agent specs. | 4 | Migrate all internal callers to `CognitionAgentParams`, keep a compatibility wrapper only until callers are updated, then remove the keyword-based entry point and validate with boundary tests. | In Progress |
 | 2026-05-01 | **Unify file/API skills and tools through ConfigRegistry** — introduce workspace-level `skill_sources` / `tool_sources` bootstrap config, seed file-managed skills/tools into ConfigRegistry at startup, lock file-managed records from API mutation, and make agent `skills` / `tools` attach registry names only. Runtime resolves selected names through registry-backed backends/loaders instead of direct filesystem paths from agent definitions. | 4, 2, 6 | Non-backward-compatible config cleanup: agent `skills` / `tools` now mean selected registry names only; file source directories move to workspace config. Existing path-based agent attachments must migrate to seeded names. | Completed |
+
+### v0.15.0 optional A2UI v1.0 support for A2A Agents
+
+**Category:** Feature and architectural change
+
+**Layers:** 1 (Foundation), 2 (Persistence), 4 (Agent Runtime), 5 (LLM
+Provider), 6 (API and Streaming), 7 (Observability)
+
+**Estimated effort:** 2-4 engineer-weeks
+
+**Dependencies:** A2A SDK 1.0.3, Deep Agents structured output,
+`jsonschema`, durable task/artifact persistence, exact `effective_scope`,
+and pinned A2UI v1.0 candidate assets from upstream revision
+`44a420b67957fafc0b02d55a153fdaf72e32ffb5`.
+
+**Acceptance criteria:**
+
+- Agents without `a2a.a2ui` publish unchanged Agent Cards and use the existing
+  conversational A2A path.
+- Agents with `a2a.a2ui` advertise
+  `https://a2ui.org/a2a-extension/a2ui/v1.0` with `required: false`, the
+  Basic catalog ID, and `acceptsInlineCatalogs: false`.
+- `application/a2ui+json` is added only to A2UI-enabled Agent input and output
+  modes.
+- Requests negotiate A2UI using standard A2A v1 extension activation and/or
+  `Message.metadata.a2uiRendererCapabilities`; incompatible catalogs, inline
+  catalogs, invalid metadata, and invalid renderer-to-agent Parts fail before
+  model execution.
+- Deep Agents typed structured output produces an internal envelope with
+  conversational text and A2UI message arrays; Cognition never parses
+  JSON-looking assistant text as A2UI.
+- Validated A2UI output emits canonical A2A v1 `Part.data` arrays with
+  `mediaType: application/a2ui+json`, no legacy `kind`, stable artifact IDs,
+  append semantics, persistence, replay, and extension attribution.
+- Renderer actions and data-model snapshots are validated and persisted as
+  scoped canonical input while existing MCP, tool policy, human approval, and
+  authorization boundaries remain authoritative.
+- Byte, depth, message-count, artifact, and output limits apply without
+  logging renderer state, component content, action context, or raw scope
+  values.
+- Unit, integration, streaming, replay, cross-scope, Basic renderer
+  interoperability, live-model E2E, Ruff, strict mypy, full pytest, and
+  available A2A TCK checks pass before release tagging.
+
+**Migration plan:**
+
+1. Ship A2UI disabled by default and require builders to opt in per Agent.
+2. Pin the candidate schemas and Basic catalog in the release artifact; record
+   upstream revision and content digests in docs and runtime manifests.
+3. Update A2UI-capable clients to discover the Agent Card extension and send
+   renderer capabilities on each A2UI turn.
+4. Keep A2A v1 wire shape canonical; accept any legacy activation alias only
+   inbound and never emit it as Cognition's standard response.
+5. When A2UI v1.0 reaches GA, compare final schemas and conformance tests
+   against the pinned candidate assets before changing the advertised support
+   claim.
 
 ### v0.13.0 multi-tenant Agent runtime boundary
 

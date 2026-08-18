@@ -274,6 +274,25 @@ if PROMETHEUS_AVAILABLE:
         "A2A requests or outputs rejected by resource limits",
         ["direction", "limit"],
     )
+    A2UI_NEGOTIATIONS_TOTAL = Counter(
+        "cognition_a2ui_negotiations_total",
+        "A2UI request negotiation outcomes",
+        ["outcome", "catalog"],
+    )
+    A2UI_VALIDATIONS_TOTAL = Counter(
+        "cognition_a2ui_validations_total",
+        "A2UI validation outcomes",
+        ["direction", "outcome", "reason"],
+    )
+    A2UI_MESSAGES_TOTAL = Counter(
+        "cognition_a2ui_messages_total",
+        "A2UI emitted message counts by type",
+        ["message_type"],
+    )
+    A2UI_BATCH_MESSAGES = Histogram(
+        "cognition_a2ui_batch_messages",
+        "A2UI emitted messages per artifact batch",
+    )
     RUNTIME_TASK_CLEANUP_TOTAL = Counter(
         "cognition_runtime_task_cleanup_total",
         "Durable task retention cleanup outcomes",
@@ -407,6 +426,10 @@ else:
     A2A_SUBSCRIPTIONS_TOTAL = DummyMetric()  # type: ignore[assignment]
     A2A_IDEMPOTENCY_TOTAL = DummyMetric()  # type: ignore[assignment]
     A2A_LIMIT_REJECTIONS_TOTAL = DummyMetric()  # type: ignore[assignment]
+    A2UI_NEGOTIATIONS_TOTAL = DummyMetric()  # type: ignore[assignment]
+    A2UI_VALIDATIONS_TOTAL = DummyMetric()  # type: ignore[assignment]
+    A2UI_MESSAGES_TOTAL = DummyMetric()  # type: ignore[assignment]
+    A2UI_BATCH_MESSAGES = DummyMetric()  # type: ignore[assignment]
     RUNTIME_TASK_CLEANUP_TOTAL = DummyMetric()  # type: ignore[assignment]
     RUNTIME_TASK_CLEANUP_DURATION = DummyMetric()  # type: ignore[assignment]
     OTLP_EXPORT_REQUEST_BYTES = DummyMetric()  # type: ignore[assignment]

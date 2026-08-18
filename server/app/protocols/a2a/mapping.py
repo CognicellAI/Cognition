@@ -53,9 +53,9 @@ def event_to_a2a_state(event: StreamEvent) -> int | None:
     if isinstance(event, RunStateEvent):
         return _RUN_STATUS_TO_A2A.get(event.to_status)
     if isinstance(event, DoneEvent):
-        return TaskState.TASK_STATE_COMPLETED
+        return int(TaskState.TASK_STATE_COMPLETED)
     if isinstance(event, ErrorEvent):
-        return TaskState.TASK_STATE_FAILED
+        return int(TaskState.TASK_STATE_FAILED)
     return None
 
 

@@ -1,12 +1,11 @@
-"""P3-ALN-3 Business Scenarios: CLI Middleware Import Fix & Tool Validation.
+"""P3-ALN-3 Business Scenarios: CLI Middleware Import Fix.
 
 As a developer using Cognition CLI,
 I want scaffolding commands to work correctly
-so that I can create tools and middleware without import errors.
+so that I can create middleware without import errors.
 
 Business Value:
 - No ImportError when creating middleware
-- Valid Python identifiers enforced for tool names
 - Clear error messages for invalid inputs
 - Correct documentation in generated templates
 """
@@ -127,171 +126,44 @@ class TestCLIMiddlewareScaffolding:
 
 
 @pytest.mark.e2e
-class TestCLIToolNameValidation:
-    """Test P3-ALN-3: Tool Name Validation."""
+class TestCLIToolScaffoldingBoundary:
+    """Tool scaffolding stays removed from the host-writing CLI surface."""
 
-    def test_create_tool_valid_name(self) -> None:
-        """cognition create tool accepts valid Python identifier names."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            result = subprocess.run(
-                [
-                    sys.executable,
-                    "-m",
-                    "server.app.cli",
-                    "create",
-                    "tool",
-                    "my_tool",
-                    "--path",
-                    tmpdir,
-                ],
-                capture_output=True,
-                text=True,
-            )
+    def test_create_tool_command_is_not_available(self) -> None:
+        """Cognition no longer creates host Python tools through the CLI."""
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "server.app.cli",
+                "create",
+                "tool",
+                "--help",
+            ],
+            capture_output=True,
+            text=True,
+        )
 
-            assert result.returncode == 0, f"Error: {result.stderr}"
-
-            # Check file was created
-            tool_file = Path(tmpdir) / "my_tool.py"
-            assert tool_file.exists()
-
-    def test_create_tool_transforms_hyphens(self) -> None:
-        """cognition create tool transforms hyphens to underscores."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            result = subprocess.run(
-                [
-                    sys.executable,
-                    "-m",
-                    "server.app.cli",
-                    "create",
-                    "tool",
-                    "my-tool-name",
-                    "--path",
-                    tmpdir,
-                ],
-                capture_output=True,
-                text=True,
-            )
-
-            assert result.returncode == 0
-
-            # Should create file with underscores
-            tool_file = Path(tmpdir) / "my_tool_name.py"
-            assert tool_file.exists(), f"Expected {tool_file} to exist"
-
-    def test_create_tool_transforms_spaces(self) -> None:
-        """cognition create tool transforms spaces to underscores."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            result = subprocess.run(
-                [
-                    sys.executable,
-                    "-m",
-                    "server.app.cli",
-                    "create",
-                    "tool",
-                    "my tool name",
-                    "--path",
-                    tmpdir,
-                ],
-                capture_output=True,
-                text=True,
-            )
-
-            assert result.returncode == 0
-
-            # Should create file with underscores
-            tool_file = Path(tmpdir) / "my_tool_name.py"
-            assert tool_file.exists()
-
-    def test_create_tool_rejects_invalid_identifier(self) -> None:
-        """cognition create tool rejects names that are not valid Python identifiers."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            result = subprocess.run(
-                [
-                    sys.executable,
-                    "-m",
-                    "server.app.cli",
-                    "create",
-                    "tool",
-                    "123bad",  # Starts with number - invalid
-                    "--path",
-                    tmpdir,
-                ],
-                capture_output=True,
-                text=True,
-            )
-
-            # Should fail with error about invalid identifier
-            assert (
-                result.returncode != 0
-                or "not a valid Python identifier" in result.stdout.lower() + result.stderr.lower()
-            )
-
-    def test_create_tool_rejects_special_chars(self) -> None:
-        """cognition create tool rejects names with special characters."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            result = subprocess.run(
-                [
-                    sys.executable,
-                    "-m",
-                    "server.app.cli",
-                    "create",
-                    "tool",
-                    "tool@name!",  # Special chars
-                    "--path",
-                    tmpdir,
-                ],
-                capture_output=True,
-                text=True,
-            )
-
-            # Should fail
-            assert (
-                result.returncode != 0
-                or "not a valid Python identifier" in result.stdout.lower() + result.stderr.lower()
-            )
-
-    def test_create_tool_next_steps_documentation(self) -> None:
-        """cognition create tool shows correct next steps (no AgentRegistry mention)."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            result = subprocess.run(
-                [
-                    sys.executable,
-                    "-m",
-                    "server.app.cli",
-                    "create",
-                    "tool",
-                    "test_tool",
-                    "--path",
-                    tmpdir,
-                ],
-                capture_output=True,
-                text=True,
-            )
-
-            assert result.returncode == 0
-
-            # Should NOT mention manual AgentRegistry.register_tool()
-            # (Fixed in P3-ALN-3)
-            output = result.stdout.lower()
-            # Next steps should mention auto-discovery
-            assert "auto-discover" in output or "auto" in output or "discovery" in output
+        combined = result.stdout.lower() + result.stderr.lower()
+        assert result.returncode != 0
+        assert "no such command" in combined
+        assert "tool" in combined
 
 
 @pytest.mark.e2e
 class TestCLIScaffoldingIntegration:
     """Test end-to-end CLI scaffolding workflows."""
 
-    def test_create_tool_then_middleware_workflow(self) -> None:
-        """Complete workflow: create tool and middleware in same session."""
+    def test_create_multiple_middleware_files_in_same_session(self) -> None:
+        """Complete workflow: create multiple middleware files in one directory."""
         with tempfile.TemporaryDirectory() as tmpdir:
-            # Create tool
-            tool_result = subprocess.run(
+            first_result = subprocess.run(
                 [
                     sys.executable,
                     "-m",
                     "server.app.cli",
                     "create",
-                    "tool",
+                    "middleware",
                     "my_processor",
                     "--path",
                     tmpdir,
@@ -299,10 +171,9 @@ class TestCLIScaffoldingIntegration:
                 capture_output=True,
                 text=True,
             )
-            assert tool_result.returncode == 0
+            assert first_result.returncode == 0
 
-            # Create middleware
-            mw_result = subprocess.run(
+            second_result = subprocess.run(
                 [
                     sys.executable,
                     "-m",
@@ -316,24 +187,22 @@ class TestCLIScaffoldingIntegration:
                 capture_output=True,
                 text=True,
             )
-            assert mw_result.returncode == 0
+            assert second_result.returncode == 0
 
-            # Verify both files exist
             assert (Path(tmpdir) / "my_processor.py").exists()
             assert (Path(tmpdir) / "my_middleware.py").exists()
 
     def test_scaffolding_produces_runnable_files(self) -> None:
         """Scaffolded files can be imported without errors."""
         with tempfile.TemporaryDirectory() as tmpdir:
-            # Create files
             subprocess.run(
                 [
                     sys.executable,
                     "-m",
                     "server.app.cli",
                     "create",
-                    "tool",
-                    "runnable_tool",
+                    "middleware",
+                    "runnable_middleware",
                     "--path",
                     tmpdir,
                 ],
@@ -350,13 +219,12 @@ class TestCLIScaffoldingIntegration:
                 import importlib.util
 
                 spec = importlib.util.spec_from_file_location(
-                    "runnable_tool", Path(tmpdir) / "runnable_tool.py"
+                    "runnable_middleware", Path(tmpdir) / "runnable_middleware.py"
                 )
                 module = importlib.util.module_from_spec(spec)
                 spec.loader.exec_module(module)
 
-                # Should have a tool function
-                assert hasattr(module, "runnable_tool")
+                assert hasattr(module, "RunnableMiddlewareMiddleware")
 
             finally:
                 sys.path[:] = original_path

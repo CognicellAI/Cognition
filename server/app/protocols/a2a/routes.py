@@ -155,6 +155,9 @@ class _ScopedCallContextBuilder(DefaultServerCallContextBuilder):
         context.state["effective_scope"] = (
             _extract_scope(dict(request.headers), self._scope_keys) or {}
         )
+        extensions, alias_used = _requested_extensions_from_headers(request.headers)
+        context.state["a2a_requested_extensions"] = extensions
+        context.state["a2a_extension_alias_used"] = alias_used
         return context
 
 
@@ -180,7 +183,7 @@ class _IdempotentRequestContextBuilder(SimpleRequestContextBuilder):
     ) -> str | None:
         """Return the stable task ID for a new idempotent message."""
         if params.message.task_id:
-            return params.message.task_id
+            return str(params.message.task_id)
         if not self._message_id_idempotency:
             return None
         if not params.message.message_id:
@@ -607,9 +610,15 @@ async def mount_a2a_routes(
     )
     cards_last_modified = format_datetime(datetime.now(UTC), usegmt=True)
 
-    def get_handler(agent_name: str, card: Any) -> _ScopedRequestHandler:
+    def get_handler(agent: Any, card: Any) -> _ScopedRequestHandler:
+        agent_name = str(agent.name)
         input_modes = tuple(card.default_input_modes)
-        handler_key = (agent_name, input_modes)
+        a2a_config_key = json.dumps(
+            agent.a2a.model_dump(mode="json"),
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        handler_key = (agent_name, (*input_modes, a2a_config_key))
         handler = handlers.get(handler_key)
         if handler is None:
             task_store = CognitionTaskStore(
@@ -623,6 +632,7 @@ async def mount_a2a_routes(
                 task_store=task_store,
                 session_agent_manager=session_agent_manager,
                 agent_name=agent_name,
+                a2a_config=agent.a2a,
                 supported_input_modes=input_modes,
                 message_id_idempotency=message_id_idempotency,
                 max_raw_part_bytes=getattr(
@@ -811,7 +821,7 @@ async def mount_a2a_routes(
             version,
             security=card_security,
         )
-        handler = get_handler(agent.name, card)
+        handler = get_handler(agent, card)
         dispatcher = JsonRpcDispatcher(
             request_handler=handler,
             context_builder=_ScopedCallContextBuilder(scope_keys),
@@ -825,6 +835,14 @@ async def mount_a2a_routes(
         sdk_response = await dispatcher.handle_requests(sdk_request)
         A2A_REQUESTS_TOTAL.labels(operation=operation_label, outcome="handled").inc()
         sdk_response.headers.setdefault("a2a-version", CURRENT_A2A_VERSION)
+        if _should_echo_a2ui_activation(request, payload, agent) and not _is_jsonrpc_error(
+            sdk_response
+        ):
+            sdk_response.headers.setdefault(
+                "A2A-Extensions",
+                "https://a2ui.org/a2a-extension/a2ui/v1.0",
+            )
+        assert isinstance(sdk_response, Response)
         return sdk_response
 
     app.routes.append(
@@ -867,3 +885,44 @@ async def mount_a2a_routes(
         rpc_endpoint="/a2a/{agent_name}",
         mode="dynamic-dispatch",
     )
+
+
+def _requested_extensions_from_headers(headers: Any) -> tuple[tuple[str, ...], bool]:
+    canonical = headers.get("A2A-Extensions")
+    alias = headers.get("X-A2A-Extensions")
+    raw = canonical if canonical is not None else alias
+    if not raw:
+        return (), False
+    values = tuple(
+        item.strip()
+        for item in str(raw).replace("\n", ",").split(",")
+        if item.strip()
+    )
+    return values, canonical is None and alias is not None
+
+
+def _should_echo_a2ui_activation(request: Request, payload: dict[str, object], agent: Any) -> bool:
+    if getattr(agent.a2a, "a2ui", None) is None:
+        return False
+    requested, _alias = _requested_extensions_from_headers(request.headers)
+    if "https://a2ui.org/a2a-extension/a2ui/v1.0" in requested:
+        return True
+    params = payload.get("params")
+    if not isinstance(params, dict):
+        return False
+    message = params.get("message")
+    if not isinstance(message, dict):
+        return False
+    metadata = message.get("metadata")
+    return isinstance(metadata, dict) and "a2uiRendererCapabilities" in metadata
+
+
+def _is_jsonrpc_error(response: Response) -> bool:
+    body = getattr(response, "body", None)
+    if not isinstance(body, bytes):
+        return False
+    try:
+        payload = json.loads(body)
+    except json.JSONDecodeError:
+        return False
+    return isinstance(payload, dict) and "error" in payload

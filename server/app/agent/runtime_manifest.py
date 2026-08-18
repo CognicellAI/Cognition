@@ -131,6 +131,10 @@ async def resolve_runtime_manifest(
             "sandbox_backend": settings.sandbox_backend,
         },
     }
+    if definition.a2a.a2ui is not None:
+        from server.app.protocols.a2a.a2ui.core import pinned_asset_manifest
+
+        manifest["dependencies"]["a2ui"] = pinned_asset_manifest()
     result = ResolvedRuntimeManifest(
         agent_revision=agent_revision,
         manifest=manifest,

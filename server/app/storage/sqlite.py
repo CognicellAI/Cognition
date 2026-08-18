@@ -845,7 +845,7 @@ class SqliteStorageBackend:
                 (task_id, scope_key),
             )
             await db.commit()
-        return cursor.rowcount == 1
+        return bool(cursor.rowcount == 1)
 
     async def create_run(
         self,
@@ -1100,6 +1100,7 @@ class SqliteStorageBackend:
         if await self.get_run(run_id, effective_scope) is None:
             raise ValueError("Run not found at exact event scope")
         async with aiosqlite.connect(self.db_path) as db:
+            await db.execute("BEGIN IMMEDIATE")
             async with db.execute(
                 """
                 SELECT COALESCE(MAX(sequence), 0) + 1 FROM session_events

@@ -41,7 +41,7 @@ if TYPE_CHECKING:
     from server.app.storage.artifact_store import ArtifactStore
 
 
-_TASK_STATUS_TO_A2A: dict[TaskStatus, int] = {
+_TASK_STATUS_TO_A2A: dict[TaskStatus, TaskState] = {
     TaskStatus.SUBMITTED: TaskState.TASK_STATE_SUBMITTED,
     TaskStatus.WORKING: TaskState.TASK_STATE_WORKING,
     TaskStatus.INPUT_REQUIRED: TaskState.TASK_STATE_INPUT_REQUIRED,
@@ -192,26 +192,30 @@ class CognitionTaskStore(TaskStore):
                     if isinstance(part, dict)
                 ]
                 if parts:
-                    artifacts.append(
-                        new_artifact(
-                            parts=parts,
-                            name=str(descriptor.get("name") or "artifact"),
-                            description=descriptor.get("description"),
-                            artifact_id=str(descriptor.get("artifact_id") or ""),
-                        )
+                    artifact = new_artifact(
+                        parts=parts,
+                        name=str(descriptor.get("name") or "artifact"),
+                        description=descriptor.get("description"),
+                        artifact_id=str(descriptor.get("artifact_id") or ""),
                     )
+                    extensions = descriptor.get("extensions", [])
+                    if isinstance(extensions, list):
+                        artifact.extensions.extend(
+                            str(value) for value in extensions if value is not None
+                        )
+                    artifacts.append(artifact)
         if not artifacts and self._artifact_store is not None:
-            artifact = await self._artifact_store.get_artifact(
+            stored_artifact = await self._artifact_store.get_artifact(
                 f"task-{task.id}-response",
                 task.effective_scope,
             )
-            if artifact is not None:
+            if stored_artifact is not None:
                 artifacts.append(
                     new_text_artifact(
-                        name=artifact.name,
-                        text=artifact.content,
-                        media_type=artifact.content_type,
-                        artifact_id=artifact.id,
+                        name=stored_artifact.name,
+                        text=stored_artifact.content,
+                        media_type=stored_artifact.content_type,
+                        artifact_id=stored_artifact.id,
                     )
                 )
         if not artifacts and assistant_text:
@@ -224,9 +228,7 @@ class CognitionTaskStore(TaskStore):
                 )
             )
 
-        status = A2ATaskStatus(
-            state=_TASK_STATUS_TO_A2A[task.status]  # type: ignore[arg-type]
-        )
+        status = A2ATaskStatus(state=_TASK_STATUS_TO_A2A[task.status])
         status.timestamp.CopyFrom(_timestamp(task.updated_at))
         if task.status_reason:
             status_message = new_text_message(

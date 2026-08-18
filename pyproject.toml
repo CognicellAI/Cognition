@@ -109,11 +109,6 @@ k8s = [
     "langchain-k8s-sandbox[k8s]",
 ]
 
-# Documentation site
-docs = [
-    "mkdocs-material>=9.6.0",
-]
-
 # AWS Lambda MicroVM sandbox backend
 aws-lambda-microvms = [
     "langchain-aws-lambda-microvms[aws]",
@@ -250,7 +245,31 @@ ignore_errors = true
 
 # Optional LLM provider deps - not installed in base env, suppress import errors
 [[tool.mypy.overrides]]
-module = ["langchain_aws", "botocore", "botocore.*"]
+module = [
+    "a2a.*",
+    "aiosqlite",
+    "botocore.*",
+    "deepagents",
+    "deepagents.*",
+    "jsonschema",
+    "jsonschema.*",
+    "langchain.*",
+    "langchain_aws",
+    "langchain_core.*",
+    "langchain_mcp_adapters.*",
+    "langgraph.*",
+    "mlflow",
+    "mlflow.*",
+    "opentelemetry",
+    "opentelemetry.*",
+    "prompt_toolkit",
+    "prompt_toolkit.*",
+    "psycopg",
+    "psycopg.*",
+    "psycopg_pool",
+    "watchdog.*",
+    "yaml",
+]
 ignore_missing_imports = true
 
 # asyncpg has no stubs on Python 3.11 CI env

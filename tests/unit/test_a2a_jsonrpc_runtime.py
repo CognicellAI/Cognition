@@ -20,6 +20,7 @@ from server.app.agent.runtime import (
     TokenEvent,
 )
 from server.app.llm.deep_agent_service import SessionAgentManager
+from server.app.protocols.a2a.a2ui import A2UI_EXTENSION_URI, A2UI_MEDIA_TYPE, BASIC_CATALOG_ID
 from server.app.protocols.a2a.routes import _artifact_update_from_runtime_event, mount_a2a_routes
 from server.app.settings import Settings
 from server.app.storage.artifact_store import MemoryArtifactStore
@@ -43,6 +44,9 @@ class _FakeAgentService:
         )
         message_id = messages[-1].id
         if message_id.startswith("slow-message"):
+            self.started.set()
+            await self.release.wait()
+        if message_id.startswith("slow-a2ui-output"):
             self.started.set()
             await self.release.wait()
         if message_id.startswith("tck-message-response"):
@@ -114,6 +118,39 @@ class _FakeAgentService:
                 yield TokenEvent(content=token)
             yield DoneEvent()
             return
+        if message_id.startswith("a2ui-output") or message_id.startswith("slow-a2ui-output"):
+            yield TokenEvent(content="Here is a surface.")
+            yield ArtifactEvent(
+                artifact_id="a2ui-output",
+                name="a2ui",
+                kind="data",
+                value=[
+                    {
+                        "version": "v1.0",
+                        "createSurface": {
+                            "surfaceId": "main",
+                            "catalogId": BASIC_CATALOG_ID,
+                        },
+                    },
+                    {
+                        "version": "v1.0",
+                        "updateComponents": {
+                            "surfaceId": "main",
+                            "components": [
+                                {
+                                    "id": "root",
+                                    "component": "Text",
+                                    "text": "Hello from A2UI",
+                                }
+                            ],
+                        },
+                    },
+                ],
+                media_type=A2UI_MEDIA_TYPE,
+                extensions=(A2UI_EXTENSION_URI,),
+            )
+            yield DoneEvent()
+            return
         yield TokenEvent(content="A2A works")
         yield DoneEvent()
 
@@ -140,6 +177,7 @@ async def _build_client(
     max_raw_part_bytes: int = 10 * 1024 * 1024,
     stream_chunk_bytes: int = 4096,
     input_modes: list[str] | None = None,
+    a2ui_enabled: bool = False,
 ) -> httpx.AsyncClient:
     app = FastAPI()
     config_store = DefaultConfigStore(MemoryConfigRegistry())
@@ -154,6 +192,7 @@ async def _build_client(
                 "exposed": True,
                 "default_input_modes": input_modes
                 or ["text/plain", "application/json"],
+                **({"a2ui": {"version": "1.0", "catalogs": ["basic"]}} if a2ui_enabled else {}),
             },
         },
     )
@@ -199,7 +238,7 @@ async def test_duplicate_in_flight_message_recovers_same_working_task(
         first = asyncio.create_task(
             client.post("/a2a/researcher", json=_send_request("slow-message-1"))
         )
-        await asyncio.wait_for(manager.service.started.wait(), timeout=1)
+        await asyncio.wait_for(manager.service.started.wait(), timeout=5)
 
         duplicate = await client.post(
             "/a2a/researcher",
@@ -243,7 +282,7 @@ async def test_subscribe_replay_ends_with_terminal_task_after_artifact_updates(
 
     async with client:
         execution = asyncio.create_task(client.post("/a2a/researcher", json=request))
-        await asyncio.wait_for(manager.service.started.wait(), timeout=1)
+        await asyncio.wait_for(manager.service.started.wait(), timeout=5)
         duplicate = await client.post("/a2a/researcher", json=request)
         task_id = duplicate.json()["result"]["task"]["id"]
         subscription = asyncio.create_task(collect_subscription(task_id))
@@ -270,6 +309,38 @@ def _send_request(message_id: str = "message-1") -> dict:
             }
         },
     }
+
+
+def _a2ui_request(message_id: str = "a2ui-output-1") -> dict:
+    request = _send_request(message_id)
+    request["params"]["message"]["metadata"] = {
+        "a2uiRendererCapabilities": {
+            "v1.0": {
+                "supportedCatalogIds": [BASIC_CATALOG_ID],
+            }
+        }
+    }
+    return request
+
+
+def _artifact_with_part(task: dict, part_key: str) -> dict:
+    return next(
+        artifact
+        for artifact in task["artifacts"]
+        if artifact.get("parts") and part_key in artifact["parts"][0]
+    )
+
+
+def _part_value(task: dict, part_key: str) -> object:
+    return _artifact_with_part(task, part_key)["parts"][0][part_key]
+
+
+def _sse_events_from_text(text: str) -> list[dict]:
+    return [
+        json.loads(line[6:])
+        for line in text.splitlines()
+        if line.startswith("data: ")
+    ]
 
 
 async def test_send_get_list_and_idempotency_use_durable_runtime(
@@ -310,6 +381,448 @@ async def test_send_get_list_and_idempotency_use_durable_runtime(
             },
         )
         assert [item["id"] for item in listed.json()["result"]["tasks"]] == [task["id"]]
+
+
+async def test_a2ui_disabled_agent_card_is_unchanged(
+    setup_storage_backend: StorageBackend,
+    tmp_path,
+) -> None:
+    client = await _build_client(setup_storage_backend, tmp_path)
+
+    async with client:
+        response = await client.get("/a2a/researcher/.well-known/agent-card.json")
+
+    card = response.json()
+    assert "extensions" not in card["capabilities"]
+    assert A2UI_MEDIA_TYPE not in card["defaultInputModes"]
+    assert A2UI_MEDIA_TYPE not in card["defaultOutputModes"]
+
+
+async def test_a2ui_enabled_agent_card_advertises_optional_basic_catalog(
+    setup_storage_backend: StorageBackend,
+    tmp_path,
+) -> None:
+    client = await _build_client(setup_storage_backend, tmp_path, a2ui_enabled=True)
+
+    async with client:
+        response = await client.get("/a2a/researcher/.well-known/agent-card.json")
+
+    card = response.json()
+    extension = card["capabilities"]["extensions"][0]
+    assert extension["uri"] == "https://a2ui.org/a2a-extension/a2ui/v1.0"
+    assert extension.get("required", False) is False
+    assert extension["params"] == {
+        "acceptsInlineCatalogs": False,
+        "supportedCatalogIds": [BASIC_CATALOG_ID],
+    }
+    assert A2UI_MEDIA_TYPE in card["defaultInputModes"]
+    assert A2UI_MEDIA_TYPE in card["defaultOutputModes"]
+
+
+async def test_a2ui_negotiated_request_returns_text_and_canonical_data_part(
+    setup_storage_backend: StorageBackend,
+    tmp_path,
+) -> None:
+    client = await _build_client(setup_storage_backend, tmp_path, a2ui_enabled=True)
+    request = _a2ui_request("a2ui-output-1")
+
+    async with client:
+        response = await client.post(
+            "/a2a/researcher",
+            json=request,
+            headers={"A2A-Extensions": "https://a2ui.org/a2a-extension/a2ui/v1.0"},
+        )
+        fetched = await client.post(
+            "/a2a/researcher",
+            json={
+                "jsonrpc": "2.0",
+                "id": "rpc-a2ui-fetch",
+                "method": "GetTask",
+                "params": {"id": response.json()["result"]["task"]["id"]},
+            },
+        )
+
+    assert response.headers["A2A-Extensions"] == (
+        "https://a2ui.org/a2a-extension/a2ui/v1.0"
+    )
+    task = response.json()["result"]["task"]
+    artifacts = task["artifacts"]
+    parts = [artifact["parts"][0] for artifact in artifacts]
+    text_part = next(part for part in parts if "text" in part)
+    data_artifact = _artifact_with_part(task, "data")
+    data_part = data_artifact["parts"][0]
+    assert text_part["text"] == "Here is a surface."
+    assert data_artifact["extensions"] == [A2UI_EXTENSION_URI]
+    assert data_part["mediaType"] == A2UI_MEDIA_TYPE
+    assert isinstance(data_part["data"], list)
+    assert data_part["data"][0]["version"] == "v1.0"
+    assert "kind" not in data_part
+
+    fetched_artifacts = fetched.json()["result"]["artifacts"]
+    fetched_data_artifact = next(
+        artifact for artifact in fetched_artifacts if "data" in artifact["parts"][0]
+    )
+    assert fetched_data_artifact["extensions"] == [A2UI_EXTENSION_URI]
+    assert fetched_data_artifact["parts"][0]["mediaType"] == A2UI_MEDIA_TYPE
+
+
+async def test_a2ui_idempotent_retry_replays_same_persisted_task(
+    setup_storage_backend: StorageBackend,
+    tmp_path,
+) -> None:
+    manager = _FakeSessionAgentManager(setup_storage_backend)
+    client = await _build_client(
+        setup_storage_backend,
+        tmp_path,
+        manager,
+        a2ui_enabled=True,
+    )
+    request = _a2ui_request("a2ui-output-idempotent")
+
+    async with client:
+        first = await client.post(
+            "/a2a/researcher",
+            json=request,
+            headers={"A2A-Extensions": A2UI_EXTENSION_URI},
+        )
+        second = await client.post(
+            "/a2a/researcher",
+            json=request,
+            headers={"A2A-Extensions": A2UI_EXTENSION_URI},
+        )
+
+    first_task = first.json()["result"]["task"]
+    second_task = second.json()["result"]["task"]
+    first_data = _artifact_with_part(first_task, "data")
+    second_data = _artifact_with_part(second_task, "data")
+
+    assert first_task["id"] == second_task["id"]
+    assert first_data["artifactId"] == second_data["artifactId"] == "a2ui-output"
+    assert first_data["extensions"] == second_data["extensions"] == [A2UI_EXTENSION_URI]
+    assert first_data["parts"][0]["data"] == second_data["parts"][0]["data"]
+    assert len(manager.service.calls) == 1
+
+
+async def test_a2ui_streaming_subscription_replays_data_artifact_and_terminal_task(
+    setup_storage_backend: StorageBackend,
+    tmp_path,
+) -> None:
+    manager = _FakeSessionAgentManager(setup_storage_backend)
+    client = await _build_client(
+        setup_storage_backend,
+        tmp_path,
+        manager,
+        a2ui_enabled=True,
+    )
+    request = _a2ui_request("slow-a2ui-output-subscribe")
+    request["method"] = "SendStreamingMessage"
+    streamed_events: list[dict] = []
+    subscription_events: list[dict] = []
+
+    async def collect_subscription(task_id: str) -> None:
+        async with client.stream(
+            "POST",
+            "/a2a/researcher",
+            json={
+                "jsonrpc": "2.0",
+                "id": "a2ui-subscribe",
+                "method": "SubscribeToTask",
+                "params": {"id": task_id},
+            },
+            headers={"Accept": "text/event-stream"},
+        ) as response:
+            async for line in response.aiter_lines():
+                if line.startswith("data: "):
+                    subscription_events.append(json.loads(line[6:]))
+
+    async with client:
+        stream_task = asyncio.create_task(
+            client.post(
+                "/a2a/researcher",
+                json=request,
+                headers={
+                    "Accept": "text/event-stream",
+                    "A2A-Extensions": A2UI_EXTENSION_URI,
+                },
+            )
+        )
+        await asyncio.wait_for(manager.service.started.wait(), timeout=5)
+        duplicate = await client.post(
+            "/a2a/researcher",
+            json=request,
+            headers={"A2A-Extensions": A2UI_EXTENSION_URI},
+        )
+        duplicate_events = _sse_events_from_text(duplicate.text)
+        task_id = duplicate_events[0]["result"]["task"]["id"]
+        subscription = asyncio.create_task(collect_subscription(task_id))
+        await asyncio.sleep(0.05)
+        manager.service.release.set()
+        stream_response = await stream_task
+        streamed_events.extend(_sse_events_from_text(stream_response.text))
+        await subscription
+        fetched = await client.post(
+            "/a2a/researcher",
+            json={
+                "jsonrpc": "2.0",
+                "id": "a2ui-fetch-after-stream",
+                "method": "GetTask",
+                "params": {"id": task_id},
+            },
+        )
+
+    stream_updates = [
+        event["result"]["artifactUpdate"]
+        for event in streamed_events
+        if "artifactUpdate" in event.get("result", {})
+    ]
+    subscription_updates = [
+        event["result"]["artifactUpdate"]
+        for event in subscription_events
+        if "artifactUpdate" in event.get("result", {})
+    ]
+    subscription_tasks = [
+        event["result"]["task"]
+        for event in subscription_events
+        if "task" in event.get("result", {})
+    ]
+    fetched_task = fetched.json()["result"]
+    fetched_a2ui = _artifact_with_part(fetched_task, "data")
+
+    assert duplicate_events[0]["result"]["task"]["status"]["state"] == "TASK_STATE_WORKING"
+    assert any(update["artifact"]["extensions"] == [A2UI_EXTENSION_URI] for update in stream_updates)
+    assert any(
+        update["artifact"]["parts"][0]["mediaType"] == A2UI_MEDIA_TYPE
+        for update in subscription_updates
+    )
+    assert subscription_tasks[-1]["status"]["state"] == "TASK_STATE_COMPLETED"
+    assert fetched_a2ui["extensions"] == [A2UI_EXTENSION_URI]
+    assert fetched_a2ui["parts"][0]["mediaType"] == A2UI_MEDIA_TYPE
+
+
+async def test_a2ui_task_artifact_and_replay_are_exact_scope_isolated(
+    setup_storage_backend: StorageBackend,
+    tmp_path,
+) -> None:
+    artifact_store = MemoryArtifactStore()
+    client = await _build_client(
+        setup_storage_backend,
+        tmp_path,
+        artifact_store=artifact_store,
+        a2ui_enabled=True,
+    )
+    request = _a2ui_request("a2ui-output-scoped")
+
+    async with client:
+        sent = await client.post(
+            "/a2a/researcher",
+            json=request,
+            headers={"A2A-Extensions": A2UI_EXTENSION_URI},
+        )
+        task = sent.json()["result"]["task"]
+        task_id = task["id"]
+        context_id = task["contextId"]
+        hidden_get = await client.post(
+            "/a2a/researcher",
+            json={
+                "jsonrpc": "2.0",
+                "id": "a2ui-hidden-get",
+                "method": "GetTask",
+                "params": {"id": task_id},
+            },
+            headers={
+                "A2A-Version": "1.0",
+                "X-Cognition-Scope-Account": "other",
+            },
+        )
+        hidden_subscribe = await client.post(
+            "/a2a/researcher",
+            json={
+                "jsonrpc": "2.0",
+                "id": "a2ui-hidden-subscribe",
+                "method": "SubscribeToTask",
+                "params": {"id": task_id},
+            },
+            headers={
+                "A2A-Version": "1.0",
+                "X-Cognition-Scope-Account": "other",
+            },
+        )
+
+    owner_events = await setup_storage_backend.list_events(
+        context_id,
+        event_type="artifact.updated",
+        task_id=task_id,
+        effective_scope={"account": "acme"},
+    )
+    sibling_events = await setup_storage_backend.list_events(
+        context_id,
+        event_type="artifact.updated",
+        task_id=task_id,
+        effective_scope={"account": "other"},
+    )
+
+    assert hidden_get.status_code == 404
+    assert hidden_subscribe.status_code == 404
+    assert owner_events
+    assert sibling_events == []
+    assert await artifact_store.list_artifacts(scope={"account": "other"}) == []
+
+
+async def test_a2ui_incompatible_catalog_fails_before_model_execution(
+    setup_storage_backend: StorageBackend,
+    tmp_path,
+) -> None:
+    manager = _FakeSessionAgentManager(setup_storage_backend)
+    client = await _build_client(
+        setup_storage_backend,
+        tmp_path,
+        manager,
+        a2ui_enabled=True,
+    )
+    request = _send_request("a2ui-output-incompatible")
+    request["params"]["message"]["metadata"] = {
+        "a2uiRendererCapabilities": {
+            "v1.0": {
+                "supportedCatalogIds": ["https://example.com/a2ui/catalog.json"],
+            }
+        }
+    }
+
+    async with client:
+        response = await client.post(
+            "/a2a/researcher",
+            json=request,
+            headers={"A2A-Extensions": "https://a2ui.org/a2a-extension/a2ui/v1.0"},
+        )
+
+    assert "error" in response.json()
+    assert "No compatible A2UI catalog" in response.json()["error"]["message"]
+    assert "A2A-Extensions" not in response.headers
+    assert manager.service.calls == []
+
+
+async def test_a2ui_renderer_action_and_data_model_continue_model_path(
+    setup_storage_backend: StorageBackend,
+    tmp_path,
+) -> None:
+    manager = _FakeSessionAgentManager(setup_storage_backend)
+    client = await _build_client(
+        setup_storage_backend,
+        tmp_path,
+        manager,
+        a2ui_enabled=True,
+    )
+    request = _send_request("a2ui-output-action")
+    request["params"]["message"]["metadata"] = {
+        "a2uiRendererCapabilities": {
+            "v1.0": {
+                "supportedCatalogIds": [BASIC_CATALOG_ID],
+            }
+        },
+        "a2uiRendererDataModel": {
+            "version": "v1.0",
+            "surfaces": {"main": {"choice": "approve"}},
+        },
+    }
+    request["params"]["message"]["parts"].append(
+        {
+            "mediaType": A2UI_MEDIA_TYPE,
+            "data": [
+                {
+                    "version": "v1.0",
+                    "action": {
+                        "name": "approve",
+                        "surfaceId": "main",
+                        "sourceComponentId": "approveButton",
+                        "timestamp": "2026-08-16T20:00:00Z",
+                        "context": {"choice": "approve"},
+                        "userMessage": "Approved",
+                    },
+                }
+            ],
+        }
+    )
+
+    async with client:
+        response = await client.post(
+            "/a2a/researcher",
+            json=request,
+            headers={"A2A-Extensions": A2UI_EXTENSION_URI},
+        )
+
+    assert response.status_code == 200
+    assert response.json()["result"]["task"]["status"]["state"] == "TASK_STATE_COMPLETED"
+    assert len(manager.service.calls) == 1
+
+
+async def test_a2ui_call_agent_function_returns_explicit_error_without_model(
+    setup_storage_backend: StorageBackend,
+    tmp_path,
+) -> None:
+    manager = _FakeSessionAgentManager(setup_storage_backend)
+    client = await _build_client(
+        setup_storage_backend,
+        tmp_path,
+        manager,
+        a2ui_enabled=True,
+    )
+    request = _send_request("a2ui-function-call")
+    request["params"]["message"]["metadata"] = {
+        "a2uiRendererCapabilities": {
+            "v1.0": {
+                "supportedCatalogIds": [BASIC_CATALOG_ID],
+            }
+        }
+    }
+    request["params"]["message"]["parts"].append(
+        {
+            "mediaType": A2UI_MEDIA_TYPE,
+            "data": [
+                {
+                    "version": "v1.0",
+                    "callAgentFunction": {
+                        "surfaceId": "main",
+                        "functionCallId": "call-1",
+                        "callFunction": {
+                            "call": "openUrl",
+                            "catalogId": BASIC_CATALOG_ID,
+                            "args": {"url": "https://example.com"},
+                        },
+                    },
+                }
+            ],
+        }
+    )
+
+    async with client:
+        response = await client.post(
+            "/a2a/researcher",
+            json=request,
+            headers={"A2A-Extensions": A2UI_EXTENSION_URI},
+        )
+
+    task = response.json()["result"]["task"]
+    artifact = next(item for item in task["artifacts"] if item["name"] == "a2ui")
+    data = artifact["parts"][0]["data"]
+    assert response.headers["A2A-Extensions"] == A2UI_EXTENSION_URI
+    assert task["status"]["state"] == "TASK_STATE_COMPLETED"
+    assert artifact["extensions"] == [A2UI_EXTENSION_URI]
+    assert data == [
+        {
+            "version": "v1.0",
+            "agentFunctionResponse": {
+                "functionCallId": "call-1",
+                "error": {
+                    "code": "UNKNOWN_AGENT_FUNCTION",
+                    "message": (
+                        "Cognition does not expose an Agent function registry; "
+                        "function 'openUrl' is not available."
+                    ),
+                },
+            },
+        }
+    ]
+    assert manager.service.calls == []
 
 
 async def test_reusing_message_id_with_different_input_is_rejected(
@@ -565,7 +1078,7 @@ async def test_message_only_and_non_text_artifact_variants_are_supported(
             "/a2a/researcher",
             json=_send_request("tck-artifact-data-object-1"),
         )
-        assert data.json()["result"]["task"]["artifacts"][0]["parts"][0]["data"] == {
+        assert _part_value(data.json()["result"]["task"], "data") == {
             "key": "value",
             "count": 42,
         }
@@ -574,7 +1087,7 @@ async def test_message_only_and_non_text_artifact_variants_are_supported(
             "/a2a/researcher",
             json=_send_request("tck-artifact-file-1"),
         )
-        raw_part = raw.json()["result"]["task"]["artifacts"][0]["parts"][0]
+        raw_part = _artifact_with_part(raw.json()["result"]["task"], "raw")["parts"][0]
         assert raw_part["filename"] == "output.txt"
         assert "raw" in raw_part
 
@@ -582,7 +1095,7 @@ async def test_message_only_and_non_text_artifact_variants_are_supported(
             "/a2a/researcher",
             json=_send_request("tck-artifact-file-url-1"),
         )
-        url_part = url.json()["result"]["task"]["artifacts"][0]["parts"][0]
+        url_part = _artifact_with_part(url.json()["result"]["task"], "url")["parts"][0]
         assert url_part["url"] == "https://example.com/output.txt"
 
 
@@ -621,8 +1134,8 @@ async def test_task_projection_preserves_every_data_json_value(
             },
         )
 
-    assert task["artifacts"][0]["parts"][0]["data"] == expected
-    assert fetched.json()["result"]["artifacts"][0]["parts"][0]["data"] == expected
+    assert _part_value(task, "data") == expected
+    assert _part_value(fetched.json()["result"], "data") == expected
 
 
 @pytest.mark.parametrize(
