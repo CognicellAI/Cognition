@@ -31,7 +31,7 @@ See AGENTS.md for category definitions, DoD requirements, and precedence rules.
 
 | Date | Description | Issue | Layer | Status |
 |------|-------------|-------|-------|--------|
-| 2026-09-02 | Normalize persisted pre-v0.14 Agent definitions by removing retired inline capability fields, updating revision identity, and preserving exact-scope and historical run boundaries. | [#209](https://github.com/CognicellAI/Cognition/issues/209), [Kennel #63](https://github.com/CognicellAI/Kennel/issues/63#issuecomment-5515261183) | 2/4 | In Review |
+| 2026-09-02 | Normalize persisted pre-v0.14 Agent definitions by removing retired inline capability fields, updating revision identity, and preserving exact-scope and historical run boundaries. | [#209](https://github.com/CognicellAI/Cognition/issues/209), [Kennel #63](https://github.com/CognicellAI/Kennel/issues/63#issuecomment-5515261183) | 2/4 | Implemented on `main`; v0.14.1 release validation pending |
 | 2026-08-04 | Align the Agent-owned Skills backend with the installed Deep Agents `BackendProtocol` (`ls`/`als` and raw read content), and add a two-server workload-token-exchange regression proving exact-audience token isolation under concurrent use. | KennelAMS RC2 local integration evaluation | 4 | Implemented on `release/v0.14.0`; release validation pending |
 | 2026-08-03 | Keep generated A2A release evidence release-independent and exclude external consumer names from public release artifacts. | v0.14.0-rc.1 evidence review | 7 | In Review |
 | 2026-07-29 | Avoid duplicate CI runs for release branches by using pull-request validation for `release/**` and reserving push validation for long-lived branches. | PR #166 ran identical push and pull-request jobs | 7 | Implemented |
