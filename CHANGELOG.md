@@ -9,6 +9,15 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.14.1] — Unreleased
+
+### Fixed
+
+- Added an idempotent database migration for Agent definitions persisted before
+  the final v0.14 schema. The migration removes retired inline `skills` and
+  `tools` fields, preserves public `a2a.skills`, and refreshes Agent revision
+  identity so upgraded definitions remain readable under strict validation.
+
 ## [0.14.0] — 2026-08-14
 
 ### Changed
