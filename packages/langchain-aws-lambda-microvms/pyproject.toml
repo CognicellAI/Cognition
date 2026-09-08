@@ -24,6 +24,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+otel = ["opentelemetry-api>=1.28.0"]
 aws = ["boto3>=1.43.36"]
 test = [
     "pytest>=8.3.0",

@@ -13,10 +13,13 @@ Design:
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
+import threading
+from collections.abc import Callable
 from datetime import UTC, datetime
-from typing import Any, Protocol, runtime_checkable
+from typing import Any, Protocol, TypeVar, runtime_checkable
 
 import structlog
 
@@ -25,6 +28,7 @@ from server.app.storage.config_models import ArtifactDefinition
 from server.app.storage.s3_object_store import S3ObjectStore
 
 logger = structlog.get_logger(__name__)
+_ObjectResult = TypeVar("_ObjectResult")
 
 ARTIFACT_TYPE_VALUES = {
     "scratch",
@@ -651,16 +655,49 @@ class S3ArtifactStore:
         self._endpoint_url = endpoint_url
         self._region_name = region_name
         self._force_path_style = force_path_style
+        self._objects: S3ObjectStore | None = None
+        self._objects_lock = threading.Lock()
+        # Match the transport's default connection-pool capacity. Canceled callers
+        # retain their slots until the underlying blocking operation actually ends.
+        self._io_slots = asyncio.Semaphore(10)
+        self._io_tasks: set[asyncio.Task[Any]] = set()
+        self._closed = False
+
+    def publication_objects(self) -> S3ObjectStore:
+        """Provide the configured object transport for binary publication."""
+        return self._object_store()
 
     def _object_store(self) -> S3ObjectStore:
-        return S3ObjectStore.from_boto3(
-            bucket=self._bucket,
-            base_prefix=self._base_prefix,
-            hmac_key=self._hmac_key,
-            endpoint_url=self._endpoint_url,
-            region_name=self._region_name,
-            force_path_style=self._force_path_style,
-        )
+        with self._objects_lock:
+            if self._objects is None:
+                self._objects = S3ObjectStore.from_boto3(
+                    bucket=self._bucket,
+                    base_prefix=self._base_prefix,
+                    hmac_key=self._hmac_key,
+                    endpoint_url=self._endpoint_url,
+                    region_name=self._region_name,
+                    force_path_style=self._force_path_style,
+                )
+            return self._objects
+
+    async def _run_io(self, call: Callable[[S3ObjectStore], _ObjectResult]) -> _ObjectResult:
+        if self._closed:
+            raise RuntimeError("Artifact store is closed")
+        await self._io_slots.acquire()
+        if self._closed:
+            self._io_slots.release()
+            raise RuntimeError("Artifact store is closed")
+        task = asyncio.create_task(asyncio.to_thread(lambda: call(self._object_store())))
+        self._io_tasks.add(task)
+
+        def finished(done: asyncio.Task[_ObjectResult]) -> None:
+            self._io_tasks.discard(done)
+            self._io_slots.release()
+            if not done.cancelled():
+                done.exception()  # Retrieve failures even when the caller was canceled.
+
+        task.add_done_callback(finished)
+        return await asyncio.shield(task)
 
     @staticmethod
     def _body_metadata(content: str) -> tuple[bytes, str, int]:
@@ -674,15 +711,12 @@ class S3ArtifactStore:
             raise RuntimeError("Artifact manifest is missing its durable-body checksum")
         return f"/artifacts/{artifact.artifact_type}/{artifact.id}/{artifact.version}/{digest}"
 
-    def _object_key(self, artifact: ArtifactDefinition, checksum: str | None = None) -> str:
-        return self._object_store().scoped_key(artifact.scope, self._path(artifact, checksum))
-
     async def initialize(self) -> None:
         initialize = getattr(self._manifest_store, "initialize", None)
         if initialize is not None:
             await initialize()
         try:
-            self._object_store().verify_connection()
+            await self._run_io(lambda objects: objects.verify_connection())
         except Exception as exc:
             logger.warning(
                 "S3 artifact storage initialization failed",
@@ -694,28 +728,44 @@ class S3ArtifactStore:
         logger.info("S3 artifact storage initialized", operation="health", result="success")
 
     async def close(self) -> None:
-        close = getattr(self._manifest_store, "close", None)
-        if close is not None:
-            await close()
+        self._closed = True
+        try:
+            if self._io_tasks:
+                await asyncio.shield(asyncio.gather(*self._io_tasks, return_exceptions=True))
+            if self._objects is not None:
+                await asyncio.to_thread(self._objects.close)
+                self._objects = None
+        finally:
+            close = getattr(self._manifest_store, "close", None)
+            if close is not None:
+                await close()
 
     async def health_check(self) -> None:
         """Verify both the authoritative manifest store and selected object store."""
         health_check = getattr(self._manifest_store, "health_check", None)
         if health_check is not None:
             await health_check()
-        self._object_store().verify_connection()
+        await self._run_io(lambda objects: objects.verify_connection())
 
     async def _hydrate(self, artifact: ArtifactDefinition | None) -> ArtifactDefinition | None:
         if artifact is None:
             return None
         if artifact.object_key is None or artifact.content_size is None:
             raise RuntimeError("Artifact manifest is missing durable-body metadata")
-        if self._object_key(artifact) != artifact.object_key:
+        if (
+            await self._run_io(
+                lambda objects: objects.scoped_key(artifact.scope, self._path(artifact))
+            )
+            != artifact.object_key
+        ):
             raise RuntimeError("Artifact manifest does not match its configured storage scope")
         try:
-            body = self._object_store().get(artifact.object_key)
+            object_key = artifact.object_key
+            body = await self._run_io(lambda objects: objects.get(object_key))
         except Exception as exc:
-            raise RuntimeError("Artifact body is unavailable from configured durable storage") from exc
+            raise RuntimeError(
+                "Artifact body is unavailable from configured durable storage"
+            ) from exc
         digest = hashlib.sha256(body).hexdigest()
         if digest != artifact.content_checksum or len(body) != artifact.content_size:
             logger.warning(
@@ -757,13 +807,20 @@ class S3ArtifactStore:
 
     async def upsert_artifact(self, artifact: ArtifactDefinition) -> None:
         body, checksum, content_size = self._body_metadata(artifact.content)
-        object_key = self._object_key(artifact, checksum)
-        object_store = self._object_store()
+        object_key = await self._run_io(
+            lambda objects: objects.scoped_key(artifact.scope, self._path(artifact, checksum))
+        )
+
+        def write_and_verify(objects: S3ObjectStore) -> bytes:
+            objects.put(object_key, body)
+            return objects.get(object_key)
+
         try:
-            object_store.put(object_key, body)
-            stored_body = object_store.get(object_key)
+            stored_body = await self._run_io(write_and_verify)
         except Exception as exc:
-            raise RuntimeError("Artifact body could not be written to configured durable storage") from exc
+            raise RuntimeError(
+                "Artifact body could not be written to configured durable storage"
+            ) from exc
         if stored_body != body or hashlib.sha256(stored_body).hexdigest() != checksum:
             logger.warning(
                 "Artifact upload integrity verification failed",
@@ -791,17 +848,18 @@ class S3ArtifactStore:
             result="success",
         )
 
-    async def delete_artifact(
-        self, artifact_id: str, scope: dict[str, str] | None = None
-    ) -> bool:
+    async def delete_artifact(self, artifact_id: str, scope: dict[str, str] | None = None) -> bool:
         versions = await self._manifest_store.list_artifact_versions(artifact_id, scope)
         for artifact in versions:
             if artifact.object_key is None:
                 raise RuntimeError("Artifact manifest is missing durable-body metadata")
             try:
-                self._object_store().delete(artifact.object_key)
+                object_key = artifact.object_key
+                await self._run_io(lambda objects: objects.delete(object_key))
             except Exception as exc:
-                raise RuntimeError("Artifact body could not be deleted from configured durable storage") from exc
+                raise RuntimeError(
+                    "Artifact body could not be deleted from configured durable storage"
+                ) from exc
         return await self._manifest_store.delete_artifact(artifact_id, scope)
 
     async def get_artifact_version(

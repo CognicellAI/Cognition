@@ -15,7 +15,7 @@ or clean up as expected.
 | Image creation fails | Rebuild the default runtime zip, confirm the S3 artifact exists, and inspect the Lambda MicroVM image build logs |
 | Commands hang | Check runtime server logs, command timeout, and network connector reachability |
 | `SANDBOX_QUOTA_EXCEEDED` | Raise or relax profile `quota`, delete/abort/expire idle sessions, or wait for start history to age out |
-| `teardown_pending` | Cognition requested termination, freed its own quota, and AWS had not yet confirmed `TERMINATED`; inspect `GetMicrovm`, idle policy, and CloudWatch service logs |
+| `teardown_pending` | Cognition requested termination but retains ownership and quota until AWS confirms `TERMINATED`; inspect `GetMicrovm` and CloudWatch service logs, then retry cleanup |
 | `teardown_failed` | Inspect `teardown_error_code`, Cognition control-plane IAM permissions, and AWS Lambda MicroVM API errors |
 | CloudWatch cost is high | Disable runtime logging by default or reduce log volume and retention |
 

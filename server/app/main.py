@@ -168,6 +168,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
     session_agent_manager = SessionAgentManager(
         settings,
+        artifact_store=artifact_store,
         storage_backend=storage_backend,
         runtime_resolver=runtime_resolver,
         config_store=config_store,
@@ -247,6 +248,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         endpoint=settings.otel_endpoint,
         app=app,
         enabled=settings.otel_enabled,
+        metrics_enabled=settings.metrics_enabled,
         max_export_bytes=settings.otel_max_export_bytes,
         queue_size=settings.otlp_queue_size,
         export_timeout_millis=settings.otlp_export_timeout_ms,
@@ -291,6 +293,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     logger.info("ConfigChangeDispatcher stopped")
 
     # Close storage backend connections
+    await session_agent_manager.close()
     if storage_backend:
         await storage_backend.close()
     await mcp_oauth_flow_coordinator.close()

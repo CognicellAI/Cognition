@@ -16,6 +16,7 @@ import time
 from collections.abc import Callable, Mapping, Sequence
 from contextlib import contextmanager
 from contextvars import ContextVar
+from threading import Lock
 from typing import Any, TypeVar
 from uuid import uuid4
 
@@ -57,6 +58,7 @@ try:
     )
     from opentelemetry.sdk.metrics import MeterProvider
     from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader
+    from opentelemetry.sdk.metrics.view import ExplicitBucketHistogramAggregation, View
     from opentelemetry.sdk.resources import Resource
     from opentelemetry.sdk.trace import ReadableSpan, SpanProcessor, TracerProvider
     from opentelemetry.sdk.trace.export import (
@@ -170,14 +172,22 @@ def _install_otel_context_noise_filter(trace_detail: str) -> None:
         otel_context_logger.addFilter(_OTelAsyncContextDetachNoiseFilter())
 
 
+from server.app.observability._latency import LatencyHistogram
+from server.app.telemetry import operation_parent
+
 # Metrics (with fallback if prometheus not available)
 if PROMETHEUS_AVAILABLE:
     REQUEST_COUNT = Counter(
         "cognition_requests_total", "Total requests", ["method", "endpoint", "status"]
     )
 
-    REQUEST_DURATION = Histogram(
-        "cognition_request_duration_seconds", "Request duration in seconds", ["method", "endpoint"]
+    REQUEST_DURATION = LatencyHistogram(
+        Histogram(
+            "cognition_request_duration_seconds",
+            "Request duration in seconds",
+            ["method", "endpoint"],
+        ),
+        "cognition.request.duration",
     )
 
     LLM_CALL_DURATION = Histogram(
@@ -241,23 +251,32 @@ if PROMETHEUS_AVAILABLE:
         "cognition_a2a_active_subscribers",
         "A2A subscribers active in this process",
     )
-    RUNTIME_TIME_TO_FIRST_OUTPUT = Histogram(
-        "cognition_runtime_time_to_first_output_seconds",
-        "Time from task execution start to first output",
-        ["transport"],
+    RUNTIME_TIME_TO_FIRST_OUTPUT = LatencyHistogram(
+        Histogram(
+            "cognition_runtime_time_to_first_output_seconds",
+            "Time from task execution start to first output",
+            ["transport"],
+        ),
+        "cognition.runtime.time_to_first_output",
     )
-    RUNTIME_TASK_DURATION = Histogram(
-        "cognition_runtime_task_duration_seconds",
-        "Task execution duration",
-        ["transport", "outcome"],
+    RUNTIME_TASK_DURATION = LatencyHistogram(
+        Histogram(
+            "cognition_runtime_task_duration_seconds",
+            "Task execution duration",
+            ["transport", "outcome"],
+        ),
+        "cognition.runtime.task.duration",
     )
     A2A_STREAM_CHUNK_BYTES = Histogram(
         "cognition_a2a_stream_chunk_bytes",
         "Encoded bytes per emitted A2A artifact chunk",
     )
-    A2A_STREAM_FLUSH_DURATION = Histogram(
-        "cognition_a2a_stream_flush_duration_seconds",
-        "Time required to persist and emit one A2A stream chunk",
+    A2A_STREAM_FLUSH_DURATION = LatencyHistogram(
+        Histogram(
+            "cognition_a2a_stream_flush_duration_seconds",
+            "Time required to persist and emit one A2A stream chunk",
+        ),
+        "cognition.a2a.stream.flush.duration",
     )
     A2A_SUBSCRIPTIONS_TOTAL = Counter(
         "cognition_a2a_subscriptions_total",
@@ -332,20 +351,26 @@ if PROMETHEUS_AVAILABLE:
         "Runtime manifest resolution attempts by outcome",
         ["outcome"],
     )
-    RUNTIME_MANIFEST_RESOLUTION_DURATION = Histogram(
-        "cognition_runtime_manifest_resolution_seconds",
-        "Runtime manifest resolution duration by outcome",
-        ["outcome"],
+    RUNTIME_MANIFEST_RESOLUTION_DURATION = LatencyHistogram(
+        Histogram(
+            "cognition_runtime_manifest_resolution_seconds",
+            "Runtime manifest resolution duration by outcome",
+            ["outcome"],
+        ),
+        "cognition.runtime.manifest_resolution.duration",
     )
     STORAGE_OPERATIONS_TOTAL = Counter(
         "cognition_storage_operations_total",
         "Scoped storage operations by backend, operation, and result",
         ["backend", "operation", "result"],
     )
-    STORAGE_OPERATION_DURATION = Histogram(
-        "cognition_storage_operation_duration_seconds",
-        "Scoped storage operation duration by backend and operation",
-        ["backend", "operation"],
+    STORAGE_OPERATION_DURATION = LatencyHistogram(
+        Histogram(
+            "cognition_storage_operation_duration_seconds",
+            "Scoped storage operation duration by backend and operation",
+            ["backend", "operation"],
+        ),
+        "cognition.storage.operation.duration",
     )
     SCOPE_ACCESS_DENIED_TOTAL = Counter(
         "cognition_scope_access_denied_total",
@@ -357,10 +382,13 @@ if PROMETHEUS_AVAILABLE:
         "Sandbox lifecycle operations by backend, stage, and outcome",
         ["backend", "stage", "outcome"],
     )
-    SANDBOX_LIFECYCLE_DURATION = Histogram(
-        "cognition_sandbox_lifecycle_duration_seconds",
-        "Sandbox lifecycle operation duration by backend and stage",
-        ["backend", "stage"],
+    SANDBOX_LIFECYCLE_DURATION = LatencyHistogram(
+        Histogram(
+            "cognition_sandbox_lifecycle_duration_seconds",
+            "Sandbox lifecycle operation duration by backend and stage",
+            ["backend", "stage"],
+        ),
+        "cognition.sandbox.lifecycle.duration",
     )
     STRICT_EXECUTION_REJECTIONS_TOTAL = Counter(
         "cognition_strict_execution_rejections_total",
@@ -589,9 +617,7 @@ class CuratingSpanExporter(SpanExporter):  # type: ignore[misc]
         self._trace_detail = trace_detail
 
     def export(self, spans: Sequence[ReadableSpan]) -> Any:
-        curated_spans = [
-            span for span in spans if not _should_drop_span(span, self._trace_detail)
-        ]
+        curated_spans = [span for span in spans if not _should_drop_span(span, self._trace_detail)]
         if not curated_spans:
             return SpanExportResult.SUCCESS if SpanExportResult is not None else None
         return self._exporter.export(tuple(curated_spans))
@@ -811,10 +837,38 @@ def _instrument_langchain_metrics(
         unit="token",
         description="Measures number of input and output tokens used",
     )
+
+    first_chunk = meter.create_histogram(
+        "cognition.model.time_to_first_chunk",
+        unit="s",
+        description="Per-call time to first nonempty text or tool-call chunk; no token estimates",
+    )
+    starts: dict[Any, float] = {}
+    starts_lock = Lock()
+
+    def _remember_start(kwargs: dict[str, Any]) -> None:
+        run_id = kwargs.get("run_id")
+        if run_id is not None:
+            with starts_lock:
+                if len(starts) >= 2048:
+                    starts.pop(next(iter(starts)))
+                starts[run_id] = time.monotonic()
+
+    def _on_llm_new_token(instance: Any, token: str, **kwargs: Any) -> None:
+        chunk = kwargs.get("chunk")
+        message = getattr(chunk, "message", None)
+        if not token and not getattr(message, "tool_call_chunks", None):
+            return
+        with starts_lock:
+            started = starts.pop(kwargs.get("run_id"), None)
+        if started is not None:
+            try:
+                first_chunk.record(time.monotonic() - started)
+            except Exception:
+                pass
+
     def _observe_unsuppressed(method_name: str, instance: Any, *args: Any, **kwargs: Any) -> Any:
-        token = context_api.attach(
-            context_api.set_value(_SUPPRESS_INSTRUMENTATION_KEY, False)
-        )
+        token = context_api.attach(context_api.set_value(_SUPPRESS_INSTRUMENTATION_KEY, False))
         try:
             method = getattr(TraceloopCallbackHandler, method_name)
             return method(instance, *args, **kwargs)
@@ -822,6 +876,7 @@ def _instrument_langchain_metrics(
             context_api.detach(token)
 
     def _on_chat_model_start(instance: Any, *args: Any, **kwargs: Any) -> Any:
+        _remember_start(kwargs)
         return _observe_unsuppressed(
             "on_chat_model_start",
             instance,
@@ -830,12 +885,17 @@ def _instrument_langchain_metrics(
         )
 
     def _on_llm_start(instance: Any, *args: Any, **kwargs: Any) -> Any:
+        _remember_start(kwargs)
         return _observe_unsuppressed("on_llm_start", instance, *args, **kwargs)
 
     def _on_llm_end(instance: Any, *args: Any, **kwargs: Any) -> Any:
+        with starts_lock:
+            starts.pop(kwargs.get("run_id"), None)
         return _observe_unsuppressed("on_llm_end", instance, *args, **kwargs)
 
     def _on_llm_error(instance: Any, *args: Any, **kwargs: Any) -> Any:
+        with starts_lock:
+            starts.pop(kwargs.get("run_id"), None)
         return _observe_unsuppressed("on_llm_error", instance, *args, **kwargs)
 
     metrics_only_handler = type(
@@ -848,6 +908,7 @@ def _instrument_langchain_metrics(
             "get_entity_path": lambda _self, _parent_run_id: "",
             "on_chat_model_start": _on_chat_model_start,
             "on_llm_start": _on_llm_start,
+            "on_llm_new_token": _on_llm_new_token,
             "on_llm_end": _on_llm_end,
             "on_llm_error": _on_llm_error,
         },
@@ -896,6 +957,7 @@ def setup_tracing(
     endpoint: str | None = None,
     app: Any | None = None,
     enabled: bool = True,
+    metrics_enabled: bool = True,
     max_export_bytes: int = 3_670_016,
     queue_size: int = 2048,
     export_timeout_millis: int = 30_000,
@@ -916,8 +978,8 @@ def setup_tracing(
     global _OBSERVABILITY_SCOPE_HMAC_KEY
     _OBSERVABILITY_SCOPE_HMAC_KEY = observability_scope_hmac_key or None
 
-    if not enabled:
-        logger.debug("OpenTelemetry tracing disabled by settings")
+    if not enabled and not (metrics_enabled and endpoint):
+        logger.debug("OpenTelemetry export disabled by settings")
         return
 
     if not OPENTELEMETRY_AVAILABLE or Resource is None or TracerProvider is None:
@@ -929,7 +991,7 @@ def setup_tracing(
 
     resource = Resource.create({"service.name": service_name})
     meter_provider = None
-    if MeterProvider is not None:
+    if metrics_enabled and MeterProvider is not None:
         metric_readers = []
         if endpoint:
             metric_exporter = _create_metric_exporter(endpoint)
@@ -940,12 +1002,48 @@ def setup_tracing(
                         export_interval_millis=metric_export_interval_millis,
                     )
                 )
-        meter_provider = MeterProvider(resource=resource, metric_readers=metric_readers)
+        meter_provider = MeterProvider(
+            resource=resource,
+            metric_readers=metric_readers,
+            views=[
+                View(
+                    instrument_unit="s",
+                    aggregation=ExplicitBucketHistogramAggregation(
+                        boundaries=(
+                            0.001,
+                            0.005,
+                            0.01,
+                            0.05,
+                            0.1,
+                            0.25,
+                            0.5,
+                            1,
+                            2.5,
+                            5,
+                            10,
+                            20,
+                            30,
+                            60,
+                            120,
+                            300,
+                            600,
+                            1800,
+                            14400,
+                        )
+                    ),
+                )
+            ],
+        )
         if metrics is not None:
             try:
                 metrics.set_meter_provider(meter_provider)
             except Exception:
                 logger.debug("OpenTelemetry meter provider already configured")
+
+    if not enabled:
+        # Model metrics use a no-op tracer when semantic tracing is disabled.
+        _instrument_langchain_metrics(trace.NoOpTracerProvider(), meter_provider)
+        return
 
     clamped_sample_ratio = max(0.0, min(1.0, trace_sample_ratio))
     sampler = (
@@ -997,6 +1095,10 @@ def setup_tracing(
             excluded_urls=_TRACE_PROBE_EXCLUDED_URLS,
             exclude_spans=["receive", "send"],
         )
+        # Lifespan startup runs inside Starlette's already-built stack. The
+        # instrumentor replaces its builder, so rebuild lazily for the first
+        # HTTP request; startup has not admitted requests yet.
+        app.middleware_stack = None
 
     # Retain OpenLLMetry's LangChain integration only for its standard GenAI
     # token and duration instruments. LangSmith's OTel-only bridge owns the
@@ -1187,13 +1289,7 @@ def agent_run_span(
         attributes["cognition.scope.fingerprint"] = fingerprint
 
     tracer = get_tracer(__name__)
-    if (
-        tracer is None
-        or trace is None
-        or context_api is None
-        or Link is None
-        or SpanKind is None
-    ):
+    if tracer is None or trace is None or context_api is None or Link is None or SpanKind is None:
         yield None
         return
 
@@ -1209,7 +1305,8 @@ def agent_run_span(
         previous_span = _ACTIVE_AGENT_RUN_SPAN.get()
         _ACTIVE_AGENT_RUN_SPAN.set(span_obj)
         try:
-            yield span_obj
+            with operation_parent(span_obj):
+                yield span_obj
         finally:
             # Async generators may be finalized from a copied Context. Restoring
             # the value is safe there; resetting the original token is not.

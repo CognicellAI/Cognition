@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Any
 from a2a.helpers.proto_helpers import (
     new_artifact,
     new_data_part,
+    new_message,
     new_raw_part,
     new_text_artifact,
     new_text_message,
@@ -155,12 +156,50 @@ class CognitionTaskStore(TaskStore):
         """Honor the SDK interface without exposing task deletion as A2A behavior."""
         await self.get(task_id, context)
 
+    async def resolve_part(self, part: dict[str, Any], scope: dict[str, str]) -> dict[str, Any]:
+        """Resolve a durable publication reference at the authorized wire boundary."""
+        from server.app.exceptions import ArtifactContentNotFoundError
+        from server.app.storage.artifact_store import S3ArtifactStore
+        from server.app.storage.published_file import REFERENCE_PREFIX, resolve_download
+
+        value = part.get("value")
+        if part.get("kind") == "url" and isinstance(value, str) and value.startswith(REFERENCE_PREFIX):
+            if not isinstance(self._artifact_store, S3ArtifactStore):
+                raise ValueError("Published artifact storage is unavailable")
+            try:
+                url = await resolve_download(self._artifact_store, scope, value)
+            except ArtifactContentNotFoundError as exc:
+                # This is a current projection, not a mutation of historical output.
+                # The surrounding artifact retains its identity and display name.
+                return {
+                    **part,
+                    "kind": "text",
+                    "value": str(exc),
+                    "media_type": "text/plain",
+                    "filename": None,
+                    "metadata": {
+                        **(part.get("metadata") or {}),
+                        "cognition": {
+                            "contentAvailability": "unavailable",
+                            "originalKind": "url",
+                            "originalMediaType": part.get("media_type"),
+                            "originalFilename": part.get("filename"),
+                        },
+                    },
+                }
+            return {**part, "value": url}
+        return part
+
     async def project(self, task: RuntimeTask) -> Task:
         """Project one already-authorized neutral task to its A2A representation."""
         messages = await self._store.list_messages_for_session(
             task.session_id,
             task.effective_scope,
         )
+        input_parts = {item["part_id"]: item for item in task.metadata.get("input_parts", [])}
+        input_messages = {
+            item["message_id"]: item for item in task.metadata.get("input_messages", [])
+        }
         history = []
         assistant_text = ""
         for message in messages:
@@ -175,6 +214,17 @@ class CognitionTaskStore(TaskStore):
                 task_id=task.id,
                 role=role,
             )
+            original = input_messages.get(message.id)
+            if original is not None and message.role == "user":
+                projected = new_message(
+                    [_project_artifact_part(input_parts[key]) for key in original["part_ids"]],
+                    context_id=task.context_id,
+                    task_id=task.id,
+                    role=role,
+                )
+                projected.metadata.update(original.get("metadata", {}))
+                projected.extensions.extend(original.get("extensions", []))
+                projected.reference_task_ids.extend(original.get("reference_task_ids", []))
             projected.message_id = message.id
             history.append(projected)
             if message.role == "assistant" and message.content:
@@ -187,7 +237,7 @@ class CognitionTaskStore(TaskStore):
                 if not isinstance(descriptor, dict):
                     continue
                 parts = [
-                    _project_artifact_part(part)
+                    _project_artifact_part(await self.resolve_part(part, task.effective_scope))
                     for part in descriptor.get("parts", [])
                     if isinstance(part, dict)
                 ]
@@ -325,20 +375,17 @@ def _project_artifact_part(part: dict[str, Any]) -> Part:
     media_type = part.get("media_type")
     filename = part.get("filename")
     if kind == "data":
-        return new_data_part(value, media_type=media_type)
-    if kind == "raw":
-        return new_raw_part(
-            base64.b64decode(str(value)),
-            media_type=media_type,
-            filename=filename,
-        )
-    if kind == "url":
-        return new_url_part(
-            str(value),
-            media_type=media_type,
-            filename=filename,
-        )
-    return new_text_part(str(value), media_type=media_type)
+        result = new_data_part(value, media_type=media_type)
+    elif kind == "raw":
+        result = new_raw_part(base64.b64decode(str(value)), media_type=media_type, filename=filename)
+    elif kind == "url":
+        result = new_url_part(str(value), media_type=media_type, filename=filename)
+    else:
+        result = new_text_part(str(value), media_type=media_type)
+    if filename:
+        result.filename = str(filename)
+    result.metadata.update(part.get("metadata") or {})
+    return result
 
 
 __all__ = [

@@ -9,12 +9,14 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import json
 import logging
 import shlex
 import threading
 import time
 import uuid
 from collections.abc import Callable, Mapping
+from contextlib import ExitStack, nullcontext
 from typing import Any, Literal
 
 import httpx
@@ -24,6 +26,8 @@ from deepagents.backends.protocol import (
     FileUploadResponse,
 )
 from deepagents.backends.sandbox import BaseSandbox
+
+from ._telemetry import operation
 
 logger = logging.getLogger(__name__)
 
@@ -146,6 +150,8 @@ class LambdaMicroVmSandbox(BaseSandbox):
         self._owns_http_client = http_client is None
 
         self._lock = threading.Lock()
+        self._closed = False
+        self._ready = False
         self._microvm_id: str | None = None
         self._endpoint: str | None = None
         self._state: str | None = None
@@ -274,6 +280,7 @@ class LambdaMicroVmSandbox(BaseSandbox):
         if image_version:
             self._resolved_image_version = str(image_version)
 
+    @operation("lambda_microvm.running_wait")
     def _wait_for_running(self) -> None:
         if self._state == RUNNING_STATE:
             return
@@ -297,6 +304,7 @@ class LambdaMicroVmSandbox(BaseSandbox):
             f"Timed out waiting for Lambda MicroVM {self._microvm_id} to enter RUNNING"
         )
 
+    @operation("lambda_microvm.termination_wait")
     def _wait_for_terminated(self) -> bool:
         if self._state == TERMINATED_STATE:
             return True
@@ -317,6 +325,7 @@ class LambdaMicroVmSandbox(BaseSandbox):
             time.sleep(min(self._teardown_poll_interval_seconds, remaining_seconds))
         return False
 
+    @operation("lambda_microvm.authenticate")
     def _create_auth_headers(self) -> None:
         if not self._microvm_id:
             raise RuntimeError("Cannot create MicroVM auth token before launch")
@@ -355,24 +364,47 @@ class LambdaMicroVmSandbox(BaseSandbox):
         *,
         json_body: dict[str, Any] | None = None,
         timeout: float | None = None,
+        max_response_bytes: int | None = None,
     ) -> dict[str, Any]:
-        if self._auth_headers is None:
-            raise RuntimeError("Lambda MicroVM auth token is not available")
-        if self._http_client is None:
-            self._http_client = httpx.Client()
-        response = self._http_client.request(
-            method,
-            self._runtime_url(path),
-            headers=self._auth_headers,
-            json=json_body,
-            timeout=timeout,
+        timing = (
+            operation("lambda_microvm." + path.removeprefix("/"))
+            if path in {"/execute", "/upload", "/download"}
+            else nullcontext()
         )
-        response.raise_for_status()
-        data = response.json()
-        if not isinstance(data, dict):
-            raise RuntimeError("Lambda MicroVM runtime returned a non-object JSON response")
-        return data
+        with timing:
+            if self._auth_headers is None:
+                raise RuntimeError("Lambda MicroVM auth token is not available")
+            if self._http_client is None:
+                self._http_client = httpx.Client()
+            if max_response_bytes is not None:
+                with self._http_client.stream(
+                    method, self._runtime_url(path), headers=self._auth_headers,
+                    json=json_body, timeout=timeout,
+                ) as response:
+                    response.raise_for_status()
+                    body = bytearray()
+                    for chunk in response.iter_bytes(chunk_size=65536):
+                        if len(body) + len(chunk) > max_response_bytes:
+                            raise ValueError("Publication response exceeds limit")
+                        body.extend(chunk)
+                    data = json.loads(body)
+                    if not isinstance(data, dict):
+                        raise RuntimeError("Lambda MicroVM runtime returned a non-object JSON response")
+                    return data
+            response = self._http_client.request(
+                method,
+                self._runtime_url(path),
+                headers=self._auth_headers,
+                json=json_body,
+                timeout=timeout,
+            )
+            response.raise_for_status()
+            data = response.json()
+            if not isinstance(data, dict):
+                raise RuntimeError("Lambda MicroVM runtime returned a non-object JSON response")
+            return data
 
+    @operation("lambda_microvm.readiness")
     def _healthcheck(self) -> None:
         started = time.monotonic()
         self._record_lifecycle_phase("runtime_healthcheck_started")
@@ -403,17 +435,24 @@ class LambdaMicroVmSandbox(BaseSandbox):
         raise TimeoutError("Timed out waiting for Lambda MicroVM command server /healthz") from last_error
 
     def _ensure_microvm(self) -> None:
-        if self._microvm_id and self._state == RUNNING_STATE and self._auth_headers:
-            return
-
-        with self._lock:
-            if self._microvm_id and self._state == RUNNING_STATE and self._auth_headers:
+        with operation("lambda_microvm.acquire"), ExitStack() as stack:
+            with operation("lambda_microvm.lock_wait"):
+                stack.enter_context(self._lock)
+            if self._closed:
+                raise RuntimeError("Lambda MicroVM sandbox has been released")
+            if self._microvm_id and self._state == RUNNING_STATE and self._auth_headers and self._ready:
                 return
 
             client = self._get_client()
 
             if self._microvm_id and self._state == SUSPENDED_STATE:
-                client.resume_microvm(microvmIdentifier=self._microvm_id)
+                with operation("lambda_microvm.resume"):
+                    client.resume_microvm(microvmIdentifier=self._microvm_id)
+                self._wait_for_running()
+            elif self._microvm_id:
+                if self._state in TERMINAL_STATES:
+                    raise RuntimeError("Lambda MicroVM is terminal; release its owned backend")
+                # Retry readiness/launch polling for the existing allocation.
                 self._wait_for_running()
             else:
                 launch_started = time.monotonic()
@@ -427,7 +466,8 @@ class LambdaMicroVmSandbox(BaseSandbox):
                     self._region_name,
                     _role_fingerprint(self._execution_role_arn),
                 )
-                response = client.run_microvm(**self._run_request())
+                with operation("lambda_microvm.launch"):
+                    response = client.run_microvm(**self._run_request())
                 self._update_state_from_response(response)
                 self._wait_for_running()
                 self._launch_duration_ms = (time.monotonic() - launch_started) * 1000
@@ -445,6 +485,7 @@ class LambdaMicroVmSandbox(BaseSandbox):
 
             self._create_auth_headers()
             self._healthcheck()
+            self._ready = True
             logger.info(
                 "Lambda MicroVM sandbox ready microvm_id=%s image=%s image_version=%s role_fingerprint=%s",
                 self._microvm_id,
@@ -555,6 +596,26 @@ class LambdaMicroVmSandbox(BaseSandbox):
             return FileDownloadResponse(path=file_path, error="invalid_path")
         return FileDownloadResponse(path=file_path, content=content)
 
+    def download_file_bounded(self, path: str, max_bytes: int) -> bytes:
+        """Read a publication file using the runtime's bounded, no-symlink route."""
+        self._ensure_microvm()
+        if not 0 < max_bytes <= 10 * 1024 * 1024:
+            raise ValueError("Invalid publication size limit")
+        runtime_path = self._workspace_upload_path(path)
+        if runtime_path is None or any(part in {".", ".."} for part in path.split("/")):
+            raise ValueError("Publication path must be inside the sandbox workspace")
+        data = self._runtime_request(
+            "POST", "/download", json_body={"path": runtime_path, "max_bytes": max_bytes}, timeout=60,
+            max_response_bytes=4 * ((max_bytes + 2) // 3) + 4096,
+        )
+        encoded = str(data.get("content_base64") or "")
+        if len(encoded) > 4 * ((max_bytes + 2) // 3):
+            raise ValueError("Publication response exceeds limit")
+        raw = base64.b64decode(encoded, validate=True)
+        if len(raw) > max_bytes:
+            raise ValueError("Publication response exceeds limit")
+        return raw
+
     def download_files(self, paths: list[str]) -> list[FileDownloadResponse]:
         """Download files from the MicroVM runtime."""
         self._ensure_microvm()
@@ -585,8 +646,15 @@ class LambdaMicroVmSandbox(BaseSandbox):
                 results.append(FileDownloadResponse(path=file_path, error="invalid_path"))
         return results
 
+    @operation("lambda_microvm.terminate")
     def terminate(self) -> None:
         """Terminate the Lambda MicroVM and clear in-memory auth material."""
+        with self._lock:
+            self._closed = True
+            self._ready = False
+            self._terminate_locked()
+
+    def _terminate_locked(self) -> None:
         started = time.monotonic()
         self._teardown_attempt += 1
         self._teardown_error_code = None

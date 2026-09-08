@@ -2159,6 +2159,9 @@ dependencies = [
 aws = [
     { name = "boto3" },
 ]
+otel = [
+    { name = "opentelemetry-api" },
+]
 test = [
     { name = "pytest" },
     { name = "pytest-asyncio" },
@@ -2169,10 +2172,11 @@ requires-dist = [
     { name = "boto3", marker = "extra == 'aws'", specifier = ">=1.43.36" },
     { name = "deepagents", specifier = ">=0.6.2" },
     { name = "httpx", specifier = ">=0.27.0" },
+    { name = "opentelemetry-api", marker = "extra == 'otel'", specifier = ">=1.28.0" },
     { name = "pytest", marker = "extra == 'test'", specifier = ">=8.3.0" },
     { name = "pytest-asyncio", marker = "extra == 'test'", specifier = ">=0.24.0" },
 ]
-provides-extras = ["aws", "test"]
+provides-extras = ["otel", "aws", "test"]
 
 [[package]]
 name = "langchain-core"

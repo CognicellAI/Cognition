@@ -314,7 +314,7 @@ class _ScopedRequestHandler(DefaultRequestHandler):
                 artifact_update = _artifact_update_from_runtime_event(
                     current.id,
                     current.context_id,
-                    runtime_event.payload,
+                    await self._cognition_task_store.resolve_part(runtime_event.payload, scope),
                 ) if runtime_event.event_type == "artifact.updated" else None
                 if artifact_update is not None:
                     yield artifact_update
@@ -436,7 +436,7 @@ def _artifact_update_from_runtime_event(
     append = bool(payload.get("append"))
     last_chunk = bool(payload.get("last_chunk"))
     if kind == "text":
-        return new_text_artifact_update_event(
+        update = new_text_artifact_update_event(
             task_id=task_id,
             context_id=context_id,
             name=name,
@@ -445,6 +445,10 @@ def _artifact_update_from_runtime_event(
             append=append,
             last_chunk=last_chunk,
         )
+        update.artifact.parts[0].metadata.update(payload.get("metadata") or {})
+        if media_type:
+            update.artifact.parts[0].media_type = media_type
+        return update
     if kind == "data":
         return new_data_artifact_update_event(
             task_id=task_id,
