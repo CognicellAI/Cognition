@@ -9,6 +9,30 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- Explicit sandbox-file publication as scoped A2A `raw` or `url` Parts, plus
+  validated structured agent results as `data` Parts. Publication verifies S3
+  bytes before activation and preserves durable references for URL refresh.
+- Reusable OTel latency measurements for runtime, checkpoint, sandbox,
+  publication and retrieval operations; optional caller-owned MicroVM SDK tracing.
+- Operator guidance for builder-owned S3 Files workspaces and published-file
+  retention, with a concise historical validation record.
+
+### Fixed
+
+- Blocking artifact S3 I/O now runs off the event loop using a reusable,
+  bounded client transport.
+- Repeated runs reuse the exact-scope session sandbox; pending teardown retains
+  ownership and quota, and released MicroVM handles cannot relaunch. Ownership
+  remains process-local; distributed recovery is not provided.
+- Published-file paths respect the assigned sandbox workspace root, including
+  custom roots, while rejecting traversal and sibling-directory access.
+- Authorized retrieval reports missing published content without changing
+  artifact identity. Operators can select new published bodies using S3 object
+  tags and configure URL-only publication; existing inline history is retained.
+
+
 ## [0.14.1] — 2026-09-02
 
 ### Fixed

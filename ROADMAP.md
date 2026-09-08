@@ -74,6 +74,8 @@ See AGENTS.md for category definitions, DoD requirements, and precedence rules.
 
 ## Bug Fixes
 
+- 2026-09-08: Validate publication paths against the assigned sandbox workspace root, including custom roots, instead of a hardcoded directory. Layer 4; release review reproduction with native tool execution; reject sibling prefixes and traversal.
+
 - 2026-09-08: Repeated runs constructed fresh sandbox backends and overwrote session tracking without terminating prior MicroVMs, defeating warm reuse and permitting untracked allocations beyond a per-session quota. Layers 3/4; high severity lifecycle/resource isolation defect. Reproduced in the original performance baseline and subsequently repaired for process-local ownership at `fa60c92`. See the session sandbox ownership entry and live lifecycle gate evidence; distributed ownership remains open.
 
 - 2026-09-08: Refresh the not-yet-serving ASGI middleware stack when FastAPI OTel instrumentation is installed during lifespan startup; preserve trusted ingress trace context. Layers 6/7. Reproduced by WayPost-to-Cognition live trace correlation; regression and live verification in progress.

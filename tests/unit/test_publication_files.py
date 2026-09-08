@@ -79,9 +79,10 @@ async def test_failed_upload_never_activates_manifest(monkeypatch):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("failure", [None, "upload", "manifest", "oversize", "scope", "traversal"])
+@pytest.mark.parametrize("failure", [None, "upload", "manifest", "oversize", "scope", "traversal", "sibling"])
 @pytest.mark.parametrize("inline_limit", [0, 256 * 1024])
-async def test_real_tool_graph_emits_published_part(monkeypatch, failure, inline_limit):
+@pytest.mark.parametrize("workspace_root", ["/workspace", "/work"])
+async def test_real_tool_graph_emits_published_part(monkeypatch, failure, inline_limit, workspace_root):
     from langchain.agents import create_agent
     from langchain_core.language_models.fake_chat_models import GenericFakeChatModel
     from langchain_core.messages import AIMessage
@@ -115,6 +116,7 @@ async def test_real_tool_graph_emits_published_part(monkeypatch, failure, inline
     objects.get.side_effect = lambda key: bodies[key]
     monkeypatch.setattr(store, "_object_store", lambda: objects)
     sandbox = MagicMock()
+    sandbox.workspace_root = workspace_root
     sandbox.download_file_bounded.return_value = b"\x00\xff"
     if failure == "oversize":
         sandbox.download_file_bounded.side_effect = ValueError("File exceeds publication limit")
@@ -135,9 +137,11 @@ async def test_real_tool_graph_emits_published_part(monkeypatch, failure, inline
                         {
                             "name": "publish_artifact",
                             "args": {
-                                "path": "/workspace/../secret"
-                                if failure == "traversal"
-                                else "/workspace/file.bin"
+                                "path": (
+                                    f"{workspace_root}/../secret" if failure == "traversal"
+                                    else f"{workspace_root}-other/file.bin" if failure == "sibling"
+                                    else f"{workspace_root}/file.bin"
+                                )
                             },
                             "id": "publish-1",
                             "type": "tool_call",
@@ -170,7 +174,7 @@ async def test_real_tool_graph_emits_published_part(monkeypatch, failure, inline
     artifacts = [event for event in events if isinstance(event, ArtifactEvent)]
     if failure:
         assert artifacts == []
-        if failure in {"scope", "traversal"}:
+        if failure in {"scope", "traversal", "sibling"}:
             sandbox.download_file_bounded.assert_not_called()
         return
     assert len(artifacts) == 1, events

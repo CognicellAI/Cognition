@@ -29,6 +29,9 @@ class PublicationMiddleware(AgentMiddleware):
         if not 0 <= inline_limit <= max_bytes <= 10 * 1024 * 1024:
             raise ValueError("Invalid artifact publication limits")
         expected_scope = dict(scope)
+        workspace_root = PurePosixPath(sandbox.workspace_root)
+        if not workspace_root.is_absolute():
+            raise ValueError("Publication requires an absolute sandbox workspace root")
 
         @tool(response_format="content_and_artifact")
         async def publish_artifact(
@@ -42,7 +45,7 @@ class PublicationMiddleware(AgentMiddleware):
             with operation("cognition.publication.validate"):
                 if runtime.context is None or runtime.context.effective_scope != expected_scope:
                     raise ValueError("Publication scope mismatch")
-                if not path.startswith("/workspace/") or any(
+                if workspace_root not in PurePosixPath(path).parents or any(
                     x in {".", ".."} for x in path.split("/")
                 ):
                     raise ValueError("Publication requires an absolute sandbox workspace path")
