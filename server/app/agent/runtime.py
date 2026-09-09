@@ -23,12 +23,14 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Literal, Protocol, cast, runtime_checkable
+from uuid import uuid4
 
 import structlog
+from pydantic import BaseModel
 
 logger = structlog.get_logger(__name__)
 
-from langchain_core.messages import AIMessageChunk, ToolMessage
+from langchain_core.messages import AIMessage, AIMessageChunk, ToolMessage
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.errors import GraphInterrupt
 from langgraph.types import Command
@@ -43,6 +45,7 @@ from server.app.observability import (
 )
 from server.app.settings import Settings, get_settings
 from server.app.storage.factory import create_storage_backend
+from server.app.telemetry import operation
 
 # ============================================================================
 # Content normalisation
@@ -956,6 +959,7 @@ class DeepAgentRuntime:
             # Maps tool_call_id -> {"name": str, "args": str} so we can emit
             # ToolCallEvent once the name is first seen and assemble args.
             _pending_tool_calls: dict[str, dict[str, Any]] = {}
+            _text_message_ids: set[str] = set()
 
             # Track active subagent delegations so we emit DelegationEvent once
             # per subagent invocation (on first subagent activity), not on every
@@ -1008,9 +1012,11 @@ class DeepAgentRuntime:
 
                     # ── Token streaming ──────────────────────────────────────
                     # AIMessageChunk with text content → TokenEvent
-                    if isinstance(msg, AIMessageChunk) and msg.content:
+                    if isinstance(msg, AIMessage) and msg.content:
                         text = _content_to_str(msg.content)
                         if text:
+                            if msg.id:
+                                _text_message_ids.add(msg.id)
                             yield TokenEvent(content=text)
 
                     # ── Tool call start ──────────────────────────────────────
@@ -1044,6 +1050,20 @@ class DeepAgentRuntime:
                     # ToolMessage carries the real tool_call_id that correlates
                     # to the ToolCallEvent emitted above.
                     if isinstance(msg, ToolMessage):
+                        from server.app.storage.published_file import (
+                            REFERENCE_PREFIX,
+                            PublishedFile,
+                        )
+
+                        attachment = msg.artifact
+                        if isinstance(attachment, dict) and isinstance(attachment.get("published_file"), PublishedFile):
+                            published = attachment["published_file"]
+                            yield ArtifactEvent(
+                                artifact_id=published.id, name=published.filename,
+                                kind=published.kind,
+                                value=attachment["inline_body"] if published.kind == "raw" else REFERENCE_PREFIX + published.id,
+                                media_type=published.media_type, filename=published.filename,
+                            )
                         tool_call_id: str = getattr(msg, "tool_call_id", "") or ""
                         output = _content_to_str(msg.content) if msg.content else ""
                         _pending_tool_calls.pop(tool_call_id, None)
@@ -1057,6 +1077,33 @@ class DeepAgentRuntime:
                 # Yields {node_name: state_updates} dicts.
                 # Used to detect subagent lifecycle events via namespace.
                 elif chunk_type == "updates":
+                    # Only root graph results are public deliverables. Subagent
+                    # structured state is intermediate input to the parent.
+                    if not ns and isinstance(data, Mapping):
+                        for update in data.values():
+                            if not isinstance(update, Mapping):
+                                continue
+                            for message in update.get("messages", []):
+                                if isinstance(message, AIMessage) and message.id not in _text_message_ids:
+                                    text = _content_to_str(message.content)
+                                    if text:
+                                        if message.id:
+                                            _text_message_ids.add(message.id)
+                                        yield TokenEvent(content=text)
+                            result = update.get("structured_response")
+                            if result is not None:
+                                value = (
+                                    result.model_dump(mode="json")
+                                    if isinstance(result, BaseModel)
+                                    else result
+                                )
+                                yield ArtifactEvent(
+                                    artifact_id=str(uuid4()),
+                                    name="structured-response",
+                                    kind="data",
+                                    value=value,
+                                    media_type="application/json",
+                                )
                     interrupt_requests = _extract_interrupt_requests_from_update(data)
                     if interrupt_requests and not interrupt_emitted:
                         interrupt_emitted = True
@@ -1320,7 +1367,8 @@ class DeepAgentRuntime:
 
         try:
             config = {"configurable": {"thread_id": tid}}
-            state = await self._agent.aget_state(config)
+            with operation("cognition.checkpoint.inspect"):
+                state = await self._agent.aget_state(config)
 
             if state:
                 return {

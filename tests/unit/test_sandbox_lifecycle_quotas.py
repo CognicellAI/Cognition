@@ -178,7 +178,7 @@ def test_release_sandbox_backend_frees_concurrent_quota_and_is_idempotent() -> N
     assert second.terminated is False
 
 
-def test_release_sandbox_backend_pending_teardown_frees_concurrent_quota() -> None:
+def test_release_sandbox_backend_pending_teardown_retains_concurrent_quota() -> None:
     manager = _manager()
     quota = LambdaMicroVmQuota(max_concurrent_sessions=1)
     first = FakeSandboxBackend(
@@ -198,6 +198,11 @@ def test_release_sandbox_backend_pending_teardown_frees_concurrent_quota() -> No
     assert phases == ["provisioned", "teardown_started", "teardown_pending"]
 
     second = FakeSandboxBackend(sandbox_id="microvm-2", quota=quota)
+    with pytest.raises(SandboxQuotaExceededError):
+        manager.register_sandbox_backend("session-2", second, scope={"tenant": "acme"})
+    assert manager._sandbox_backends["session-1"] is first
+    first.teardown_status = "complete"
+    manager.release_sandbox_backend("session-1")
     manager.register_sandbox_backend(
         "session-2",
         second,

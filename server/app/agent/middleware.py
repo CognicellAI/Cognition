@@ -283,7 +283,11 @@ class ToolArgumentValidationMiddleware(AgentMiddleware):
             return await handler(request)
 
         try:
-            schema = tool.get_input_schema()
+            # Validate only model-supplied fields. ToolRuntime and other
+            # injected arguments are supplied later by the upstream ToolNode.
+            schema = getattr(tool, "tool_call_schema", None)
+            if not isinstance(schema, type) or not hasattr(schema, "model_validate"):
+                schema = tool.get_input_schema()
             schema.model_validate(args)
         except ValidationError as exc:
             tool_name = tool_call.get("name", "unknown")

@@ -294,3 +294,69 @@ except ImportError:
 ```
 
 The server starts and runs normally regardless of whether `prometheus_client`, `opentelemetry-sdk`, or `mlflow` are installed. Observability is additive, not required.
+
+## Operation latency through OTLP
+
+With `COGNITION_METRICS_ENABLED=true` and `COGNITION_OTLP_ENDPOINT` configured,
+Cognition exports latency metrics even when `COGNITION_TRACING_ENABLED=false`.
+The existing model-metrics adapter remains the sole owner of provider token and
+model-duration instruments. Tracing sampling does not sample metric observations.
+
+`cognition.operation.duration` (seconds) measures publication validation, bounded
+sandbox download, hashing, object upload/readback verification, manifest commit,
+authorized artifact resolution/signing, and explicit checkpoint reads. Its only
+labels are constant `operation` and `outcome` (`success` or `error`, according to
+whether the operation raised). It never exports paths, content, exception text,
+credentials or signed URLs. SDK instrumentation adds
+`lambda_microvm.operation.duration` using the embedding application's provider.
+Install the standalone MicroVM package's `otel` extra to enable its OTel API hooks.
+The SDK neither configures an exporter nor changes the sandbox protocol.
+
+Existing Prometheus latency instruments also emit corresponding OTLP histograms:
+
+| Prometheus name | OTLP name |
+|---|---|
+| `cognition_request_duration_seconds` | `cognition.request.duration` |
+| `cognition_runtime_time_to_first_output_seconds` | `cognition.runtime.time_to_first_output` |
+| `cognition_runtime_task_duration_seconds` | `cognition.runtime.task.duration` |
+| `cognition_a2a_stream_flush_duration_seconds` | `cognition.a2a.stream.flush.duration` |
+| `cognition_runtime_manifest_resolution_seconds` | `cognition.runtime.manifest_resolution.duration` |
+| `cognition_storage_operation_duration_seconds` | `cognition.storage.operation.duration` |
+| `cognition_sandbox_lifecycle_duration_seconds` | `cognition.sandbox.lifecycle.duration` |
+
+When collecting both signals, drop these legacy histogram families at the
+Prometheus receiver; otherwise the same observation is counted twice. Other
+legacy counters and process metrics can still be scraped. The
+[archived performance lab](../architecture/a2a-deliverability-validation.md#archive-and-reproduction)
+contains the tested Collector configuration and local dashboard.
+Duration histograms have buckets extending to four hours. Different buckets and
+collection paths can produce different histogram percentile approximations.
+
+The framework's existing raw-trace policy is unchanged: operators must protect
+and filter upstream framework content in their Collector. The content-free
+manual measurements are not a replacement for that policy. Benchmark agents,
+workloads, AWS provisioning, S3 Files mount diagnostics and dashboards are
+archived separately from the release tree. Production settings contain no
+benchmark configuration.
+
+HTTP instrumentation is initialized during application lifespan startup. Cognition
+invalidates Starlette's initially built middleware stack after installing the
+instrumentor, so the first HTTP request already extracts W3C trace context. The
+semantic execution trace still starts its own root and links to that ingress.
+Manual operations recover the owning run context if a framework installs a
+synthetic foreign trace context; valid descendants retain their existing parent.
+
+Native checkpoint I/O is timed on each storage-owned saver instance:
+`cognition.checkpoint.load`, `cognition.checkpoint.save`, and
+`cognition.checkpoint.write_pending`. The native saver class, identity, signatures
+and persistence behavior are retained; arguments and serialized checkpoint values
+are not recorded. `cognition.checkpoint.inspect` measures an explicit runtime state
+inspection and may contain a load span. These overlapping durations are distinct
+operations and must not be added together.
+
+`cognition.task.admission` measures the protocol-neutral task submission or
+continuation transaction, including idempotent recovery and rejected attempts.
+It runs in the caller's ingress trace. `cognition.runtime.config` and
+`cognition.runtime.model` measure pinned configuration and model resolution
+inside execution. Cognition currently rejects conflicting active runs rather
+than queuing them; these timers do not invent an execution-queue delay.

@@ -15,9 +15,10 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import threading
 import time
 from collections import deque
-from collections.abc import AsyncGenerator, AsyncIterator, Mapping
+from collections.abc import AsyncGenerator, AsyncIterator, Callable, Mapping
 from dataclasses import dataclass, field
 from typing import Any, TypeVar, cast
 
@@ -83,6 +84,7 @@ from server.app.storage.common import canonical_json_digest
 from server.app.storage.config_models import SandboxProfile
 from server.app.storage.config_store import ConfigStore
 from server.app.storage.factory import create_storage_backend
+from server.app.telemetry import operation
 
 logger = structlog.get_logger(__name__)
 
@@ -353,6 +355,7 @@ class DeepAgentStreamingService:
         config_store: ConfigStore | None = None,
         mcp_oauth_repository: Any | None = None,
         mcp_readiness_repository: Any | None = None,
+        artifact_store: Any | None = None,
     ) -> None:
         self.settings = settings
         self.storage_backend = create_storage_backend(settings)
@@ -360,6 +363,7 @@ class DeepAgentStreamingService:
         self._config_store = config_store
         self._mcp_oauth_repository = mcp_oauth_repository
         self._mcp_readiness_repository = mcp_readiness_repository
+        self._artifact_store = artifact_store
 
     def _get_runtime_resolver(self) -> RuntimeResolver:
         if self._runtime_resolver is None:
@@ -585,20 +589,22 @@ class DeepAgentStreamingService:
             )
             a2ui_active = isinstance(a2ui_run_metadata, Mapping)
 
-            agent_cfg, custom_tools = await self._resolve_agent_config(
-                session=session,
-                project_path=project_path,
-                system_prompt=system_prompt,
-                scope=effective_scope,
-                runtime_manifest=pinned_manifest,
-            )
+            with operation("cognition.runtime.config"):
+                agent_cfg, custom_tools = await self._resolve_agent_config(
+                    session=session,
+                    project_path=project_path,
+                    system_prompt=system_prompt,
+                    scope=effective_scope,
+                    runtime_manifest=pinned_manifest,
+                )
 
-            resolved_model = await self._resolve_model(
-                session=session,
-                scope=effective_scope,
-                agent_def=agent_cfg.agent_def,
-                runtime_manifest=pinned_manifest,
-            )
+            with operation("cognition.runtime.model"):
+                resolved_model = await self._resolve_model(
+                    session=session,
+                    scope=effective_scope,
+                    agent_def=agent_cfg.agent_def,
+                    runtime_manifest=pinned_manifest,
+                )
             model, provider, model_id, recursion_limit = resolved_model
             model_cache_key = _model_cache_key_from_resolved(
                 resolved_model,
@@ -653,6 +659,7 @@ class DeepAgentStreamingService:
                 model_cache_key=model_cache_key,
                 manifest_digest=manifest_digest,
                 store=store,
+                artifact_store=self._artifact_store,
                 checkpointer=checkpointer,
                 settings=self.settings,
                 tools=custom_tools if custom_tools else None,
@@ -684,17 +691,16 @@ class DeepAgentStreamingService:
                 sandbox_execution_role_arn=agent_cfg.sandbox_execution_role_arn,
                 pinned_sandbox_profile_config=_pinned_sandbox_profile(pinned_manifest),
             )
+            if manager is not None:
+                agent_params._sandbox_acquirer = manager.sandbox_acquirer(
+                    session_id, scope=effective_scope or {},
+                    agent_name=session.agent_name if session else None,
+                    run_id=run_id or thread_id,
+                )
             agent = await create_cognition_agent(agent_params)
             invocation_context.sandbox_backend = agent.sandbox_backend
 
             if manager and agent.sandbox_backend is not None:
-                manager.register_sandbox_backend(
-                    session_id,
-                    agent.sandbox_backend,
-                    run_id=run_id or thread_id,
-                    agent_name=session.agent_name if session else None,
-                    scope=effective_scope,
-                )
                 for sandbox_event in manager.drain_sandbox_events(session_id):
                     yield sandbox_event
 
@@ -945,8 +951,10 @@ class DeepAgentStreamingService:
         args: dict[str, Any] | None = None,
         scope: dict[str, str] | None = None,
         trace_parent_span: Any | None = None,
+        manager: SessionAgentManager | None = None,
     ) -> AsyncGenerator[StreamEvent, None]:
         """Resume an interrupted Deep Agents run from persisted checkpoint state."""
+        runtime: DeepAgentRuntime | None = None
         try:
             session = await self.storage_backend.get_session(session_id, scope)
             if session is None:
@@ -960,19 +968,21 @@ class DeepAgentStreamingService:
             if active_run is None:
                 raise RuntimeError("Pinned active run manifest was not found at exact scope")
 
-            agent_cfg, custom_tools = await self._resolve_agent_config(
-                session=session,
-                project_path=project_path,
-                scope=effective_scope,
-                runtime_manifest=active_run.runtime_manifest,
-            )
+            with operation("cognition.runtime.config"):
+                agent_cfg, custom_tools = await self._resolve_agent_config(
+                    session=session,
+                    project_path=project_path,
+                    scope=effective_scope,
+                    runtime_manifest=active_run.runtime_manifest,
+                )
 
-            resolved_model = await self._resolve_model(
-                session=session,
-                scope=effective_scope,
-                agent_def=agent_cfg.agent_def,
-                runtime_manifest=active_run.runtime_manifest,
-            )
+            with operation("cognition.runtime.model"):
+                resolved_model = await self._resolve_model(
+                    session=session,
+                    scope=effective_scope,
+                    agent_def=agent_cfg.agent_def,
+                    runtime_manifest=active_run.runtime_manifest,
+                )
             model, provider, model_id, recursion_limit = resolved_model
             model_cache_key = _model_cache_key_from_resolved(
                 resolved_model,
@@ -1012,6 +1022,7 @@ class DeepAgentStreamingService:
                 model_cache_key=model_cache_key,
                 manifest_digest=active_run.manifest_digest,
                 store=store,
+                artifact_store=self._artifact_store,
                 checkpointer=checkpointer,
                 settings=self.settings,
                 tools=custom_tools if custom_tools else None,
@@ -1037,6 +1048,11 @@ class DeepAgentStreamingService:
                 sandbox_execution_role_arn=agent_cfg.sandbox_execution_role_arn,
                 pinned_sandbox_profile_config=_pinned_sandbox_profile(active_run.runtime_manifest),
             )
+            if manager is not None:
+                agent_params._sandbox_acquirer = manager.sandbox_acquirer(
+                    session_id, scope=effective_scope or {}, agent_name=session.agent_name,
+                    run_id=active_run.id,
+                )
             agent = await create_cognition_agent(agent_params)
             invocation_context.sandbox_backend = agent.sandbox_backend
 
@@ -1055,7 +1071,8 @@ class DeepAgentStreamingService:
                 context=invocation_context,
                 trace_parent_span=trace_parent_span,
             )
-
+            if manager is not None:
+                manager.register_runtime(session_id, runtime)
             acc = StreamAccumulator()
             usage_aggregator = ProviderUsageAggregator(
                 default_provider=provider,
@@ -1132,6 +1149,9 @@ class DeepAgentStreamingService:
                 exc_info=True,
             )
             yield ErrorEvent(message=str(e), code="RESUME_ERROR")
+        finally:
+            if manager is not None and runtime is not None:
+                manager.unregister_runtime(session_id, runtime)
 
     async def rebuild_message_projection(
         self,
@@ -1220,6 +1240,7 @@ class SessionAgentManager:
         config_store: ConfigStore | None = None,
         mcp_oauth_repository: Any | None = None,
         mcp_readiness_repository: Any | None = None,
+        artifact_store: Any | None = None,
     ) -> None:
         """Initialize the session manager.
 
@@ -1235,12 +1256,18 @@ class SessionAgentManager:
         self._config_store = config_store
         self._mcp_oauth_repository = mcp_oauth_repository
         self._mcp_readiness_repository = mcp_readiness_repository
+        self._artifact_store = artifact_store
         self._services: dict[str, DeepAgentStreamingService] = {}
         self._project_paths: dict[str, str] = {}
         self._service_access: dict[str, float] = {}
         self._service_cache_evictions = 0
         self._active_runtimes: dict[str, list[Any]] = {}
         self._sandbox_backends: dict[str, Any] = {}
+        self._sandbox_bindings: dict[str, tuple[dict[str, str], str | None, str]] = {}
+        self._sandbox_scopes: dict[str, dict[str, str]] = {}
+        self._sandbox_releasing: set[str] = set()
+        self._sandbox_teardown_inflight: set[str] = set()
+        self._sandbox_ownership_lock = threading.RLock()
         self._sandbox_events: dict[str, asyncio.Queue[SandboxLifecycleEvent]] = {}
         self._sandbox_correlations: dict[str, dict[str, Any]] = {}
         self._sandbox_start_history: dict[str, deque[float]] = {}
@@ -1272,6 +1299,7 @@ class SessionAgentManager:
             config_store=self._config_store,
             mcp_oauth_repository=self._mcp_oauth_repository,
             mcp_readiness_repository=self._mcp_readiness_repository,
+            artifact_store=self._artifact_store,
         )
         if self._storage_backend is not None:
             service.storage_backend = self._storage_backend
@@ -1314,9 +1342,9 @@ class SessionAgentManager:
         )
         expired = [session_id for last_access, session_id in candidates if now - last_access > ttl]
         for session_id in expired:
-            self.unregister_session(session_id)
-            self._service_cache_evictions += 1
-            RUNTIME_CACHE_EVICTIONS_TOTAL.labels(cache="session_service", reason="ttl").inc()
+            if self.unregister_session(session_id):
+                self._service_cache_evictions += 1
+                RUNTIME_CACHE_EVICTIONS_TOTAL.labels(cache="session_service", reason="ttl").inc()
 
         while len(self._services) > self.settings.session_service_cache_max_entries:
             idle = sorted(
@@ -1324,13 +1352,14 @@ class SessionAgentManager:
                     (last_access, session_id)
                     for session_id, last_access in self._service_access.items()
                     if not self._active_runtimes.get(session_id)
+                    and session_id not in self._sandbox_releasing
                 ),
             )
             if not idle:
                 break
-            self.unregister_session(idle[0][1])
-            self._service_cache_evictions += 1
-            RUNTIME_CACHE_EVICTIONS_TOTAL.labels(cache="session_service", reason="capacity").inc()
+            if self.unregister_session(idle[0][1]):
+                self._service_cache_evictions += 1
+                RUNTIME_CACHE_EVICTIONS_TOTAL.labels(cache="session_service", reason="capacity").inc()
 
     def get_service_cache_stats(self) -> dict[str, int]:
         """Return safe cache cardinality/eviction metrics."""
@@ -1402,7 +1431,57 @@ class SessionAgentManager:
         logger.warning("No active runtime to abort", session_id=session_id)
         return False
 
+    def sandbox_acquirer(
+        self, session_id: str, *, scope: dict[str, str], agent_name: str | None,
+        run_id: str | None,
+    ) -> Callable[[str, Callable[[], Any]], Any]:
+        """Bind lazy backend construction to exact session ownership."""
+        trusted_scope = dict(scope)
+
+        def acquire(identity: str, factory: Callable[[], Any]) -> Any:
+            with self._sandbox_ownership_lock:
+                if session_id in self._sandbox_teardown_inflight:
+                    raise RuntimeError("Sandbox teardown is not confirmed; retry release first")
+                binding = (trusted_scope, agent_name, identity)
+                existing = self._sandbox_backends.get(session_id)
+                previous = self._sandbox_bindings.get(session_id)
+                if existing is not None:
+                    if previous is None or previous[:2] != binding[:2]:
+                        raise RuntimeError("Sandbox ownership scope or agent mismatch")
+                    if session_id in self._sandbox_releasing:
+                        raise RuntimeError("Sandbox teardown is not confirmed; retry release first")
+                    if previous == binding:
+                        self._sandbox_correlations[session_id]["run_id"] = run_id
+                        event = self.snapshot_sandbox_backend(session_id, phase="reused")
+                        if event is not None:
+                            self._emit_sandbox_event(session_id, event)
+                        return existing
+                    if self._active_runtimes.get(session_id):
+                        raise RuntimeError("Cannot replace a sandbox while a runtime is active")
+                else:
+                    backend = factory()
+                    self.register_sandbox_backend(
+                        session_id, backend, scope=trusted_scope, agent_name=agent_name, run_id=run_id,
+                    )
+                    self._sandbox_bindings[session_id] = binding
+                    return backend
+            # AWS teardown can wait; unrelated session acquisition must keep working.
+            self.release_sandbox_backend(session_id)
+            return acquire(identity, factory)
+
+        return acquire
+
     def register_sandbox_backend(
+        self, session_id: str, backend: Any, *, run_id: str | None = None,
+        agent_name: str | None = None, scope: Mapping[str, str] | None = None,
+    ) -> None:
+        """Register one owned backend without allowing concurrent replacement."""
+        with self._sandbox_ownership_lock:
+            self._register_sandbox_backend(
+                session_id, backend, run_id=run_id, agent_name=agent_name, scope=scope,
+            )
+
+    def _register_sandbox_backend(
         self,
         session_id: str,
         backend: Any,
@@ -1423,6 +1502,19 @@ class SessionAgentManager:
             agent_name: Agent definition bound to the session.
             scope: Trusted builder-authorized effective scope.
         """
+        existing = self._sandbox_backends.get(session_id)
+        if session_id in self._sandbox_teardown_inflight:
+            raise RuntimeError("Sandbox teardown is not confirmed")
+        if existing is not None:
+            if existing is not backend:
+                raise RuntimeError("Session already owns a sandbox; release it before replacement")
+            correlation = self._sandbox_correlations[session_id]
+            if (
+                self._sandbox_scopes[session_id] != dict(scope or {})
+                or correlation["agent_name"] != agent_name
+            ):
+                raise RuntimeError("Sandbox ownership scope or agent mismatch")
+            return
         correlation = self._sandbox_correlation(
             session_id=session_id,
             backend=backend,
@@ -1439,6 +1531,7 @@ class SessionAgentManager:
             )
 
         self._sandbox_correlations[session_id] = correlation
+        self._sandbox_scopes[session_id] = dict(scope or {})
         self._sandbox_backends[session_id] = backend
         sandbox_id = getattr(backend, "id", str(id(backend)))
         self._emit_sandbox_event(
@@ -1605,6 +1698,8 @@ class SessionAgentManager:
         aws_state = metadata.get("aws_state") or metadata.get("status")
         if aws_state == "TERMINATED":
             return "teardown_complete"
+        if self._sandbox_backend_type == "aws_lambda_microvm":
+            return "teardown_pending"
         return "teardown_complete"
 
     def _log_sandbox_lifecycle_event(self, event: SandboxLifecycleEvent) -> None:
@@ -1637,13 +1732,28 @@ class SessionAgentManager:
             logger.info("Sandbox lifecycle event", phase=event.phase, **fields)
 
     def release_sandbox_backend(self, session_id: str) -> None:
-        """Release only the sandbox backend and quota state for a session."""
-        backend = self._sandbox_backends.pop(session_id, None)
+        """Release resources, retaining ownership until teardown is confirmed."""
+        with self._sandbox_ownership_lock:
+            if session_id in self._sandbox_teardown_inflight or session_id not in self._sandbox_backends:
+                return
+            self._sandbox_teardown_inflight.add(session_id)
+            self._sandbox_releasing.add(session_id)
+        try:
+            self._release_sandbox_backend(session_id)
+        finally:
+            with self._sandbox_ownership_lock:
+                self._sandbox_teardown_inflight.discard(session_id)
+
+    def _release_sandbox_backend(self, session_id: str) -> None:
+        backend = self._sandbox_backends.get(session_id)
         if backend is None:
             self._sandbox_correlations.pop(session_id, None)
             self._sandbox_emitted_lifecycle_phases.pop(session_id, None)
             logger.debug("Sandbox backend release skipped", session_id=session_id)
             return
+
+        self._sandbox_releasing.add(session_id)
+        phase = "teardown_complete" if self._sandbox_backend_type == "local" else "teardown_failed"
 
         sandbox_id = getattr(backend, "id", str(id(backend)))
         self._emit_sandbox_event(
@@ -1673,7 +1783,7 @@ class SessionAgentManager:
                         metadata=metadata,
                     ),
                 )
-                logger.info("Sandbox backend released", session_id=session_id, phase=phase)
+                logger.info("Sandbox teardown checked", session_id=session_id, phase=phase)
             except Exception as e:
                 metadata = self._sandbox_runtime_metadata(backend, session_id=session_id)
                 metadata["teardown_status"] = "failed"
@@ -1692,21 +1802,44 @@ class SessionAgentManager:
                     "Sandbox backend terminate failed", session_id=session_id, error=str(e)
                 )
 
-        self._sandbox_correlations.pop(session_id, None)
-        self._sandbox_emitted_lifecycle_phases.pop(session_id, None)
+        if phase == "teardown_complete":
+            with self._sandbox_ownership_lock:
+                self._sandbox_backends.pop(session_id, None)
+                self._sandbox_bindings.pop(session_id, None)
+                self._sandbox_scopes.pop(session_id, None)
+                self._sandbox_releasing.discard(session_id)
+                self._sandbox_correlations.pop(session_id, None)
+                self._sandbox_emitted_lifecycle_phases.pop(session_id, None)
 
-    def unregister_session(self, session_id: str) -> None:
+    def unregister_session(self, session_id: str) -> bool:
         """Unregister a session and clean up resources."""
+        self.release_sandbox_backend(session_id)
+        with self._sandbox_ownership_lock:
+            return self._unregister_session(session_id)
+
+    def _unregister_session(self, session_id: str) -> bool:
+        if session_id in self._sandbox_backends:
+            return False
         self._services.pop(session_id, None)
         self._project_paths.pop(session_id, None)
         self._service_access.pop(session_id, None)
         self._active_runtimes.pop(session_id, None)
 
-        self.release_sandbox_backend(session_id)
         self._sandbox_events.pop(session_id, None)
         self._sandbox_emitted_lifecycle_phases.pop(session_id, None)
         RUNTIME_CACHE_SIZE.labels(cache="session_service").set(len(self._services))
         logger.info("Session unregistered", session_id=session_id)
+        return True
+
+    async def close(self) -> None:
+        """Attempt cleanup of all owned sandboxes during graceful shutdown."""
+        for session_id in list(self._sandbox_backends):
+            await asyncio.to_thread(self.release_sandbox_backend, session_id)
+        if self._sandbox_backends:
+            logger.error(
+                "Sandbox teardown remains unconfirmed at shutdown; operator reconciliation required",
+                pending_sessions=len(self._sandbox_backends),
+            )
 
     def _emit_sandbox_event(self, session_id: str, event: SandboxLifecycleEvent) -> None:
         """Queue a sandbox lifecycle event for the session."""

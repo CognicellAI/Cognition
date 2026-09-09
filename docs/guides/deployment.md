@@ -151,6 +151,19 @@ on exact-scope columns and pinned run manifests. Existing sessions that
 referenced removed built-in default Agents need compatible builder-provisioned
 Agent definitions before cutover.
 
+When upgrading a database created by v0.13 or a v0.14 release candidate to
+v0.14.1 or later, migration `007` normalizes persisted Agent definitions for
+the native Skills runtime. It removes retired top-level `skills` and `tools`
+fields and nested subagent `tools`, then advances the affected Agent revision
+and digest. Valid public capability declarations under `a2a.skills` are
+preserved, as are historical run manifests and their recorded Agent revisions.
+
+This conversion discards any inline Skill bundle content stored in an Agent
+definition. Before restoring traffic, builders that still require those Skills
+must install equivalent standard bundles under `<sandbox workspace>/skills`.
+Back up the database, drain incompatible writers, run the migration, and verify
+every Agent and generated Agent Card before admitting the new runtime.
+
 For explicit migration management:
 
 ```bash

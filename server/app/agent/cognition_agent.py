@@ -21,12 +21,15 @@ compiled graph, enabling targeted invalidation instead of all-or-nothing clears.
 
 from __future__ import annotations
 
+import asyncio
+import hashlib
 import importlib
 import json
 import time
 from collections import OrderedDict
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
+from functools import partial
 from pathlib import Path
 from typing import Any, NamedTuple, cast
 
@@ -445,6 +448,7 @@ class CognitionAgentParams:
     project_path: str | Path
     model: Any = None
     store: Any = None
+    artifact_store: Any = None
     checkpointer: Any = None
     system_prompt: str | None = None
     memory: Sequence[str] | None = None
@@ -470,6 +474,10 @@ class CognitionAgentParams:
     model_cache_key: str | None = None
     manifest_digest: str | None = None
     pinned_sandbox_profile_config: SandboxProfile | None = None
+    # Internal session ownership hook; not an agent-definition/configuration field.
+    _sandbox_acquirer: Callable[[str, Callable[[], Any]], Any] | None = field(
+        default=None, repr=False
+    )
 
 
 def _create_sandbox(
@@ -480,7 +488,26 @@ def _create_sandbox(
     sandbox_profile: str | None = None,
     sandbox_execution_role_arn: str | None = None,
     sandbox_profile_config: SandboxProfile | None = None,
+    acquirer: Callable[[str, Callable[[], Any]], Any] | None = None,
 ) -> Any:
+    if acquirer is not None:
+        construction_settings = {
+            key: value for key, value in settings.model_dump(mode="json").items()
+            if key.startswith(("sandbox_", "docker_", "k8s_"))
+            or key == "unsafe_local_execution"
+        }
+        identity = hashlib.sha256(json.dumps({
+            "settings": construction_settings,
+            "path": str(project_path), "id": sandbox_id, "labels": k8s_labels,
+            "profile": sandbox_profile or settings.aws_lambda_microvm_default_profile,
+            "role": sandbox_execution_role_arn,
+            "profile_config": sandbox_profile_config.model_dump(mode="json")
+            if sandbox_profile_config is not None else None,
+        }, sort_keys=True).encode()).hexdigest()
+        return acquirer(identity, lambda: _create_sandbox(
+            project_path, sandbox_id, settings, k8s_labels, sandbox_profile,
+            sandbox_execution_role_arn, sandbox_profile_config,
+        ))
     start = time.monotonic()
     outcome = "success"
     if settings.sandbox_backend == "local" and not settings.unsafe_local_execution:
@@ -632,7 +659,7 @@ async def create_cognition_agent(params: CognitionAgentParams) -> CognitionAgent
             scope=params.scope,
         )
 
-    sandbox_backend = _create_sandbox(
+    construct_sandbox = partial(_create_sandbox,
         project_path,
         sandbox_id,
         settings,
@@ -640,6 +667,11 @@ async def create_cognition_agent(params: CognitionAgentParams) -> CognitionAgent
         sandbox_profile=resolved_sandbox_profile,
         sandbox_execution_role_arn=params.sandbox_execution_role_arn,
         sandbox_profile_config=sandbox_profile_config,
+        acquirer=params._sandbox_acquirer,
+    )
+    sandbox_backend = (
+        await asyncio.to_thread(construct_sandbox)
+        if params._sandbox_acquirer is not None else construct_sandbox()
     )
 
     defaults_resolved = False
@@ -758,6 +790,17 @@ async def create_cognition_agent(params: CognitionAgentParams) -> CognitionAgent
             prompt = SYSTEM_PROMPT
 
     agent_middleware = list(params.middleware) if params.middleware else []
+    if settings.artifact_publication_enabled:
+        from server.app.agent.publication import PublicationMiddleware
+        from server.app.storage.artifact_store import S3ArtifactStore
+
+        publication_store = params.artifact_store
+        if not isinstance(publication_store, S3ArtifactStore) or not hasattr(sandbox_backend, "download_file_bounded"):
+            raise ValueError("Artifact publication requires S3 and a bounded-download sandbox")
+        agent_middleware.append(PublicationMiddleware(sandbox_backend, publication_store, params.scope or {},
+            inline_limit=settings.artifact_publication_inline_max_bytes,
+            max_bytes=settings.artifact_publication_max_bytes))
+
     settings_blocked_tools = settings.blocked_tools if hasattr(settings, "blocked_tools") else []
     excluded_tools = sorted({*(str(tool) for tool in (params.excluded_tools or []))})
     blocked_tools = sorted(
@@ -839,9 +882,7 @@ async def create_cognition_agent(params: CognitionAgentParams) -> CognitionAgent
         has_composite_routes=bool(routes),
     )
 
-    resolved_response_format: DeepAgentResponseFormat = _resolve_response_format(
-        agent_response_format
-    )
+    resolved_response_format = _runtime_response_format(params.model, agent_response_format)
 
     create_kwargs = cast(
         Any,
@@ -869,6 +910,16 @@ async def create_cognition_agent(params: CognitionAgentParams) -> CognitionAgent
     result = CognitionAgentResult(agent=agent, sandbox_backend=sandbox_backend)
 
     return result
+
+
+def _runtime_response_format(model: Any, schema: str | type[Any] | None) -> DeepAgentResponseFormat:
+    """Select tool validation for Bedrock's legacy InvokeModel adapter."""
+    resolved = _resolve_response_format(schema)
+    if resolved is not None and getattr(model, "_llm_type", None) == "amazon_bedrock_chat":
+        from langchain.agents.structured_output import ToolStrategy
+
+        return ToolStrategy(resolved)
+    return resolved
 
 
 def _resolve_response_format(response_format: str | type[Any] | None) -> type[Any] | None:

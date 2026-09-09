@@ -16,6 +16,7 @@ import base64
 import hashlib
 import os
 import shlex
+import threading
 from pathlib import Path, PurePosixPath
 from typing import Any, cast
 
@@ -37,6 +38,7 @@ from deepagents.backends.protocol import (
 logger = structlog.get_logger(__name__)
 
 from server.app.storage.config_models import LambdaMicroVmQuota, SandboxProfile  # noqa: E402
+from server.app.telemetry import operation_context
 
 
 def _skills_root(workspace_root: str) -> str:
@@ -570,6 +572,8 @@ class CognitionAwsLambdaMicroVmSandboxBackend(SandboxBackendProtocol):
         self._profile_config = profile_config
         self._protected_paths = protected_paths or [".cognition"]
         self._backend: Any | None = None
+        self._backend_lock = threading.Lock()
+        self._released = False
         self._last_runtime_metadata: dict[str, Any] = {}
         self._workspace_root = workspace_root.rstrip("/") or "/"
 
@@ -691,6 +695,13 @@ class CognitionAwsLambdaMicroVmSandboxBackend(SandboxBackendProtocol):
         return []
 
     def _get_backend(self) -> Any:
+        # Parallel Deep Agents tools must reach the same SDK instance and launch lock.
+        with self._backend_lock:
+            if self._released:
+                raise RuntimeError("Sandbox has been released; create a new owned backend")
+            return self._initialize_backend()
+
+    def _initialize_backend(self) -> Any:
         if self._backend is not None:
             return self._backend
         if self._profile_config is None:
@@ -758,12 +769,14 @@ class CognitionAwsLambdaMicroVmSandboxBackend(SandboxBackendProtocol):
         )
         return self._backend
 
+    @operation_context()
     def execute(self, command: str, *, timeout: int | None = None) -> ExecuteResponse:
         """Execute a command in the AWS Lambda MicroVM sandbox."""
         backend = self._get_backend()
         result: ExecuteResponse = backend.execute(command, timeout=timeout)
         return result
 
+    @operation_context()
     def read(
         self,
         file_path: str,
@@ -775,6 +788,7 @@ class CognitionAwsLambdaMicroVmSandboxBackend(SandboxBackendProtocol):
         result: ReadResult = backend.read(file_path, offset=offset, limit=limit)
         return result
 
+    @operation_context()
     def write(self, file_path: str, content: str) -> WriteResult:
         """Write file content to the AWS Lambda MicroVM sandbox."""
         if self._is_protected_path(file_path):
@@ -783,6 +797,7 @@ class CognitionAwsLambdaMicroVmSandboxBackend(SandboxBackendProtocol):
         result: WriteResult = backend.write(file_path, content)
         return result
 
+    @operation_context()
     def edit(
         self,
         file_path: str,
@@ -796,12 +811,14 @@ class CognitionAwsLambdaMicroVmSandboxBackend(SandboxBackendProtocol):
         backend = self._get_backend()
         return backend.edit(file_path, old_string, new_string, replace_all=replace_all)
 
+    @operation_context()
     def ls(self, path: str) -> LsResult:
         """List directory entries in the AWS Lambda MicroVM sandbox."""
         backend = self._get_backend()
         result: LsResult = backend.ls(path)
         return result
 
+    @operation_context()
     def grep(
         self,
         pattern: str,
@@ -818,24 +835,41 @@ class CognitionAwsLambdaMicroVmSandboxBackend(SandboxBackendProtocol):
         result: GrepResult = backend.grep(pattern, **kwargs)
         return result
 
+    @operation_context()
     def glob(self, pattern: str, path: str | None = "/") -> GlobResult:
         """Find matching files in the AWS Lambda MicroVM sandbox."""
         backend = self._get_backend()
         result: GlobResult = backend.glob(pattern, path=path)
         return result
 
+    @operation_context()
+    def download_file_bounded(self, path: str, max_bytes: int) -> bytes:
+        """Read a bounded artifact snapshot inside the assigned MicroVM."""
+        return bytes(self._get_backend().download_file_bounded(path, max_bytes))
+
+    @operation_context()
     def download_files(self, paths: list[str]) -> list[FileDownloadResponse]:
         """Download files from the AWS Lambda MicroVM sandbox."""
         backend = self._get_backend()
         return cast(list[FileDownloadResponse], backend.download_files(paths))
 
+    @operation_context()
     def upload_files(self, files: list[tuple[str, bytes]]) -> list[FileUploadResponse]:
         """Upload files to the AWS Lambda MicroVM sandbox."""
         backend = self._get_backend()
         return cast(list[FileUploadResponse], backend.upload_files(files))
 
+    @operation_context()
     def terminate(self) -> None:
         """Terminate the AWS Lambda MicroVM sandbox if one was created."""
+        with self._backend_lock:
+            self._released = True
+            self._terminate_backend()
+
+    def _terminate_backend(self) -> None:
+        if self._backend is None:
+            self._last_runtime_metadata.setdefault("teardown_status", "skipped")
+            return
         if self._backend is not None:
             try:
                 self._backend.terminate()
@@ -875,7 +909,8 @@ class CognitionAwsLambdaMicroVmSandboxBackend(SandboxBackendProtocol):
                 )
                 logger.warning("AWS Lambda MicroVM sandbox terminate failed", error=str(e))
             finally:
-                self._backend = None
+                if self._last_runtime_metadata.get("teardown_status") in {"complete", "skipped"}:
+                    self._backend = None
 
 
 class CognitionKubernetesSandboxBackend(SandboxBackendProtocol):

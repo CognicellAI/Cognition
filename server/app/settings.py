@@ -340,6 +340,9 @@ class Settings(BaseSettings):
         default="local",
         alias="COGNITION_DURABLE_FILE_BACKEND",
     )
+    artifact_publication_enabled: bool = Field(
+        default=False, alias="COGNITION_ARTIFACT_PUBLICATION_ENABLED",
+    )
     s3_bucket: str | None = Field(default=None, alias="COGNITION_S3_BUCKET")
     s3_prefix: str = Field(default="cognition", alias="COGNITION_S3_PREFIX")
     s3_endpoint_url: str | None = Field(default=None, alias="COGNITION_S3_ENDPOINT_URL")
@@ -356,6 +359,14 @@ class Settings(BaseSettings):
             "HMAC key used to derive opaque, exact-scope object prefixes. "
             "It is never persisted or exposed to agent runtime data."
         ),
+    )
+    artifact_publication_inline_max_bytes: int = Field(
+        default=256 * 1024, ge=0, le=10 * 1024 * 1024,
+        validation_alias="COGNITION_ARTIFACT_PUBLICATION_INLINE_MAX_BYTES",
+    )
+    artifact_publication_max_bytes: int = Field(
+        default=10 * 1024 * 1024, gt=0, le=10 * 1024 * 1024,
+        validation_alias="COGNITION_ARTIFACT_PUBLICATION_MAX_BYTES",
     )
 
     # Sandbox / Execution backend settings

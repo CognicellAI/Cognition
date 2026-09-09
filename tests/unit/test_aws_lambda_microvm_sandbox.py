@@ -3,8 +3,13 @@
 from __future__ import annotations
 
 import base64
+import threading
+import time
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 from unittest.mock import MagicMock, patch
+
+import pytest
 
 from langchain_aws_lambda_microvms import LambdaMicroVmSandbox
 from server.app.agent.sandbox_backend import (
@@ -26,6 +31,78 @@ INTERNET_EGRESS_ARN = (
     "arn:aws:lambda:us-west-2:aws:network-connector:aws-network-connector:INTERNET_EGRESS"
 )
 VPC_EGRESS_ARN = "arn:aws:lambda:us-west-2:123456789012:network-connector:nc-123"
+
+
+def test_failed_readiness_retries_same_allocation():
+    client = FakeLambdaMicroVmsClient()
+    sandbox = LambdaMicroVmSandbox(image_identifier=IMAGE_ARN, client=client, http_client=FakeHttpClient())
+    with (
+        patch.object(client, "run_microvm", wraps=client.run_microvm) as launch,
+        patch.object(sandbox, "_healthcheck", side_effect=[TimeoutError("not ready"), None]) as ready,
+    ):
+        with pytest.raises(TimeoutError):
+            sandbox.execute("true")
+        sandbox.execute("true")
+    launch.assert_called_once()
+    assert ready.call_count == 2
+
+
+@pytest.mark.parametrize("launched", [False, True])
+def test_released_sdk_cannot_launch_or_execute_again(launched):
+    client = FakeLambdaMicroVmsClient()
+    sandbox = LambdaMicroVmSandbox(image_identifier=IMAGE_ARN, client=client, http_client=FakeHttpClient())
+    with patch.object(client, "run_microvm", wraps=client.run_microvm) as launch:
+        if launched:
+            sandbox.execute("true")
+        sandbox.terminate()
+        with pytest.raises(RuntimeError, match="released"):
+            sandbox.execute("true")
+        assert launch.call_count == int(launched)
+
+
+def test_wrapper_retains_failed_sdk_for_teardown_retry():
+    client = FakeLambdaMicroVmsClient()
+    sdk = LambdaMicroVmSandbox(image_identifier=IMAGE_ARN, client=client, http_client=FakeHttpClient())
+    wrapper = CognitionAwsLambdaMicroVmSandboxBackend("/tmp", profile_config=_profile())
+    with patch("langchain_aws_lambda_microvms.LambdaMicroVmSandbox", return_value=sdk):
+        wrapper.execute("true")
+    client.terminate_error = RuntimeError("unavailable")
+    wrapper.terminate()
+    assert wrapper._backend is sdk
+    with pytest.raises(RuntimeError, match="released"):
+        wrapper.execute("true")
+    client.terminate_error = None
+    wrapper.terminate()
+    assert wrapper._backend is None
+    assert wrapper.runtime_metadata["teardown_status"] == "complete"
+
+
+def test_parallel_first_operations_launch_only_one_microvm() -> None:
+    """Parallel Deep Agents tools must share one lazily initialized SDK backend."""
+    client = FakeLambdaMicroVmsClient()
+    http = FakeHttpClient()
+    backend = CognitionAwsLambdaMicroVmSandboxBackend("/tmp", profile_config=_profile())
+    start = threading.Barrier(3)
+
+    def construct(**kwargs: Any) -> LambdaMicroVmSandbox:
+        # HTTP client initialization releases the GIL in a real SDK constructor.
+        time.sleep(0.1)
+        return LambdaMicroVmSandbox(**kwargs, client=client, http_client=http)
+
+    def execute(_: int) -> int | None:
+        start.wait(timeout=5)
+        return backend.execute("printf ready").exit_code
+
+    with (
+        patch(
+            "langchain_aws_lambda_microvms.LambdaMicroVmSandbox", side_effect=construct
+        ) as factory,
+        patch.object(client, "run_microvm", wraps=client.run_microvm) as launch,
+        ThreadPoolExecutor(max_workers=3) as pool,
+    ):
+        assert list(pool.map(execute, range(3))) == [0, 0, 0]
+        assert factory.call_count == 1
+        assert launch.call_count == 1
 
 
 class FakeLambdaMicroVmsClient:

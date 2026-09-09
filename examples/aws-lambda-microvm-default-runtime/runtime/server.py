@@ -4,6 +4,7 @@ import base64
 import json
 import os
 import shlex
+import stat
 import subprocess
 import time
 from http import HTTPStatus
@@ -48,6 +49,32 @@ LIFECYCLE_HOOKS = {
 def _json_bytes(payload: dict[str, Any]) -> bytes:
     """Encode compact JSON responses so Content-Length is exact."""
     return json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+
+
+def read_publication_file(path: str, max_bytes: int) -> bytes:
+    """Read a regular workspace file without following symlinks or staging it."""
+    if not 0 < max_bytes <= 10 * 1024 * 1024:
+        raise ValueError("invalid publication limit")
+    parts = path.split("/")
+    if not parts or any(part in {"", ".", ".."} for part in parts):
+        raise ValueError("invalid publication path")
+    directory = os.open(WORKSPACE_ROOT, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        for part in parts[:-1]:
+            child = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=directory)
+            os.close(directory)
+            directory = child
+        descriptor = os.open(parts[-1], os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=directory)
+        with os.fdopen(descriptor, "rb") as source:
+            info = os.fstat(source.fileno())
+            if not stat.S_ISREG(info.st_mode) or info.st_size > max_bytes:
+                raise ValueError("publication requires a regular file within size limit")
+            body = source.read(max_bytes + 1)
+            if len(body) > max_bytes:
+                raise ValueError("publication size limit exceeded")
+            return body
+    finally:
+        os.close(directory)
 
 
 def _safe_workspace_path(raw_path: str | None) -> Path:
@@ -224,7 +251,10 @@ class Handler(BaseHTTPRequestHandler):
         # Downloads return base64 for exact binary preservation. Cognition decodes
         # this into Deep Agents file download responses.
         source = _safe_workspace_path(str(body.get("path", "")))
-        raw = source.read_bytes()
+        if "max_bytes" in body:
+            raw = read_publication_file(str(body.get("path", "")), int(body["max_bytes"]))
+        else:
+            raw = source.read_bytes()
         self._send_json(
             HTTPStatus.OK,
             {

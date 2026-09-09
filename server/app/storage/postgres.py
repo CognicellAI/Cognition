@@ -34,6 +34,7 @@ from server.app.models import (
     TaskStatus,
     ToolCall,
 )
+from server.app.storage._checkpoint_telemetry import observe_checkpointer
 from server.app.storage.backend import StorageBackend
 from server.app.storage.common import (
     effective_scope_key,
@@ -1326,7 +1327,7 @@ class PostgresStorageBackend:
         )
         await pool.open()
         self._checkpointer_context = pool
-        self._checkpointer = AsyncPostgresSaver(pool)
+        self._checkpointer = observe_checkpointer(AsyncPostgresSaver(pool))
         await self._checkpointer.setup()
 
         return self._checkpointer

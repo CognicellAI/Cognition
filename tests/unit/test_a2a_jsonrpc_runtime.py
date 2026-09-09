@@ -1285,6 +1285,11 @@ async def test_all_inbound_part_variants_are_ordered_scoped_and_inert(
     assert '"roomId": "room-1"' in content
     assert '"schema": {"type": "object"}' in content
 
+    history = response.json()["result"]["task"]["history"]
+    assert history[0]["parts"][1]["data"] == {"priority": 3.0}
+    assert history[0]["parts"][2]["raw"] == "aGVsbG8="
+    assert history[0]["metadata"] == {"roomId": "room-1"}
+
     task_id = response.json()["result"]["task"]["id"]
     stored_task = await setup_storage_backend.get_task(
         task_id,

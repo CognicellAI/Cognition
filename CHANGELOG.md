@@ -9,17 +9,44 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-## [0.15.0] — 2026-08-17
+## [0.15.0] — 2026-09-08
 
 ### Added
 
-- Added optional per-Agent A2UI v1.0 support for A2A v1 Agents, including
-  Agent Card extension discovery, request-scoped extension negotiation, typed
-  structured runtime output, canonical `application/a2ui+json` data Parts, and
-  renderer-to-Agent input validation.
-- Bundled and pinned the A2UI v1.0 Candidate schemas and Basic catalog for
-  offline validation without remote catalog fetching or the pre-A2A-v1
-  `a2ui-agent-sdk` dependency.
+- Optional per-Agent A2UI v1.0 Candidate support: discovery, negotiation,
+  validated structured UI batches and renderer input over A2A data Parts.
+  Bundled schemas and the Basic catalog are pinned for offline validation.
+
+- Explicit sandbox-file publication as scoped A2A `raw` or `url` Parts, plus
+  validated structured agent results as `data` Parts. Publication verifies S3
+  bytes before activation and preserves durable references for URL refresh.
+- Reusable OTel latency measurements for runtime, checkpoint, sandbox,
+  publication and retrieval operations; optional caller-owned MicroVM SDK tracing.
+- Operator guidance for builder-owned S3 Files workspaces and published-file
+  retention, with a concise historical validation record.
+
+### Fixed
+
+- Blocking artifact S3 I/O now runs off the event loop using a reusable,
+  bounded client transport.
+- Repeated runs reuse the exact-scope session sandbox; pending teardown retains
+  ownership and quota, and released MicroVM handles cannot relaunch. Ownership
+  remains process-local; distributed recovery is not provided.
+- Published-file paths respect the assigned sandbox workspace root, including
+  custom roots, while rejecting traversal and sibling-directory access.
+- Authorized retrieval reports missing published content without changing
+  artifact identity. Operators can select new published bodies using S3 object
+  tags and configure URL-only publication; existing inline history is retained.
+
+
+## [0.14.1] — 2026-09-02
+
+### Fixed
+
+- Added an idempotent database migration for Agent definitions persisted before
+  the final v0.14 schema. The migration removes retired inline `skills` and
+  `tools` fields, preserves public `a2a.skills`, and refreshes Agent revision
+  identity so upgraded definitions remain readable under strict validation.
 
 ## [0.14.0] — 2026-08-14
 

@@ -32,6 +32,7 @@ from server.app.models import (
     TaskStatus,
     ToolCall,
 )
+from server.app.storage._checkpoint_telemetry import observe_checkpointer
 from server.app.storage.backend import StorageBackend
 from server.app.storage.common import (
     effective_scope_key,
@@ -1228,7 +1229,7 @@ class SqliteStorageBackend:
             return self._checkpointer
 
         self._checkpointer_context = AsyncSqliteSaver.from_conn_string(str(self.db_path))
-        self._checkpointer = await self._checkpointer_context.__aenter__()
+        self._checkpointer = observe_checkpointer(await self._checkpointer_context.__aenter__())
 
         return self._checkpointer
 
