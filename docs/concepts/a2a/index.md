@@ -27,6 +27,7 @@ trusted scope headers.
 |---|---|
 | [Agent Cards and public skills](agent-cards.md) | Public identity, endpoints, MIME modes, skills, and the boundary between discovery and runtime configuration. |
 | [Message Parts and artifacts](message-parts.md) | Text, structured data, inline bytes, URL references, persistence, and execution boundaries. |
+| [A2UI v1.0 extension](a2ui.md) | Optional A2UI discovery, negotiation, typed data artifacts, renderer input, and boundaries. |
 | [Tasks and streaming](tasks-and-streaming.md) | Durable task identity, runs, contexts, continuation, cancellation, and event delivery. |
 | [Security and scoping](security-and-scoping.md) | Trusted ingress, exact-scope isolation, authentication discovery, and builder responsibilities. |
 

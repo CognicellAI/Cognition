@@ -2,7 +2,7 @@
 
 **Status:** Design workspace  
 **Audience:** Maintainers, deployment operators, and builders  
-**Last updated:** 2026-08-03
+**Last updated:** 2026-08-16
 
 Proposals describe shaped architectural directions as they move from design to
 implementation. They are release-independent until accepted through the roadmap
@@ -12,6 +12,7 @@ and architecture decision process.
 
 | Proposal | Status | Purpose |
 | --- | --- | --- |
+| [Optional A2UI v1.0 support for A2A Agents](optional-a2ui-v1-a2a-extension.md) | Draft | Add per-Agent A2UI v1.0 discovery, negotiation, validated structured generation, data Parts, renderer events, and scoped persistence without a schema registry |
 | [v0.14.0 C4 Model: Agent Capabilities and Durable Storage](v0.14.0-deep-agents-skills-mcp-storage.md) | Implementing | Define the breaking Deep Agents 0.7, skill bundle, Agent-owned MCP, and durable storage architecture |
 | [v0.14.0 MCP Runtime and Authentication Contract](v0.14.0-mcp-runtime-contract.md) | Implementing | Specify Agent-owned MCP config, direct MCP OAuth, workload token exchange, per-server discovery, readiness, and executable security criteria |
 | [Sandboxed skill package registry](sandboxed-skill-registry.md) | Superseded | Rejected name-based registry design retained as architectural history |

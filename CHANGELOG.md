@@ -9,7 +9,13 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.15.0] — 2026-09-08
+
 ### Added
+
+- Optional per-Agent A2UI v1.0 Candidate support: discovery, negotiation,
+  validated structured UI batches and renderer input over A2A data Parts.
+  Bundled schemas and the Basic catalog are pinned for offline validation.
 
 - Explicit sandbox-file publication as scoped A2A `raw` or `url` Parts, plus
   validated structured agent results as `data` Parts. Publication verifies S3

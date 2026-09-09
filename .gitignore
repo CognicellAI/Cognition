@@ -47,6 +47,9 @@ htmlcov/
 # Ruff
 .ruff_cache/
 
+# Docs site build
+site/
+
 # Pre-commit
 .pre-commit-config.yaml.bak
 
@@ -76,6 +79,7 @@ localdocs/
 # Retired local lab; reproducible source is on codex/a2a-investigation-archive.
 /examples/a2a-parts-investigation/
 claurst
+.vercel
 
 # Generated MkDocs site
 site/

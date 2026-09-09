@@ -25,6 +25,18 @@ from typing import Any, TypeVar, cast
 import structlog
 from langchain_core.messages import HumanMessage, SystemMessage
 
+from server.app.a2ui.core import (
+    A2UI_EXTENSION_URI,
+    A2UI_MEDIA_TYPE,
+    BASIC_CATALOG_ID,
+    A2UIInvocationContext,
+    A2UIResponseEnvelope,
+    A2UIValidationError,
+    build_generation_prompt,
+    normalize_a2ui_output,
+    validate_agent_to_renderer_messages,
+)
+from server.app.a2ui.telemetry import record_batch, record_validation
 from server.app.agent.cognition_agent import CognitionAgentParams, create_cognition_agent
 from server.app.agent.definition import AgentDefinition
 from server.app.agent.resolver import ResolvedRuntimeModel, RuntimeResolver
@@ -48,6 +60,7 @@ from server.app.agent.runtime import (
     StatusEvent,
     StepCompleteEvent,  # noqa: F401 — re-exported for consumers of this module
     StreamEvent,
+    StructuredResponseEvent,
     TokenEvent,
     ToolCallEvent,
     ToolResultEvent,
@@ -257,6 +270,113 @@ async def _with_execution_timeout(
     async with asyncio.timeout(timeout_seconds):
         async for event in events:
             yield event
+
+
+def _a2ui_context_from_metadata(metadata: Mapping[str, Any]) -> A2UIInvocationContext | None:
+    value = metadata.get("a2ui")
+    if value is None:
+        return None
+    if not isinstance(value, Mapping) or value.get("extension_uri") != A2UI_EXTENSION_URI:
+        raise A2UIValidationError("Invalid pinned A2UI invocation")
+    ids = value.get("catalog_ids")
+    if (
+        not isinstance(ids, list | tuple)
+        or not ids
+        or any(item != BASIC_CATALOG_ID for item in ids)
+    ):
+        raise A2UIValidationError("Invalid pinned A2UI catalogs")
+    return A2UIInvocationContext(
+        extension_uri=A2UI_EXTENSION_URI,
+        catalog_ids=tuple(ids),
+        catalog_digests={},
+    )
+
+
+async def _with_a2ui_output(
+    events: AsyncIterator[Any],
+    runtime: DeepAgentRuntime,
+    context: A2UIInvocationContext | None,
+    thread_id: str,
+    run_id: str,
+) -> AsyncIterator[Any]:
+    """Apply one output policy to initial execution and approval continuation.
+
+    The caller wraps this entire iterator in one execution timeout, including
+    repair. Framework tool/usage events remain framework-owned. An internal
+    envelope never becomes a public artifact before this validation succeeds.
+    """
+    if context is None:
+        async for event in events:
+            yield event
+        return
+
+    for attempt in range(2):
+        valid_output = False
+        repair = False
+        try:
+            async for event in events:
+                if isinstance(event, TokenEvent):
+                    continue
+                if isinstance(event, StructuredResponseEvent):
+                    try:
+                        envelope = normalize_a2ui_output(event.value)
+                        messages = validate_agent_to_renderer_messages(
+                            envelope.messages, context.catalog_ids
+                        )
+                    except A2UIValidationError:
+                        if attempt == 0:
+                            record_validation("output", "repair", "agent_schema")
+                            repair = True
+                            break
+                        yield ErrorEvent(
+                            message="Invalid A2UI output after repair", code="A2UI_OUTPUT_INVALID"
+                        )
+                        return
+                    record_batch(messages)
+                    valid_output = True
+                    if envelope.text:
+                        yield TokenEvent(content=envelope.text)
+                    yield ArtifactEvent(
+                        artifact_id=f"a2ui-{run_id}",
+                        name="a2ui",
+                        kind="data",
+                        value=messages,
+                        media_type=A2UI_MEDIA_TYPE,
+                        description="A2UI v1.0 message batch",
+                        extensions=(A2UI_EXTENSION_URI,),
+                        append=False,
+                        last_chunk=True,
+                    )
+                    continue
+                if isinstance(event, DoneEvent) and not valid_output:
+                    yield ErrorEvent(
+                        message="Missing A2UI structured output", code="A2UI_OUTPUT_INVALID"
+                    )
+                    return
+                yield event
+                if isinstance(event, ErrorEvent | InterruptEvent):
+                    return
+        finally:
+            close = getattr(events, "aclose", None)
+            if close is not None:
+                await close()
+        if not repair:
+            return
+        # Continue the same checkpoint with a bounded repair instruction. Never
+        # echo validation errors or renderer payloads into logs or diagnostics.
+        events = runtime.astream_events(
+            {
+                "messages": [
+                    HumanMessage(
+                        content=(
+                            "The previous UI response failed validation. Correct it once, "
+                            "preserving the requested result. " + build_generation_prompt(context)
+                        )
+                    )
+                ]
+            },
+            thread_id=thread_id,
+        )
 
 
 def _has_explicit_agent_field(agent_def: Any, field_name: str) -> bool:
@@ -538,6 +658,9 @@ class DeepAgentStreamingService:
                 manifest_digest = pinned_run.manifest_digest
                 pinned_manifest = pinned_run.runtime_manifest
 
+            a2ui_context = _a2ui_context_from_metadata(
+                pinned_run.metadata if run_id is not None and pinned_run is not None else {}
+            )
             with operation("cognition.runtime.config"):
                 agent_cfg, custom_tools = await self._resolve_agent_config(
                     session=session,
@@ -619,7 +742,9 @@ class DeepAgentStreamingService:
                 interrupt_on=agent_cfg.interrupt_on,
                 permissions=agent_cfg.permissions,
                 response_format=(
-                    session.config.response_format if session and session.config else None
+                    A2UIResponseEnvelope
+                    if a2ui_context
+                    else (session.config.response_format if session and session.config else None)
                 )
                 or agent_cfg.response_format,
                 tool_token_limit_before_evict=agent_cfg.tool_token_limit_before_evict,
@@ -638,7 +763,8 @@ class DeepAgentStreamingService:
             )
             if manager is not None:
                 agent_params._sandbox_acquirer = manager.sandbox_acquirer(
-                    session_id, scope=effective_scope or {},
+                    session_id,
+                    scope=effective_scope or {},
                     agent_name=session.agent_name if session else None,
                     run_id=run_id or thread_id,
                 )
@@ -656,11 +782,14 @@ class DeepAgentStreamingService:
                 recursion_limit=recursion_limit,
                 context=invocation_context,
                 trace_parent_span=trace_parent_span,
+                structured_response_as_artifact=a2ui_context is None,
             )
             if manager:
                 manager.register_runtime(session_id, runtime)
 
             # Build message input (system prompt already embedded in agent graph)
+            if a2ui_context is not None:
+                content = f"{content}\n\n{build_generation_prompt(a2ui_context)}"
             messages = self._build_messages(content, None)
 
             acc = StreamAccumulator()
@@ -673,9 +802,12 @@ class DeepAgentStreamingService:
             try:
                 try:
                     async for event in _with_execution_timeout(
-                        runtime.astream_events(
-                            {"messages": messages},
-                            thread_id=thread_id,
+                        _with_a2ui_output(
+                            runtime.astream_events({"messages": messages}, thread_id=thread_id),
+                            runtime,
+                            a2ui_context,
+                            thread_id,
+                            run_id or thread_id,
                         ),
                         execution_timeout_seconds,
                     ):
@@ -822,6 +954,7 @@ class DeepAgentStreamingService:
             if active_run is None:
                 raise RuntimeError("Pinned active run manifest was not found at exact scope")
 
+            a2ui_context = _a2ui_context_from_metadata(active_run.metadata)
             with operation("cognition.runtime.config"):
                 agent_cfg, custom_tools = await self._resolve_agent_config(
                     session=session,
@@ -886,7 +1019,11 @@ class DeepAgentStreamingService:
                 memory=agent_cfg.memory,
                 interrupt_on=agent_cfg.interrupt_on,
                 permissions=agent_cfg.permissions,
-                response_format=(session.config.response_format if session.config else None)
+                response_format=(
+                    A2UIResponseEnvelope
+                    if a2ui_context
+                    else (session.config.response_format if session.config else None)
+                )
                 or agent_cfg.response_format,
                 tool_token_limit_before_evict=agent_cfg.tool_token_limit_before_evict,
                 context_policy=agent_cfg.context_policy,
@@ -904,7 +1041,9 @@ class DeepAgentStreamingService:
             )
             if manager is not None:
                 agent_params._sandbox_acquirer = manager.sandbox_acquirer(
-                    session_id, scope=effective_scope or {}, agent_name=session.agent_name,
+                    session_id,
+                    scope=effective_scope or {},
+                    agent_name=session.agent_name,
                     run_id=active_run.id,
                 )
             agent = await create_cognition_agent(agent_params)
@@ -924,6 +1063,7 @@ class DeepAgentStreamingService:
                 recursion_limit=recursion_limit,
                 context=invocation_context,
                 trace_parent_span=trace_parent_span,
+                structured_response_as_artifact=a2ui_context is None,
             )
             if manager is not None:
                 manager.register_runtime(session_id, runtime)
@@ -932,12 +1072,24 @@ class DeepAgentStreamingService:
                 default_provider=provider,
                 default_model=model_id,
             )
-            async for event in runtime.astream_resume_events(
-                decision=decision,
-                tool_name=tool_name,
-                args=args,
-                thread_id=thread_id,
-                trace_parent_span=trace_parent_span,
+            timeout_seconds = (
+                agent_cfg.agent_def.config.timeout_seconds if agent_cfg.agent_def else None
+            )
+            async for event in _with_execution_timeout(
+                _with_a2ui_output(
+                    runtime.astream_resume_events(
+                        decision=decision,
+                        tool_name=tool_name,
+                        args=args,
+                        thread_id=thread_id,
+                        trace_parent_span=trace_parent_span,
+                    ),
+                    runtime,
+                    a2ui_context,
+                    thread_id,
+                    active_run.id,
+                ),
+                timeout_seconds,
             ):
                 if isinstance(event, TokenEvent):
                     acc.record_token(event.content)
@@ -949,13 +1101,15 @@ class DeepAgentStreamingService:
                         model=event.model,
                     )
                 if isinstance(event, InterruptEvent):
-                    continue
+                    yield event
+                    return
                 if isinstance(event, DoneEvent):
                     continue
                 if isinstance(
                     event,
                     (
                         TokenEvent,
+                        ArtifactEvent,
                         ToolCallEvent,
                         ToolResultEvent,
                         ToolSafetyEvent,
@@ -973,6 +1127,8 @@ class DeepAgentStreamingService:
                     if isinstance(event, ModelUsageEvent):
                         continue
                     yield cast(StreamEvent, event)
+                    if isinstance(event, ErrorEvent):
+                        return
 
             if acc.accumulated_content:
                 usage_aggregator.mark_unreported_fallback()
@@ -980,6 +1136,10 @@ class DeepAgentStreamingService:
             yield UsageEvent(**usage_report.to_payload())
             yield DoneEvent()
 
+        except TimeoutError:
+            if runtime is not None:
+                await runtime.abort(thread_id)
+            yield ErrorEvent(message="Agent execution deadline exceeded", code="EXECUTION_TIMEOUT")
         except LLMProviderConfigError as e:
             logger.error(
                 "Provider configuration error on resume", error=str(e), session_id=session_id
@@ -1213,7 +1373,9 @@ class SessionAgentManager:
                 break
             if self.unregister_session(idle[0][1]):
                 self._service_cache_evictions += 1
-                RUNTIME_CACHE_EVICTIONS_TOTAL.labels(cache="session_service", reason="capacity").inc()
+                RUNTIME_CACHE_EVICTIONS_TOTAL.labels(
+                    cache="session_service", reason="capacity"
+                ).inc()
 
     def get_service_cache_stats(self) -> dict[str, int]:
         """Return safe cache cardinality/eviction metrics."""
@@ -1286,7 +1448,11 @@ class SessionAgentManager:
         return False
 
     def sandbox_acquirer(
-        self, session_id: str, *, scope: dict[str, str], agent_name: str | None,
+        self,
+        session_id: str,
+        *,
+        scope: dict[str, str],
+        agent_name: str | None,
         run_id: str | None,
     ) -> Callable[[str, Callable[[], Any]], Any]:
         """Bind lazy backend construction to exact session ownership."""
@@ -1315,7 +1481,11 @@ class SessionAgentManager:
                 else:
                     backend = factory()
                     self.register_sandbox_backend(
-                        session_id, backend, scope=trusted_scope, agent_name=agent_name, run_id=run_id,
+                        session_id,
+                        backend,
+                        scope=trusted_scope,
+                        agent_name=agent_name,
+                        run_id=run_id,
                     )
                     self._sandbox_bindings[session_id] = binding
                     return backend
@@ -1326,13 +1496,22 @@ class SessionAgentManager:
         return acquire
 
     def register_sandbox_backend(
-        self, session_id: str, backend: Any, *, run_id: str | None = None,
-        agent_name: str | None = None, scope: Mapping[str, str] | None = None,
+        self,
+        session_id: str,
+        backend: Any,
+        *,
+        run_id: str | None = None,
+        agent_name: str | None = None,
+        scope: Mapping[str, str] | None = None,
     ) -> None:
         """Register one owned backend without allowing concurrent replacement."""
         with self._sandbox_ownership_lock:
             self._register_sandbox_backend(
-                session_id, backend, run_id=run_id, agent_name=agent_name, scope=scope,
+                session_id,
+                backend,
+                run_id=run_id,
+                agent_name=agent_name,
+                scope=scope,
             )
 
     def _register_sandbox_backend(
@@ -1588,7 +1767,10 @@ class SessionAgentManager:
     def release_sandbox_backend(self, session_id: str) -> None:
         """Release resources, retaining ownership until teardown is confirmed."""
         with self._sandbox_ownership_lock:
-            if session_id in self._sandbox_teardown_inflight or session_id not in self._sandbox_backends:
+            if (
+                session_id in self._sandbox_teardown_inflight
+                or session_id not in self._sandbox_backends
+            ):
                 return
             self._sandbox_teardown_inflight.add(session_id)
             self._sandbox_releasing.add(session_id)

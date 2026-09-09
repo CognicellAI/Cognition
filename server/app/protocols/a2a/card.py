@@ -8,12 +8,24 @@ No agent is exposed by default.
 from __future__ import annotations
 
 import structlog
-from a2a.types import AgentCapabilities, AgentCard, AgentInterface, AgentSkill
+from a2a.types import AgentCapabilities, AgentCard, AgentExtension, AgentInterface, AgentSkill
 
 from server.app.agent.definition import AgentDefinition
+from server.app.protocols.a2a.a2ui import (
+    A2UI_EXTENSION_URI,
+    A2UI_MEDIA_TYPE,
+    build_agent_card_extension_params,
+)
 from server.app.protocols.a2a.security import A2ACardSecurity
 
 logger = structlog.get_logger(__name__)
+
+
+def _with_a2ui_mode(modes: list[str], agent: AgentDefinition) -> list[str]:
+    """Append the A2UI media type for A2UI-enabled agents."""
+    if agent.a2a.a2ui is None or A2UI_MEDIA_TYPE in modes:
+        return modes
+    return [*modes, A2UI_MEDIA_TYPE]
 
 
 def build_agent_card_for_agent(
@@ -44,6 +56,8 @@ def build_agent_card_for_agent(
     )
     interface_url = agent.a2a.public_interface_url or f"{base_url}/a2a/{agent.name}"
     security = security or A2ACardSecurity(schemes={}, requirements=())
+    default_input_modes = _with_a2ui_mode(agent.a2a.default_input_modes, agent)
+    default_output_modes = _with_a2ui_mode(agent.a2a.default_output_modes, agent)
 
     if agent.a2a.skills:
         skills = [
@@ -53,8 +67,12 @@ def build_agent_card_for_agent(
                 description=skill.description,
                 tags=skill.tags,
                 examples=skill.examples,
-                input_modes=skill.input_modes,
-                output_modes=skill.output_modes,
+                input_modes=_with_a2ui_mode(skill.input_modes, agent)
+                if skill.input_modes
+                else [],
+                output_modes=_with_a2ui_mode(skill.output_modes, agent)
+                if skill.output_modes
+                else [],
             )
             for skill in agent.a2a.skills
         ]
@@ -65,18 +83,29 @@ def build_agent_card_for_agent(
                 name=public_name,
                 description=skill_description,
                 tags=["primary"] if has_public_name else ["cognition", agent.mode],
-                input_modes=agent.a2a.default_input_modes,
-                output_modes=agent.a2a.default_output_modes,
+                input_modes=default_input_modes,
+                output_modes=default_output_modes,
                 examples=[],
             )
         ]
+
+    extensions = []
+    if agent.a2a.a2ui is not None:
+        extensions.append(
+            AgentExtension(
+                uri=A2UI_EXTENSION_URI,
+                description="Generates interactive UI using A2UI v1.0.",
+                required=False,
+                params=build_agent_card_extension_params(),
+            )
+        )
 
     card = AgentCard(
         name=public_name,
         description=card_description,
         version=version,
-        default_input_modes=agent.a2a.default_input_modes,
-        default_output_modes=agent.a2a.default_output_modes,
+        default_input_modes=default_input_modes,
+        default_output_modes=default_output_modes,
         # Explicitly publish every capability flag.  The protocol uses
         # presence-sensitive fields, so omitting ``pushNotifications`` or
         # ``extendedAgentCard`` would leave clients unable to distinguish an
@@ -84,6 +113,7 @@ def build_agent_card_for_agent(
         capabilities=AgentCapabilities(
             streaming=True,
             push_notifications=False,
+            extensions=extensions,
             extended_agent_card=False,
         ),
         supported_interfaces=[

@@ -157,3 +157,20 @@ async def test_actual_agent_validates_structured_output_before_publication(total
     else:
         assert artifacts == []
         assert any(isinstance(event, ErrorEvent) for event in events)
+
+
+@pytest.mark.asyncio
+async def test_internal_structured_output_is_not_published_or_emitted_by_subagents():
+    from server.app.agent.runtime import StructuredResponseEvent
+
+    class Graph:
+        async def astream(self, *args, **kwargs):
+            for ns in [("child",), ()]:
+                yield {"type": "updates", "ns": ns, "data": {
+                    "model": {"structured_response": {"messages": []}}
+                }}
+
+    runtime = DeepAgentRuntime(Graph(), MagicMock(), thread_id="ui", structured_response_as_artifact=False)
+    events = [event async for event in runtime.astream_events("ui")]
+    assert not any(isinstance(event, ArtifactEvent) for event in events)
+    assert len([event for event in events if isinstance(event, StructuredResponseEvent)]) == 1

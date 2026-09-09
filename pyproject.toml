@@ -63,6 +63,7 @@ dependencies = [
     "a2a-sdk>=1.0.3",
     # AWS Lambda MicroVM sandbox adapter (boto3 is optional/lazy)
     "langchain-aws-lambda-microvms>=0.1.0",
+    "jsonschema>=4.26.0",
 ]
 
 [project.optional-dependencies]
@@ -90,6 +91,11 @@ dev = [
     "pre-commit>=4.0.0",
 ]
 
+# Documentation site
+docs = [
+    "mkdocs-material>=9.6.0",
+]
+
 # Deployment (MLflow tracing + Docker sandbox)
 deploy = [
     "mlflow[genai]>=2.19.0",
@@ -102,11 +108,6 @@ deploy = [
 # Kubernetes sandbox backend
 k8s = [
     "langchain-k8s-sandbox[k8s]",
-]
-
-# Documentation site
-docs = [
-    "mkdocs-material>=9.6.0",
 ]
 
 # AWS Lambda MicroVM sandbox backend
@@ -245,7 +246,31 @@ ignore_errors = true
 
 # Optional LLM provider deps - not installed in base env, suppress import errors
 [[tool.mypy.overrides]]
-module = ["langchain_aws", "botocore", "botocore.*"]
+module = [
+    "a2a.*",
+    "aiosqlite",
+    "botocore.*",
+    "deepagents",
+    "deepagents.*",
+    "jsonschema",
+    "jsonschema.*",
+    "langchain.*",
+    "langchain_aws",
+    "langchain_core.*",
+    "langchain_mcp_adapters.*",
+    "langgraph.*",
+    "mlflow",
+    "mlflow.*",
+    "opentelemetry",
+    "opentelemetry.*",
+    "prompt_toolkit",
+    "prompt_toolkit.*",
+    "psycopg",
+    "psycopg.*",
+    "psycopg_pool",
+    "watchdog.*",
+    "yaml",
+]
 ignore_missing_imports = true
 
 # asyncpg has no stubs on Python 3.11 CI env

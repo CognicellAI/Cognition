@@ -14,13 +14,22 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
-from typing import Annotated, Any, Literal
+from typing import Annotated, Any, Literal, cast
 from urllib.parse import urlsplit
 
 import structlog
-from pydantic import AfterValidator, BaseModel, ConfigDict, Field, field_validator
+from pydantic import (
+    AfterValidator,
+    BaseModel,
+    ConfigDict,
+    Field,
+    field_validator,
+    model_serializer,
+)
 
 logger = structlog.get_logger(__name__)
+
+A2UICatalogName = Literal["basic"]
 
 try:
     import yaml
@@ -109,6 +118,32 @@ class A2APublicSkill(BaseModel):
         return _validate_media_types(values)
 
 
+class A2UIConfig(BaseModel):
+    """Optional per-Agent A2UI v1.0 capability declaration."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    version: Literal["1.0"] = "1.0"
+    catalogs: list[A2UICatalogName] = Field(
+        default_factory=lambda: cast(list[A2UICatalogName], ["basic"]),
+        min_length=1,
+    )
+
+    @field_validator("catalogs")
+    @classmethod
+    def validate_catalogs(cls, values: list[A2UICatalogName]) -> list[A2UICatalogName]:
+        """Require a unique non-empty catalog list."""
+        return list(dict.fromkeys(values))
+
+    @property
+    def catalog_ids(self) -> tuple[str, ...]:
+        """Return canonical A2UI catalog identifiers for Agent Card projection."""
+        return tuple(
+            "https://a2ui.org/specification/v1_0/catalogs/basic/catalog.json"
+            for _catalog in self.catalogs
+        )
+
+
 class A2AConfig(BaseModel):
     """Builder-controlled A2A exposure and public Agent Card presentation."""
 
@@ -125,6 +160,7 @@ class A2AConfig(BaseModel):
         min_length=1,
     )
     skills: list[A2APublicSkill] = Field(default_factory=list)
+    a2ui: A2UIConfig | None = Field(default=None)
 
     @field_validator("default_input_modes", "default_output_modes")
     @classmethod
@@ -140,6 +176,14 @@ class A2AConfig(BaseModel):
         if len(ids) != len(set(ids)):
             raise ValueError("A2A public skill IDs must be unique")
         return values
+
+    @model_serializer(mode="wrap")
+    def serialize_without_disabled_a2ui(self, handler: Any) -> dict[str, Any]:
+        """Omit disabled A2UI without changing legacy nullable A2A fields."""
+        data = cast(dict[str, Any], handler(self))
+        if self.a2ui is None:
+            data.pop("a2ui", None)
+        return data
 
 
 class ContextPolicy(BaseModel):

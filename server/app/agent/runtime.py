@@ -212,6 +212,13 @@ class DirectMessageEvent(AgentEvent):
 
 
 @dataclass
+class StructuredResponseEvent(AgentEvent):
+    """Typed final structured response produced by the agent runtime."""
+
+    value: Any
+
+
+@dataclass
 class ArtifactEvent(AgentEvent):
     """Protocol-neutral task artifact or artifact chunk."""
 
@@ -222,6 +229,7 @@ class ArtifactEvent(AgentEvent):
     media_type: str | None = None
     filename: str | None = None
     description: str | None = None
+    extensions: tuple[str, ...] = ()
     append: bool = False
     last_chunk: bool = True
 
@@ -396,6 +404,7 @@ StreamEvent = (
     | StatusEvent
     | DoneEvent
     | DirectMessageEvent
+    | StructuredResponseEvent
     | ArtifactEvent
     | ErrorEvent
     | RejectedEvent
@@ -775,6 +784,7 @@ class DeepAgentRuntime:
         recursion_limit: int = 1000,
         context: Any | None = None,
         trace_parent_span: Any | None = None,
+        structured_response_as_artifact: bool = True,
     ):
         """Initialize the DeepAgentRuntime.
 
@@ -789,7 +799,10 @@ class DeepAgentRuntime:
                 middleware.
             trace_parent_span: Active Cognition run span to restore at the
                 LangGraph invocation boundary.
+            structured_response_as_artifact: Publish validated root structured
+                results directly, or yield private values to the caller's output policy.
         """
+        self._structured_response_as_artifact = structured_response_as_artifact
         self._agent = agent
         self._checkpointer = checkpointer
         self._thread_id = thread_id
@@ -1069,7 +1082,9 @@ class DeepAgentRuntime:
                                             _text_message_ids.add(message.id)
                                         yield TokenEvent(content=text)
                             result = update.get("structured_response")
-                            if result is not None:
+                            if result is not None and not self._structured_response_as_artifact:
+                                yield StructuredResponseEvent(value=result)
+                            elif result is not None:
                                 value = (
                                     result.model_dump(mode="json")
                                     if isinstance(result, BaseModel)

@@ -6,7 +6,7 @@ import asyncio
 import json
 import time
 from collections.abc import AsyncIterator
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 import structlog
 from a2a.helpers.proto_helpers import (
@@ -27,6 +27,8 @@ from a2a.utils.errors import (
 )
 from google.protobuf.json_format import MessageToDict  # type: ignore[import-untyped]
 
+from server.app.a2ui.telemetry import record_batch
+from server.app.agent.definition import A2AConfig
 from server.app.agent.runtime import (
     ArtifactEvent,
     DirectMessageEvent,
@@ -57,6 +59,14 @@ from server.app.observability import (
     RUNTIME_TIME_TO_FIRST_OUTPUT,
     agent_run_span,
     current_trace_context,
+)
+from server.app.protocols.a2a.a2ui import (
+    A2UI_EXTENSION_URI,
+    A2UI_MEDIA_TYPE,
+    A2UIValidationError,
+    build_unknown_agent_function_responses,
+    has_agent_function_calls,
+    negotiate_a2ui,
 )
 from server.app.protocols.a2a.inbound import (
     InvalidA2APartError,
@@ -98,6 +108,7 @@ class CognitionA2AExecutor(AgentExecutor):
         session_agent_manager: SessionAgentManager,
         *,
         agent_name: str,
+        a2a_config: A2AConfig | None = None,
         supported_input_modes: tuple[str, ...] = ("text/plain", "application/json"),
         message_id_idempotency: bool = True,
         max_raw_part_bytes: int = 10 * 1024 * 1024,
@@ -114,6 +125,7 @@ class CognitionA2AExecutor(AgentExecutor):
         self._task_store = task_store
         self._agent_manager = session_agent_manager
         self._agent_name = agent_name
+        self._a2a_config = a2a_config or A2AConfig()
         self._supported_input_modes = supported_input_modes
         self._message_id_idempotency = message_id_idempotency
         self._max_raw_part_bytes = max_raw_part_bytes
@@ -133,6 +145,12 @@ class CognitionA2AExecutor(AgentExecutor):
         scope = effective_scope_from_context(context.call_context)
         message_id = context.message.message_id if context.message else None
         message_parts = tuple(context.message.parts if context.message else ())
+        message_metadata = (
+            MessageToDict(context.message.metadata)
+            if context.message and context.message.HasField("metadata")
+            else {}
+        )
+        a2ui_context = None
         try:
             validate_a2a_part_media_types(
                 message_parts,
@@ -147,14 +165,21 @@ class CognitionA2AExecutor(AgentExecutor):
                 max_message_bytes=self._max_message_bytes,
                 max_text_part_bytes=self._max_text_part_bytes,
                 max_data_part_bytes=self._max_data_part_bytes,
-                message_metadata=(
-                    MessageToDict(context.message.metadata)
-                    if context.message and context.message.HasField("metadata")
-                    else None
-                ),
+                message_metadata=message_metadata,
                 message_extensions=(tuple(context.message.extensions) if context.message else ()),
                 reference_task_ids=(
                     tuple(context.message.reference_task_ids) if context.message else ()
+                ),
+            )
+            a2ui_context = negotiate_a2ui(
+                config=self._a2a_config,
+                requested_extensions=tuple(
+                    context.call_context.state.get("a2a_requested_extensions", ())
+                ),
+                message_metadata=message_metadata,
+                message_parts=message_parts,
+                compatibility_alias_used=bool(
+                    context.call_context.state.get("a2a_extension_alias_used")
                 ),
             )
         except UnsupportedA2AMediaTypeError as exc:
@@ -163,6 +188,8 @@ class CognitionA2AExecutor(AgentExecutor):
             from server.app.observability import A2A_LIMIT_REJECTIONS_TOTAL
 
             A2A_LIMIT_REJECTIONS_TOTAL.labels(direction="input", limit="message").inc()
+            raise InvalidParamsError(message=str(exc)) from exc
+        except A2UIValidationError as exc:
             raise InvalidParamsError(message=str(exc)) from exc
         user_text = normalized.content or "(empty message)"
         persisted_message_id = message_id if self._message_id_idempotency else None
@@ -191,6 +218,11 @@ class CognitionA2AExecutor(AgentExecutor):
                             "a2a_request_fingerprint": context.call_context.state.get(
                                 "a2a_request_fingerprint"
                             ),
+                            **(
+                                {"a2ui": a2ui_context.to_metadata()}
+                                if a2ui_context is not None
+                                else {}
+                            ),
                         },
                     )
                 )
@@ -210,6 +242,11 @@ class CognitionA2AExecutor(AgentExecutor):
                             "a2a_message_id": message_id,
                             "a2a_request_fingerprint": context.call_context.state.get(
                                 "a2a_request_fingerprint"
+                            ),
+                            **(
+                                {"a2ui": a2ui_context.to_metadata()}
+                                if a2ui_context is not None
+                                else {}
                             ),
                         },
                     )
@@ -235,6 +272,39 @@ class CognitionA2AExecutor(AgentExecutor):
                 message_extensions=normalized.extensions,
                 reference_task_ids=normalized.reference_task_ids,
             )
+            if a2ui_context is not None and has_agent_function_calls(a2ui_context):
+                messages = build_unknown_agent_function_responses(a2ui_context)
+                record_batch(messages)
+                artifact = ArtifactEvent(
+                    artifact_id=f"a2ui-{execution.run.id}",
+                    name="a2ui",
+                    kind="data",
+                    value=messages,
+                    media_type=A2UI_MEDIA_TYPE,
+                    description="A2UI v1.0 message batch",
+                    extensions=(A2UI_EXTENSION_URI,),
+                )
+                await self._runtime.persist_artifact_output(
+                    execution,
+                    artifact_id=artifact.artifact_id,
+                    name=artifact.name,
+                    kind=artifact.kind,
+                    value=artifact.value,
+                    media_type=artifact.media_type,
+                    filename=artifact.filename,
+                    description=artifact.description,
+                    extensions=artifact.extensions,
+                    append=artifact.append,
+                    last_chunk=artifact.last_chunk,
+                )
+                await event_queue.enqueue_event(_artifact_event(execution, artifact))
+                await self._complete(
+                    execution,
+                    event_queue,
+                    [],
+                    has_artifact=True,
+                )
+                return
 
             service = self._agent_manager.get_service(execution.session.id)
             if service is None:
@@ -434,6 +504,7 @@ class CognitionA2AExecutor(AgentExecutor):
                         media_type=event.media_type,
                         filename=event.filename,
                         description=event.description,
+                        extensions=event.extensions,
                         append=event.append,
                         last_chunk=event.last_chunk,
                     )
@@ -759,7 +830,7 @@ def _status_event(
     return new_text_status_update_event(
         task_id=execution.task.id,
         context_id=execution.task.context_id,
-        state=state,  # type: ignore[arg-type]
+        state=cast(TaskState, state),
         text=text,
     )
 
@@ -769,7 +840,7 @@ def _artifact_event(
     event: ArtifactEvent,
 ) -> TaskArtifactUpdateEvent:
     if event.kind == "data":
-        return new_data_artifact_update_event(
+        update = new_data_artifact_update_event(
             task_id=execution.task.id,
             context_id=execution.task.context_id,
             name=event.name,
@@ -779,9 +850,11 @@ def _artifact_event(
             last_chunk=event.last_chunk,
             artifact_id=event.artifact_id,
         )
+        update.artifact.extensions.extend(event.extensions)
+        return update
     if event.kind == "raw":
         raw = event.value if isinstance(event.value, bytes) else str(event.value).encode()
-        return new_raw_artifact_update_event(
+        update = new_raw_artifact_update_event(
             task_id=execution.task.id,
             context_id=execution.task.context_id,
             name=event.name,
@@ -792,8 +865,10 @@ def _artifact_event(
             last_chunk=event.last_chunk,
             artifact_id=event.artifact_id,
         )
+        update.artifact.extensions.extend(event.extensions)
+        return update
     if event.kind == "url":
-        return new_url_artifact_update_event(
+        update = new_url_artifact_update_event(
             task_id=execution.task.id,
             context_id=execution.task.context_id,
             name=event.name,
@@ -804,7 +879,9 @@ def _artifact_event(
             last_chunk=event.last_chunk,
             artifact_id=event.artifact_id,
         )
-    return new_text_artifact_update_event(
+        update.artifact.extensions.extend(event.extensions)
+        return update
+    update = new_text_artifact_update_event(
         task_id=execution.task.id,
         context_id=execution.task.context_id,
         name=event.name,
@@ -813,6 +890,8 @@ def _artifact_event(
         last_chunk=event.last_chunk,
         artifact_id=event.artifact_id,
     )
+    update.artifact.extensions.extend(event.extensions)
+    return update
 
 
 def _artifact_size(kind: str, value: Any) -> int:
