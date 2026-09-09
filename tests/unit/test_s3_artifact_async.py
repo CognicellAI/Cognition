@@ -91,7 +91,7 @@ async def test_cancellation_keeps_io_slots_until_workers_finish(storage):
         nonlocal entered
         with lock:
             entered += 1
-        release.wait(3)
+        release.wait()
         original(**kwargs)
 
     client.put_object.side_effect = slow_put
@@ -103,7 +103,9 @@ async def test_cancellation_keeps_io_slots_until_workers_finish(storage):
     ]
     following = None
     try:
-        await wait_until(lambda: entered == 10)
+        # A small runner can have fewer executor threads than the store's ten
+        # slots. Queued worker tasks must retain their reservations too.
+        await wait_until(lambda: len(store._io_tasks) == 10 and entered > 0)
         for task in tasks:
             task.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
@@ -111,7 +113,8 @@ async def test_cancellation_keeps_io_slots_until_workers_finish(storage):
             store.upsert_artifact(ArtifactDefinition(id="next", name="next", content="body"))
         )
         await asyncio.sleep(0.05)
-        assert entered == 10, "Canceled callers released slots while S3 workers were still running"
+        assert len(store._io_tasks) == 10, "Canceled callers released slots before worker completion"
+        assert not following.done()
         assert await manifests.list_artifacts({}) == []
     finally:
         release.set()
