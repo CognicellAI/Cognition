@@ -14,6 +14,7 @@ Git-Style Workspace Model:
 
 from __future__ import annotations
 
+import asyncio
 import json
 import time
 import uuid
@@ -553,7 +554,11 @@ async def delete_session(
     """
     await _get_scoped_session(session_id, store, scope)
 
-    agent_manager.unregister_session(session_id)
+    if await asyncio.to_thread(agent_manager.unregister_session, session_id) is False:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Sandbox teardown is not confirmed; retry session deletion after reconciliation",
+        )
 
     await store.delete_session(session_id, scope.get_all())
 
@@ -742,6 +747,7 @@ async def resume_session(
                     args=request.args,
                     scope=session.scopes,
                     trace_parent_span=resume_run_span,
+                    manager=agent_manager,
                 ):
                     yield runtime_event
             finally:

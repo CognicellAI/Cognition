@@ -73,6 +73,8 @@ mlflow.db
 
 # Local planning docs
 localdocs/
+# Retired local lab; reproducible source is on codex/a2a-investigation-archive.
+/examples/a2a-parts-investigation/
 claurst
 
 # Generated MkDocs site

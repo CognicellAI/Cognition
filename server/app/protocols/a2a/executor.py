@@ -437,7 +437,25 @@ class CognitionA2AExecutor(AgentExecutor):
                         append=event.append,
                         last_chunk=event.last_chunk,
                     )
-                    await event_queue.enqueue_event(_artifact_event(execution, event))
+                    from dataclasses import replace
+
+                    resolved_part = await self._task_store.resolve_part(
+                        {
+                            "kind": event.kind, "value": event.value,
+                            "media_type": event.media_type, "filename": event.filename,
+                        }, scope,
+                    )
+                    update = _artifact_event(
+                        execution, replace(
+                            event, kind=resolved_part["kind"], value=resolved_part["value"],
+                            media_type=resolved_part.get("media_type"),
+                            filename=resolved_part.get("filename"),
+                        ),
+                    )
+                    update.artifact.parts[0].metadata.update(resolved_part.get("metadata") or {})
+                    if resolved_part.get("media_type"):
+                        update.artifact.parts[0].media_type = resolved_part["media_type"]
+                    await event_queue.enqueue_event(update)
                     has_artifact = True
                     continue
 
@@ -700,12 +718,13 @@ class CognitionA2AExecutor(AgentExecutor):
         *,
         has_artifact: bool,
     ) -> None:
-        text = "".join(accumulated_text) or "(no response)"
-        await self._runtime.persist_assistant_message(
-            execution,
-            content=text,
-            create_artifact=not has_artifact,
-        )
+        text = "".join(accumulated_text) or ("" if has_artifact else "(no response)")
+        if text:
+            await self._runtime.persist_assistant_message(
+                execution,
+                content=text,
+                create_artifact=not has_artifact,
+            )
         task, _run, _event = await self._runtime.transition(
             execution.task,
             execution.run,

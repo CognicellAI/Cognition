@@ -1,5 +1,50 @@
 # Cognition Roadmap
 
+## Release-tree cleanup (2026-09-08)
+
+- Category: Documentation and investigation-fixture maintenance; no production behavior change.
+- Archive the complete A2A/S3 Files lab at `79982391cb17d215503f4168674ac05663f11405` (`codex/a2a-investigation-archive`). Remove lab infrastructure, probes, dashboards, bulk captures and the example-only mount test from the release tree; retain production code, regression tests and operator guides.
+- Preserve local credentials, Terraform state and durable AWS artifacts. Consolidate evidence and archive reproduction instructions in `docs/architecture/a2a-deliverability-validation.md`; repair documentation references and verify the clean tracked tree.
+- Status: Removed 74 lab/example-test files; clean tracked-tree export passed 1,061 unit tests (4 skipped), Ruff, mypy (268 files), strict MkDocs and wheel/sdist builds. Built packages contain no investigation files. No production code or AWS resources changed; release integration review remains separate.
+
+## Session sandbox ownership repair (2026-09-08)
+
+- Category: Bug fix and runtime lifecycle enhancement; layers 3/4/5. Effort: 2 days.
+- Reuse session-owned backends only for the same exact trusted scope, agent and resolved sandbox configuration. Acquire/register before graph execution; never overwrite a live handle. Retain quota/ownership until teardown is confirmed, allow teardown retries and fence released MicroVM handles against reinitialization.
+- Acceptance: repeated run and approval-resume reuse; scope/configuration mismatch isolation; concurrent acquisition creates one backend; pending/failed teardown blocks replacement and retains quota; failed initialization does not allocate another VM; native runtime and live investigation lifecycle checks; relevant lint/type/regression checks.
+- Dependencies: pinned runtime manifests and existing sandbox quota/lifecycle events. No workspace filesystem or S3 Files changes. The internal factory hook carries ownership through agent construction; no new operator settings. Cross-process durable ownership, provider-enforced writer fencing and crash recovery remain a separate production requirement, not a guarantee of process-local reuse.
+- Status: Implemented at `fa60c92` with SDK repair `e0f9f41`; 179 regression tests, Ruff and targeted mypy passed. Deterministic and live Bedrock two-task gates each reused one VM, followed by AWS-confirmed termination. Both Compose services updated and historical downloads verified. See `docs/architecture/a2a-deliverability-validation.md`; cross-process ownership and live approval/suspend-resume validation remain outside this repair.
+
+## Operator-owned published-file retention (2026-09-08)
+
+- Category: Enhancement and retrieval bug fix; layers 1, 2 and 6. Effort: 1 day.
+- Tag newly published binary objects separately from artifact descriptors so operators can select them with S3 Lifecycle. Preserve existing object keys, publications and generic inline support; configure only the S3 Files example for URL delivery.
+- Acceptance: authorized retrieval checks content availability before signing; missing published bytes produce a standard text notice under the same A2A artifact identity in terminal retrieval and streams. Scope errors, corrupt descriptors, access denial and storage outages must remain errors. Cover native publication, tag selection, URL refresh and expired-content projections with regressions; document independent history/client retention and required S3 permissions.
+- Dependencies: existing S3 publication and scoped A2A projection. Compatibility: the publishing principal needs `s3:PutObjectTagging`; no existing object migration or automatic Lifecycle policy installation. Operators choose retention periods and rules.
+- Status: Implemented; native publication and A2A retrieval/stream regressions pass. Verified real S3 tags, missing-object notices, scope rejection, URL refresh and byte fidelity from the read-only Compose container. No AWS Lifecycle rule installed; operators still choose retention periods.
+
+## Reusable performance telemetry and isolated A2A benchmarks (2026-09-08)
+
+- Category: Feature / observability and performance evaluation; layers 1, 2, 3, 4, 6, 7. Effort: 4–6 days.
+- Extend curated OTLP instrumentation for real sandbox acquisition, publication, persistence and client delivery. Preserve Prometheus compatibility, exact scope and the existing single owner of model usage metrics. Lower layers use OTel directly; no upward observability imports.
+- Keep synthetic workloads, AWS fixtures, builder-owned S3 Files mount diagnostics and the local Collector/Tempo/Prometheus/Grafana stack in the investigation example. No production benchmark switches, storage redesign or sandbox protocol extensions.
+- Acceptance: deterministic lifecycle/load/size cohorts, real-model and WayPost verification, independent metrics export, bounded dimensions/queues, failure isolation, exporter-outage and context-propagation tests, measured telemetry overhead, redacted reproducible evidence and confirmed VM cleanup. Establish a baseline before selecting product SLOs.
+- Dependencies: sandbox/S3/A2A investigation revision, configured AWS/model credentials and WayPost HTTP support. Compatibility: existing A2A and sandbox wire formats unchanged; optional SDK OTel API integration; preserve existing Prometheus names and avoid duplicate collection.
+- Status: Instrumentation implemented on `codex/a2a-performance-otel`; evaluation narrowed by user request to a reasonable baseline. Completed 30 tasks each at concurrency 1/5/10, a partial publication sweep and three successful real Bedrock tasks. The original warm/resume cohorts were invalidated by the lifecycle defect, since repaired for process-local reuse. Matched overhead remains unmeasured. Later live S3 optimization results are recorded separately; no controlled causal speedup is claimed. See `docs/architecture/a2a-deliverability-validation.md` for retained results and limits.
+
+## S3 Files builder-integration investigation (2026-09-08)
+
+Live-model performance follow-up: 10 successful Bedrock requests each at observed
+concurrency 1/5/10, with completion p50 21.7/31.9/40.2 seconds. Benchmark VMs
+confirmed terminated. See `docs/architecture/a2a-deliverability-validation.md`.
+
+- Category: Feature / example integration; layers 3 (execution), 6 (A2A demonstration).
+- Implement a separate investigation image with fail-closed S3 Files startup/resume mounts. Use existing sandbox profiles and opaque run-hook payloads; no S3 Files provisioning in Cognition core.
+- Builder-owned infrastructure supplies two isolated conversation directories, access points, execution roles, and a dedicated VPC connector. Keep all resources investigation-specific.
+- Acceptance: live file CRUD, forced MicroVM replacement and remount fidelity, alternate-access-point denial, failed-mount rejection, live LLM A2A Parts and WayPost interaction, retained attachment downloads, read-only Cognition host, reproducible deployment and cleanup.
+- Effort: 2–3 days. Dependencies: existing sandbox publication demo, AWS S3 Files and Lambda MicroVM access, WayPost HTTP compatibility branch.
+- Status: Verified live, including WayPost, replacement and suspend/resume mounts, scoped isolation, post-teardown downloads, and the generic initialization-race fix. Workspace quotas and production-scale identity provisioning remain outside this bounded demonstration.
+
 This roadmap tracks the path toward Cognition's "batteries-included AI backend" vision.
 
 All work is categorized by type: Security Fixes, Bug Fixes, Performance Improvements, Dependency Updates, and Features (P0-P3 tiers).
@@ -29,9 +74,21 @@ See AGENTS.md for category definitions, DoD requirements, and precedence rules.
 
 ## Bug Fixes
 
+- 2026-09-08: Give the S3 cancellation regression a test-owned executor and wait until all ten operations reach upload before cancelling; avoid counting earlier key-resolution calls or assuming host thread capacity. Test-only portability fix; layer 2.
+
+- 2026-09-08: Validate publication paths against the assigned sandbox workspace root, including custom roots, instead of a hardcoded directory. Layer 4; release review reproduction with native tool execution; reject sibling prefixes and traversal.
+
+- 2026-09-08: Repeated runs constructed fresh sandbox backends and overwrote session tracking without terminating prior MicroVMs, defeating warm reuse and permitting untracked allocations beyond a per-session quota. Layers 3/4; high severity lifecycle/resource isolation defect. Reproduced in the original performance baseline and subsequently repaired for process-local ownership at `fa60c92`. See the session sandbox ownership entry and live lifecycle gate evidence; distributed ownership remains open.
+
+- 2026-09-08: Refresh the not-yet-serving ASGI middleware stack when FastAPI OTel instrumentation is installed during lifespan startup; preserve trusted ingress trace context. Layers 6/7. Reproduced by WayPost-to-Cognition live trace correlation; regression and live verification in progress.
+
 | Date | Description | Issue | Layer | Status |
 |------|-------------|-------|-------|--------|
 | 2026-09-02 | Normalize persisted pre-v0.14 Agent definitions by removing retired inline capability fields, updating revision identity, and preserving exact-scope and historical run boundaries. | [#209](https://github.com/CognicellAI/Cognition/issues/209), [Kennel #63](https://github.com/CognicellAI/Kennel/issues/63#issuecomment-5515261183) | 2/4 | Implemented on `main`; v0.14.1 release validation pending |
+| 2026-09-08 | Serialize lazy Lambda MicroVM wrapper initialization so parallel first tool calls share one SDK instance and launch lock. | S3 Files live demo; concurrent-operation regression | 3 | Verified: regression and live WayPost parallel reads launch one VM |
+| 2026-09-08 | Explicit null `response_format` is silently ignored by the Agent PATCH API; use definition replacement until null clearing is supported. | S3 Files demo configuration | 6 | Reproduced; implementation pending |
+| 2026-09-08 | Prevent silent tool loss in Bedrock model selection (GPT-OSS legacy adapter), and reject missing configured structured output instead of marking the task completed. | `docs/architecture/a2a-deliverability-validation.md` | 4/5 | Reproduced; implementation pending |
+| 2026-09-08 | Provide accurate sandbox publication instructions and recoverable path-validation feedback while retaining fatal trusted-scope checks. | Natural-language publication probe | 3/4 | Reproduced; implementation pending |
 | 2026-08-04 | Align the Agent-owned Skills backend with the installed Deep Agents `BackendProtocol` (`ls`/`als` and raw read content), and add a two-server workload-token-exchange regression proving exact-audience token isolation under concurrent use. | KennelAMS RC2 local integration evaluation | 4 | Implemented on `release/v0.14.0`; release validation pending |
 | 2026-08-03 | Keep generated A2A release evidence release-independent and exclude external consumer names from public release artifacts. | v0.14.0-rc.1 evidence review | 7 | In Review |
 | 2026-07-29 | Avoid duplicate CI runs for release branches by using pull-request validation for `release/**` and reserving push validation for long-lived branches. | PR #166 ran identical push and pull-request jobs | 7 | Implemented |
@@ -207,6 +264,7 @@ The following fallback patterns exist and are tracked for removal. They produce 
 
 | Description | Target Metric | Before | After | Layer | Status |
 |-------------|---------------|--------|-------|-------|--------|
+| Offload synchronous S3 artifact manifest I/O from the async event loop and reuse store clients | Concurrency 5/10 task latency and event-loop responsiveness | Live completion p50 21.7/31.9/40.2 s at concurrency 1/5/10; blocking artifact I/O and repeated client construction verified | 21.3/26.3/27.1 s in a 30-task live repeat, 0 errors; 106 regressions passed; scoped post-restart retrieval verified. Sequential comparison, not guaranteed causal speedups. See docs/architecture/a2a-deliverability-validation.md | 2 | Implemented and verified on `codex/a2a-performance-otel` |
 | Curate the standard Agent trace profile | At most 40 spans for the reference short run, while retaining run, LangGraph, model, tool, subagent, sandbox, and failure structure with valid parentage | 209 spans and 742,119 attribute bytes in the measured MLflow reference trace | 20 spans, one root, no orphaned children, and exact model-token totals in local Compose trace `tr-f0174459e7d636b60018689dfe78b4aa`; 378,050 raw attribute/event bytes are retained by builder policy, so attribute volume is tracked rather than capped | 4/6/7 | Implemented on `release/v0.13.0`; release validation pending |
 | Exact-scope indexed Agent/config and runtime lookup for v0.13.0 | PostgreSQL query plans use composite scope indexes; no application-side tenant scan; list work scales with the requested page | Agent/config and session lists can load broad result sets and filter scope in Python | CI-sized proof with 10,000 config rows, 1,000 scopes, and 50,000 sessions; median/p95 recorded without a wall-clock gate | 1/2/4/6 | Implemented on `release/v0.13.0`; release validation pending |
 | Bound shared runtime caches for v0.13.0 | Agent graph and session-service caches have configured size/TTL limits and observable eviction | Process-lifetime dictionaries can grow with tenant/session cardinality | Deterministic LRU/TTL bounds and terminal cleanup | 4/7 | Implemented on `release/v0.13.0`; release validation pending |
@@ -278,6 +336,15 @@ The following fallback patterns exist and are tracked for removal. They produce 
 ---
 
 ## P0: Table Stakes (Blocking)
+
+### Sandbox → S3 → A2A publication investigation
+
+- **Category:** Feature / architectural integration; layers 2, 3, 4, 6, 7.
+- **Status:** Implemented and investigation verified on `codex/sandbox-s3-a2a-parts`; see `docs/architecture/a2a-deliverability-validation.md` for the two-turn Claude demonstration and pinned TCK limitation.
+- **Acceptance:** Real agent structured results and explicitly published sandbox files produce all four A2A Parts; S3 snapshots survive sandbox teardown; exact scope, bounded reads, no host artifact staging, and lossless task reconstruction are verified with regression tests and an isolated Compose/AWS demonstration.
+- **Effort:** 4–6 days. **Dependencies:** existing ArtifactStore/S3 manifests, Lambda MicroVM backend, Deep Agents structured output, A2A adapter.
+- **Migration:** Additive binary publication and result projection; existing text artifacts and virtual paths retain their behavior. No deployment storage fallback.
+
 
 | Task | Layer | Status | Acceptance Criteria | Effort | Dependencies |
 |------|-------|--------|---------------------|--------|--------------|

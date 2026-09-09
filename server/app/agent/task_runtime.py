@@ -39,6 +39,7 @@ from server.app.runtime_projection import ActiveRunConflictError, RuntimeProject
 from server.app.settings import get_settings
 from server.app.storage.backend import StorageBackend
 from server.app.storage.config_store import ConfigStore, get_default_config_store
+from server.app.telemetry import operation
 
 if TYPE_CHECKING:
     from server.app.storage.artifact_store import ArtifactStore
@@ -176,105 +177,107 @@ class AgentTaskRuntime:
 
     async def submit(self, command: SubmitTask) -> TaskExecution:
         """Create or idempotently recover a new task execution."""
-        scope = dict(command.effective_scope)
-        if command.idempotency_key:
-            existing = await self._store.get_task_by_idempotency_key(
-                command.agent_name,
-                scope,
-                command.idempotency_key,
-            )
-            if existing is not None:
-                return await self._execution_for_existing(existing)
-
-        context_id = command.context_id or str(uuid.uuid4())
-        session = await self._store.get_session(context_id, scope)
-        if session is None:
-            try:
-                session = await self._store.create_session(
-                    session_id=context_id,
-                    thread_id=str(uuid.uuid4()),
-                    config=command.session_config,
-                    title=f"Agent context {context_id[:8]}",
-                    scopes=scope,
-                    agent_name=command.agent_name,
-                    metadata={"runtime_context_id": context_id},
-                    workspace_path=command.workspace_path or self._default_workspace_path,
+        with operation("cognition.task.admission"):
+            scope = dict(command.effective_scope)
+            if command.idempotency_key:
+                existing = await self._store.get_task_by_idempotency_key(
+                    command.agent_name,
+                    scope,
+                    command.idempotency_key,
                 )
-            except SessionAlreadyExistsError as exc:
-                # Do not disclose that the identifier exists in another scope.
-                raise RuntimeTaskNotFoundError(context_id) from exc
-        else:
-            self._assert_context_owner(session, command.agent_name, scope)
+                if existing is not None:
+                    return await self._execution_for_existing(existing)
 
-        active = await self._store.get_active_run(session.id, scope)
-        if active is not None:
-            raise RuntimeTaskConflictError(
-                f"Context '{context_id}' already has active run '{active.id}'"
+            context_id = command.context_id or str(uuid.uuid4())
+            session = await self._store.get_session(context_id, scope)
+            if session is None:
+                try:
+                    session = await self._store.create_session(
+                        session_id=context_id,
+                        thread_id=str(uuid.uuid4()),
+                        config=command.session_config,
+                        title=f"Agent context {context_id[:8]}",
+                        scopes=scope,
+                        agent_name=command.agent_name,
+                        metadata={"runtime_context_id": context_id},
+                        workspace_path=command.workspace_path or self._default_workspace_path,
+                    )
+                except SessionAlreadyExistsError as exc:
+                    # Do not disclose that the identifier exists in another scope.
+                    raise RuntimeTaskNotFoundError(context_id) from exc
+            else:
+                self._assert_context_owner(session, command.agent_name, scope)
+
+            active = await self._store.get_active_run(session.id, scope)
+            if active is not None:
+                raise RuntimeTaskConflictError(
+                    f"Context '{context_id}' already has active run '{active.id}'"
+                )
+
+            task = await self._store.create_task(
+                task_id=command.task_id or str(uuid.uuid4()),
+                context_id=context_id,
+                session_id=session.id,
+                agent_name=command.agent_name,
+                effective_scope=scope,
+                idempotency_key=command.idempotency_key,
+                metadata=dict(command.metadata),
             )
-
-        task = await self._store.create_task(
-            task_id=command.task_id or str(uuid.uuid4()),
-            context_id=context_id,
-            session_id=session.id,
-            agent_name=command.agent_name,
-            effective_scope=scope,
-            idempotency_key=command.idempotency_key,
-            metadata=dict(command.metadata),
-        )
-        return await self._begin_execution(
-            task,
-            session,
-            content=command.content,
-            message_id=command.message_id,
-            parent_message_id=command.parent_message_id,
-            idempotency_key=command.idempotency_key,
-            metadata=command.metadata,
-        )
+            return await self._begin_execution(
+                task,
+                session,
+                content=command.content,
+                message_id=command.message_id,
+                parent_message_id=command.parent_message_id,
+                idempotency_key=command.idempotency_key,
+                metadata=command.metadata,
+            )
 
     async def continue_task(self, command: ContinueTask) -> TaskExecution:
         """Create a new attempt under an input/auth-interrupted task."""
-        task = await self._require_task(
-            command.task_id,
-            command.agent_name,
-            command.effective_scope,
-        )
-        if command.idempotency_key:
-            existing_run = await self._store.get_run_by_idempotency_key(
-                task.session_id,
-                command.idempotency_key,
-                task.effective_scope,
+        with operation("cognition.task.admission"):
+            task = await self._require_task(
+                command.task_id,
+                command.agent_name,
+                command.effective_scope,
             )
-            if existing_run is not None:
-                user_message = await self._message_for_run(task, existing_run)
-                session = await self._require_context(task)
-                return TaskExecution(task, session, existing_run, user_message, reused=True)
-        if task.status not in {TaskStatus.INPUT_REQUIRED, TaskStatus.AUTH_REQUIRED}:
-            raise RuntimeTaskConflictError(
-                f"Task '{task.id}' is not awaiting continuation",
-                task_id=task.id,
+            if command.idempotency_key:
+                existing_run = await self._store.get_run_by_idempotency_key(
+                    task.session_id,
+                    command.idempotency_key,
+                    task.effective_scope,
+                )
+                if existing_run is not None:
+                    user_message = await self._message_for_run(task, existing_run)
+                    session = await self._require_context(task)
+                    return TaskExecution(task, session, existing_run, user_message, reused=True)
+            if task.status not in {TaskStatus.INPUT_REQUIRED, TaskStatus.AUTH_REQUIRED}:
+                raise RuntimeTaskConflictError(
+                    f"Task '{task.id}' is not awaiting continuation",
+                    task_id=task.id,
+                )
+            session = await self._require_context(task)
+            if (
+                await self._store.get_active_run(
+                    session.id,
+                    task.effective_scope,
+                )
+                is not None
+            ):
+                raise RuntimeTaskConflictError(
+                    f"Context '{session.id}' already has an active run",
+                    task_id=task.id,
+                )
+            return await self._begin_execution(
+                task,
+                session,
+                content=command.content,
+                message_id=command.message_id,
+                parent_message_id=command.parent_message_id,
+                idempotency_key=command.idempotency_key,
+                metadata=command.metadata,
+                parent_run_id=task.last_run_id,
             )
-        session = await self._require_context(task)
-        if (
-            await self._store.get_active_run(
-                session.id,
-                task.effective_scope,
-            )
-            is not None
-        ):
-            raise RuntimeTaskConflictError(
-                f"Context '{session.id}' already has an active run",
-                task_id=task.id,
-            )
-        return await self._begin_execution(
-            task,
-            session,
-            content=command.content,
-            message_id=command.message_id,
-            parent_message_id=command.parent_message_id,
-            idempotency_key=command.idempotency_key,
-            metadata=command.metadata,
-            parent_run_id=task.last_run_id,
-        )
 
     async def get(self, query: GetTask) -> RuntimeTask | None:
         """Return a task only for its exact agent and effective scope."""

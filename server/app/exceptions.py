@@ -63,6 +63,16 @@ class CognitionError(Exception):
         }
 
 
+class ArtifactContentNotFoundError(CognitionError):
+    """A previously published object's bytes are no longer available."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            message="Published content is no longer available.",
+            code=ErrorCode.NOT_FOUND,
+        )
+
+
 class SessionError(CognitionError):
     """Errors related to session management."""
 

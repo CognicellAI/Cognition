@@ -27,6 +27,7 @@ from server.app.models import (
     SessionStatus,
     TaskStatus,
 )
+from server.app.storage._checkpoint_telemetry import observe_checkpointer
 from server.app.storage.common import (
     effective_scope_key,
     make_message,
@@ -747,7 +748,7 @@ class MemoryStorageBackend:
     async def get_checkpointer(self) -> BaseCheckpointSaver:
         """Get the in-memory checkpointer."""
         if self._checkpointer is None:
-            self._checkpointer = InMemorySaver()
+            self._checkpointer = observe_checkpointer(InMemorySaver())
         return self._checkpointer
 
     async def close_checkpointer(self) -> None:

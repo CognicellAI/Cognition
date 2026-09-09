@@ -7,6 +7,9 @@ import hmac
 import json
 import posixpath
 from typing import Any
+from urllib.parse import urlencode
+
+from server.app.exceptions import ArtifactContentNotFoundError
 
 
 class S3ObjectStore:
@@ -36,7 +39,7 @@ class S3ObjectStore:
         except ImportError as exc:  # pragma: no cover - guarded by the s3 extra
             raise RuntimeError("Install Cognition with the 's3' extra to use S3 storage") from exc
         return cls(
-            boto3.client(
+            boto3.session.Session().client(
                 "s3",
                 endpoint_url=endpoint_url,
                 region_name=region_name,
@@ -78,17 +81,54 @@ class S3ObjectStore:
                 f"Configured S3-compatible storage is unavailable: {type(exc).__name__}"
             ) from exc
 
-    def put(self, key: str, body: bytes) -> None:
+    def put(self, key: str, body: bytes, *, tags: dict[str, str] | None = None) -> None:
         """Write one immutable content-addressed body."""
-        self._client.put_object(Bucket=self._bucket, Key=key, Body=body)
+        options = {"Tagging": urlencode(tags)} if tags else {}
+        self._client.put_object(Bucket=self._bucket, Key=key, Body=body, **options)
+
+    def require_object(self, key: str) -> None:
+        """Check availability without downloading bytes or masking storage failures."""
+        from botocore.exceptions import ClientError
+
+        try:
+            self._client.head_object(Bucket=self._bucket, Key=key)
+        except ClientError as exc:
+            if exc.response.get("Error", {}).get("Code") not in {"404", "NotFound", "NoSuchKey"}:
+                raise
+            # HEAD has no error body: a missing bucket can also look like a 404.
+            # Confirm the bucket remains accessible before reporting missing content.
+            self._client.head_bucket(Bucket=self._bucket)
+            raise ArtifactContentNotFoundError() from exc
 
     def get(self, key: str) -> bytes:
         """Read one durable body."""
-        return bytes(self._client.get_object(Bucket=self._bucket, Key=key)["Body"].read())
+        body = self._client.get_object(Bucket=self._bucket, Key=key)["Body"]
+        try:
+            return bytes(body.read())
+        finally:
+            body.close()
+
+    def download_url(self, key: str, filename: str, media_type: str) -> str:
+        """Create a fifteen-minute bearer URL for an authorized published file."""
+        from urllib.parse import quote
+
+        return str(self._client.generate_presigned_url(
+            "get_object",
+            Params={
+                "Bucket": self._bucket, "Key": key,
+                "ResponseContentType": media_type,
+                "ResponseContentDisposition": "attachment; filename*=UTF-8''" + quote(filename, safe=""),
+            },
+            ExpiresIn=900,
+        ))
 
     def delete(self, key: str) -> None:
         """Delete one durable body during artifact lifecycle cleanup."""
         self._client.delete_object(Bucket=self._bucket, Key=key)
+
+    def close(self) -> None:
+        """Release the transport's reusable connection pool."""
+        self._client.close()
 
 
 __all__ = ["S3ObjectStore"]
