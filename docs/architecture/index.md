@@ -21,7 +21,6 @@ templates, and tests. Earlier architecture prose was not used as a source.
 | [Execution and sandboxes](06-execution-and-sandboxes.md) | How are filesystem and command operations routed across local, Docker, Kubernetes, and Lambda MicroVM backends? |
 | [Runtime flows](07-runtime-flows.md) | What happens during startup, native streaming, A2A execution, approval, and cancellation? |
 | [Deployment and operations](08-deployment-and-operations.md) | How do local, Compose, and Kubernetes deployments place and connect the containers? |
-| [S3 Files and A2A deliverability](s3-files-a2a-deliverability.md) | How do builder-owned workspaces become durable, scoped deliverables? Whitepaper based on the separately dated September 2026 investigation. |
 | [A2A deliverability validation](a2a-deliverability-validation.md) | Which results support publication, retention and sandbox reuse, and where is the archived lab? |
 | [Governance and evolution](09-governance-and-evolution.md) | How is this model kept current and how are architectural changes tracked? |
 | [Code-derived risks](10-code-derived-risks.md) | Which verified implementation constraints require acceptance, correction, or release tracking? |

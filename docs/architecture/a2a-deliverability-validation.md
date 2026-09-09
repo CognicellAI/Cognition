@@ -4,7 +4,7 @@
 
 **Audience:** Cognition maintainers, builders and operators.
 
-**Related:** [Architecture whitepaper](s3-files-a2a-deliverability.md),
+**Related:** [Builder integration whitepaper](../guides/s3-files-a2a-deliverability.md),
 [retention guide](../guides/published-file-retention.md),
 [sandbox lifecycle](../concepts/sandboxes/aws-lambda-microvm/lifecycle-and-observability.md).
 
