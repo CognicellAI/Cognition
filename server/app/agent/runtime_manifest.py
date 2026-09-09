@@ -132,7 +132,7 @@ async def resolve_runtime_manifest(
         },
     }
     if definition.a2a.a2ui is not None:
-        from server.app.protocols.a2a.a2ui.core import pinned_asset_manifest
+        from server.app.a2ui.core import pinned_asset_manifest
 
         manifest["dependencies"]["a2ui"] = pinned_asset_manifest()
     result = ResolvedRuntimeManifest(

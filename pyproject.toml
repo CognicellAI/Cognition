@@ -63,6 +63,7 @@ dependencies = [
     "a2a-sdk>=1.0.3",
     # AWS Lambda MicroVM sandbox adapter (boto3 is optional/lazy)
     "langchain-aws-lambda-microvms>=0.1.0",
+    "jsonschema>=4.26.0",
 ]
 
 [project.optional-dependencies]

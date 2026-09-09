@@ -25,6 +25,18 @@ from typing import Any, TypeVar, cast
 import structlog
 from langchain_core.messages import HumanMessage, SystemMessage
 
+from server.app.a2ui.core import (
+    A2UI_EXTENSION_URI,
+    A2UI_MEDIA_TYPE,
+    BASIC_CATALOG_ID,
+    A2UIInvocationContext,
+    A2UIResponseEnvelope,
+    A2UIValidationError,
+    build_generation_prompt,
+    normalize_a2ui_output,
+    validate_agent_to_renderer_messages,
+)
+from server.app.a2ui.telemetry import record_batch, record_validation
 from server.app.agent.cognition_agent import CognitionAgentParams, create_cognition_agent
 from server.app.agent.definition import AgentDefinition
 from server.app.agent.resolver import ResolvedRuntimeModel, RuntimeResolver
@@ -61,23 +73,10 @@ from server.app.agent.runtime import (
 from server.app.agent.usage import ProviderUsageAggregator
 from server.app.exceptions import LLMProviderConfigError
 from server.app.observability import (
-    A2UI_BATCH_MESSAGES,
-    A2UI_MESSAGES_TOTAL,
-    A2UI_VALIDATIONS_TOTAL,
     CONTEXT_EVENT_COUNT,
     RUNTIME_CACHE_EVICTIONS_TOTAL,
     RUNTIME_CACHE_SIZE,
     add_span_event,
-)
-from server.app.protocols.a2a.a2ui import (
-    A2UI_EXTENSION_URI,
-    A2UI_MEDIA_TYPE,
-    A2UIInvocationContext,
-    A2UIResponseEnvelope,
-    A2UIValidationError,
-    build_generation_prompt,
-    normalize_a2ui_output,
-    validate_agent_to_renderer_messages,
 )
 from server.app.settings import Settings
 from server.app.storage.common import canonical_json_digest
@@ -273,24 +272,118 @@ async def _with_execution_timeout(
             yield event
 
 
+def _a2ui_context_from_metadata(metadata: Mapping[str, Any]) -> A2UIInvocationContext | None:
+    value = metadata.get("a2ui")
+    if value is None:
+        return None
+    if not isinstance(value, Mapping) or value.get("extension_uri") != A2UI_EXTENSION_URI:
+        raise A2UIValidationError("Invalid pinned A2UI invocation")
+    ids = value.get("catalog_ids")
+    if (
+        not isinstance(ids, list | tuple)
+        or not ids
+        or any(item != BASIC_CATALOG_ID for item in ids)
+    ):
+        raise A2UIValidationError("Invalid pinned A2UI catalogs")
+    return A2UIInvocationContext(
+        extension_uri=A2UI_EXTENSION_URI,
+        catalog_ids=tuple(ids),
+        catalog_digests={},
+    )
+
+
+async def _with_a2ui_output(
+    events: AsyncIterator[Any],
+    runtime: DeepAgentRuntime,
+    context: A2UIInvocationContext | None,
+    thread_id: str,
+    run_id: str,
+) -> AsyncIterator[Any]:
+    """Apply one output policy to initial execution and approval continuation.
+
+    The caller wraps this entire iterator in one execution timeout, including
+    repair. Framework tool/usage events remain framework-owned. An internal
+    envelope never becomes a public artifact before this validation succeeds.
+    """
+    if context is None:
+        async for event in events:
+            yield event
+        return
+
+    for attempt in range(2):
+        valid_output = False
+        repair = False
+        try:
+            async for event in events:
+                if isinstance(event, TokenEvent):
+                    continue
+                if isinstance(event, StructuredResponseEvent):
+                    try:
+                        envelope = normalize_a2ui_output(event.value)
+                        messages = validate_agent_to_renderer_messages(
+                            envelope.messages, context.catalog_ids
+                        )
+                    except A2UIValidationError:
+                        if attempt == 0:
+                            record_validation("output", "repair", "agent_schema")
+                            repair = True
+                            break
+                        yield ErrorEvent(
+                            message="Invalid A2UI output after repair", code="A2UI_OUTPUT_INVALID"
+                        )
+                        return
+                    record_batch(messages)
+                    valid_output = True
+                    if envelope.text:
+                        yield TokenEvent(content=envelope.text)
+                    yield ArtifactEvent(
+                        artifact_id=f"a2ui-{run_id}",
+                        name="a2ui",
+                        kind="data",
+                        value=messages,
+                        media_type=A2UI_MEDIA_TYPE,
+                        description="A2UI v1.0 message batch",
+                        extensions=(A2UI_EXTENSION_URI,),
+                        append=False,
+                        last_chunk=True,
+                    )
+                    continue
+                if isinstance(event, DoneEvent) and not valid_output:
+                    yield ErrorEvent(
+                        message="Missing A2UI structured output", code="A2UI_OUTPUT_INVALID"
+                    )
+                    return
+                yield event
+                if isinstance(event, ErrorEvent | InterruptEvent):
+                    return
+        finally:
+            close = getattr(events, "aclose", None)
+            if close is not None:
+                await close()
+        if not repair:
+            return
+        # Continue the same checkpoint with a bounded repair instruction. Never
+        # echo validation errors or renderer payloads into logs or diagnostics.
+        events = runtime.astream_events(
+            {
+                "messages": [
+                    HumanMessage(
+                        content=(
+                            "The previous UI response failed validation. Correct it once, "
+                            "preserving the requested result. " + build_generation_prompt(context)
+                        )
+                    )
+                ]
+            },
+            thread_id=thread_id,
+        )
+
+
 def _has_explicit_agent_field(agent_def: Any, field_name: str) -> bool:
     fields_set = getattr(agent_def, "model_fields_set", None)
     if isinstance(fields_set, set):
         return field_name in fields_set
     return hasattr(agent_def, field_name)
-
-
-def _a2ui_message_type(message: Mapping[str, Any]) -> str:
-    """Return the bounded A2UI message type for telemetry."""
-    known = (
-        "createSurface",
-        "updateComponents",
-        "updateDataModel",
-        "deleteSurface",
-        "callRendererFunction",
-        "agentFunctionResponse",
-    )
-    return next((key for key in known if key in message), "unknown")
 
 
 def _scope_fingerprint(scope: Mapping[str, str] | None) -> str | None:
@@ -303,24 +396,6 @@ def _scope_fingerprint(scope: Mapping[str, str] | None) -> str | None:
         separators=(",", ":"),
     ).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()[:16]
-
-
-def _build_a2ui_repair_prompt(original_content: str, validation_error: str) -> str:
-    """Return a bounded A2UI repair instruction without renderer state."""
-    return (
-        f"{original_content}\n\n[A2UI repair]\n"
-        "The previous structured A2UI response failed Cognition validation. "
-        "Return a corrected structured response only. Keep the same user intent, "
-        "use A2UI v1.0, emit a non-empty messages array, and do not include "
-        "legacy A2A kind fields. Each message object must use a concrete A2UI "
-        "message key such as createSurface, updateComponents, or updateDataModel; "
-        "do not use a type field. Minimal valid shape: "
-        "{\"text\":\"Done\",\"messages\":[{\"version\":\"v1.0\","
-        "\"createSurface\":{\"surfaceId\":\"main\",\"components\":[{\"id\":\"root\","
-        "\"component\":\"Text\",\"text\":\"Ready\"}],\"dataModel\":{}}}]}. "
-        "Validation error: "
-        f"{validation_error[:500]}"
-    )
 
 
 def _effective_session_scope(
@@ -582,13 +657,10 @@ class DeepAgentStreamingService:
                     raise RuntimeError("Pinned run manifest was not found at exact scope")
                 manifest_digest = pinned_run.manifest_digest
                 pinned_manifest = pinned_run.runtime_manifest
-            a2ui_run_metadata = (
-                pinned_run.metadata.get("a2ui")
-                if run_id is not None and pinned_run is not None
-                else None
-            )
-            a2ui_active = isinstance(a2ui_run_metadata, Mapping)
 
+            a2ui_context = _a2ui_context_from_metadata(
+                pinned_run.metadata if run_id is not None and pinned_run is not None else {}
+            )
             with operation("cognition.runtime.config"):
                 agent_cfg, custom_tools = await self._resolve_agent_config(
                     session=session,
@@ -671,10 +743,8 @@ class DeepAgentStreamingService:
                 permissions=agent_cfg.permissions,
                 response_format=(
                     A2UIResponseEnvelope
-                    if a2ui_active
-                    else (
-                        session.config.response_format if session and session.config else None
-                    )
+                    if a2ui_context
+                    else (session.config.response_format if session and session.config else None)
                 )
                 or agent_cfg.response_format,
                 tool_token_limit_before_evict=agent_cfg.tool_token_limit_before_evict,
@@ -693,7 +763,8 @@ class DeepAgentStreamingService:
             )
             if manager is not None:
                 agent_params._sandbox_acquirer = manager.sandbox_acquirer(
-                    session_id, scope=effective_scope or {},
+                    session_id,
+                    scope=effective_scope or {},
                     agent_name=session.agent_name if session else None,
                     run_id=run_id or thread_id,
                 )
@@ -711,36 +782,15 @@ class DeepAgentStreamingService:
                 recursion_limit=recursion_limit,
                 context=invocation_context,
                 trace_parent_span=trace_parent_span,
+                structured_response_as_artifact=a2ui_context is None,
             )
             if manager:
                 manager.register_runtime(session_id, runtime)
 
-            model_content = content
-            if a2ui_active:
-                assert isinstance(a2ui_run_metadata, Mapping)
-                catalog_ids_raw = a2ui_run_metadata.get("catalog_ids", ())
-                catalog_digests_raw = a2ui_run_metadata.get("catalog_digests", {})
-                a2ui_context = A2UIInvocationContext(
-                    extension_uri=str(a2ui_run_metadata.get("extension_uri", "")),
-                    catalog_ids=tuple(
-                        str(item) for item in catalog_ids_raw if item is not None
-                    )
-                    if isinstance(catalog_ids_raw, list | tuple)
-                    else (),
-                    catalog_digests={
-                        str(key): str(value)
-                        for key, value in catalog_digests_raw.items()
-                    }
-                    if isinstance(catalog_digests_raw, Mapping)
-                    else {},
-                )
-                model_content = (
-                    f"{content}\n\n[A2UI invocation]\n"
-                    f"{build_generation_prompt(a2ui_context)}"
-                )
-
             # Build message input (system prompt already embedded in agent graph)
-            initial_messages = self._build_messages(model_content, None)
+            if a2ui_context is not None:
+                content = f"{content}\n\n{build_generation_prompt(a2ui_context)}"
+            messages = self._build_messages(content, None)
 
             acc = StreamAccumulator()
             usage_aggregator = ProviderUsageAggregator(
@@ -748,157 +798,93 @@ class DeepAgentStreamingService:
                 default_model=model_id,
             )
             runtime_exception: Exception | None = None
-            a2ui_repair_prompt: str | None = None
-            max_a2ui_attempts = 2 if a2ui_active else 1
 
             try:
-                for a2ui_attempt in range(max_a2ui_attempts):
-                    runtime_exception = None
-                    retry_a2ui_output = False
-                    attempt_messages = (
-                        self._build_messages(a2ui_repair_prompt, None)
-                        if a2ui_repair_prompt is not None
-                        else initial_messages
-                    )
-                    try:
-                        async for event in _with_execution_timeout(
-                            runtime.astream_events(
-                                {"messages": attempt_messages},
-                                thread_id=thread_id,
+                try:
+                    async for event in _with_execution_timeout(
+                        _with_a2ui_output(
+                            runtime.astream_events({"messages": messages}, thread_id=thread_id),
+                            runtime,
+                            a2ui_context,
+                            thread_id,
+                            run_id or thread_id,
+                        ),
+                        execution_timeout_seconds,
+                    ):
+                        if isinstance(event, TokenEvent):
+                            acc.record_token(event.content)
+                            yield event
+
+                        elif isinstance(event, ModelUsageEvent):
+                            usage_aggregator.observe_usage_metadata(
+                                event.call_id,
+                                event.usage_metadata,
+                                provider=event.provider,
+                                model=event.model,
+                            )
+
+                        elif isinstance(event, ToolCallEvent):
+                            acc.set_tool_call(event.tool_call_id)
+                            yield event
+
+                        elif isinstance(event, ToolResultEvent):
+                            acc.set_tool_call(None)
+                            if manager:
+                                for sandbox_event in manager.snapshot_sandbox_backend_events(
+                                    session_id,
+                                    include_runtime_snapshot=False,
+                                ):
+                                    yield sandbox_event
+                            yield event
+
+                        elif isinstance(event, PlanningEvent) or isinstance(
+                            event,
+                            (
+                                DelegationEvent,
+                                ArtifactEvent,
+                                StatusEvent,
+                                StepCompleteEvent,
+                                InterruptEvent,
+                                ToolSafetyEvent,
+                                ContextEvent,
                             ),
-                            execution_timeout_seconds,
                         ):
-                            if isinstance(event, TokenEvent):
-                                if a2ui_active:
-                                    continue
-                                acc.record_token(event.content)
-                                yield event
-
-                            elif isinstance(event, ModelUsageEvent):
-                                usage_aggregator.observe_usage_metadata(
-                                    event.call_id,
-                                    event.usage_metadata,
-                                    provider=event.provider,
-                                    model=event.model,
-                                )
-
-                            elif isinstance(event, ToolCallEvent):
-                                acc.set_tool_call(event.tool_call_id)
-                                yield event
-
-                            elif isinstance(event, ToolResultEvent):
-                                acc.set_tool_call(None)
-                                if manager:
-                                    for sandbox_event in manager.snapshot_sandbox_backend_events(
-                                        session_id,
-                                        include_runtime_snapshot=False,
-                                    ):
-                                        yield sandbox_event
-                                yield event
-
-                            elif isinstance(event, StructuredResponseEvent):
-                                if not a2ui_active:
-                                    continue
-                                try:
-                                    envelope = normalize_a2ui_output(event.value)
-                                    a2ui_messages = validate_agent_to_renderer_messages(
-                                        envelope.messages
-                                    )
-                                except A2UIValidationError as exc:
-                                    if a2ui_attempt + 1 < max_a2ui_attempts:
-                                        A2UI_VALIDATIONS_TOTAL.labels(
-                                            direction="output",
-                                            outcome="repair",
-                                            reason="agent_schema",
-                                        ).inc()
-                                        a2ui_repair_prompt = _build_a2ui_repair_prompt(
-                                            model_content,
-                                            str(exc),
-                                        )
-                                        retry_a2ui_output = True
-                                        break
-                                    A2UI_VALIDATIONS_TOTAL.labels(
-                                        direction="output",
-                                        outcome="rejected",
-                                        reason="agent_schema",
-                                    ).inc()
-                                    yield ErrorEvent(
-                                        message=str(exc),
-                                        code="A2UI_OUTPUT_INVALID",
-                                    )
-                                    return
-                                for message in a2ui_messages:
-                                    A2UI_MESSAGES_TOTAL.labels(
-                                        message_type=_a2ui_message_type(message)
-                                    ).inc()
-                                A2UI_BATCH_MESSAGES.observe(len(a2ui_messages))
-                                if envelope.text:
-                                    acc.record_token(envelope.text)
-                                    yield TokenEvent(content=envelope.text)
-                                yield ArtifactEvent(
-                                    artifact_id=f"a2ui-{run_id or thread_id}",
-                                    name="a2ui",
-                                    kind="data",
-                                    value=a2ui_messages,
-                                    media_type=A2UI_MEDIA_TYPE,
-                                    description="A2UI v1.0 message batch",
-                                    extensions=(A2UI_EXTENSION_URI,),
-                                    append=False,
-                                    last_chunk=True,
-                                )
-
-                            elif isinstance(event, PlanningEvent) or isinstance(
-                                event,
-                                (
-                                    DelegationEvent,
-                                    ArtifactEvent,
-                                    StatusEvent,
-                                    StepCompleteEvent,
-                                    InterruptEvent,
-                                    ToolSafetyEvent,
-                                    ContextEvent,
-                                ),
-                            ):
-                                yield event
-                                if isinstance(event, InterruptEvent):
-                                    return
-
-                            elif isinstance(event, ErrorEvent):
-                                yield event
+                            yield event
+                            if isinstance(event, InterruptEvent):
                                 return
 
-                        # DoneEvent from the runtime is absorbed here; we emit our own below.
+                        elif isinstance(event, ErrorEvent):
+                            yield event
+                            return
 
-                    except TimeoutError:
-                        await runtime.abort(thread_id)
-                        logger.warning(
-                            "Agent execution deadline exceeded",
-                            session_id=session_id,
-                            thread_id=thread_id,
-                            timeout_seconds=execution_timeout_seconds,
-                        )
-                        yield ErrorEvent(
-                            message=(
-                                "Agent execution exceeded the configured "
-                                f"{execution_timeout_seconds:g} second deadline"
-                            ),
-                            code="EXECUTION_TIMEOUT",
-                        )
-                        return
-                    except asyncio.CancelledError:
-                        raise
-                    except Exception as exc:
-                        logger.error(
-                            "LangGraph execution failed during stream_response",
-                            error=str(exc),
-                            session_id=session_id,
-                            exc_info=True,
-                        )
-                        runtime_exception = exc
+                    # DoneEvent from the runtime is absorbed here; we emit our own below.
 
-                    if retry_a2ui_output:
-                        continue
-                    break
+                except TimeoutError:
+                    await runtime.abort(thread_id)
+                    logger.warning(
+                        "Agent execution deadline exceeded",
+                        session_id=session_id,
+                        thread_id=thread_id,
+                        timeout_seconds=execution_timeout_seconds,
+                    )
+                    yield ErrorEvent(
+                        message=(
+                            "Agent execution exceeded the configured "
+                            f"{execution_timeout_seconds:g} second deadline"
+                        ),
+                        code="EXECUTION_TIMEOUT",
+                    )
+                    return
+                except asyncio.CancelledError:
+                    raise
+                except Exception as exc:
+                    logger.error(
+                        "LangGraph execution failed during stream_response",
+                        error=str(exc),
+                        session_id=session_id,
+                        exc_info=True,
+                    )
+                    runtime_exception = exc
 
                 if runtime_exception is not None:
                     yield ErrorEvent(
@@ -968,6 +954,7 @@ class DeepAgentStreamingService:
             if active_run is None:
                 raise RuntimeError("Pinned active run manifest was not found at exact scope")
 
+            a2ui_context = _a2ui_context_from_metadata(active_run.metadata)
             with operation("cognition.runtime.config"):
                 agent_cfg, custom_tools = await self._resolve_agent_config(
                     session=session,
@@ -1032,7 +1019,11 @@ class DeepAgentStreamingService:
                 memory=agent_cfg.memory,
                 interrupt_on=agent_cfg.interrupt_on,
                 permissions=agent_cfg.permissions,
-                response_format=(session.config.response_format if session.config else None)
+                response_format=(
+                    A2UIResponseEnvelope
+                    if a2ui_context
+                    else (session.config.response_format if session.config else None)
+                )
                 or agent_cfg.response_format,
                 tool_token_limit_before_evict=agent_cfg.tool_token_limit_before_evict,
                 context_policy=agent_cfg.context_policy,
@@ -1050,7 +1041,9 @@ class DeepAgentStreamingService:
             )
             if manager is not None:
                 agent_params._sandbox_acquirer = manager.sandbox_acquirer(
-                    session_id, scope=effective_scope or {}, agent_name=session.agent_name,
+                    session_id,
+                    scope=effective_scope or {},
+                    agent_name=session.agent_name,
                     run_id=active_run.id,
                 )
             agent = await create_cognition_agent(agent_params)
@@ -1070,6 +1063,7 @@ class DeepAgentStreamingService:
                 recursion_limit=recursion_limit,
                 context=invocation_context,
                 trace_parent_span=trace_parent_span,
+                structured_response_as_artifact=a2ui_context is None,
             )
             if manager is not None:
                 manager.register_runtime(session_id, runtime)
@@ -1078,12 +1072,24 @@ class DeepAgentStreamingService:
                 default_provider=provider,
                 default_model=model_id,
             )
-            async for event in runtime.astream_resume_events(
-                decision=decision,
-                tool_name=tool_name,
-                args=args,
-                thread_id=thread_id,
-                trace_parent_span=trace_parent_span,
+            timeout_seconds = (
+                agent_cfg.agent_def.config.timeout_seconds if agent_cfg.agent_def else None
+            )
+            async for event in _with_execution_timeout(
+                _with_a2ui_output(
+                    runtime.astream_resume_events(
+                        decision=decision,
+                        tool_name=tool_name,
+                        args=args,
+                        thread_id=thread_id,
+                        trace_parent_span=trace_parent_span,
+                    ),
+                    runtime,
+                    a2ui_context,
+                    thread_id,
+                    active_run.id,
+                ),
+                timeout_seconds,
             ):
                 if isinstance(event, TokenEvent):
                     acc.record_token(event.content)
@@ -1095,13 +1101,15 @@ class DeepAgentStreamingService:
                         model=event.model,
                     )
                 if isinstance(event, InterruptEvent):
-                    continue
+                    yield event
+                    return
                 if isinstance(event, DoneEvent):
                     continue
                 if isinstance(
                     event,
                     (
                         TokenEvent,
+                        ArtifactEvent,
                         ToolCallEvent,
                         ToolResultEvent,
                         ToolSafetyEvent,
@@ -1119,6 +1127,8 @@ class DeepAgentStreamingService:
                     if isinstance(event, ModelUsageEvent):
                         continue
                     yield cast(StreamEvent, event)
+                    if isinstance(event, ErrorEvent):
+                        return
 
             if acc.accumulated_content:
                 usage_aggregator.mark_unreported_fallback()
@@ -1126,6 +1136,10 @@ class DeepAgentStreamingService:
             yield UsageEvent(**usage_report.to_payload())
             yield DoneEvent()
 
+        except TimeoutError:
+            if runtime is not None:
+                await runtime.abort(thread_id)
+            yield ErrorEvent(message="Agent execution deadline exceeded", code="EXECUTION_TIMEOUT")
         except LLMProviderConfigError as e:
             logger.error(
                 "Provider configuration error on resume", error=str(e), session_id=session_id
@@ -1359,7 +1373,9 @@ class SessionAgentManager:
                 break
             if self.unregister_session(idle[0][1]):
                 self._service_cache_evictions += 1
-                RUNTIME_CACHE_EVICTIONS_TOTAL.labels(cache="session_service", reason="capacity").inc()
+                RUNTIME_CACHE_EVICTIONS_TOTAL.labels(
+                    cache="session_service", reason="capacity"
+                ).inc()
 
     def get_service_cache_stats(self) -> dict[str, int]:
         """Return safe cache cardinality/eviction metrics."""
@@ -1432,7 +1448,11 @@ class SessionAgentManager:
         return False
 
     def sandbox_acquirer(
-        self, session_id: str, *, scope: dict[str, str], agent_name: str | None,
+        self,
+        session_id: str,
+        *,
+        scope: dict[str, str],
+        agent_name: str | None,
         run_id: str | None,
     ) -> Callable[[str, Callable[[], Any]], Any]:
         """Bind lazy backend construction to exact session ownership."""
@@ -1461,7 +1481,11 @@ class SessionAgentManager:
                 else:
                     backend = factory()
                     self.register_sandbox_backend(
-                        session_id, backend, scope=trusted_scope, agent_name=agent_name, run_id=run_id,
+                        session_id,
+                        backend,
+                        scope=trusted_scope,
+                        agent_name=agent_name,
+                        run_id=run_id,
                     )
                     self._sandbox_bindings[session_id] = binding
                     return backend
@@ -1472,13 +1496,22 @@ class SessionAgentManager:
         return acquire
 
     def register_sandbox_backend(
-        self, session_id: str, backend: Any, *, run_id: str | None = None,
-        agent_name: str | None = None, scope: Mapping[str, str] | None = None,
+        self,
+        session_id: str,
+        backend: Any,
+        *,
+        run_id: str | None = None,
+        agent_name: str | None = None,
+        scope: Mapping[str, str] | None = None,
     ) -> None:
         """Register one owned backend without allowing concurrent replacement."""
         with self._sandbox_ownership_lock:
             self._register_sandbox_backend(
-                session_id, backend, run_id=run_id, agent_name=agent_name, scope=scope,
+                session_id,
+                backend,
+                run_id=run_id,
+                agent_name=agent_name,
+                scope=scope,
             )
 
     def _register_sandbox_backend(
@@ -1734,7 +1767,10 @@ class SessionAgentManager:
     def release_sandbox_backend(self, session_id: str) -> None:
         """Release resources, retaining ownership until teardown is confirmed."""
         with self._sandbox_ownership_lock:
-            if session_id in self._sandbox_teardown_inflight or session_id not in self._sandbox_backends:
+            if (
+                session_id in self._sandbox_teardown_inflight
+                or session_id not in self._sandbox_backends
+            ):
                 return
             self._sandbox_teardown_inflight.add(session_id)
             self._sandbox_releasing.add(session_id)

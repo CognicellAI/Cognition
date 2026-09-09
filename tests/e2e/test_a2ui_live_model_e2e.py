@@ -4,7 +4,10 @@ This test is intentionally opt-in through live OpenAI-compatible credentials.
 It proves the full runtime path that mocked protocol tests cannot: an A2UI
 Agent negotiates the A2UI extension, receives typed structured model output,
 returns text plus renderable A2UI data, accepts a renderer action, and emits an
-updated A2UI surface.
+updated A2UI surface. With COGNITION_A2UI_RENDERER_NODE_MODULES set, the
+optional fixture renders upstream Lit widgets in JSDOM and clicks the button.
+That fixture adapts shared v1 messages to a v0.9 engine; it does not certify
+complete v1 renderer conformance.
 """
 
 from __future__ import annotations
@@ -35,10 +38,7 @@ pytestmark = [
     pytest.mark.timeout(180),
     pytest.mark.skipif(
         not os.environ.get("COGNITION_OPENAI_COMPATIBLE_API_KEY"),
-        reason=(
-            "Requires COGNITION_OPENAI_COMPATIBLE_API_KEY for the live-model "
-            "A2UI scenario."
-        ),
+        reason=("Requires COGNITION_OPENAI_COMPATIBLE_API_KEY for the live-model A2UI scenario."),
     ),
 ]
 
@@ -54,7 +54,7 @@ async def live_a2ui_server() -> AsyncIterator[str]:
     """Start a temporary Cognition server wired to a live OpenAI-compatible model."""
     port = _find_free_port()
     metrics_port = _find_free_port()
-    model = os.environ.get("COGNITION_A2UI_LIVE_MODEL", "openai/gpt-4.1-mini")
+    model = os.environ.get("COGNITION_A2UI_LIVE_MODEL", "openai/gpt-5.4")
     base_url = os.environ.get(
         "COGNITION_A2UI_LIVE_BASE_URL",
         os.environ.get("COGNITION_OPENAI_COMPATIBLE_BASE_URL", "https://openrouter.ai/api/v1"),
@@ -128,7 +128,7 @@ async def test_live_model_returns_a2ui_surface_and_updates_after_renderer_action
 ) -> None:
     """Exercise text plus A2UI output and renderer action continuation."""
     agent_name = f"a2ui-live-{uuid.uuid4().hex[:8]}"
-    provider_model = os.environ.get("COGNITION_A2UI_LIVE_MODEL", "openai/gpt-4.1-mini")
+    provider_model = os.environ.get("COGNITION_A2UI_LIVE_MODEL", "openai/gpt-5.4")
     provider_base_url = os.environ.get(
         "COGNITION_A2UI_LIVE_BASE_URL",
         os.environ.get("COGNITION_OPENAI_COMPATIBLE_BASE_URL", "https://openrouter.ai/api/v1"),
@@ -159,7 +159,8 @@ async def test_live_model_returns_a2ui_surface_and_updates_after_renderer_action
                 "system_prompt": (
                     "You are testing Cognition A2UI support. For A2UI requests, "
                     "produce a compact Basic-catalog surface. Use a stable "
-                    "surfaceId of main, prefer one flat Text component, and update "
+                    "surfaceId of main. Include a Button with id approveButton, "
+                    "a child Text label Approve, and an action named approve. Update "
                     "the surface when the renderer sends an action."
                 ),
                 "description": "Live A2UI E2E Agent",
@@ -183,9 +184,7 @@ async def test_live_model_returns_a2ui_surface_and_updates_after_renderer_action
             f"/a2a/{agent_name}",
             json=_send_message(
                 message_id=f"initial-{uuid.uuid4()}",
-                text=(
-                    "Create a tiny text-only status panel for release v0.15.0."
-                ),
+                text=("Show me a compact release status panel with an Approve button."),
             ),
             headers=_a2a_headers(),
         )
@@ -206,10 +205,24 @@ async def test_live_model_returns_a2ui_surface_and_updates_after_renderer_action
         assert isinstance(initial_messages, list)
         assert _contains_agent_to_renderer_message(initial_messages, "createSurface")
 
+        renderer = os.environ.get("COGNITION_A2UI_RENDERER_NODE_MODULES")
+        renderer_action = {
+            "name": "approve",
+            "surfaceId": "main",
+            "sourceComponentId": "approveButton",
+            "timestamp": "2026-09-08T20:00:00Z",
+            "context": {"choice": "approve"},
+            "userMessage": "Approved",
+        }
+        if renderer:
+            rendered = await _render_probe(renderer, initial_messages)
+            renderer_action = rendered["action"]
+
         action = await client.post(
             f"/a2a/{agent_name}",
             json=_send_message(
                 message_id=f"action-{uuid.uuid4()}",
+                context_id=initial_task["contextId"],
                 text="The renderer action selected approval. Update the existing surface.",
                 parts=[
                     {
@@ -217,14 +230,7 @@ async def test_live_model_returns_a2ui_surface_and_updates_after_renderer_action
                         "data": [
                             {
                                 "version": "v1.0",
-                                "action": {
-                                    "name": "approve",
-                                    "surfaceId": "main",
-                                    "sourceComponentId": "approveButton",
-                                    "timestamp": "2026-08-16T20:00:00Z",
-                                    "context": {"choice": "approve"},
-                                    "userMessage": "Approved",
-                                },
+                                "action": renderer_action,
                             }
                         ],
                     }
@@ -243,6 +249,8 @@ async def test_live_model_returns_a2ui_surface_and_updates_after_renderer_action
         assert action.headers.get("A2A-Extensions") == A2UI_EXTENSION_URI
 
         action_task = action.json()["result"]["task"]
+        assert action_task["contextId"] == initial_task["contextId"]
+        assert action_task["id"] != initial_task["id"]
         action_parts = _parts(action_task, "data")
         assert action_task["status"]["state"] == "TASK_STATE_COMPLETED", json.dumps(
             action_task["status"], indent=2
@@ -266,12 +274,37 @@ async def test_live_model_returns_a2ui_surface_and_updates_after_renderer_action
         )
         assert fetched.status_code == 200, fetched.text
         assert _parts(fetched.json()["result"], "data")[-1]["mediaType"] == A2UI_MEDIA_TYPE
+        # Optional local evidence for renderer interoperability checks. No
+        # credentials, provider configuration or file download URLs are saved.
+        rendered_roundtrip = (
+            await _render_probe(renderer, initial_messages, action_messages) if renderer else None
+        )
+        evidence_dir = os.environ.get("COGNITION_A2UI_EVIDENCE_DIR")
+        if evidence_dir:
+            evidence = Path(evidence_dir)
+            evidence.mkdir(parents=True, exist_ok=True)
+            (evidence / "roundtrip.json").write_text(
+                json.dumps(
+                    {
+                        "model": provider_model,
+                        "renderer": rendered_roundtrip,
+                        "context_id": initial_task["contextId"],
+                        "initial_task_id": initial_task["id"],
+                        "action_task_id": action_task["id"],
+                        "initial_messages": initial_messages,
+                        "action_messages": action_messages,
+                        "retrieved_messages": _parts(fetched.json()["result"], "data")[-1]["data"],
+                    },
+                    indent=2,
+                )
+            )
 
 
 def _send_message(
     *,
     message_id: str,
     text: str,
+    context_id: str | None = None,
     parts: list[dict[str, Any]] | None = None,
     metadata: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
@@ -293,6 +326,7 @@ def _send_message(
             "message": {
                 "messageId": message_id,
                 "role": "ROLE_USER",
+                **({"contextId": context_id} if context_id else {}),
                 "parts": [{"text": text, "mediaType": "text/plain"}, *(parts or [])],
                 "metadata": message_metadata,
             }
@@ -318,3 +352,37 @@ def _parts(task: dict[str, Any], content_key: str) -> list[dict[str, Any]]:
 
 def _contains_agent_to_renderer_message(messages: list[Any], message_type: str) -> bool:
     return any(isinstance(message, dict) and message_type in message for message in messages)
+
+
+async def _render_probe(
+    node_modules: str, initial: list[Any], updated: list[Any] | None = None
+) -> dict[str, Any]:
+    script = Path(__file__).parent / "fixtures" / "a2ui_lit_probe.mjs"
+    process = await asyncio.create_subprocess_exec(
+        "node",
+        str(script),
+        node_modules,
+        stdin=asyncio.subprocess.PIPE,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    try:
+        stdout, stderr = await asyncio.wait_for(
+            process.communicate(
+                json.dumps(
+                    {
+                        "initial_messages": initial,
+                        "action_messages": updated,
+                        "require_button": True,
+                    }
+                ).encode()
+            ),
+            timeout=30,
+        )
+    except BaseException:
+        if process.returncode is None:
+            process.kill()
+        await process.wait()
+        raise
+    assert process.returncode == 0, stderr.decode()
+    return json.loads(stdout)

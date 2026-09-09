@@ -1,6 +1,8 @@
 # Optional A2UI v1.0 Support for A2A Agents
 
-**Status:** Draft
+**Status:** Implemented as optional pinned Candidate support for the v0.15.0 release candidate.
+See the [operator guide](../concepts/a2a/a2ui.md) for the implemented boundaries,
+provider limitations and renderer evidence. This proposal records the original design.
 
 **Target:** Cognition v0.15.0
 

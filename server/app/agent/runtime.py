@@ -466,19 +466,6 @@ def _extract_summarization_event_from_update(update: Any) -> Mapping[str, Any] |
     return None
 
 
-def _extract_structured_response_from_update(update: Any) -> Any | None:
-    """Extract Deep Agents structured_response from an updates-mode chunk."""
-    if not isinstance(update, Mapping):
-        return None
-
-    candidates: list[Any] = [update]
-    candidates.extend(value for value in update.values() if isinstance(value, Mapping))
-    for candidate in candidates:
-        if isinstance(candidate, Mapping) and "structured_response" in candidate:
-            return candidate.get("structured_response")
-    return None
-
-
 def _extract_interrupt_requests_from_update(update: Any) -> list[dict[str, Any]] | None:
     """Extract interrupt action requests from updates/value chunks."""
     if not isinstance(update, Mapping):
@@ -797,6 +784,7 @@ class DeepAgentRuntime:
         recursion_limit: int = 1000,
         context: Any | None = None,
         trace_parent_span: Any | None = None,
+        structured_response_as_artifact: bool = True,
     ):
         """Initialize the DeepAgentRuntime.
 
@@ -811,7 +799,10 @@ class DeepAgentRuntime:
                 middleware.
             trace_parent_span: Active Cognition run span to restore at the
                 LangGraph invocation boundary.
+            structured_response_as_artifact: Publish validated root structured
+                results directly, or yield private values to the caller's output policy.
         """
+        self._structured_response_as_artifact = structured_response_as_artifact
         self._agent = agent
         self._checkpointer = checkpointer
         self._thread_id = thread_id
@@ -1091,7 +1082,9 @@ class DeepAgentRuntime:
                                             _text_message_ids.add(message.id)
                                         yield TokenEvent(content=text)
                             result = update.get("structured_response")
-                            if result is not None:
+                            if result is not None and not self._structured_response_as_artifact:
+                                yield StructuredResponseEvent(value=result)
+                            elif result is not None:
                                 value = (
                                     result.model_dump(mode="json")
                                     if isinstance(result, BaseModel)
@@ -1131,10 +1124,6 @@ class DeepAgentRuntime:
                         for step_event in _completed_step_events(previous_todos, todos):
                             yield step_event
                         previous_todos = todos
-
-                    structured_response = _extract_structured_response_from_update(data)
-                    if structured_response is not None:
-                        yield StructuredResponseEvent(value=structured_response)
 
                     summarization_event = _extract_summarization_event_from_update(data)
                     if summarization_event is not None:

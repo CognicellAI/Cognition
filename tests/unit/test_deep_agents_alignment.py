@@ -98,7 +98,7 @@ class TestTodoStreamingTranslation:
             }
 
         agent.astream = _astream
-        runtime = DeepAgentRuntime(agent=agent, checkpointer=MagicMock(), thread_id="thread-1")
+        runtime = DeepAgentRuntime(agent=agent, checkpointer=MagicMock(), thread_id="thread-1", structured_response_as_artifact=False)
 
         events = [event async for event in runtime.astream_events("hello", thread_id="thread-1")]
 

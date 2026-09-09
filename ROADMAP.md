@@ -1,5 +1,13 @@
 # Cognition Roadmap
 
+## A2UI candidate release hardening (2026-09-08)
+
+- Category: security/bug fixes and architectural correction; layers 1, 4, 5, 6, 7; effort 2 days. Integrate current main on `release/v0.15.0`; A2UI is included as optional pinned Candidate support.
+- Enforce negotiated catalogs and bounded renderer input before validation, support upstream Unicode schema patterns without changing pinned assets, and reject malformed metadata. Keep internal structured envelopes private; use the same validated output policy on initial execution and approval resume, with one execution deadline across repair.
+- Preserve top-down dependencies by separating transport bindings from foundation A2UI schemas and runtime output handling. No operator configuration migration, storage redesign or plugin framework.
+- Acceptance: regressions through actual graph/runtime paths, exact-scope continuation/replay, initial render/action/update with a compatible renderer, relevant full tests/type/lint/docs checks, then exact-commit release candidate builds and reviewed TCK evidence. Live model credentials or renderer compatibility limitations must be reported explicitly.
+- Status: runtime and validation fixes implemented; full unit suite, Ruff, mypy, strict docs and package asset checks passed locally. Live Claude Sonnet 4.6 and GPT-5.4 rendered action/update roundtrips passed with the bounded Lit test adapter. Gemini provider schema rejection and incomplete v1 renderer conformance are documented; exact-candidate CI remains the release gate.
+
 ## Release-tree cleanup (2026-09-08)
 
 - Documentation follow-up: place the S3 Files whitepaper under builder guides, label it as an optional integration pattern, and update navigation and relative links. No runtime change.

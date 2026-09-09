@@ -113,10 +113,10 @@ Implemented in `server/app/observability/__init__.py`. All metrics are defined a
 | `cognition_a2a_subscriptions_total` | Counter | `outcome` | Subscription lifecycle outcomes |
 | `cognition_a2a_idempotency_total` | Counter | `outcome` | Retry reuse and conflicts |
 | `cognition_a2a_limit_rejections_total` | Counter | `direction`, `limit` | Resource-limit rejections |
-| `cognition_a2ui_negotiations_total` | Counter | `outcome`, `catalog` | A2UI activation and catalog-negotiation outcomes |
-| `cognition_a2ui_validations_total` | Counter | `direction`, `outcome`, `reason` | A2UI schema validation outcomes without payload labels |
-| `cognition_a2ui_messages_total` | Counter | `message_type` | Emitted A2UI message counts by bounded message type |
-| `cognition_a2ui_batch_messages` | Histogram | — | Number of A2UI messages per emitted artifact batch |
+| `cognition.a2ui.negotiations` | Counter | `outcome`, `catalog` | A2UI activation and catalog-negotiation outcomes |
+| `cognition.a2ui.validations` | Counter | `direction`, `outcome`, `reason` | A2UI schema validation outcomes without payload labels |
+| `cognition.a2ui.messages` | Counter | `message_type` | Emitted A2UI message counts by bounded message type |
+| `cognition.a2ui.batch_messages` | Histogram | — | Number of A2UI messages per emitted artifact batch |
 | `cognition_runtime_task_cleanup_total` | Counter | `transport`, `outcome` | Retention cleanup results |
 | `cognition_runtime_task_cleanup_duration_seconds` | Histogram | `transport` | Cleanup pass duration |
 | `cognition_scope_access_denied_total` | Counter | `resource_type`, `operation` | Explicit scope-policy rejections without exposing scope values |
@@ -360,3 +360,5 @@ It runs in the caller's ingress trace. `cognition.runtime.config` and
 `cognition.runtime.model` measure pinned configuration and model resolution
 inside execution. Cognition currently rejects conflicting active runs rather
 than queuing them; these timers do not invent an execution-queue delay.
+
+A2UI measurements use the OpenTelemetry API and the configured metrics provider. They contain bounded outcomes and message types, never renderer content.

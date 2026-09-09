@@ -27,6 +27,7 @@ from a2a.utils.errors import (
 )
 from google.protobuf.json_format import MessageToDict  # type: ignore[import-untyped]
 
+from server.app.a2ui.telemetry import record_batch
 from server.app.agent.definition import A2AConfig
 from server.app.agent.runtime import (
     ArtifactEvent,
@@ -52,7 +53,6 @@ from server.app.models import RunStatus, TaskStatus
 from server.app.observability import (
     A2A_STREAM_CHUNK_BYTES,
     A2A_STREAM_FLUSH_DURATION,
-    A2UI_BATCH_MESSAGES,
     RUNTIME_ACTIVE_TASKS,
     RUNTIME_TASK_DURATION,
     RUNTIME_TASK_TRANSITIONS_TOTAL,
@@ -156,17 +156,6 @@ class CognitionA2AExecutor(AgentExecutor):
                 message_parts,
                 self._supported_input_modes,
             )
-            a2ui_context = negotiate_a2ui(
-                config=self._a2a_config,
-                requested_extensions=tuple(
-                    context.call_context.state.get("a2a_requested_extensions", ())
-                ),
-                message_metadata=message_metadata,
-                message_parts=message_parts,
-                compatibility_alias_used=bool(
-                    context.call_context.state.get("a2a_extension_alias_used")
-                ),
-            )
             normalized = normalize_a2a_parts(
                 message_parts,
                 task_id=context.task_id,
@@ -180,6 +169,17 @@ class CognitionA2AExecutor(AgentExecutor):
                 message_extensions=(tuple(context.message.extensions) if context.message else ()),
                 reference_task_ids=(
                     tuple(context.message.reference_task_ids) if context.message else ()
+                ),
+            )
+            a2ui_context = negotiate_a2ui(
+                config=self._a2a_config,
+                requested_extensions=tuple(
+                    context.call_context.state.get("a2a_requested_extensions", ())
+                ),
+                message_metadata=message_metadata,
+                message_parts=message_parts,
+                compatibility_alias_used=bool(
+                    context.call_context.state.get("a2a_extension_alias_used")
                 ),
             )
         except UnsupportedA2AMediaTypeError as exc:
@@ -274,7 +274,7 @@ class CognitionA2AExecutor(AgentExecutor):
             )
             if a2ui_context is not None and has_agent_function_calls(a2ui_context):
                 messages = build_unknown_agent_function_responses(a2ui_context)
-                A2UI_BATCH_MESSAGES.observe(len(messages))
+                record_batch(messages)
                 artifact = ArtifactEvent(
                     artifact_id=f"a2ui-{execution.run.id}",
                     name="a2ui",
