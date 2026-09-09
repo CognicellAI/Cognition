@@ -1,5 +1,12 @@
 # Cognition Roadmap
 
+## v0.15.0 release preparation (2026-09-08)
+
+- Scope: scoped A2A deliverables, publication retention, process-local sandbox reuse, reusable latency telemetry and operator documentation already merged into main.
+- Release metadata only; validation follows `docs/guides/release-checklist.md`. Use `codex/release-v0.15.0` because the older `release/v0.15.0` branch contains deferred A2UI work.
+- A2UI is excluded. Its implementation and review are preserved on `codex/deferred-a2ui` for a later release.
+- Distributed sandbox ownership and writer fencing remain deferred. S3 Files remains a builder-owned optional integration.
+
 ## Release-tree cleanup (2026-09-08)
 
 - Documentation follow-up: place the S3 Files whitepaper under builder guides, label it as an optional integration pattern, and update navigation and relative links. No runtime change.

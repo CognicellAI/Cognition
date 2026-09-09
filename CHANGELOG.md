@@ -9,6 +9,8 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.15.0] — 2026-09-08
+
 ### Added
 
 - Explicit sandbox-file publication as scoped A2A `raw` or `url` Parts, plus
