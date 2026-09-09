@@ -74,7 +74,7 @@ See AGENTS.md for category definitions, DoD requirements, and precedence rules.
 
 ## Bug Fixes
 
-- 2026-09-08: Make S3 cancellation regression verify retained reservations for both running and executor-queued I/O; avoid assuming ten executor threads on small CI runners. Test-only portability fix; layer 2.
+- 2026-09-08: Give the S3 cancellation regression a test-owned executor and wait until all ten operations reach upload before cancelling; avoid counting earlier key-resolution calls or assuming host thread capacity. Test-only portability fix; layer 2.
 
 - 2026-09-08: Validate publication paths against the assigned sandbox workspace root, including custom roots, instead of a hardcoded directory. Layer 4; release review reproduction with native tool execution; reject sibling prefixes and traversal.
 

@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import io
 import threading
+from concurrent.futures import ThreadPoolExecutor
 from unittest.mock import MagicMock
 
 import pytest
@@ -82,6 +83,10 @@ async def test_client_is_reused_across_concurrent_reads_writes_and_closed(storag
 @pytest.mark.asyncio
 async def test_cancellation_keeps_io_slots_until_workers_finish(storage):
     store, manifests, client, _ = storage
+    # This test must place ten operations inside upload, after key resolution.
+    # Give its function-scoped event loop enough workers regardless of host CPUs;
+    # pytest's loop teardown owns executor shutdown.
+    asyncio.get_running_loop().set_default_executor(ThreadPoolExecutor(max_workers=12))
     release = threading.Event()
     entered = 0
     lock = threading.Lock()
@@ -103,9 +108,7 @@ async def test_cancellation_keeps_io_slots_until_workers_finish(storage):
     ]
     following = None
     try:
-        # A small runner can have fewer executor threads than the store's ten
-        # slots. Queued worker tasks must retain their reservations too.
-        await wait_until(lambda: len(store._io_tasks) == 10 and entered > 0)
+        await wait_until(lambda: entered == 10)
         for task in tasks:
             task.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
