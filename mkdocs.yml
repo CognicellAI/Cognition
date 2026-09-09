@@ -72,7 +72,6 @@ nav:
       - Execution & Sandboxes: architecture/06-execution-and-sandboxes.md
       - Runtime Flows: architecture/07-runtime-flows.md
       - Deployment & Operations: architecture/08-deployment-and-operations.md
-      - S3 Files & A2A Deliverability: architecture/s3-files-a2a-deliverability.md
       - A2A Deliverability Validation: architecture/a2a-deliverability-validation.md
       - Published-file Retention: guides/published-file-retention.md
       - Governance & Evolution: architecture/09-governance-and-evolution.md
@@ -118,6 +117,7 @@ nav:
       - Configuration: guides/configuration.md
       - Extending Agents: guides/extending-agents.md
       - A2A Builder Guide: guides/a2a.md
+      - S3 Files Integration Whitepaper: guides/s3-files-a2a-deliverability.md
       - Deployment: guides/deployment.md
       - API Reference: guides/api-reference.md
       - Release Checklist: guides/release-checklist.md

@@ -39,6 +39,7 @@ task-oriented.
 | Document | Description |
 |---|---|
 | [Getting Started](./guides/getting-started.md) | Install, configure, and send your first message |
+| [S3 Files and A2A Deliverability](./guides/s3-files-a2a-deliverability.md) | Whitepaper describing an optional, tested builder integration |
 | [Core vs App Layer](./guides/core-vs-app-layer.md) | Builder responsibilities: what belongs in Cognition versus your product |
 | [Configuration](./guides/configuration.md) | Complete reference for all YAML keys and environment variables |
 | [Extending Agents](./guides/extending-agents.md) | Add memory, skills, tools, subagents, middleware, MCP servers, A2A exposure, and custom LLM providers |

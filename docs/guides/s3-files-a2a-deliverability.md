@@ -2,8 +2,10 @@
 
 *A builder and operator whitepaper on S3 Files, Cognition and durable agent output*
 
-**Status:** Validated reference implementation on `codex/a2a-performance-otel`; not a production-readiness declaration.
+**Status:** Suggested builder integration, validated in the September 2026 investigation; not required Cognition architecture or a production-readiness declaration.
 **Evidence date:** September 8, 2026. Storage optimization: `3ba1053`; comparison evidence: `eea6253`.
+
+S3 Files is an optional builder choice. Cognition does not provision or mount it. The implemented optional file-publication path requires S3-compatible storage and a sandbox backend with bounded file reads; builders can choose a different workspace persistence mechanism.
 
 ## 1. The problem: making agent work useful beyond a response
 
@@ -74,7 +76,7 @@ The separation makes ownership concrete:
 | Deliverables | Artifact-store configuration, credentials and retention policy | Validation, verified publication, durable references and A2A projection |
 | Operations | Capacity limits, monitoring destination, backup and recovery policy | Runtime signals, OTel instrumentation and persistence interfaces |
 
-An operator may also be the builder. The table describes boundaries between responsibilities, not a requirement for separate teams or services. [Builder boundaries](../guides/core-vs-app-layer.md) · [Implementation sources](#implementation-sources)
+An operator may also be the builder. The table describes boundaries between responsibilities, not a requirement for separate teams or services. [Builder boundaries](core-vs-app-layer.md) · [Implementation sources](#implementation-sources)
 
 ## 3. Following a request from conversation to deliverable
 
@@ -228,7 +230,7 @@ flowchart TB
 
 The investigation reproduced a Cognition lifecycle defect: repeated runs constructed new sandbox backends and overwrote the tracked session backend without terminating its predecessor. The reported benchmarks therefore used fresh VMs with explicit teardown, and replacement demonstrations confirmed termination before rebinding. The subsequent process-local ownership repair (`fa60c92`) reuses compatible backends and retains pending/failed teardown handles and quota. It does not change the meaning of the original benchmark results. Durable ownership across replicas, crash reconciliation and production writer fencing—preventing an obsolete or duplicate sandbox from continuing to write a workspace—remain necessary. See [current lifecycle behavior](../concepts/sandboxes/aws-lambda-microvm/lifecycle-and-observability.md) and the [original findings](#evidence-and-reproducibility).
 
-Publication failures have a different boundary. Invalid paths and oversized files are rejected. Upload or readback failure prevents successful publication. A failed manifest write must not produce a success announcement, although an uploaded but unreferenced object can remain. Newly published binary objects have a dedicated Lifecycle tag; descriptors remain untagged. Authorized retrieval checks content availability before signing and projects missing bytes as an unavailable-content text notice under the same artifact identity. Storage failures remain errors. Operators can retain task history after files expire, but need separate policies for workspace data, old inline payloads, descriptors, backups and client caches. See the [published-file retention guide](../guides/published-file-retention.md) for selectors, permissions and URL-refresh behavior.
+Publication failures have a different boundary. Invalid paths and oversized files are rejected. Upload or readback failure prevents successful publication. A failed manifest write must not produce a success announcement, although an uploaded but unreferenced object can remain. Newly published binary objects have a dedicated Lifecycle tag; descriptors remain untagged. Authorized retrieval checks content availability before signing and projects missing bytes as an unavailable-content text notice under the same artifact identity. Storage failures remain errors. Operators can retain task history after files expire, but need separate policies for workspace data, old inline payloads, descriptors, backups and client caches. See the [published-file retention guide](published-file-retention.md) for selectors, permissions and URL-refresh behavior.
 
 The demonstrated Cognition container has a read-only root, read-only configuration mounts and no writable host workspace mount. Operational temporary storage uses tmpfs. This proves publication without host disk staging, not an absence of all Python filesystem calls. Workspace file CRUD belongs inside the sandbox. S3 credentials used by Cognition belong to the operator's deployment, while sandbox execution permissions belong to the builder's workspace integration.
 
@@ -254,7 +256,7 @@ Earlier deterministic tests used scripted model responses while still executing 
 
 ### Observability and remaining work
 
-Cognition's OTel design keeps one semantic run trace linked to ingress and retains framework-owned model/tool spans. Additional measurements cover configuration resolution, checkpoints, actual lazy sandbox acquisition, publication, persistence and retrieval. The SDK uses its caller's provider. Optional WayPost instrumentation measures client requests and browser milestones. Metric dimensions remain bounded; secrets, content and signed URLs do not belong in telemetry. [Observability architecture](decisions/0002-curated-opentelemetry-agent-tracing.md)
+Cognition's OTel design keeps one semantic run trace linked to ingress and retains framework-owned model/tool spans. Additional measurements cover configuration resolution, checkpoints, actual lazy sandbox acquisition, publication, persistence and retrieval. The SDK uses its caller's provider. Optional WayPost instrumentation measures client requests and browser milestones. Metric dimensions remain bounded; secrets, content and signed URLs do not belong in telemetry. [Observability architecture](../architecture/decisions/0002-curated-opentelemetry-agent-tracing.md)
 
 Interpret spans as overlapping work. Their medians cannot be summed into a critical path, and model spans can include client scheduling delays. Follow-up investigation should distinguish checkpoint lock wait from SQL time and repair sandbox ownership before evaluating warm reuse. The available evidence does not establish 100–1,000-agent capacity or a product latency SLO.
 
@@ -274,7 +276,7 @@ The architecture therefore has substantial evidence for durable, scoped A2A deli
 | Publication policy | Enable publication; optionally lower size thresholds | Normal 256 KiB inline limit and 10 MiB maximum |
 | Operations | Telemetry destination, credential rotation, backups and retention | OTel signals and durable runtime interfaces |
 
-Start with the [A2A builder guide](../guides/a2a.md), [MicroVM setup](../concepts/sandboxes/aws-lambda-microvm/setup.md), [sandbox profiles](../concepts/sandboxes/aws-lambda-microvm/profiles.md), and [configuration guide](../guides/configuration.md). The [validation record](a2a-deliverability-validation.md#archive-and-reproduction) explains how to retrieve the archived lab and its deployment/cleanup runbooks. Production builders supply their own authorized bindings.
+Start with the [A2A builder guide](a2a.md), [MicroVM setup](../concepts/sandboxes/aws-lambda-microvm/setup.md), [sandbox profiles](../concepts/sandboxes/aws-lambda-microvm/profiles.md), and [configuration guide](configuration.md). The [validation record](../architecture/a2a-deliverability-validation.md#archive-and-reproduction) explains how to retrieve the archived lab and its deployment/cleanup runbooks. Production builders supply their own authorized bindings.
 
 ### Implementation sources
 
@@ -284,7 +286,7 @@ These are repository-relative primary-source references at `3ba1053`, available 
 |---|---|
 | Tool registration, trusted scope and path validation | `server/app/agent/publication.py`, `PublicationMiddleware` |
 | Sandbox bounded read and filesystem checks | `examples/aws-lambda-microvm-default-runtime/runtime/server.py`, `read_publication_file` |
-| Builder mount and readiness behavior | Archived lab: `s3-files/runtime/mount_runtime.py`; see [archive access](a2a-deliverability-validation.md#archive-and-reproduction) |
+| Builder mount and readiness behavior | Archived lab: `s3-files/runtime/mount_runtime.py`; see [archive access](../architecture/a2a-deliverability-validation.md#archive-and-reproduction) |
 | Verified binary publication and URL resolution | `server/app/storage/published_file.py`, `publish_file`, `resolve_download` |
 | Descriptor storage and bounded S3 operations | `server/app/storage/artifact_store.py`, `S3ArtifactStore` |
 | Opaque namespaces and URL expiry | `server/app/storage/s3_object_store.py`, `S3ObjectStore` |
@@ -293,7 +295,7 @@ These are repository-relative primary-source references at `3ba1053`, available 
 
 ### Evidence and reproducibility
 
-The [validation record](a2a-deliverability-validation.md) consolidates measured
+The [validation record](../architecture/a2a-deliverability-validation.md) consolidates measured
 results, tested revisions, representative task/trace identities and known limits.
 It includes instructions for retrieving the full lab at immutable commit
 `79982391cb17d215503f4168674ac05663f11405`. The release tree retains production

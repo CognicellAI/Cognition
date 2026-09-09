@@ -2,6 +2,8 @@
 
 ## Release-tree cleanup (2026-09-08)
 
+- Documentation follow-up: place the S3 Files whitepaper under builder guides, label it as an optional integration pattern, and update navigation and relative links. No runtime change.
+
 - Category: Documentation and investigation-fixture maintenance; no production behavior change.
 - Archive the complete A2A/S3 Files lab at `79982391cb17d215503f4168674ac05663f11405` (`codex/a2a-investigation-archive`). Remove lab infrastructure, probes, dashboards, bulk captures and the example-only mount test from the release tree; retain production code, regression tests and operator guides.
 - Preserve local credentials, Terraform state and durable AWS artifacts. Consolidate evidence and archive reproduction instructions in `docs/architecture/a2a-deliverability-validation.md`; repair documentation references and verify the clean tracked tree.
