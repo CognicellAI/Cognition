@@ -102,6 +102,8 @@ class K8sSandbox(BaseSandbox):
             return self._sandbox
 
         with self._lock:
+            if self._teardown_status == "pending":
+                raise RuntimeError("Sandbox teardown is pending")
             if self._sandbox is not None:
                 return self._sandbox
 

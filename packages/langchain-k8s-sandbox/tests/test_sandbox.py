@@ -301,3 +301,48 @@ class TestK8sSandboxUploadDownload:
         results = sb.download_files(["/nonexistent.py"])
         assert len(results) == 1
         assert results[0].error == "file_not_found"
+
+
+class TestK8sResourceObservation:
+    @pytest.mark.parametrize("kind", ["pods", "sandboxes", "sandboxclaims"])
+    def test_only_not_found_means_absent(self, kind: str) -> None:
+        exceptions = pytest.importorskip("kubernetes.client.exceptions")
+        sb = K8sSandbox(namespace="isolated")
+        sb._sandbox = MagicMock()
+        helper = sb._sandbox.k8s_helper
+        method = (
+            helper.core_v1_api.read_namespaced_pod if kind == "pods"
+            else helper.custom_objects_api.get_namespaced_custom_object
+        )
+        for status in (403, 429, 500):
+            method.side_effect = exceptions.ApiException(status=status)
+            with pytest.raises(exceptions.ApiException):
+                sb._read_resource(kind, "owned-resource")
+        method.side_effect = TimeoutError("unreachable")
+        with pytest.raises(TimeoutError):
+            sb._read_resource(kind, "owned-resource")
+        method.side_effect = exceptions.ApiException(status=404)
+        assert sb._read_resource(kind, "owned-resource") is None
+        arguments = method.call_args.kwargs
+        assert arguments["namespace"] == "isolated"
+        assert arguments["name"] == "owned-resource"
+        assert arguments["_request_timeout"] == (5, 10)
+        if kind != "pods":
+            assert arguments["plural"] == kind
+            assert arguments["group"] == (
+                "extensions.agents.x-k8s.io" if kind == "sandboxclaims"
+                else "agents.x-k8s.io"
+            )
+
+
+def test_acquisition_rechecks_pending_after_lock() -> None:
+    sb = K8sSandbox()
+    lock = MagicMock()
+
+    def teardown_started() -> None:
+        sb._teardown_status = "pending"
+
+    lock.__enter__.side_effect = teardown_started
+    sb._lock = lock
+    with pytest.raises(RuntimeError, match="teardown is pending"):
+        sb._ensure_sandbox()
