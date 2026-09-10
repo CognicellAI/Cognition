@@ -102,7 +102,15 @@ class S3ObjectStore:
 
     def get(self, key: str) -> bytes:
         """Read one durable body."""
-        body = self._client.get_object(Bucket=self._bucket, Key=key)["Body"]
+        from botocore.exceptions import ClientError
+
+        try:
+            body = self._client.get_object(Bucket=self._bucket, Key=key)["Body"]
+        except ClientError as exc:
+            if exc.response.get("Error", {}).get("Code") not in {"404", "NotFound", "NoSuchKey"}:
+                raise
+            self._client.head_bucket(Bucket=self._bucket)
+            raise ArtifactContentNotFoundError() from exc
         try:
             return bytes(body.read())
         finally:

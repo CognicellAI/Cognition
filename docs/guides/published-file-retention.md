@@ -24,10 +24,12 @@ in addition to existing write permissions. Review existing tag-based policies
 before deploying the change. Existing objects are not retagged.
 
 Do not expire the entire Cognition prefix: it can include active policies,
-memories and other persistent artifact content. Descriptor/text expiration also
-requires compatible unavailable-content handling and a retention decision for
-referencing tasks. Classification alone does not make those expiration policies
-ready to enable. Session record cleanup remains independent and cannot prove
+memories and other persistent artifact content. Missing publication descriptors now produce the same unavailable-content
+projection as missing binary snapshots, preserving task and artifact identities.
+Authorization failures and inaccessible buckets remain storage failures.
+Text-only legacy task fallback and a retention decision for referencing tasks
+still require verification; classification alone does not make all expiration
+policies ready to enable. Session record cleanup remains independent and cannot prove
 that the associated S3 objects were erased.
 
 ## Delivery policy

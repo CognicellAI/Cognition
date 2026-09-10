@@ -23,6 +23,7 @@ from typing import Any, Protocol, TypeVar, runtime_checkable
 
 import structlog
 
+from server.app.exceptions import ArtifactContentNotFoundError
 from server.app.storage.common import effective_scope_key
 from server.app.storage.config_models import ArtifactDefinition
 from server.app.storage.s3_object_store import S3ObjectStore
@@ -815,6 +816,8 @@ class S3ArtifactStore:
         try:
             object_key = artifact.object_key
             body = await self._run_io(lambda objects: objects.get(object_key))
+        except ArtifactContentNotFoundError:
+            raise
         except Exception as exc:
             raise RuntimeError(
                 "Artifact body is unavailable from configured durable storage"

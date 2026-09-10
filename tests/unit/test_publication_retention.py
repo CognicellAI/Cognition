@@ -69,7 +69,12 @@ def publication_store(monkeypatch):
     client.put_object.side_effect = lambda **kwargs: bodies.__setitem__(
         kwargs["Key"], kwargs["Body"]
     )
-    client.get_object.side_effect = lambda **kwargs: {"Body": BytesIO(bodies[kwargs["Key"]])}
+    def get(**kwargs):
+        if kwargs["Key"] not in bodies:
+            raise error("NoSuchKey", 404)
+        return {"Body": BytesIO(bodies[kwargs["Key"]])}
+
+    client.get_object.side_effect = get
 
     def head(**kwargs):
         if kwargs["Key"] not in bodies:
@@ -89,13 +94,14 @@ def publication_store(monkeypatch):
     return store, bodies, client
 
 
-async def test_scoped_history_survives_expiration_and_recovers_if_restored(publication_store):
+@pytest.mark.parametrize("expired_body", ["binary", "descriptor"])
+async def test_scoped_history_survives_expiration_and_recovers_if_restored(publication_store, expired_body):
     store, bodies, client = publication_store
     scope = {"tenant": "a", "conversation": "one"}
     published = await publish_file(store, scope, b"pdf-bytes", "report.pdf", "application/pdf", 0)
     binary_put, descriptor_put = client.put_object.call_args_list
     assert binary_put.kwargs["Tagging"] == "cognition%3Acontent-class=published-file"
-    assert "Tagging" not in descriptor_put.kwargs
+    assert descriptor_put.kwargs["Tagging"] == "cognition%3Acontent-class=publication-descriptor"
     original = {
         "kind": "url",
         "value": REFERENCE_PREFIX + published.id,
@@ -130,7 +136,8 @@ async def test_scoped_history_survives_expiration_and_recovers_if_restored(publi
     first = await projector.project(task)
     assert first.artifacts[0].parts[0].url == "https://example.test/first"
     assert first.artifacts[0].parts[0].filename == "report.pdf"
-    del bodies[published.object_key]
+    expired_key = published.object_key if expired_body == "binary" else descriptor_put.kwargs["Key"]
+    expired_bytes = bodies.pop(expired_key)
     missing = await projector.project(task)
     assert missing.status.state == TaskState.TASK_STATE_COMPLETED
     assert missing.artifacts[0].artifact_id == first.artifacts[0].artifact_id
@@ -156,7 +163,7 @@ async def test_scoped_history_survives_expiration_and_recovers_if_restored(publi
         await projector.resolve_part(original, {"tenant": "b", "conversation": "one"})
     assert client.head_object.call_count == before
 
-    bodies[published.object_key] = b"pdf-bytes"
+    bodies[expired_key] = expired_bytes
     restored = await projector.project(task)
     assert restored.artifacts[0].artifact_id == published.id
     assert restored.artifacts[0].parts[0].url == "https://example.test/refreshed"
@@ -316,3 +323,34 @@ async def test_record_retention_does_not_read_or_delete_expired_s3_bytes(publica
     client.get_object.assert_not_called()
     client.delete_object.assert_not_called()
     client.put_object.assert_not_called()
+
+
+@pytest.mark.parametrize("code", ["404", "NotFound", "NoSuchKey"])
+def test_missing_body_read_requires_accessible_bucket(code):
+    client = MagicMock()
+    objects = S3ObjectStore(client, bucket="test", base_prefix="test", hmac_key="test")
+    client.get_object.side_effect = error(code, 404)
+    with pytest.raises(ArtifactContentNotFoundError):
+        objects.get("body")
+    client.head_bucket.assert_called_once_with(Bucket="test")
+
+
+@pytest.mark.parametrize("code,status", [("AccessDenied", 403), ("SlowDown", 503), ("NoSuchBucket", 404)])
+def test_body_read_failures_are_not_expiration(code, status):
+    client = MagicMock()
+    objects = S3ObjectStore(client, bucket="test", base_prefix="test", hmac_key="test")
+    failure = error(code, status)
+    client.get_object.side_effect = failure
+    with pytest.raises(ClientError) as caught:
+        objects.get("body")
+    assert caught.value is failure
+    client.head_bucket.assert_not_called()
+
+
+def test_body_read_generic_404_with_unavailable_bucket_is_not_expiration():
+    client = MagicMock()
+    objects = S3ObjectStore(client, bucket="test", base_prefix="test", hmac_key="test")
+    client.get_object.side_effect = error("404", 404)
+    client.head_bucket.side_effect = error("AccessDenied", 403)
+    with pytest.raises(ClientError):
+        objects.get("body")
