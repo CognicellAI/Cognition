@@ -757,3 +757,5 @@ Feature enhancement, execution layer: add bounded regular-file reads to the loca
 - Persistence bug fix: missing S3 descriptor/body reads propagate ArtifactContentNotFoundError only after bucket accessibility is confirmed. A2A publication projection can retain completed task/artifact identity for an expired descriptor, while authorization and provider failures remain errors. Tests cover binary/descriptor expiry and restoration plus GET error classification. Text-only legacy task fallback remains a separate integration check.
 
 - A2A projection bug fix: expired legacy response artifact bodies preserve completed task state and stable response identity with an unavailable-content notice. Existing task-scoped message history is unchanged; earlier assistant progress is not substituted for the expired final response. Twenty-five retention tests and Ruff pass. Storage outages still propagate as errors.
+
+- Bug fix (Layer 3, Kubernetes sandbox): propagate SDK termination failures and preserve handles for retry instead of reporting successful cleanup. Regression test covers failure followed by retry; provider Pod deletion confirmation remains separate.

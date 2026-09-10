@@ -169,14 +169,24 @@ class TestK8sSandboxTerminate:
         sb = K8sSandbox()
         sb.terminate()
 
-    def test_terminate_failure_does_not_raise(self) -> None:
+    def test_terminate_failure_preserves_handle_for_retry(self) -> None:
         sb = K8sSandbox()
         mock_sandbox = MagicMock()
         mock_sandbox.terminate.side_effect = RuntimeError("cleanup failed")
         sb._sandbox = mock_sandbox
 
+        client = MagicMock()
+        sb._client = client
+        with pytest.raises(RuntimeError, match="cleanup failed"):
+            sb.terminate()
+        assert sb._sandbox is mock_sandbox
+        assert sb._client is client
+
+        mock_sandbox.terminate.side_effect = None
         sb.terminate()
+        assert mock_sandbox.terminate.call_count == 2
         assert sb._sandbox is None
+        assert sb._client is None
 
     def test_execute_after_terminate_creates_new(self) -> None:
         sb = K8sSandbox()

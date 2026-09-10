@@ -293,7 +293,8 @@ class K8sSandbox(BaseSandbox):
         """Terminate the sandbox and clean up resources.
 
         Safe to call multiple times. Subsequent ``execute()`` calls after
-        terminate will create a new sandbox.
+        successful termination will create a new sandbox. Provider errors propagate
+        and preserve the existing handle so callers can retry cleanup.
         """
         if self._sandbox is not None:
             try:
@@ -301,6 +302,6 @@ class K8sSandbox(BaseSandbox):
                 logger.info("K8s sandbox terminated", sandbox_id=self._sandbox_id)
             except Exception as e:
                 logger.warning("K8s sandbox terminate failed", error=str(e))
-            finally:
-                self._sandbox = None
-                self._client = None
+                raise
+            self._sandbox = None
+            self._client = None

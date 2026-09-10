@@ -57,3 +57,5 @@ Set `ttl` to automatically delete the sandbox after N seconds. This is implement
 ## Design
 
 See [DESIGN.md](./DESIGN.md) for architecture, RBAC requirements, lifecycle details, and v1/v2 scope.
+
+Termination failures propagate to the caller and retain the SDK handle for retry. A successful SDK return clears the handle; this alone does not establish that Kubernetes has finished deleting the underlying Pod. Consumers requiring confirmed detachment must observe provider deletion before reusing or purging mounted storage.
