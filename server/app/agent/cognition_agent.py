@@ -657,14 +657,23 @@ async def create_cognition_agent(params: CognitionAgentParams) -> CognitionAgent
             config_store = None
 
     resolved_sandbox_profile = params.sandbox_profile or settings.aws_lambda_microvm_default_profile
+    current_profile = await _resolve_sandbox_profile_config(
+        settings=settings,
+        config_store=config_store,
+        profile_name=resolved_sandbox_profile,
+        scope=params.scope,
+    )
     sandbox_profile_config = params.pinned_sandbox_profile_config
-    if sandbox_profile_config is None:
-        sandbox_profile_config = await _resolve_sandbox_profile_config(
-            settings=settings,
-            config_store=config_store,
-            profile_name=resolved_sandbox_profile,
-            scope=params.scope,
-        )
+    if sandbox_profile_config is not None and settings.sandbox_backend == "aws_lambda_microvm":
+        if (
+            current_profile is None
+            or sandbox_profile_config.model_dump() != current_profile.model_dump()
+        ):
+            raise RuntimeError(
+                "Pinned sandbox profile no longer matches current authorized configuration"
+            )
+    else:
+        sandbox_profile_config = current_profile
 
     construct_sandbox = partial(_create_sandbox,
         project_path,

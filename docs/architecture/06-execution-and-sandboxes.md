@@ -144,6 +144,20 @@ must not interpret `untracked` as provider termination or permission to erase
 storage. This change does not expose a public release endpoint or revoke future
 session execution; a scoped cutover contract remains implementation work.
 
+### Integration branch: pinned profile admission
+
+Lambda sandbox construction now resolves the selected profile from the live
+registry under the current trusted scope even when a run carries a pinned profile.
+A missing or changed profile rejects construction before backend acquisition.
+Unchanged pins retain their behavior. This prevents historical manifests from
+silently restoring deleted or modified infrastructure configuration. Existing
+sessions and history are retained; affected resumes fail admission.
+
+This is admission at Agent construction, not immediate revocation of an already
+running VM or distributed fencing. Scoped release and complete cutover remain
+separate work. Unit tests cover deleted, changed and foreign-scope profiles and
+unchanged pinned-profile backend reuse.
+
 ## Security properties and limits
 
 | Property | Local | Docker | Kubernetes | Lambda MicroVM |

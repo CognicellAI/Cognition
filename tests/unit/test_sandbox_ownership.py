@@ -8,6 +8,8 @@ import pytest
 
 from server.app.agent.cognition_agent import CognitionAgentParams, create_cognition_agent
 from server.app.storage.config_models import LambdaMicroVmQuota
+from server.app.storage.config_registry import MemoryConfigRegistry
+from server.app.storage.config_store import DefaultConfigStore
 from tests.unit.test_cognition_agent_lambda_microvm_profile import _profile, _settings
 from tests.unit.test_sandbox_lifecycle_quotas import FakeSandboxBackend, _manager
 
@@ -108,6 +110,8 @@ def test_config_change_waits_for_confirmed_teardown(teardown):
 async def test_real_agent_factory_reuses_resolved_profile_and_replaces_changed_role(tmp_path):
     manager = _manager()
     profile = _profile()
+    store = DefaultConfigStore(MemoryConfigRegistry(), workspace_path=tmp_path)
+    await store.upsert_sandbox_profile(profile)
     params = CognitionAgentParams(
         project_path=tmp_path,
         model=MagicMock(),
@@ -116,6 +120,7 @@ async def test_real_agent_factory_reuses_resolved_profile_and_replaces_changed_r
         settings=_settings(tmp_path),
         scope={"tenant": "a"},
         pinned_sandbox_profile_config=profile,
+        config_store=store,
         _sandbox_acquirer=manager.sandbox_acquirer(
             "session",
             scope={"tenant": "a"},
