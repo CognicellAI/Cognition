@@ -198,3 +198,7 @@ apply it to `exec_run`. This is a known operational constraint.
 - [Agent runtime components](04-agent-runtime-components.md)
 - [Runtime flows](07-runtime-flows.md)
 - [Deployment and operations](08-deployment-and-operations.md)
+
+### Idle-only release admission
+
+The session manager supports `release_sandbox_backend(session_id, only_if_idle=True)` for compute reclamation without aborting registered local runtime work. Its existing ownership lock checks activity and admits teardown atomically against local runtime registration. Active work returns `busy`; idle work follows the existing `complete`, `pending`, or `untracked` observations. The default remains unchanged for explicit abort/deletion callers. This internal primitive neither deletes history nor establishes cross-replica idleness; scoped HTTP admission and persisted session/run checks remain necessary before an administrative endpoint can use it.

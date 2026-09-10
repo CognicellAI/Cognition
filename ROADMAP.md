@@ -769,3 +769,7 @@ Category: Security fix / runtime hardening. Layer4 Agent Runtime → Layer3 Exec
 ## Bug fix: clear Agent sandbox overrides through PATCH
 
 Layer 6 API: explicit null for sandbox_profile or sandbox_execution_role_arn clears that override; omission preserves it. Generic use case: return an Agent to deployment defaults without replacing unrelated configuration. Existing non-null updates and ETag conditions are unchanged. Explicit null previously acted as no-op, so clients relying on that bug must omit the field instead. Independent parameterized CRUD regression reproduces both failures and checks persistence and omission semantics. This changes configuration only, not existing sandbox teardown.
+
+## Generic idle-only sandbox release admission
+
+Layer 5 orchestration; small enhancement using existing manager ownership lock. Add opt-in only_if_idle release behavior for operators reclaiming idle compute while preserving active work and history. Acceptance: active runtime returns busy without teardown; idle release uses existing confirmed/pending/untracked evidence and prevents concurrent local registration. Existing callers retain default release behavior. Dependencies: existing sandbox ownership registration guard. Process-local guarantee only; no distributed fencing or provider recovery claim. Scoped HTTP exposure remains a separate incomplete integration step.

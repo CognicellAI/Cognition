@@ -1785,17 +1785,20 @@ class SessionAgentManager:
             logger.info("Sandbox lifecycle event", phase=event.phase, **fields)
 
     def release_sandbox_backend(
-        self, session_id: str
-    ) -> Literal["complete", "pending", "untracked"]:
+        self, session_id: str, *, only_if_idle: bool = False
+    ) -> Literal["complete", "pending", "untracked", "busy"]:
         """Release a tracked backend without deleting session history.
 
         Returns:
+            ``busy`` when idle-only release finds a registered local runtime;
             ``complete`` only after this attempt confirms tracked backend teardown;
             ``pending`` while teardown is running or remains unconfirmed;
             ``untracked`` when this process has no backend handle. Untracked is
             not evidence that a provider resource or another replica has stopped.
         """
         with self._sandbox_ownership_lock:
+            if only_if_idle and self._active_runtimes.get(session_id):
+                return "busy"
             if session_id in self._sandbox_teardown_inflight:
                 return "pending"
             if session_id not in self._sandbox_backends:

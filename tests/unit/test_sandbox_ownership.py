@@ -248,3 +248,27 @@ def test_pending_teardown_rejects_new_runtime_registration():
     runtime = object()
     manager.register_runtime("session", runtime)
     assert manager.get_runtime("session") is runtime
+
+
+def test_idle_only_release_preserves_active_work_then_releases_idle_backend():
+    manager = _manager()
+    backend = FakeSandboxBackend(sandbox_id="idle-only")
+    manager.register_sandbox_backend("session", backend, scope={"tenant": "one"})
+    runtime = object()
+    manager.register_runtime("session", runtime)
+    assert manager.release_sandbox_backend("session", only_if_idle=True) == "busy"
+    assert not backend.terminated
+    assert manager.get_runtime("session") is runtime
+    manager.unregister_runtime("session", runtime)
+    assert manager.release_sandbox_backend("session", only_if_idle=True) == "complete"
+    assert backend.terminated
+
+
+def test_idle_only_pending_release_blocks_new_runtime_registration():
+    manager = _manager()
+    backend = FakeSandboxBackend(sandbox_id="idle-pending", teardown_status="pending")
+    manager.register_sandbox_backend("session", backend, scope={"tenant": "one"})
+    assert manager.release_sandbox_backend("session", only_if_idle=True) == "pending"
+    with pytest.raises(RuntimeError, match="teardown"):
+        manager.register_runtime("session", object())
+    assert manager._sandbox_backends["session"] is backend
