@@ -777,3 +777,9 @@ Layer 5 orchestration; small enhancement using existing manager ownership lock. 
 ## Scoped non-destructive sandbox release endpoint
 
 Layer 6 API enhancement, small effort. POST /sessions/{session_id}/sandbox/release uses exact session scope, protects persisted active/resumable work and invokes idle-only manager release. Acceptance: foreign scope404, active/approval sessions busy, manager observations preserved, history unchanged. Depends on idle-only release admission. Existing APIs unchanged; process-local observations are not distributed fencing or proof of absence after restart.
+
+## Optional transient MicroVM initialization
+
+Layer 3 execution enhancement; small effort; depends on existing authenticated command-server transport. General use case: embedding applications initialize custom runtime images after allocation with short-lived launch material that must not be stored in AWS launch metadata or Agent profiles. Add an optional SDK callback receiving the provider VM identity and returning a JSON object for direct /run initialization before healthcheck/commands. Builder retains authorization and payload ownership. Acceptance: callback executes once per allocation, no payload in provider request/metadata/logging, initialization failure prevents commands and requests teardown, ordinary launches unchanged. Additive constructor contract; no migration, credential resolver, product vocabulary or HTTP configuration surface. Server-level trusted-scope wiring remains separate work.
+
+Status: SDK callback implemented;22 MicroVM adapter tests and targeted Ruff pass. Tests cover pre-command ordering, one-time initialization across readiness retries, unchanged ordinary launches, rejected oversized material, callback/transport failures, teardown retry and secret-safe error reporting even when teardown fails. External provider smoke using a custom image also passed; this does not establish declarative server integration or credential policy.

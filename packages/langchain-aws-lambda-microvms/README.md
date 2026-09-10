@@ -32,3 +32,28 @@ Normal Python context propagation applies: `asyncio.to_thread` preserves the
 caller's context; custom thread executors should propagate it explicitly.
 Health and command protocols remain unchanged. Mounted-workspace diagnostics
 belong to the image builder, outside this SDK.
+
+## Optional post-allocation initialization
+
+Embedding applications can pass `runtime_initializer: Callable[[str], dict]`.
+After allocation and AWS proxy authentication, the SDK calls it with the provider
+MicroVM ID, sends its JSON object directly to `/run` in the image's
+`{microvmId, runHookPayload}` envelope, then checks `/healthz` before admitting
+commands or file transfers. The complete envelope is limited to 16 KiB.
+The HTTP call has a 60-second timeout; the callback must bound its own I/O.
+
+Use this for custom images requiring transient launch material. The image's
+ordinary provider hook must support waiting for this initialization. The callback
+is trusted application code, not Agent configuration or a model tool. Bind any
+authorization context in the embedding application; the SDK does not infer scope
+from the VM ID, issue credentials, or resolve secrets. Keep secrets out of the
+ordinary `run_hook_payload`, which AWS receives during allocation.
+
+Initialization occurs once per allocation, including across healthcheck retries.
+The SDK does not retain the returned payload or include it in runtime metadata.
+Failure closes the backend to commands and requests termination; failed or pending
+teardown remains observable and retryable through `terminate()`. An ambiguous
+initialization response is not retried with new material. There is no refresh or
+expiry revocation guarantee. Applications own callback/client instrumentation and
+must ensure it does not log payloads. Omitting the callback preserves existing
+launch behavior. Declarative Cognition server wiring is not yet provided.
