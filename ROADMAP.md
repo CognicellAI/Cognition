@@ -1,5 +1,11 @@
 # Cognition Roadmap
 
+## Offline artifact backend migration (2026-09-09)
+
+- Generic operator maintenance for existing PostgreSQL inline artifacts when enabling S3, preserving exact scope, version, content and run ownership.
+- Reuse existing S3 upload verification and manifest activation; bounded pages, preview by default, resumable failures, stopped writers and restorable backup required. No online migration or automatic deployment cutover.
+- Status: bounded migration implemented on integration branch. Six migration tests and twelve S3 store regressions pass. A real disposable PostgreSQL-to-S3-compatible-store rehearsal preserved exact scopes and bytes across one-row pages. Existing-data cutover remains operator-owned and has not run.
+
 ## Scoped publication and runtime retention (2026-09-09)
 
 - Category: Feature / Enhancement; priority P1; layers 1, 2, 4 and 6; estimated effort 5–8 days.

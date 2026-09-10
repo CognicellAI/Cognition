@@ -193,3 +193,28 @@ Keep descriptors and task records as long as historical attribution is wanted.
 Apply separate policies to PostgreSQL history/backups, old raw payloads, builder
 workspaces and client caches. S3 Lifecycle alone is not deletion of every copy.
 Cognition does not install an AWS expiration policy automatically.
+
+## Moving existing inline artifacts to S3
+
+Changing `COGNITION_DURABLE_FILE_BACKEND` does not migrate existing artifact
+bodies. The experimental offline maintenance module can move PostgreSQL inline
+artifacts into the configured S3 destination while preserving their scoped
+identities and versions. Keep the previous runtime configuration and a tested,
+restorable database backup. Stop runtime and administration writers before apply;
+this command does not coordinate an online cutover.
+
+With the destination's normal S3 and PostgreSQL settings supplied securely:
+
+```sh
+python -m server.app.storage.migrate_artifacts --limit 100
+python -m server.app.storage.migrate_artifacts --limit 100 --apply --writers-stopped
+```
+
+Preview reports the pending row count without initializing or writing S3. Apply
+moves at most the requested page and verifies uploaded bytes through the existing
+artifact store before activating its manifest. Failed rows are counted without
+printing provider errors or content. Inspect failures before repeating; do not
+interpret zero pending rows as sufficient evidence if a page reported failures.
+Confirm scoped historical retrieval and content before restarting writers with
+the new backend. Retain the backup until that acceptance succeeds. The command
+is under validation and is not yet admitted for unattended production migration.
