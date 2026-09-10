@@ -1796,3 +1796,7 @@ All error responses follow a consistent structure:
 ### Clearing Agent sandbox overrides
 
 For `PATCH /agents/{name}`, omit `sandbox_profile` and `sandbox_execution_role_arn` to preserve them. Send an explicit JSON `null` for either field to clear that Agent override and resume normal default resolution. Use the current Agent ETag with `If-Match`; unrelated fields remain unchanged. Clearing configuration does not terminate an existing sandbox.
+
+### Release idle sandbox compute
+
+`POST /sessions/{session_id}/sandbox/release` requires the session’s exact configured scope. It preserves session history and returns `{ "status": "complete|pending|untracked|busy" }` (one status value, HTTP200); unknown/foreign sessions return404. `busy` protects persisted active/resumable work or a registered local runtime. `complete` confirms teardown of the backend tracked by this process for this attempt; `pending` retains an unconfirmed handle. `untracked` means this process has no handle, including after restart or on a different replica, and must never be treated as provider absence. A lost successful response can therefore yield `untracked` on retry. This is not workspace-wide teardown evidence or distributed fencing. Builders retain responsibility for current configuration eligibility and provider observation where needed. No session, message or run is deleted or aborted by this operation.

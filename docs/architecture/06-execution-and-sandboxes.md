@@ -202,3 +202,5 @@ apply it to `exec_run`. This is a known operational constraint.
 ### Idle-only release admission
 
 The session manager supports `release_sandbox_backend(session_id, only_if_idle=True)` for compute reclamation without aborting registered local runtime work. Its existing ownership lock checks activity and admits teardown atomically against local runtime registration. Active work returns `busy`; idle work follows the existing `complete`, `pending`, or `untracked` observations. The default remains unchanged for explicit abort/deletion callers. This internal primitive neither deletes history nor establishes cross-replica idleness; scoped HTTP admission and persisted session/run checks remain necessary before an administrative endpoint can use it.
+
+The scoped `POST /sessions/{session_id}/sandbox/release` endpoint now applies exact session lookup and persisted session/run activity checks before idle-only manager release. Its observation is limited to the tracked backend on the serving process. It does not prove all replicas or all mounts for a storage binding are gone, and an untracked retry remains uncertain.

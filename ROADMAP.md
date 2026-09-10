@@ -773,3 +773,7 @@ Layer 6 API: explicit null for sandbox_profile or sandbox_execution_role_arn cle
 ## Generic idle-only sandbox release admission
 
 Layer 5 orchestration; small enhancement using existing manager ownership lock. Add opt-in only_if_idle release behavior for operators reclaiming idle compute while preserving active work and history. Acceptance: active runtime returns busy without teardown; idle release uses existing confirmed/pending/untracked evidence and prevents concurrent local registration. Existing callers retain default release behavior. Dependencies: existing sandbox ownership registration guard. Process-local guarantee only; no distributed fencing or provider recovery claim. Scoped HTTP exposure remains a separate incomplete integration step.
+
+## Scoped non-destructive sandbox release endpoint
+
+Layer 6 API enhancement, small effort. POST /sessions/{session_id}/sandbox/release uses exact session scope, protects persisted active/resumable work and invokes idle-only manager release. Acceptance: foreign scope404, active/approval sessions busy, manager observations preserved, history unchanged. Depends on idle-only release admission. Existing APIs unchanged; process-local observations are not distributed fencing or proof of absence after restart.
