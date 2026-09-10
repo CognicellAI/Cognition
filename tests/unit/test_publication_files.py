@@ -208,7 +208,7 @@ async def test_real_tool_graph_emits_published_part(monkeypatch, failure, inline
         assert artifacts[0].value.startswith(REFERENCE_PREFIX)
     binary_write, descriptor_write = objects.put.call_args_list
     assert binary_write.kwargs == {"tags": {"cognition:content-class": "published-file"}}
-    assert descriptor_write.kwargs == {}
+    assert descriptor_write.kwargs == {"tags": {"cognition:content-class": "publication-descriptor"}}
 
 
 @pytest.mark.asyncio

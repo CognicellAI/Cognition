@@ -864,8 +864,18 @@ class S3ArtifactStore:
             lambda objects: objects.scoped_key(artifact.scope, self._path(artifact, checksum))
         )
 
+        # These classes describe stored bodies, not session retention or deletion intent.
+        content_class = (
+            "publication-descriptor"
+            if artifact.content_type == "application/vnd.cognition.published-file+json"
+            else "run-artifact" if artifact.run_id else None
+        )
+
         def write_and_verify(objects: S3ObjectStore) -> bytes:
-            objects.put(object_key, body)
+            if content_class is None:
+                objects.put(object_key, body)
+            else:
+                objects.put(object_key, body, tags={"cognition:content-class": content_class})
             return objects.get(object_key)
 
         try:

@@ -24,13 +24,15 @@ from server.app.storage.schema import create_all_tables
 class _FakeObjectStore:
     def __init__(self) -> None:
         self.objects: dict[str, bytes] = {}
+        self.tags: dict[str, dict[str, str]] = {}
 
     def scoped_key(self, scope: dict[str, str], path: str) -> str:
         del scope
         return f"opaque-scope{path}"
 
-    def put(self, key: str, body: bytes) -> None:
+    def put(self, key: str, body: bytes, *, tags: dict[str, str] | None = None) -> None:
         self.objects[key] = body
+        self.tags[key] = tags or {}
 
     def get(self, key: str) -> bytes:
         return self.objects[key]
@@ -234,3 +236,30 @@ async def test_s3_artifact_store_deletes_versioned_bodies(monkeypatch: pytest.Mo
     assert await store.delete_artifact("report", {"tenant": "acme"})
     assert backend.objects == {}
     assert await manifests.get_artifact("report", {"tenant": "acme"}) is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "run_id,content_type,expected",
+    [
+        (None, "text/plain", {}),
+        ("run-one", "text/plain", {"cognition:content-class": "run-artifact"}),
+        (None, "application/vnd.cognition.published-file+json",
+         {"cognition:content-class": "publication-descriptor"}),
+        ("run-one", "application/vnd.cognition.published-file+json",
+         {"cognition:content-class": "publication-descriptor"}),
+    ],
+)
+async def test_s3_body_lifecycle_classes(monkeypatch, run_id, content_type, expected):
+    manifests = MemoryArtifactStore()
+    store = S3ArtifactStore(manifests, bucket="test", base_prefix="test", hmac_key="test")
+    objects = _FakeObjectStore()
+    monkeypatch.setattr(store, "_object_store", lambda: objects)
+    artifact = ArtifactDefinition(
+        id="lifecycle", name="lifecycle", artifact_type="artifact", path="lifecycle",
+        content="body", content_type=content_type, run_id=run_id, scope={"project": "one"},
+    )
+    await store.upsert_artifact(artifact)
+    assert list(objects.tags.values()) == [expected]
+    loaded = await store.get_artifact("lifecycle", {"project": "one"})
+    assert loaded is not None and loaded.content == "body"

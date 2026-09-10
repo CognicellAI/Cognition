@@ -5,6 +5,31 @@ Cognition's task history. Cognition does not install a retention rule or choose 
 retention period. Workspace retention, task history and client caches have separate
 owners.
 
+## Stored-body classes (integration branch)
+
+New S3 writes use `cognition:content-class` to distinguish:
+
+| Value | Stored bytes |
+| --- | --- |
+| `published-file` | Published binary snapshot |
+| `publication-descriptor` | JSON descriptor pointing to a published snapshot |
+| `run-artifact` | Other artifact body carrying a run identity, including textual final responses |
+| Untagged | Artifact body without these associations, potentially long-lived configuration or memory |
+
+A descriptor is classified before its run association. These tags are storage
+classification, not a signal that a run or session has expired. Use a small set
+of operator-managed class rules; Cognition does not create per-object lifecycle
+policies or install expiration rules. Tagged uploads require `s3:PutObjectTagging`
+in addition to existing write permissions. Review existing tag-based policies
+before deploying the change. Existing objects are not retagged.
+
+Do not expire the entire Cognition prefix: it can include active policies,
+memories and other persistent artifact content. Descriptor/text expiration also
+requires compatible unavailable-content handling and a retention decision for
+referencing tasks. Classification alone does not make those expiration policies
+ready to enable. Session record cleanup remains independent and cannot prove
+that the associated S3 objects were erased.
+
 ## Delivery policy
 
 For deployments where S3 should own generated-file retention, configure:
