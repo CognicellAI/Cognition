@@ -228,3 +228,18 @@ def test_failed_release_remains_pending_for_retry():
     with patch.object(backend, "terminate", side_effect=RuntimeError("provider unavailable")):
         assert manager.release_sandbox_backend("session") == "pending"
     assert manager.release_sandbox_backend("session") == "complete"
+
+
+def test_pending_teardown_rejects_new_runtime_registration():
+    manager = _manager()
+    backend = FakeSandboxBackend(sandbox_id="one", teardown_status="pending")
+    manager.register_sandbox_backend("session", backend, scope={})
+    assert manager.release_sandbox_backend("session") == "pending"
+    with pytest.raises(RuntimeError, match="teardown is not confirmed"):
+        manager.register_runtime("session", object())
+    assert manager.active_runtime_count("session") == 0
+    backend.teardown_status = "complete"
+    assert manager.release_sandbox_backend("session") == "complete"
+    runtime = object()
+    manager.register_runtime("session", runtime)
+    assert manager.get_runtime("session") is runtime

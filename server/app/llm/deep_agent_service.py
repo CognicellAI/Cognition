@@ -1409,8 +1409,14 @@ class SessionAgentManager:
 
     def register_runtime(self, session_id: str, runtime: Any) -> None:
         """Register an active runtime for abort tracking."""
-        runtimes = self._active_runtimes.setdefault(session_id, [])
-        runtimes.append(runtime)
+        with self._sandbox_ownership_lock:
+            if (
+                session_id in self._sandbox_releasing
+                or session_id in self._sandbox_teardown_inflight
+            ):
+                raise RuntimeError("Sandbox teardown is not confirmed; retry release first")
+            runtimes = self._active_runtimes.setdefault(session_id, [])
+            runtimes.append(runtime)
         logger.debug(
             "Runtime registered for abort tracking",
             session_id=session_id,

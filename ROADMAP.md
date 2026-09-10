@@ -743,3 +743,5 @@ Feature enhancement, execution layer: add bounded regular-file reads to the loca
 - Acceptance: completed, pending/retry, concurrent and untracked releases are independently tested; lifecycle events and quota retention remain intact.
 - Effort: small. Dependencies: existing SessionAgentManager ownership tracking and backend teardown metadata.
 - Status: internal result implemented; 24 ownership/quota tests and Ruff pass. A scoped public release/cutover contract remains separate work.
+
+- Runtime lifecycle bug fix: reject new runtime registration while a session sandbox is releasing or has unconfirmed teardown. The ownership lock makes registration and the teardown marker mutually exclusive. Regression reproduces registration against a pending backend before the fix. This does not provide distributed admission or revoke future runs after teardown completes.
