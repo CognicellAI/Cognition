@@ -116,3 +116,42 @@ async def test_pinned_profile_cannot_bypass_current_registry_admission(
                 )
             )
         create_backend.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_required_initializer_fails_before_allocation_without_deployment_config(tmp_path):
+    store = DefaultConfigStore(MemoryConfigRegistry(), workspace_path=tmp_path)
+    await store.upsert_sandbox_profile(_profile().model_copy(update={"runtime_initialization_required": True}))
+    with patch("server.app.agent.cognition_agent._create_sandbox") as create_backend:
+        with pytest.raises(RuntimeError, match="authority is not configured"):
+            await create_cognition_agent(CognitionAgentParams(
+                project_path=tmp_path, model=MagicMock(), settings=_settings(tmp_path), config_store=store,
+            ))
+        create_backend.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_required_initializer_reaches_sdk_with_exact_scope(tmp_path):
+    from pydantic import SecretStr
+
+    store = DefaultConfigStore(MemoryConfigRegistry(), workspace_path=tmp_path)
+    scope = {"project": "a", "principal": "caller"}
+    profile = _profile().model_copy(update={"scope": scope, "runtime_initialization_required": True})
+    await store.upsert_sandbox_profile(profile)
+    settings = _settings(tmp_path).model_copy(update={
+        "sandbox_initialization_url": "https://initializer.example/run",
+        "sandbox_initialization_token": SecretStr("test-bearer"),
+    })
+    with (
+        patch("server.app.agent.cognition_agent.create_deep_agent", return_value=MagicMock()),
+        patch("server.app.agent.cognition_agent.bind_runtime_initializer") as bind,
+    ):
+        result = await create_cognition_agent(CognitionAgentParams(
+            project_path=tmp_path, model=MagicMock(), store=MagicMock(), checkpointer=MagicMock(),
+            settings=settings, config_store=store, scope=scope,
+        ))
+    assert bind.call_args.kwargs["scope"] == scope
+    assert bind.call_args.kwargs["profile_name"] == profile.name
+    with patch("langchain_aws_lambda_microvms.LambdaMicroVmSandbox") as sdk:
+        result.sandbox_backend.execute("true")
+        assert sdk.call_args.kwargs["runtime_initializer"] is bind.return_value

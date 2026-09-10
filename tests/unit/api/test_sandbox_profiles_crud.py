@@ -163,3 +163,17 @@ class TestSandboxProfilesCrud:
         delete_response = client.delete("/sandbox/profiles/delete-me")
         assert delete_response.status_code == 204
         assert client.get("/sandbox/profiles/delete-me").status_code == 404
+
+
+def test_runtime_initialization_switch_round_trips_and_preserves_omission():
+    payload = _profile_payload("initialize")
+    payload["runtime_initialization_required"] = True
+    response = client.post("/sandbox/profiles", json=payload)
+    assert response.status_code == 201
+    assert response.json()["runtime_initialization_required"] is True
+    response = client.patch("/sandbox/profiles/initialize", json={"port": 8081})
+    assert response.status_code == 200
+    assert response.json()["runtime_initialization_required"] is True
+    response = client.patch("/sandbox/profiles/initialize", json={"runtime_initialization_required": False})
+    assert response.status_code == 200
+    assert client.get("/sandbox/profiles/initialize").json()["runtime_initialization_required"] is False

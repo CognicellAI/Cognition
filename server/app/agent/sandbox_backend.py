@@ -18,6 +18,7 @@ import os
 import shlex
 import stat
 import threading
+from collections.abc import Callable
 from contextlib import ExitStack
 from pathlib import Path, PurePosixPath
 from typing import Any, cast
@@ -603,8 +604,10 @@ class CognitionAwsLambdaMicroVmSandboxBackend(SandboxBackendProtocol):
         profile_config: SandboxProfile | None = None,
         protected_paths: list[str] | None = None,
         workspace_root: str = "/workspace",
+        runtime_initializer: Callable[[str], dict[str, Any]] | None = None,
     ) -> None:
         self._root_dir = Path(root_dir).resolve()
+        self._runtime_initializer = runtime_initializer
         self._id = sandbox_id or f"cognition-aws-lambda-microvm-{id(self)}"
         self._profile = profile
         self._execution_role_arn = execution_role_arn
@@ -790,6 +793,7 @@ class CognitionAwsLambdaMicroVmSandboxBackend(SandboxBackendProtocol):
             idle_policy=idle_policy,
             logging_config=logging_config,
             run_hook_payload=run_hook_payload,
+            runtime_initializer=self._runtime_initializer,
             maximum_duration_seconds=profile.maximum_duration_seconds,
             port=profile.port,
             token_expiration_minutes=profile.token_expiration_minutes,
@@ -1348,6 +1352,7 @@ def create_sandbox_backend(
     aws_lambda_microvm_profile: str = "default",
     aws_lambda_microvm_execution_role_arn: str | None = None,
     aws_lambda_microvm_profile_config: SandboxProfile | None = None,
+    runtime_initializer: Callable[[str], dict[str, Any]] | None = None,
 ) -> (
     FilesystemBackend | CognitionKubernetesSandboxBackend | CognitionAwsLambdaMicroVmSandboxBackend
 ):
@@ -1419,6 +1424,7 @@ def create_sandbox_backend(
             profile=aws_lambda_microvm_profile,
             execution_role_arn=aws_lambda_microvm_execution_role_arn,
             profile_config=aws_lambda_microvm_profile_config,
+            runtime_initializer=runtime_initializer,
             workspace_root=sandbox_workspace_root,
         )
     else:

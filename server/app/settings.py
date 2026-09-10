@@ -10,6 +10,7 @@ from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
+    HttpUrl,
     SecretStr,
     field_validator,
     model_validator,
@@ -475,6 +476,25 @@ class Settings(BaseSettings):
         alias="COGNITION_AWS_LAMBDA_MICROVM_DEFAULT_PROFILE",
         description="Default SandboxProfile name for the AWS Lambda MicroVM backend.",
     )
+
+    sandbox_initialization_url: HttpUrl | None = Field(
+        default=None, alias="COGNITION_SANDBOX_INITIALIZATION_URL",
+        description="Deployment-owned HTTPS endpoint for transient sandbox initialization.",
+    )
+    sandbox_initialization_token: SecretStr | None = Field(
+        default=None, min_length=1, alias="COGNITION_SANDBOX_INITIALIZATION_TOKEN",
+        description="Bearer token for the deployment-owned initialization endpoint.",
+    )
+
+    @field_validator("sandbox_initialization_url")
+    @classmethod
+    def validate_initialization_url(cls, value: HttpUrl | None) -> HttpUrl | None:
+        """Require TLS without embedded credentials or fragment routing."""
+        if value is not None and (
+            value.scheme != "https" or value.username or value.password or value.fragment
+        ):
+            raise ValueError("Sandbox initialization URL requires HTTPS without credentials or fragment")
+        return value
 
     blocked_tools: list[str] = Field(
         default=[],

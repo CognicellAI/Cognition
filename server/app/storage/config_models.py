@@ -309,6 +309,7 @@ class SandboxProfile(BaseModel):
     logging: LambdaMicroVmLogging | None = Field(default=None)
     quota: LambdaMicroVmQuota | None = Field(default=None)
     run_hook_payload: str | None = Field(default=None)
+    runtime_initialization_required: bool = Field(default=False)
     maximum_duration_seconds: int = Field(default=3600, gt=0, le=28800)
     port: int = Field(default=8080, ge=1, le=65535)
     token_expiration_minutes: int = Field(default=30, gt=0)

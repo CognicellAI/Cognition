@@ -739,6 +739,7 @@ class SandboxProfileCreate(BaseModel):
     logging: LambdaMicroVmLogging | None = None
     quota: LambdaMicroVmQuota | None = None
     run_hook_payload: str | None = None
+    runtime_initialization_required: bool = False
     maximum_duration_seconds: int = Field(default=3600, gt=0, le=28800)
     port: int = Field(default=8080, ge=1, le=65535)
     token_expiration_minutes: int = Field(default=30, gt=0)
@@ -760,6 +761,7 @@ class SandboxProfileUpdate(BaseModel):
     logging: LambdaMicroVmLogging | None = None
     quota: LambdaMicroVmQuota | None = None
     run_hook_payload: str | None = None
+    runtime_initialization_required: bool | None = None
     maximum_duration_seconds: int | None = Field(default=None, gt=0, le=28800)
     port: int | None = Field(default=None, ge=1, le=65535)
     token_expiration_minutes: int | None = Field(default=None, gt=0)
@@ -782,6 +784,7 @@ class SandboxProfileResponse(BaseModel):
     logging: LambdaMicroVmLogging | None = None
     quota: LambdaMicroVmQuota | None = None
     run_hook_payload: str | None = None
+    runtime_initialization_required: bool = False
     maximum_duration_seconds: int
     port: int
     token_expiration_minutes: int

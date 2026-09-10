@@ -50,6 +50,7 @@ from server.app.agent.middleware import (  # noqa: E402
 )
 from server.app.agent.prompts import SYSTEM_PROMPT  # noqa: E402
 from server.app.agent.sandbox_backend import create_sandbox_backend  # noqa: E402
+from server.app.execution.initialization import bind_runtime_initializer  # noqa: E402
 from server.app.observability import (  # noqa: E402
     RUNTIME_CACHE_EVICTIONS_TOTAL,
     RUNTIME_CACHE_LOOKUPS_TOTAL,
@@ -496,6 +497,7 @@ def _create_sandbox(
     sandbox_execution_role_arn: str | None = None,
     sandbox_profile_config: SandboxProfile | None = None,
     acquirer: Callable[[str, Callable[[], Any]], Any] | None = None,
+    runtime_initializer: Callable[[str], dict[str, Any]] | None = None,
 ) -> Any:
     if acquirer is not None:
         construction_settings = {
@@ -514,6 +516,7 @@ def _create_sandbox(
         return acquirer(identity, lambda: _create_sandbox(
             project_path, sandbox_id, settings, k8s_labels, sandbox_profile,
             sandbox_execution_role_arn, sandbox_profile_config,
+            runtime_initializer=runtime_initializer,
         ))
     start = time.monotonic()
     outcome = "success"
@@ -554,6 +557,7 @@ def _create_sandbox(
             aws_lambda_microvm_profile=resolved_profile,
             aws_lambda_microvm_execution_role_arn=sandbox_execution_role_arn,
             aws_lambda_microvm_profile_config=sandbox_profile_config,
+            runtime_initializer=runtime_initializer,
         )
     except Exception:
         outcome = "failure"
@@ -675,6 +679,20 @@ async def create_cognition_agent(params: CognitionAgentParams) -> CognitionAgent
     else:
         sandbox_profile_config = current_profile
 
+    runtime_initializer = None
+    if sandbox_profile_config is not None and sandbox_profile_config.runtime_initialization_required:
+        if settings.sandbox_initialization_url is None or settings.sandbox_initialization_token is None:
+            raise RuntimeError("Required sandbox initialization authority is not configured")
+        runtime_initializer = bind_runtime_initializer(
+            url=str(settings.sandbox_initialization_url),
+            token=settings.sandbox_initialization_token,
+            scope=dict(params.scope or {}),
+            profile_name=resolved_sandbox_profile,
+            image_arn=sandbox_profile_config.image_arn,
+            image_version=sandbox_profile_config.image_version,
+            maximum_duration_seconds=sandbox_profile_config.maximum_duration_seconds,
+        )
+
     construct_sandbox = partial(_create_sandbox,
         project_path,
         sandbox_id,
@@ -684,6 +702,7 @@ async def create_cognition_agent(params: CognitionAgentParams) -> CognitionAgent
         sandbox_execution_role_arn=params.sandbox_execution_role_arn,
         sandbox_profile_config=sandbox_profile_config,
         acquirer=params._sandbox_acquirer,
+        runtime_initializer=runtime_initializer,
     )
     sandbox_backend = (
         await asyncio.to_thread(construct_sandbox)

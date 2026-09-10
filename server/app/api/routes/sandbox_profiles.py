@@ -31,6 +31,7 @@ def _to_response(profile: SandboxProfile) -> SandboxProfileResponse:
         logging=profile.logging,
         quota=profile.quota,
         run_hook_payload=profile.run_hook_payload,
+        runtime_initialization_required=profile.runtime_initialization_required,
         maximum_duration_seconds=profile.maximum_duration_seconds,
         port=profile.port,
         token_expiration_minutes=profile.token_expiration_minutes,
@@ -81,6 +82,7 @@ async def register_sandbox_profile(
             logging=body.logging,
             quota=body.quota,
             run_hook_payload=body.run_hook_payload,
+            runtime_initialization_required=body.runtime_initialization_required,
             maximum_duration_seconds=body.maximum_duration_seconds,
             port=body.port,
             token_expiration_minutes=body.token_expiration_minutes,
@@ -147,6 +149,9 @@ async def update_sandbox_profile(
             logging=updates.get("logging", existing.logging),
             quota=updates.get("quota", existing.quota),
             run_hook_payload=updates.get("run_hook_payload", existing.run_hook_payload),
+            runtime_initialization_required=updates.get(
+                "runtime_initialization_required", existing.runtime_initialization_required,
+            ),
             maximum_duration_seconds=updates.get(
                 "maximum_duration_seconds",
                 existing.maximum_duration_seconds,
