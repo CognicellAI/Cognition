@@ -722,3 +722,9 @@ Layers: foundation settings, persistence, runtime maintenance and private CLI.
 Provide deployment-wide enablement (default off), inactivity age, batch size and interval through a private maintenance worker. Claim eligible inactive contexts before deleting their messages, tasks, runs, checkpoint thread and exact observed artifact records. Preserve active/resumable dependencies and retry identity on failure. S3 Lifecycle independently expires published bytes; maintenance neither reads nor deletes S3 bodies. Legacy opportunistic task TTL and session retention are mutually exclusive. No product-specific schema or Agent override is introduced.
 
 Validation: 118 runtime/session/scope/artifact/publication tests passed, one existing skip, including disposable PostgreSQL and configured CLI preview/apply; source lint and ten-file type checks pass. Remaining admission: synthetic local deployment, provider storage lifecycle coverage for non-published S3 bodies, and review of complete lifecycle guarantees. No production scheduling or deletion policy is enabled by this branch.
+
+## Integration branch: explicit publication opt-in
+
+Category: feature enhancement; layers 1 and 4. Shared deployments may require explicit Agent publication policy using `COGNITION_ARTIFACT_PUBLICATION_REQUIRE_AGENT_POLICY`. Default false preserves v0.15 inheritance. With the setting enabled, omitted or removed policy denies publication, while explicit policy remains bounded by deployment enablement and limits. No builder-specific scope or product policy is introduced.
+
+Acceptance: omitted policy is denied, explicit opt-in cannot widen deployment limits, and current-policy removal revokes subsequent publication. Publication/policy/settings regressions: 97 passed, two existing skips. Source lint and type checks pass. All 13 capability reporting checks pass. Local deployment remains pending; no release admission is implied.

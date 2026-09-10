@@ -18,6 +18,7 @@ class PublicationLimits:
     enabled: bool
     max_bytes: int
     inline_limit: int
+    require_agent_policy: bool = False
 
     def __post_init__(self) -> None:
         if not 0 <= self.inline_limit <= self.max_bytes <= 10 * 1024 * 1024:
@@ -26,6 +27,8 @@ class PublicationLimits:
     def narrow(self, policy: PublicationPolicy | None) -> PublicationLimits:
         """Apply optional Agent policy without widening deployment authority."""
         if policy is None:
+            if self.require_agent_policy:
+                return PublicationLimits(False, self.max_bytes, self.inline_limit)
             return self
         maximum = min(
             self.max_bytes,

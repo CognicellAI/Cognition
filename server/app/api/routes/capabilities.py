@@ -102,6 +102,7 @@ async def get_capabilities(
             "sandbox_backend": settings.sandbox_backend,
             "artifact_publication": {
                 "enabled": settings.artifact_publication_enabled,
+                "require_agent_policy": settings.artifact_publication_require_agent_policy,
                 "max_bytes": settings.artifact_publication_max_bytes,
                 "inline_max_bytes": settings.artifact_publication_inline_max_bytes,
                 "policy_enforcement": "current_agent_before_upload",

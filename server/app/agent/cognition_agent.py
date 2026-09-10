@@ -806,6 +806,7 @@ async def create_cognition_agent(params: CognitionAgentParams) -> CognitionAgent
             enabled=True,
             inline_limit=settings.artifact_publication_inline_max_bytes,
             max_bytes=settings.artifact_publication_max_bytes,
+            require_agent_policy=settings.artifact_publication_require_agent_policy,
         )
         limits = limits.narrow(params.publication_policy) if params.publication_agent_name is None else limits
         policy_resolver = None

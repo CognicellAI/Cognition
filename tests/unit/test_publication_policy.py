@@ -156,3 +156,32 @@ async def test_interrupted_graph_rechecks_current_registry_before_publication(tm
         await graph.ainvoke(None, config, context=context)
     sandbox.download_file_bounded.assert_not_called()
     objects.put.assert_not_called()
+
+
+@pytest.mark.parametrize("deployment_enabled", [True, False])
+def test_explicit_policy_mode_never_enables_omitted_policy(deployment_enabled):
+    from server.app.agent.definition import PublicationPolicy
+
+    limits = PublicationLimits(deployment_enabled, 1024, 256, require_agent_policy=True)
+    assert not limits.narrow(None).enabled
+    assert limits.narrow(PublicationPolicy(enabled=True)).enabled is deployment_enabled
+    assert not limits.narrow(PublicationPolicy(enabled=False)).enabled
+    assert limits.narrow(PublicationPolicy(enabled=True, max_bytes=2048)).max_bytes == 1024
+
+
+@pytest.mark.asyncio
+async def test_explicit_policy_removal_revokes_current_publication(tmp_path):
+    from server.app.agent.publication_policy import CurrentPublicationPolicy
+    from server.app.storage.config_registry import MemoryConfigRegistry
+    from server.app.storage.config_store import DefaultConfigStore
+
+    store = DefaultConfigStore(MemoryConfigRegistry(), workspace_path=tmp_path)
+    scope = {"project": "owner"}
+    definition = AgentDefinition(name="worker", system_prompt="Work", publication=PublicationPolicy(enabled=True))
+    await store.upsert_agent("worker", scope, definition.model_dump())
+    resolver = CurrentPublicationPolicy(store, "worker", tuple(scope.items()), "api",
+                                       PublicationLimits(True, 1024, 256, require_agent_policy=True))
+    assert (await resolver()).enabled
+    definition.publication = None
+    await store.upsert_agent("worker", scope, definition.model_dump())
+    assert not (await resolver()).enabled

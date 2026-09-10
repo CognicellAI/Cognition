@@ -340,6 +340,11 @@ class Settings(BaseSettings):
         default="local",
         alias="COGNITION_DURABLE_FILE_BACKEND",
     )
+    artifact_publication_require_agent_policy: bool = Field(
+        default=False,
+        alias="COGNITION_ARTIFACT_PUBLICATION_REQUIRE_AGENT_POLICY",
+        description="Require explicit Agent publication policy instead of inheriting deployment enablement.",
+    )
     artifact_publication_enabled: bool = Field(
         default=False, alias="COGNITION_ARTIFACT_PUBLICATION_ENABLED",
     )

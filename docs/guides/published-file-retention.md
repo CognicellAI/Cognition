@@ -22,9 +22,17 @@ task records, events and checkpoints after their S3 copy expires.
 
 ## Scoped publication policy
 
+For deployments that require explicit opt-in, set
+`COGNITION_ARTIFACT_PUBLICATION_REQUIRE_AGENT_POLICY=true`. An omitted Agent
+publication policy then denies publication even when the deployment capability
+is enabled. Explicit Agent policy may enable publication within the deployment
+limits. Removing that policy denies subsequent publication, including resumed
+work. The setting defaults false to preserve v0.15 inheritance behavior. It does
+not change Agent definitions, text output, task retrieval or existing files.
+
 Builders may supply optional `publication` in an Agent definition or the Agent
-create/update API. Omission (or an explicit null reset) preserves the deployment
-policy. For example:
+create/update API. Omission (or an explicit null reset) follows the deployment
+policy, including its explicit-opt-in requirement when configured. For example:
 
 ```yaml
 publication:
@@ -60,7 +68,7 @@ artifact retrieval and signed URL lifetime remain independent of publication
 permission.
 
 `GET /capabilities` reports `scoped_artifact_publication_policy` support and the
-deployment publication ceilings. Agent responses expose the configured policy
+deployment publication ceilings and `require_agent_policy`. Agent responses expose the configured policy
 and existing revision/digest fields. No publication setting is added to public
 Agent Cards. Definitions without a publication policy keep their previous
 serialized shape and digest, including persisted pre-policy run manifests.
