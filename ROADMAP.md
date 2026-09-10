@@ -759,3 +759,5 @@ Feature enhancement, execution layer: add bounded regular-file reads to the loca
 - A2A projection bug fix: expired legacy response artifact bodies preserve completed task state and stable response identity with an unavailable-content notice. Existing task-scoped message history is unchanged; earlier assistant progress is not substituted for the expired final response. Twenty-five retention tests and Ruff pass. Storage outages still propagate as errors.
 
 - Bug fix (Layer 3, Kubernetes sandbox): propagate SDK termination failures and preserve handles for retry instead of reporting successful cleanup. Regression test covers failure followed by retry; provider Pod deletion confirmation remains separate.
+
+- Bug fix (Layer 3): Kubernetes teardown now retains pending handles until claim, Sandbox and known Pod absence are observed. Backend unit tests cover pending Pod, retry, unknown identity and observation errors. Live Kubernetes acceptance remains pending.

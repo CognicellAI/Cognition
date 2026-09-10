@@ -75,6 +75,8 @@ class K8sSandbox(BaseSandbox):
         self._sandbox: Any | None = None
         self._client: Any | None = None
         self._lock = threading.Lock()
+        self._teardown_status = "skipped"
+        self._teardown_pod_name: str | None = None
 
     @property
     def id(self) -> str:
@@ -94,6 +96,8 @@ class K8sSandbox(BaseSandbox):
             RuntimeError: If the k8s-agent-sandbox SDK is not installed
                 or sandbox creation fails.
         """
+        if self._teardown_status == "pending":
+            raise RuntimeError("Sandbox teardown is pending")
         if self._sandbox is not None:
             return self._sandbox
 
@@ -131,6 +135,7 @@ class K8sSandbox(BaseSandbox):
             )
 
             self._sandbox = self._client.create_sandbox(**create_kwargs)
+            self._teardown_status = "not_started"
 
             sandbox_name = getattr(self._sandbox, "sandbox_id", None) or getattr(
                 self._sandbox, "claim_name", None
@@ -289,19 +294,65 @@ class K8sSandbox(BaseSandbox):
                 results.append(FileDownloadResponse(path=file_path, error="file_not_found"))
         return results
 
-    def terminate(self) -> None:
-        """Terminate the sandbox and clean up resources.
+    @property
+    def runtime_metadata(self) -> dict[str, str]:
+        """Expose observed teardown state to lifecycle owners."""
+        return {"teardown_status": self._teardown_status}
 
-        Safe to call multiple times. Subsequent ``execute()`` calls after
-        successful termination will create a new sandbox. Provider errors propagate
-        and preserve the existing handle so callers can retry cleanup.
+    def terminate(self) -> None:
+        """Request deletion and check once; callers retry while status is pending.
+
+        Keep the handle until the claim, Sandbox and its known Pod are absent.
+        API errors propagate without converting uncertain deletion into success.
         """
-        if self._sandbox is not None:
-            try:
-                self._sandbox.terminate()
-                logger.info("K8s sandbox terminated", sandbox_id=self._sandbox_id)
-            except Exception as e:
-                logger.warning("K8s sandbox terminate failed", error=str(e))
-                raise
+        with self._lock:
+            if self._sandbox is None:
+                return
+            self._teardown_status = "pending"
+            sandbox = self._sandbox
+            if self._teardown_pod_name is None:
+                # Resolve before deletion; never infer an unknown Pod is absent.
+                record = self._read_resource("sandboxes", sandbox.sandbox_id)
+                if record is None:
+                    return
+                name = record.get("metadata", {}).get("annotations", {}).get(
+                    "agents.x-k8s.io/pod-name"
+                )
+                if not isinstance(name, str) or not name:
+                    return
+                self._teardown_pod_name = name
+            sandbox.terminate()
+            if self._read_resource("sandboxclaims", sandbox.claim_name) is not None:
+                return
+            if self._read_resource("sandboxes", sandbox.sandbox_id) is not None:
+                return
+            if self._read_resource("pods", self._teardown_pod_name) is not None:
+                return
             self._sandbox = None
             self._client = None
+            self._teardown_pod_name = None
+            self._teardown_status = "complete"
+            logger.info("K8s sandbox deletion observed", sandbox_id=self._sandbox_id)
+
+    def _read_resource(self, kind: str, name: str) -> Any | None:
+        """Read exact provider resources with bounded requests; only 404 is absence."""
+        from kubernetes.client.exceptions import ApiException
+
+        helper = self._sandbox.k8s_helper
+        try:
+            if kind == "pods":
+                return helper.core_v1_api.read_namespaced_pod(
+                    name=name, namespace=self._namespace, _request_timeout=(5, 10)
+                )
+            group = (
+                "extensions.agents.x-k8s.io"
+                if kind == "sandboxclaims" else "agents.x-k8s.io"
+            )
+            return helper.custom_objects_api.get_namespaced_custom_object(
+                group=group, version="v1alpha1", namespace=self._namespace,
+                plural=kind, name=name, _request_timeout=(5, 10),
+            )
+        except ApiException as exc:
+            if exc.status == 404:
+                return None
+            raise

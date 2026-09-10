@@ -155,8 +155,14 @@ class TestK8sSandboxExecute:
 
 
 class TestK8sSandboxTerminate:
+    @pytest.fixture(autouse=True)
+    def absent_resources(self):
+        with patch.object(K8sSandbox, "_read_resource", return_value=None):
+            yield
+
     def test_terminate_calls_sdk(self) -> None:
         sb = K8sSandbox()
+        sb._teardown_pod_name = "pod-1"
         mock_sandbox = MagicMock()
         sb._sandbox = mock_sandbox
 
@@ -167,10 +173,12 @@ class TestK8sSandboxTerminate:
 
     def test_terminate_idempotent(self) -> None:
         sb = K8sSandbox()
+        sb._teardown_pod_name = "pod-1"
         sb.terminate()
 
     def test_terminate_failure_preserves_handle_for_retry(self) -> None:
         sb = K8sSandbox()
+        sb._teardown_pod_name = "pod-1"
         mock_sandbox = MagicMock()
         mock_sandbox.terminate.side_effect = RuntimeError("cleanup failed")
         sb._sandbox = mock_sandbox
@@ -190,12 +198,43 @@ class TestK8sSandboxTerminate:
 
     def test_execute_after_terminate_creates_new(self) -> None:
         sb = K8sSandbox()
+        sb._teardown_pod_name = "pod-1"
         mock_sandbox = MagicMock()
         sb._sandbox = mock_sandbox
 
         sb.terminate()
         assert sb._sandbox is None
 
+
+    def test_pending_pod_retains_handle_until_retry(self) -> None:
+        sb = K8sSandbox()
+        sb._teardown_pod_name = "pod-1"
+        sandbox = MagicMock()
+        sb._sandbox = sandbox
+        with patch.object(sb, "_read_resource", side_effect=[None, None, {}]):
+            sb.terminate()
+        assert sb.runtime_metadata["teardown_status"] == "pending"
+        assert sb._sandbox is sandbox
+        sb.terminate()
+        assert sb.runtime_metadata["teardown_status"] == "complete"
+        assert sb._sandbox is None
+
+    def test_unknown_pod_never_confirms_deletion(self) -> None:
+        sb = K8sSandbox()
+        sb._sandbox = MagicMock()
+        sb.terminate()
+        assert sb.runtime_metadata["teardown_status"] == "pending"
+        sb._sandbox.terminate.assert_not_called()
+
+    def test_observation_error_preserves_pending(self) -> None:
+        sb = K8sSandbox()
+        sb._sandbox = MagicMock()
+        sb._teardown_pod_name = "pod-1"
+        with patch.object(sb, "_read_resource", side_effect=TimeoutError):
+            with pytest.raises(TimeoutError):
+                sb.terminate()
+        assert sb._sandbox is not None
+        assert sb.runtime_metadata["teardown_status"] == "pending"
 
 class TestK8sSandboxUploadDownload:
     def test_upload_files_success(self) -> None:
