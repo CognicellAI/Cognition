@@ -712,3 +712,13 @@ Per AGENTS.md requirements:
    - Security/Bug/Performance/Dependency: As part of PR
 
 **Last Updated**: 2026-05-25 (v0.10.0 final release validation complete — `0.10.0-rc1` app and sandbox image gate passed)
+
+
+## Integration branch: configurable session record retention
+
+Status: implemented and regression-tested on the isolated integration branch; deployment acceptance pending.
+Layers: foundation settings, persistence, runtime maintenance and private CLI.
+
+Provide deployment-wide enablement (default off), inactivity age, batch size and interval through a private maintenance worker. Claim eligible inactive contexts before deleting their messages, tasks, runs, checkpoint thread and exact observed artifact records. Preserve active/resumable dependencies and retry identity on failure. S3 Lifecycle independently expires published bytes; maintenance neither reads nor deletes S3 bodies. Legacy opportunistic task TTL and session retention are mutually exclusive. No product-specific schema or Agent override is introduced.
+
+Validation: 118 runtime/session/scope/artifact/publication tests passed, one existing skip, including disposable PostgreSQL and configured CLI preview/apply; source lint and ten-file type checks pass. Remaining admission: synthetic local deployment, provider storage lifecycle coverage for non-published S3 bodies, and review of complete lifecycle guarantees. No production scheduling or deletion policy is enabled by this branch.

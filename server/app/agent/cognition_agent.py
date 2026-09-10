@@ -87,6 +87,7 @@ class CognitionContext:
 
     effective_scope: dict[str, str] = field(default_factory=dict)
     session_id: str | None = None
+    run_id: str | None = None
     thread_id: str | None = None
     agent_name: str | None = None
     metadata: dict[str, str] = field(default_factory=dict)
@@ -101,6 +102,7 @@ class CognitionContext:
         scope: dict[str, str] | None,
         *,
         session_id: str | None = None,
+        run_id: str | None = None,
         thread_id: str | None = None,
         agent_name: str | None = None,
         metadata: dict[str, str] | None = None,
@@ -110,6 +112,7 @@ class CognitionContext:
         return cls(
             effective_scope=dict(scope or {}),
             session_id=session_id,
+            run_id=run_id,
             thread_id=thread_id,
             agent_name=agent_name,
             metadata=dict(metadata or {}),

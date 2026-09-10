@@ -596,6 +596,20 @@ class Settings(BaseSettings):
         alias="COGNITION_A2A_CLEANUP_GRACE_SECONDS",
     )
 
+    session_retention_enabled: bool = Field(
+        default=False, alias="COGNITION_SESSION_RETENTION_ENABLED",
+        description="Enable deployment-wide inactive session record cleanup.",
+    )
+    session_retention_days: int = Field(
+        default=30, ge=1, alias="COGNITION_SESSION_RETENTION_DAYS",
+    )
+    session_retention_batch_size: int = Field(
+        default=100, ge=1, le=1000, alias="COGNITION_SESSION_RETENTION_BATCH_SIZE",
+    )
+    session_retention_interval_seconds: float = Field(
+        default=3600.0, gt=0, alias="COGNITION_SESSION_RETENTION_INTERVAL_SECONDS",
+    )
+
     # SSE (Server-Sent Events) settings
     sse_heartbeat_interval_seconds: float = Field(
         default=15.0,
@@ -647,6 +661,16 @@ class Settings(BaseSettings):
     def s3_enabled(self) -> bool:
         """Return whether durable file data is configured for S3-compatible storage."""
         return self.durable_file_backend == "s3"
+
+    @model_validator(mode="after")
+    def validate_session_retention_policy(self) -> Settings:
+        """Prevent task cleanup from discarding session cleanup dependencies."""
+        if self.session_retention_enabled and self.a2a_terminal_task_ttl_seconds > 0:
+            raise ValueError(
+                "Session retention requires COGNITION_A2A_TERMINAL_TASK_TTL_SECONDS=0; "
+                "the legacy task cleaner removes run ownership and artifact bytes"
+            )
+        return self
 
     def validate_deployment_storage_policy(self) -> None:
         """Validate the builder-selected storage backend without classifying it."""

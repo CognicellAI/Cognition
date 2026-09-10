@@ -626,5 +626,74 @@ def main() -> None:
     app()
 
 
+@app.command("retention")
+def retention(
+    before: str | None = typer.Option(None, help="Override the configured inactivity age with a timezone-aware ISO timestamp"),
+    limit: int | None = typer.Option(None, min=1, max=1000, help="Override the configured cleanup batch size"),
+    cursor: str = typer.Option("", help="Resume after the preceding result's next_cursor"),
+    scope_json: str | None = typer.Option(None, help="Restrict cleanup to this exact scope JSON object"),
+    apply: bool = typer.Option(False, "--apply", help="Apply cleanup; default is a non-destructive preview"),
+    watch: bool = typer.Option(False, "--watch", help="Repeat bounded cleanup pages at the configured interval; requires --apply"),
+) -> None:
+    """Run private record maintenance; --watch repeats bounded pages."""
+    import asyncio
+    import json
+    from dataclasses import asdict
+    from datetime import UTC, datetime, timedelta
+
+    from server.app.agent.retention import RuntimeRetention, watch_retention
+    from server.app.storage.factory import create_artifact_store, create_storage_backend
+    from server.app.storage.retention import validate_retention_scan
+
+    settings = get_settings()
+    if watch and (not apply or before is not None):
+        raise typer.BadParameter("--watch requires --apply and the configured inactivity age (omit --before)")
+    before = before or (datetime.now(UTC) - timedelta(days=settings.session_retention_days)).isoformat()
+    limit = limit or settings.session_retention_batch_size
+    if apply and not settings.session_retention_enabled:
+        raise typer.BadParameter("Enable COGNITION_SESSION_RETENTION_ENABLED before applying cleanup")
+
+    try:
+        validate_retention_scan(before, limit)
+        scope = json.loads(scope_json) if scope_json is not None else None
+        if scope is not None and (
+            not isinstance(scope, dict) or any(not isinstance(k, str) or not isinstance(v, str)
+                                               for k, v in scope.items())
+        ):
+            raise ValueError("Scope must be a JSON object of string values")
+    except (ValueError, TypeError) as exc:
+        raise typer.BadParameter(str(exc)) from exc
+
+    async def run() -> dict:
+        settings = get_settings()
+        store = create_storage_backend(settings)
+        artifacts = create_artifact_store(settings, include_durable_bodies=False)
+        try:
+            await store.initialize()
+            initialize = getattr(artifacts, "initialize", None)
+            if initialize is not None:
+                await initialize()
+            if watch:
+                async for outcome in watch_retention(
+                    RuntimeRetention(store, artifacts), days=settings.session_retention_days,
+                    limit=limit, interval_seconds=settings.session_retention_interval_seconds,
+                    scope=scope, cursor=cursor,
+                ):
+                    console.print_json(data=asdict(outcome))
+            return asdict(await RuntimeRetention(store, artifacts).sweep(
+                before, after_id=cursor, limit=limit, apply=apply, scope=scope,
+            ))
+        finally:
+            close = getattr(artifacts, "close", None)
+            if close is not None:
+                await close()
+            await store.close()
+
+    result = asyncio.run(run())
+    console.print_json(data=result)
+    if result["failed"]:
+        raise typer.Exit(code=1)
+
+
 if __name__ == "__main__":
     main()

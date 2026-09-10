@@ -233,7 +233,9 @@ def create_config_dispatcher(settings: Settings) -> ConfigChangeDispatcher:
         return InProcessDispatcher()
 
 
-def create_artifact_store(settings: Settings) -> ArtifactStore:
+def create_artifact_store(
+    settings: Settings, *, include_durable_bodies: bool = True
+) -> ArtifactStore:
     """Create the ArtifactStore matching the persistence backend.
 
     Args:
@@ -277,7 +279,7 @@ def create_artifact_store(settings: Settings) -> ArtifactStore:
             backend_type=backend_type,
         )
 
-    if not settings.s3_enabled:
+    if not include_durable_bodies or not settings.s3_enabled:
         return store
 
     from server.app.storage.artifact_store import S3ArtifactStore

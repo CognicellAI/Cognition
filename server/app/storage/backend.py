@@ -546,6 +546,22 @@ class StorageBackend(Protocol):
         """Delete a session."""
         ...
 
+    async def scan_retention_sessions(
+        self, before: str, *, after_id: str = "", limit: int = 100
+    ) -> list[Session]:
+        """Private maintenance scan across scopes; never bind to customer listing."""
+        ...
+
+    async def claim_retention_session(
+        self, session_id: str, scope: dict[str, str], before: str
+    ) -> Session | None:
+        """Atomically expire an inactive context only without live dependencies."""
+        ...
+
+    async def purge_retention_session(self, session_id: str, scope: dict[str, str]) -> bool:
+        """Remove expired runtime rows after external content cleanup succeeds."""
+        ...
+
     # Message operations
     async def create_message(
         self,

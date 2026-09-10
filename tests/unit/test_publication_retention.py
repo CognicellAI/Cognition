@@ -284,3 +284,35 @@ async def test_stream_and_get_task_preserve_missing_attachment(
             },
         )
         assert "result" not in wrong.json()
+
+
+async def test_publication_records_trusted_run_ownership(publication_store):
+    store, _, _ = publication_store
+    scope = {"project": "owner"}
+    published = await publish_file(
+        store, scope, b"body", "report.txt", "text/plain", 0, run_id="trusted-run"
+    )
+    descriptor = await store.get_artifact("published-" + published.id, scope)
+    assert descriptor is not None
+    assert descriptor.run_id == "trusted-run"
+    assert descriptor.scope == scope
+    assert await store.get_artifact("published-" + published.id, {"project": "sibling"}) is None
+
+
+async def test_record_retention_does_not_read_or_delete_expired_s3_bytes(publication_store):
+    from server.app.storage.config_models import ArtifactDefinition
+
+    store, bodies, client = publication_store
+    scope = {"project": "owner"}
+    await store.upsert_artifact(ArtifactDefinition(
+        id="response", name="response", content="old response", scope=scope, run_id="run"
+    ))
+    bodies.clear()  # Storage lifecycle has already expired the body.
+    client.reset_mock()
+    records = await store.list_retention_artifacts(scope, "run")
+    assert len(records) == 1
+    assert await store.delete_artifact_version(records[0])
+    assert await store.list_retention_artifacts(scope, "run") == []
+    client.get_object.assert_not_called()
+    client.delete_object.assert_not_called()
+    client.put_object.assert_not_called()

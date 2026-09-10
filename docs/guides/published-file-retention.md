@@ -194,7 +194,67 @@ Apply separate policies to PostgreSQL history/backups, old raw payloads, builder
 workspaces and client caches. S3 Lifecycle alone is not deletion of every copy.
 Cognition does not install an AWS expiration policy automatically.
 
-## Moving existing inline artifacts to S3
+## Inactive-context maintenance (integration branch)
+
+The private `cognition retention` command provides a bounded maintenance pass for
+inactive runtime contexts. It is not enabled on a schedule automatically. Run it
+with the same storage configuration as the runtime. Deployment-wide settings are
+`COGNITION_SESSION_RETENTION_ENABLED` (false),
+`COGNITION_SESSION_RETENTION_DAYS` (30), and
+`COGNITION_SESSION_RETENTION_BATCH_SIZE` (100, maximum 1000).
+The command uses the configured inactivity age and batch size by default;
+`--before` and `--limit` can override them for a maintenance pass. Explicit cutoffs
+must include a timezone. Applying cleanup requires the enablement setting.
+When session retention is enabled, `COGNITION_A2A_TERMINAL_TASK_TTL_SECONDS`
+must remain zero. The older task cleaner removes run ownership and can delete
+artifact bytes; settings validation rejects running both policies together.
+`COGNITION_SESSION_RETENTION_INTERVAL_SECONDS` (3600) controls the private worker:
+run `cognition retention --watch --apply` with enablement set to true. It processes
+one bounded page per interval, cycles back after the last page, and retries
+transient failures without exposing provider errors. It uses a fresh age cutoff
+for each page; `--watch` rejects `--before`. Cancellation stops the worker.
+Deploy this command as an operator-owned maintenance workload; the API server
+does not start it automatically. No per-Agent override is provided. The command
+opens only record storage, without initializing the S3 transport.
+
+```sh
+cognition retention --before 2026-08-01T00:00:00Z --limit 100
+COGNITION_SESSION_RETENTION_ENABLED=true cognition retention --before 2026-08-01T00:00:00Z --limit 100 --apply
+```
+
+The default previews candidates without deleting content. `--scope-json` selects
+one exact scope; omitting it scans all scopes, including scopes with no current
+Agent definition. Follow the returned `next_cursor` with `--cursor` until it is
+null. Start subsequent sweeps from the beginning so failed candidates are retried.
+The preview is advisory: application rechecks eligibility atomically and can
+protect a candidate that received new activity after scanning.
+
+An eligible context is marked expired before cleanup. New runtime work cannot be
+admitted to that context. Cleanup removes run-owned artifact records,
+checkpoints, and runtime messages/events/tasks/runs before removing the session.
+It neither reads nor deletes S3 bodies. Published-file expiration belongs to the
+storage lifecycle policy. S3-backed text artifact bodies and descriptor bodies
+also need a separately admitted storage policy; deleting their database records
+does not expire those objects, and the published-file tag does not select them.
+A dependent-store failure retains the expired session and run identities for
+retry, reports a failure count, and exits nonzero. A timeout or failed provider
+operation is not reported as completed deletion. Live tasks, active or resumable
+runs, and shared checkpoint threads prevent reclamation.
+
+Coverage is context-based: this command does not impose a maximum age on individual
+tasks inside a continuing context. It does not delete Agent definitions,
+cross-thread memory, externally mounted workspaces, noncurrent object versions,
+or backups. Those require their respective owners' retention policies. New
+published descriptors carry their trusted run identity. Legacy descriptors lacking
+that identity and historical orphaned data require separate inventory and migration;
+this pass must not be presented as evidence of their erasure.
+
+This maintenance slice is still under integration review, particularly concurrent
+artifact-version ownership and interaction with the older opportunistic A2A task
+retention path. Do not enable production scheduling on the strength of unit tests
+alone. Published-body lifecycle expiration remains independent of context cleanup.
+
+### Moving existing inline artifacts to S3
 
 Changing `COGNITION_DURABLE_FILE_BACKEND` does not migrate existing artifact
 bodies. The experimental offline maintenance module can move PostgreSQL inline

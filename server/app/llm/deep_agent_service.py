@@ -704,6 +704,7 @@ class DeepAgentStreamingService:
             invocation_context = CognitionContext.from_scope(
                 effective_scope,
                 session_id=session.id if session else session_id,
+                run_id=run_id,
                 thread_id=session.thread_id if session else thread_id,
                 agent_name=session.agent_name if session else None,
                 metadata=session.metadata if session else None,
@@ -990,6 +991,7 @@ class DeepAgentStreamingService:
             invocation_context = CognitionContext.from_scope(
                 effective_scope,
                 session_id=session.id,
+                run_id=active_run.id,
                 thread_id=session.thread_id,
                 agent_name=session.agent_name,
                 metadata=session.metadata,

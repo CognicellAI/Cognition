@@ -74,7 +74,8 @@ class PublicationMiddleware(AgentMiddleware):
             if len(body) > limits.max_bytes:
                 raise ValueError("File exceeds publication limit")
             result = await publish_file(
-                store, expected_scope, body, PurePosixPath(path).name, media_type, limits.inline_limit
+                store, expected_scope, body, PurePosixPath(path).name, media_type, limits.inline_limit,
+                run_id=getattr(runtime.context, "run_id", None),
             )
             # Bytes are returned only as an internal tool artifact, never model text.
             return f"Published {result.filename} ({result.size} bytes), artifact {result.id}.", {
