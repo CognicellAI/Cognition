@@ -230,9 +230,11 @@ class TestK8sSandboxTerminate:
         sb = K8sSandbox()
         sb._sandbox = MagicMock()
         sb._teardown_pod_name = "pod-1"
-        with patch.object(sb, "_read_resource", side_effect=TimeoutError):
-            with pytest.raises(TimeoutError):
-                sb.terminate()
+        with (
+            patch.object(sb, "_read_resource", side_effect=TimeoutError),
+            pytest.raises(TimeoutError),
+        ):
+            sb.terminate()
         assert sb._sandbox is not None
         assert sb.runtime_metadata["teardown_status"] == "pending"
 
