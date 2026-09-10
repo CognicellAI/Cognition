@@ -168,6 +168,16 @@ between them. Clients should retrieve the task again after a failed stale link
 and show the resulting notice or error. This is a client responsibility; the
 change does not add automatic refresh or cache eviction to WayPost.
 
+## Local development sandbox
+
+The local sandbox supports bounded publication reads beneath its concrete
+`workspace_root`. Use that root when creating a file; it is not necessarily
+`/workspace`. The reader rejects path traversal, symlink components, nonregular
+files and content beyond the byte limit, including growth after the size check.
+This does not isolate local shell execution or make the development backend a
+production tenant boundary. Lambda MicroVM and other remote backends require
+their own supported bounded-read adapter and provider-backed acceptance.
+
 ## Deploy and verify
 
 Set `COGNITION_ARTIFACT_PUBLICATION_INLINE_MAX_BYTES=0` in the operator-managed

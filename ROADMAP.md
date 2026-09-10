@@ -728,3 +728,8 @@ Validation: 118 runtime/session/scope/artifact/publication tests passed, one exi
 Category: feature enhancement; layers 1 and 4. Shared deployments may require explicit Agent publication policy using `COGNITION_ARTIFACT_PUBLICATION_REQUIRE_AGENT_POLICY`. Default false preserves v0.15 inheritance. With the setting enabled, omitted or removed policy denies publication, while explicit policy remains bounded by deployment enablement and limits. No builder-specific scope or product policy is introduced.
 
 Acceptance: omitted policy is denied, explicit opt-in cannot widen deployment limits, and current-policy removal revokes subsequent publication. Publication/policy/settings regressions: 97 passed, two existing skips. Source lint and type checks pass. All 13 capability reporting checks pass. Local deployment remains pending; no release admission is implied.
+
+
+## Local development publication reads
+
+Feature enhancement, execution layer: add bounded regular-file reads to the local development sandbox so the existing publication middleware can be exercised without a remote provider. Reject traversal, out-of-workspace paths, symlinks at every path component, nonregular files and oversized bodies. The local shell remains unisolated; this is not production sandbox admission. Implemented with documentation; 32 bounded-read/publication-policy/local-sandbox tests pass, targeted Ruff and source mypy pass. Local integration and remote-provider acceptance remain separate.

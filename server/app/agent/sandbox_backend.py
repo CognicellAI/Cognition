@@ -16,7 +16,9 @@ import base64
 import hashlib
 import os
 import shlex
+import stat
 import threading
+from contextlib import ExitStack
 from pathlib import Path, PurePosixPath
 from typing import Any, cast
 
@@ -94,6 +96,43 @@ class CognitionLocalSandboxBackend(LocalShellBackend, SandboxBackendProtocol):
     def skills_root(self) -> str:
         """Return the conventional native Deep Agents Skills source path."""
         return str(self.cwd / "skills")
+
+    def download_file_bounded(self, path: str, max_bytes: int) -> bytes:
+        """Read a regular workspace file without following symlinks or over-reading.
+
+        This supports publication in the development backend. Local shell execution
+        remains intentionally unisolated; this operation adds no sandbox guarantee.
+        """
+        if isinstance(max_bytes, bool) or not isinstance(max_bytes, int) or max_bytes < 0:
+            raise ValueError("Invalid download byte limit")
+        target = PurePosixPath(path)
+        root = Path(self.workspace_root).resolve()
+        if not target.is_absolute() or ".." in target.parts:
+            raise ValueError("Publication requires an absolute workspace path")
+        try:
+            parts = target.relative_to(root).parts
+        except ValueError as exc:
+            raise ValueError("Publication path is outside workspace") from exc
+        if not parts:
+            raise ValueError("Publication requires a file")
+        with ExitStack() as opened:
+            directory = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+            opened.callback(os.close, directory)
+            for component in parts[:-1]:
+                directory = os.open(component, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=directory)
+                opened.callback(os.close, directory)
+            descriptor = os.open(parts[-1], os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=directory)
+            opened.callback(os.close, descriptor)
+            info = os.fstat(descriptor)
+            if not stat.S_ISREG(info.st_mode):
+                raise ValueError("Publication requires a regular file")
+            if info.st_size > max_bytes:
+                raise ValueError("Publication file exceeds byte limit")
+            with os.fdopen(os.dup(descriptor), "rb") as stream:
+                body = stream.read(max_bytes + 1)
+            if len(body) > max_bytes:
+                raise ValueError("Publication file exceeds byte limit")
+            return body
 
     def _is_protected_path(self, path: str) -> bool:
         """Check if a path is protected.
