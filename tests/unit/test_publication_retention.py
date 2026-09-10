@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from copy import deepcopy
 from io import BytesIO
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -17,6 +18,7 @@ from server.app.models import RuntimeTask, TaskStatus
 from server.app.protocols.a2a.routes import _artifact_update_from_runtime_event
 from server.app.protocols.a2a.task_store import CognitionTaskStore
 from server.app.storage.artifact_store import MemoryArtifactStore, S3ArtifactStore
+from server.app.storage.config_models import ArtifactDefinition
 from server.app.storage.published_file import REFERENCE_PREFIX, publish_file, resolve_download
 from server.app.storage.s3_object_store import S3ObjectStore
 
@@ -354,3 +356,43 @@ def test_body_read_generic_404_with_unavailable_bucket_is_not_expiration():
     client.head_bucket.side_effect = error("AccessDenied", 403)
     with pytest.raises(ClientError):
         objects.get("body")
+
+
+async def test_legacy_response_expiry_preserves_task_without_substituting_history(publication_store):
+    store, bodies, client = publication_store
+    scope = {"project": "one"}
+    await store.upsert_artifact(ArtifactDefinition(
+        id="task-legacy-response", name="response", artifact_type="artifact", path="response",
+        content="Final answer", run_id="run-one", scope=scope,
+    ))
+    backend = AsyncMock()
+    backend.list_messages_for_session.return_value = [
+        SimpleNamespace(id="unrelated", role="assistant", content="Other task answer",
+                        metadata={"task_id": "other"}),
+        SimpleNamespace(id="same-task", role="assistant", content="Earlier progress",
+                        metadata={"task_id": "legacy"}),
+    ]
+    projector = CognitionTaskStore(AsyncMock(), backend, agent_name="reporter", artifact_store=store)
+    task = RuntimeTask(
+        id="legacy", context_id="context", session_id="session", agent_name="reporter",
+        status=TaskStatus.COMPLETED, effective_scope=scope,
+        created_at="2026-09-08T00:00:00Z", updated_at="2026-09-08T00:01:00Z",
+    )
+    first = await projector.project(task)
+    assert first.artifacts[0].parts[0].text == "Final answer"
+    key = client.put_object.call_args.kwargs["Key"]
+    body = bodies.pop(key)
+    expired = await projector.project(task)
+    assert expired.status.state == TaskState.TASK_STATE_COMPLETED
+    assert expired.artifacts[0].artifact_id == "task-legacy-response"
+    assert expired.artifacts[0].parts[0].text == "Response content is no longer available."
+    assert expired.artifacts[0].parts[0].metadata["cognition"]["contentAvailability"] == "unavailable"
+    assert expired.history == first.history
+    assert len(expired.history) == 1
+    backend.list_messages_for_session.assert_awaited_with("session", scope)
+    bodies[key] = body
+    restored = await projector.project(task)
+    assert restored.artifacts == first.artifacts
+    client.get_object.side_effect = error("AccessDenied", 403)
+    with pytest.raises(RuntimeError, match="unavailable from configured durable storage"):
+        await projector.project(task)
