@@ -1,5 +1,15 @@
 # Cognition Roadmap
 
+## Scoped publication and runtime retention (2026-09-09)
+
+- Category: Feature / Enhancement; priority P1; layers 1, 2, 4 and 6; estimated effort 5–8 days.
+- Provide optional definition-driven publication policy bounded by deployment settings, with current exact-scope enforcement for cached/resumed execution. Preserve existing behavior when omitted; no builder product concepts.
+- Provide bounded runtime maintenance that discovers inactive scopes and protects active/resumable dependencies, with dry-run and truthful cleanup outcomes across runtime-owned stores.
+- Acceptance: definition round trips; scope isolation; deployment ceilings; disable/limit changes during resumed execution; unavailable/deleted configuration denial; bounded inactive-scope cleanup, retries and live-dependency protection; independent runtime tests and documentation.
+- Dependencies: existing config registry, publication middleware, runtime storage and lifecycle ports. Inspect storage coverage before finalizing maintenance API. Existing persistent data must not be deleted by default.
+- Compatibility: additive configuration; omitted publication policy retains deployment behavior. No A2A envelope changes or product-specific schema. Document any storage/interface migration before implementation.
+- Status: scoped publication implemented on isolated feature branch. Publication/API/manifest suite: 116 passed; runtime regressions: 49 passed; final policy/capability checks: 25 passed. Targeted Ruff and mypy passed. Complete runtime retention and local integration remain pending; no main/release merge authorized.
+
 ## A2UI candidate release hardening (2026-09-08)
 
 - Category: security/bug fixes and architectural correction; layers 1, 4, 5, 6, 7; effort 2 days. Integrate current main on `release/v0.15.0`; A2UI is included as optional pinned Candidate support.

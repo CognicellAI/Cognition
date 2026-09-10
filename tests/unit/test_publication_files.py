@@ -79,7 +79,7 @@ async def test_failed_upload_never_activates_manifest(monkeypatch):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("failure", [None, "upload", "manifest", "oversize", "scope", "traversal", "sibling"])
+@pytest.mark.parametrize("failure", [None, "upload", "manifest", "oversize", "scope", "traversal", "sibling", "disabled", "revoked_during_read", "limit_reduced", "policy_unavailable"])
 @pytest.mark.parametrize("inline_limit", [0, 256 * 1024])
 @pytest.mark.parametrize("workspace_root", ["/workspace", "/work"])
 async def test_real_tool_graph_emits_published_part(monkeypatch, failure, inline_limit, workspace_root):
@@ -153,10 +153,30 @@ async def test_real_tool_graph_emits_published_part(monkeypatch, failure, inline
         )
     )
     checkpointer = InMemorySaver()
+    from unittest.mock import AsyncMock
+
+    from server.app.agent.publication_policy import PublicationLimits
+
+    resolver = AsyncMock(return_value=PublicationLimits(True, 10 * 1024 * 1024, inline_limit))
+    if failure == "disabled":
+        resolver.return_value = PublicationLimits(False, 10 * 1024 * 1024, inline_limit)
+    elif failure == "revoked_during_read":
+        resolver.side_effect = [
+            PublicationLimits(True, 10 * 1024 * 1024, inline_limit),
+            PublicationLimits(False, 10 * 1024 * 1024, inline_limit),
+        ]
+    elif failure == "limit_reduced":
+        resolver.side_effect = [
+            PublicationLimits(True, 10 * 1024 * 1024, inline_limit),
+            PublicationLimits(True, 1, 0),
+        ]
+    elif failure == "policy_unavailable":
+        resolver.side_effect = RuntimeError("Policy unavailable")
     graph = create_agent(
         model=model,
         middleware=[
-            PublicationMiddleware(sandbox, store, {"tenant": "a"}, inline_limit=inline_limit),
+            PublicationMiddleware(sandbox, store, {"tenant": "a"}, inline_limit=inline_limit,
+                                  policy_resolver=resolver),
             ToolArgumentValidationMiddleware(),
         ],
         context_schema=CognitionContext,
@@ -174,8 +194,10 @@ async def test_real_tool_graph_emits_published_part(monkeypatch, failure, inline
     artifacts = [event for event in events if isinstance(event, ArtifactEvent)]
     if failure:
         assert artifacts == []
-        if failure in {"scope", "traversal", "sibling"}:
+        if failure in {"scope", "traversal", "sibling", "disabled", "policy_unavailable"}:
             sandbox.download_file_bounded.assert_not_called()
+        if failure in {"disabled", "policy_unavailable", "revoked_during_read", "limit_reduced"}:
+            objects.put.assert_not_called()
         return
     assert len(artifacts) == 1, events
     if inline_limit:

@@ -428,6 +428,16 @@ class SubagentDefinition(BaseModel):
         return v
 
 
+class PublicationPolicy(BaseModel):
+    """Builder-controlled file publication bounds within deployment ceilings."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    enabled: bool = Field(default=True, strict=True)
+    max_bytes: int | None = Field(default=None, ge=1, le=10 * 1024 * 1024, strict=True)
+    delivery_mode: Literal["auto", "url"] = "auto"
+
+
 class AgentDefinition(BaseModel):
     """Declarative agent definition.
 
@@ -461,6 +471,7 @@ class AgentDefinition(BaseModel):
     response_format: str | None = Field(default=None)
     middleware: list[str | dict[str, Any]] = Field(default_factory=list)
     mcp: AgentMcpConfig = Field(default_factory=AgentMcpConfig)
+    publication: PublicationPolicy | None = None
 
     config: AgentConfig = Field(default_factory=AgentConfig)
     # P3 Multi-Agent Registry additions
@@ -474,6 +485,14 @@ class AgentDefinition(BaseModel):
         ),
     )
     a2a: A2AConfig = Field(default_factory=A2AConfig)
+
+    @model_serializer(mode="wrap")
+    def serialize_without_unset_publication(self, handler: Any) -> dict[str, Any]:
+        """Keep pre-policy definition digests and pinned manifests compatible."""
+        data = cast(dict[str, Any], handler(self))
+        if self.publication is None:
+            data.pop("publication", None)
+        return data
 
     @field_validator("name")
     @classmethod

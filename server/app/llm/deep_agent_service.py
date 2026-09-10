@@ -757,6 +757,12 @@ class DeepAgentStreamingService:
                 mcp_readiness_repository=self._mcp_readiness_repository,
                 scope=effective_scope,
                 config_store=self._get_config_store(),
+                publication_agent_name=session.agent_name if session else None,
+                publication_agent_source=(
+                    str(pinned_manifest["agent"]["source"])
+                    if pinned_manifest and isinstance(pinned_manifest.get("agent"), dict)
+                    and pinned_manifest["agent"].get("source") else None
+                ),
                 sandbox_profile=agent_cfg.sandbox_profile,
                 sandbox_execution_role_arn=agent_cfg.sandbox_execution_role_arn,
                 pinned_sandbox_profile_config=_pinned_sandbox_profile(pinned_manifest),
@@ -1035,6 +1041,12 @@ class DeepAgentStreamingService:
                 mcp_readiness_repository=self._mcp_readiness_repository,
                 scope=effective_scope,
                 config_store=self._get_config_store(),
+                publication_agent_name=session.agent_name,
+                publication_agent_source=(
+                    str(active_run.runtime_manifest["agent"]["source"])
+                    if isinstance(active_run.runtime_manifest.get("agent"), dict)
+                    and active_run.runtime_manifest["agent"].get("source") else None
+                ),
                 sandbox_profile=agent_cfg.sandbox_profile,
                 sandbox_execution_role_arn=agent_cfg.sandbox_execution_role_arn,
                 pinned_sandbox_profile_config=_pinned_sandbox_profile(active_run.runtime_manifest),

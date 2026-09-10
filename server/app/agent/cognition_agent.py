@@ -38,6 +38,7 @@ from deepagents import create_deep_agent as _create_deep_agent
 
 logger = structlog.get_logger(__name__)
 
+from server.app.agent.definition import PublicationPolicy  # noqa: E402
 from server.app.agent.mcp_client import McpServerConfig, load_mcp_tools_per_server  # noqa: E402
 from server.app.agent.middleware import (  # noqa: E402
     CognitionObservabilityMiddleware,
@@ -469,6 +470,9 @@ class CognitionAgentParams:
     mcp_readiness_repository: Any | None = None
     scope: dict[str, str] | None = None
     config_store: ConfigStore | None = None
+    publication_policy: PublicationPolicy | None = None
+    publication_agent_name: str | None = None
+    publication_agent_source: str | None = None
     sandbox_profile: str | None = None
     sandbox_execution_role_arn: str | None = None
     model_cache_key: str | None = None
@@ -792,14 +796,46 @@ async def create_cognition_agent(params: CognitionAgentParams) -> CognitionAgent
     agent_middleware = list(params.middleware) if params.middleware else []
     if settings.artifact_publication_enabled:
         from server.app.agent.publication import PublicationMiddleware
+        from server.app.agent.publication_policy import CurrentPublicationPolicy, PublicationLimits
         from server.app.storage.artifact_store import S3ArtifactStore
 
-        publication_store = params.artifact_store
-        if not isinstance(publication_store, S3ArtifactStore) or not hasattr(sandbox_backend, "download_file_bounded"):
-            raise ValueError("Artifact publication requires S3 and a bounded-download sandbox")
-        agent_middleware.append(PublicationMiddleware(sandbox_backend, publication_store, params.scope or {},
+        limits = PublicationLimits(
+            enabled=True,
             inline_limit=settings.artifact_publication_inline_max_bytes,
-            max_bytes=settings.artifact_publication_max_bytes))
+            max_bytes=settings.artifact_publication_max_bytes,
+        )
+        limits = limits.narrow(params.publication_policy) if params.publication_agent_name is None else limits
+        policy_resolver = None
+        if params.publication_agent_name is not None:
+            if config_store is None:
+                raise ValueError("Publication requires the current Agent configuration")
+            source = params.publication_agent_source
+            if source is None:
+                record = await config_store.get_agent_record(
+                    params.publication_agent_name, params.scope or {}
+                )
+                source = record.source if record is not None else "file"
+            if source not in {"api", "file"}:
+                raise ValueError("Invalid publication Agent source")
+            policy_resolver = CurrentPublicationPolicy(
+                config_store, params.publication_agent_name,
+                tuple(sorted((params.scope or {}).items())),
+                cast(Any, source), limits,
+            )
+            limits = await policy_resolver()
+        if limits.enabled:
+            publication_store = params.artifact_store
+            if not isinstance(publication_store, S3ArtifactStore) or not hasattr(
+                sandbox_backend, "download_file_bounded"
+            ):
+                raise ValueError("Artifact publication requires S3 and a bounded-download sandbox")
+            agent_middleware.append(PublicationMiddleware(
+                sandbox_backend, publication_store, params.scope or {},
+                inline_limit=limits.inline_limit,
+                max_bytes=limits.max_bytes,
+                policy_resolver=policy_resolver,
+                agent_name=params.publication_agent_name,
+            ))
 
     settings_blocked_tools = settings.blocked_tools if hasattr(settings, "blocked_tools") else []
     excluded_tools = sorted({*(str(tool) for tool in (params.excluded_tools or []))})

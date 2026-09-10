@@ -965,3 +965,26 @@ class TestDeleteAgent:
     def test_delete_missing_agent_returns_404(self):
         response = client.delete("/agents/no-such-agent-delete")
         assert response.status_code == 404
+
+
+def test_publication_policy_create_update_clear_and_scope_isolation(monkeypatch):
+    monkeypatch.setattr(get_settings(), "scope_keys", ["project"])
+    monkeypatch.setattr(get_settings(), "scoping_enabled", False)
+    headers = {"X-Cognition-Scope-project": "publication-a"}
+    policy = {"enabled": True, "max_bytes": 1024, "delivery_mode": "url"}
+    created = client.post("/agents", headers=headers, json={
+        "name": "publisher", "system_prompt": "Work", "publication": policy,
+    })
+    assert created.status_code == 201, created.text
+    assert created.json()["publication"] == policy
+    changed = client.patch("/agents/publisher", headers=headers, json={
+        "publication": {"enabled": False},
+    })
+    assert changed.status_code == 200, changed.text
+    assert changed.json()["publication"]["enabled"] is False
+    assert client.get("/agents/publisher", headers={
+        "X-Cognition-Scope-project": "publication-b",
+    }).status_code == 404
+    cleared = client.patch("/agents/publisher", headers=headers, json={"publication": None})
+    assert cleared.status_code == 200, cleared.text
+    assert cleared.json()["publication"] is None

@@ -20,6 +20,51 @@ change text/data output, incoming raw Parts, prior publications or downloaded
 copies. Previously persisted raw Parts may still contain base64 file bytes in
 task records, events and checkpoints after their S3 copy expires.
 
+## Scoped publication policy
+
+Builders may supply optional `publication` in an Agent definition or the Agent
+create/update API. Omission (or an explicit null reset) preserves the deployment
+policy. For example:
+
+```yaml
+publication:
+  enabled: true
+  max_bytes: 1048576
+  delivery_mode: url
+```
+
+`enabled` is a boolean, `max_bytes` is an optional integer from one byte through
+10 MiB, and `delivery_mode` is `auto` (deployment inline threshold) or `url`
+(zero inline threshold). The effective byte maximum is the smaller of the Agent
+and deployment limits. An Agent cannot override deployment disablement or raise
+a deployment ceiling. These are runtime
+controls; the builder owns authorization to change them and any product policy
+that supplies their values.
+
+The managed execution path resolves the current exact-scoped Agent policy at
+graph construction and again before file reading and immediately before upload.
+This policy is intentionally live even when the rest of a run definition is
+pinned. API-owned Agents do not fall back to another scope or a shared file Agent
+after deletion. Missing, invalid or unavailable current configuration denies
+publication. A disabled policy omits the publication tool from newly constructed
+graphs; previously constructed or interrupted graphs still check current policy
+when their tool executes. Embedded graph callers may supply a static policy;
+live registry enforcement requires the current Agent identity and config store.
+
+An upload admitted by the final policy check may finish after a concurrent policy
+update. A policy update does not cancel an already admitted upload or erase
+existing publications. The observed revision returned by the Agent API proves
+configuration persistence, not completion of every in-flight upload. Deployments
+must account for this boundary when reporting disable convergence. Existing
+artifact retrieval and signed URL lifetime remain independent of publication
+permission.
+
+`GET /capabilities` reports `scoped_artifact_publication_policy` support and the
+deployment publication ceilings. Agent responses expose the configured policy
+and existing revision/digest fields. No publication setting is added to public
+Agent Cards. Definitions without a publication policy keep their previous
+serialized shape and digest, including persisted pre-policy run manifests.
+
 ## Select only published bytes
 
 Each newly published binary object carries this fixed tag, applied atomically

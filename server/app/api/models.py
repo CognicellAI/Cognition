@@ -18,6 +18,7 @@ from server.app.agent.definition import (
     ContextPolicy,
     FilesystemPermissionConfig,
     HumanInTheLoopConfig,
+    PublicationPolicy,
 )
 from server.app.models import Session as CoreSession
 from server.app.models import SessionConfig
@@ -870,6 +871,7 @@ class AgentResponse(BaseModel):
     config: AgentConfigResponse | None = Field(
         None, description="Full runtime config for this agent"
     )
+    publication: PublicationPolicy | None = None
     response_format: str | None = Field(None, description="Structured output schema path")
     interrupt_on: dict[str, dict[str, Any]] = Field(
         default_factory=dict,
@@ -1214,6 +1216,7 @@ class AgentCreate(BaseModel):
     memory: list[str] = Field(default_factory=list)
     interrupt_on: dict[str, HumanInTheLoopConfig] = Field(default_factory=dict)
     permissions: list[FilesystemPermissionConfig] = Field(default_factory=list)
+    publication: PublicationPolicy | None = None
     response_format: str | None = Field(
         default=None, description="Dotted path to structured output schema"
     )
@@ -1266,6 +1269,7 @@ class AgentUpdate(BaseModel):
     permissions: list[FilesystemPermissionConfig] | None = None
     subagents: list[dict[str, Any]] | None = None
     async_subagents: list[AsyncSubagentConfig] | None = None
+    publication: PublicationPolicy | None = None
     response_format: str | None = None
     model: str | None = None
     temperature: float | None = None

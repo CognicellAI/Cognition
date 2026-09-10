@@ -1520,6 +1520,7 @@ async def create_agent_runtime(
         CognitionAgentParams(
             project_path=workspace_path,
             system_prompt=definition.system_prompt,
+            publication_policy=definition.publication,
             memory=definition.memory,
             async_subagents=definition.async_subagents,
             middleware=resolved_middleware if resolved_middleware else None,
