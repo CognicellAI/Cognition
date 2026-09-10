@@ -988,3 +988,30 @@ def test_publication_policy_create_update_clear_and_scope_isolation(monkeypatch)
     cleared = client.patch("/agents/publisher", headers=headers, json={"publication": None})
     assert cleared.status_code == 200, cleared.text
     assert cleared.json()["publication"] is None
+
+
+@pytest.mark.parametrize("field", ["sandbox_profile", "sandbox_execution_role_arn"])
+def test_patch_explicit_null_clears_only_selected_sandbox_override(field):
+    name = f"clear-{field.replace('_', '-')}"
+    values = {
+        "sandbox_profile": "synthetic-runtime",
+        "sandbox_execution_role_arn": "arn:aws:iam::123456789012:role/synthetic",
+    }
+    created = client.post("/agents", json={"name": name, "system_prompt": "Synthetic test", **values})
+    assert created.status_code == 201, created.text
+    unchanged = client.patch(
+        f"/agents/{name}", json={"description": "unrelated update"},
+        headers={"If-Match": created.headers["etag"]},
+    )
+    assert unchanged.status_code == 200
+    for key, value in values.items():
+        assert unchanged.json()["config"][key] == value
+    cleared = client.patch(
+        f"/agents/{name}", json={field: None},
+        headers={"If-Match": unchanged.headers["etag"]},
+    )
+    assert cleared.status_code == 200
+    for key, value in values.items():
+        assert cleared.json()["config"][key] == (None if key == field else value)
+    persisted = client.get(f"/agents/{name}").json()["config"]
+    assert persisted[field] is None

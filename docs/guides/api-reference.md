@@ -1792,3 +1792,7 @@ All error responses follow a consistent structure:
 | `STREAMING_ERROR` | 500 | Error during agent streaming |
 | `ABORTED` | — | Stream aborted via `POST /sessions/{id}/abort` (delivered as SSE `error` event) |
 | `INTERNAL_ERROR` | 500 | Unexpected server error |
+
+### Clearing Agent sandbox overrides
+
+For `PATCH /agents/{name}`, omit `sandbox_profile` and `sandbox_execution_role_arn` to preserve them. Send an explicit JSON `null` for either field to clear that Agent override and resume normal default resolution. Use the current Agent ETag with `If-Match`; unrelated fields remain unchanged. Clearing configuration does not terminate an existing sandbox.
