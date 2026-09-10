@@ -129,6 +129,21 @@ Kubernetes and MicroVM adapters implement explicit termination. The current
 Docker wrapper does not expose `terminate()`, so its container lifecycle is not
 closed through the same manager path.
 
+### Integration branch: explicit release observations
+
+The internal `SessionAgentManager.release_sandbox_backend` returns `complete`
+only when its tracked backend has been removed after teardown confirmation.
+It returns `pending` for an in-flight or unconfirmed attempt, including provider
+failures that retain a retryable handle. It returns `untracked` when this process
+has no handle. Existing callers may ignore this additive result.
+
+This operation does not delete session history. The result is an observation of
+one process-local attempt, not a durable receipt: a repeat after completion can
+return `untracked`, as can a call to another replica or after a restart. Callers
+must not interpret `untracked` as provider termination or permission to erase
+storage. This change does not expose a public release endpoint or revoke future
+session execution; a scoped cutover contract remains implementation work.
+
 ## Security properties and limits
 
 | Property | Local | Docker | Kubernetes | Lambda MicroVM |

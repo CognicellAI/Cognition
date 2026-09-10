@@ -178,12 +178,13 @@ def test_slow_teardown_does_not_block_unrelated_acquisition():
         release = pool.submit(manager.release_sandbox_backend, "one")
         assert started.wait(5)
         try:
+            assert manager.release_sandbox_backend("one") == "pending"
             acquire = manager.sandbox_acquirer("two", scope={}, agent_name="reporter", run_id="2")
             created = pool.submit(acquire, "config", lambda: FakeSandboxBackend(sandbox_id="two"))
             assert created.result(timeout=1).id == "two"
         finally:
             proceed.set()
-        release.result(timeout=5)
+        assert release.result(timeout=5) == "complete"
 
 
 async def test_session_delete_does_not_delete_history_until_teardown_confirmed(monkeypatch):
@@ -205,3 +206,25 @@ async def test_session_delete_does_not_delete_history_until_teardown_confirmed(m
     backend.teardown_status = "complete"
     await delete_session("session", manager.settings, manager, scope, store)
     store.delete_session.assert_awaited_once_with("session", {"tenant": "one"})
+
+
+def test_release_observation_distinguishes_untracked_from_confirmed():
+    manager = _manager()
+    assert manager.release_sandbox_backend("session") == "untracked"
+    backend = FakeSandboxBackend(sandbox_id="one", teardown_status="pending")
+    manager.register_sandbox_backend("session", backend, scope={"project": "one"})
+    assert manager.release_sandbox_backend("session") == "pending"
+    assert manager._sandbox_backends["session"] is backend
+    backend.teardown_status = "complete"
+    assert manager.release_sandbox_backend("session") == "complete"
+    # No durable receipt is retained: a later call must not invent confirmation.
+    assert manager.release_sandbox_backend("session") == "untracked"
+
+
+def test_failed_release_remains_pending_for_retry():
+    manager = _manager()
+    backend = FakeSandboxBackend(sandbox_id="one")
+    manager.register_sandbox_backend("session", backend, scope={})
+    with patch.object(backend, "terminate", side_effect=RuntimeError("provider unavailable")):
+        assert manager.release_sandbox_backend("session") == "pending"
+    assert manager.release_sandbox_backend("session") == "complete"

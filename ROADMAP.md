@@ -733,3 +733,13 @@ Acceptance: omitted policy is denied, explicit opt-in cannot widen deployment li
 ## Local development publication reads
 
 Feature enhancement, execution layer: add bounded regular-file reads to the local development sandbox so the existing publication middleware can be exercised without a remote provider. Reject traversal, out-of-workspace paths, symlinks at every path component, nonregular files and oversized bodies. The local shell remains unisolated; this is not production sandbox admission. Implemented with documentation; 32 bounded-read/publication-policy/local-sandbox tests pass, targeted Ruff and source mypy pass. Local integration and remote-provider acceptance remain separate.
+
+### Explicit sandbox release observations (integration branch)
+
+- Category: Enhancement; layers 4 (runtime lifecycle) and 3 (execution).
+- General use case: embedding applications need to distinguish completed backend teardown from a pending attempt or a sandbox not tracked by this process, without deleting session history.
+- Contract: the existing internal release method returns `complete`, `pending`, or `untracked`. Only a tracked backend removed after confirmed teardown returns `complete`; concurrent teardown returns `pending`; absent process-local ownership returns `untracked`.
+- Compatibility: existing callers may ignore the additive return value. No public API, persistent receipt, distributed ownership, storage deletion or new authorization boundary is introduced.
+- Acceptance: completed, pending/retry, concurrent and untracked releases are independently tested; lifecycle events and quota retention remain intact.
+- Effort: small. Dependencies: existing SessionAgentManager ownership tracking and backend teardown metadata.
+- Status: internal result implemented; 24 ownership/quota tests and Ruff pass. A scoped public release/cutover contract remains separate work.

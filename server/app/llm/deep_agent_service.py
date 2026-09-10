@@ -20,7 +20,7 @@ import time
 from collections import deque
 from collections.abc import AsyncGenerator, AsyncIterator, Callable, Mapping
 from dataclasses import dataclass, field
-from typing import Any, TypeVar, cast
+from typing import Any, Literal, TypeVar, cast
 
 import structlog
 from langchain_core.messages import HumanMessage, SystemMessage
@@ -1778,18 +1778,29 @@ class SessionAgentManager:
         else:
             logger.info("Sandbox lifecycle event", phase=event.phase, **fields)
 
-    def release_sandbox_backend(self, session_id: str) -> None:
-        """Release resources, retaining ownership until teardown is confirmed."""
+    def release_sandbox_backend(
+        self, session_id: str
+    ) -> Literal["complete", "pending", "untracked"]:
+        """Release a tracked backend without deleting session history.
+
+        Returns:
+            ``complete`` only after this attempt confirms tracked backend teardown;
+            ``pending`` while teardown is running or remains unconfirmed;
+            ``untracked`` when this process has no backend handle. Untracked is
+            not evidence that a provider resource or another replica has stopped.
+        """
         with self._sandbox_ownership_lock:
-            if (
-                session_id in self._sandbox_teardown_inflight
-                or session_id not in self._sandbox_backends
-            ):
-                return
+            if session_id in self._sandbox_teardown_inflight:
+                return "pending"
+            if session_id not in self._sandbox_backends:
+                return "untracked"
             self._sandbox_teardown_inflight.add(session_id)
             self._sandbox_releasing.add(session_id)
         try:
             self._release_sandbox_backend(session_id)
+            # Acquisition stays blocked until the finally clause clears inflight.
+            with self._sandbox_ownership_lock:
+                return "pending" if session_id in self._sandbox_backends else "complete"
         finally:
             with self._sandbox_ownership_lock:
                 self._sandbox_teardown_inflight.discard(session_id)
