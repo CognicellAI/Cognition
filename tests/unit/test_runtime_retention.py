@@ -332,8 +332,11 @@ def test_session_retention_cannot_overlap_legacy_task_cleanup(enabled, task_ttl,
 
     from server.app.settings import Settings
 
-    options = dict(_env_file=None, COGNITION_SESSION_RETENTION_ENABLED=enabled,
-                   COGNITION_A2A_TERMINAL_TASK_TTL_SECONDS=task_ttl)
+    options = {
+        "_env_file": None,
+        "COGNITION_SESSION_RETENTION_ENABLED": enabled,
+        "COGNITION_A2A_TERMINAL_TASK_TTL_SECONDS": task_ttl,
+    }
     if valid:
         assert Settings(**options).session_retention_enabled == enabled
     else:
