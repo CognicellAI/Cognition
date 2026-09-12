@@ -436,8 +436,8 @@ must authenticate Cognition, validate canonical binding eligibility and return
 HTTP200 with the transient JSON object for the custom image. It must not trust a
 VM ID alone as authorization. The response is limited to16KiB; the SDK also bounds
 the final `/run` envelope to16KiB. Requests use a10-second HTTP timeout, no automatic
-retries, redirects or environment proxy inheritance. Network/TLS trust must be
-configured for the deployment. Payloads are not persisted in profiles or metadata.
+retries, redirects or environment proxy inheritance. For a private CA, set `COGNITION_SANDBOX_INITIALIZATION_CA_FILE` to a mounted PEM
+trust anchor. TLS verification stays enabled and the trust setting is deployment-only. Payloads are not persisted in profiles or metadata.
 The image must accept its ordinary provider hook while awaiting initialization.
 
 Initialization failure blocks commands and requests teardown. The hook runs once

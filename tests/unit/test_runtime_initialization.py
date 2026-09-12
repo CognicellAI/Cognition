@@ -34,7 +34,7 @@ def test_initialization_sends_copied_trusted_scope_and_transient_result():
     client = httpx.Client(transport=httpx.MockTransport(handle))
     with patch("server.app.execution.initialization.httpx.Client", return_value=client) as factory:
         assert initializer("vm-a") == {"transient": "payload-canary"}
-    factory.assert_called_once_with(timeout=10, follow_redirects=False, trust_env=False)
+    factory.assert_called_once_with(timeout=10, follow_redirects=False, trust_env=False, verify=True)
 
 
 @pytest.mark.parametrize("status,body", [
@@ -59,3 +59,17 @@ def test_initialization_settings_reject_insecure_destinations(url):
 
     with pytest.raises(ValidationError):
         Settings(sandbox_initialization_url=url)
+
+
+def test_custom_ca_keeps_tls_verification_and_disables_environment_proxy():
+    initializer = bind_runtime_initializer(
+        url="https://initializer.example/run", token=SecretStr("canary"),
+        scope={}, profile_name="runtime", image_arn="image", image_version="1",
+        maximum_duration_seconds=120, ca_file="/deployment/authority-ca.pem",
+    )
+    client = httpx.Client(transport=httpx.MockTransport(lambda _: httpx.Response(200, json={})))
+    with patch("server.app.execution.initialization.httpx.Client", return_value=client) as factory:
+        assert initializer("vm-a") == {}
+    factory.assert_called_once_with(
+        timeout=10, follow_redirects=False, trust_env=False, verify="/deployment/authority-ca.pem",
+    )
