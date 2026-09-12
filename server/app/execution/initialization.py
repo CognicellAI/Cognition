@@ -19,6 +19,7 @@ def bind_runtime_initializer(
     image_arn: str,
     image_version: str | None,
     maximum_duration_seconds: int,
+    ca_file: str | None = None,
 ) -> Callable[[str], dict[str, Any]]:
     """Bind trusted construction context, never model-supplied callback arguments.
 
@@ -38,7 +39,12 @@ def bind_runtime_initializer(
             request = json.dumps({**context, "microvm_id": microvm_id}, allow_nan=False)
             if len(request.encode()) > 16384:
                 raise ValueError("Initialization context exceeds limit")
-            with httpx.Client(timeout=10, follow_redirects=False, trust_env=False) as client:
+            with httpx.Client(
+                timeout=10,
+                follow_redirects=False,
+                trust_env=False,
+                verify=ca_file or True,
+            ) as client:
                 with client.stream(
                     "POST", url, content=request,
                     headers={"Authorization": "Bearer " + token.get_secret_value(),

@@ -485,6 +485,11 @@ class Settings(BaseSettings):
         default=None, min_length=1, alias="COGNITION_SANDBOX_INITIALIZATION_TOKEN",
         description="Bearer token for the deployment-owned initialization endpoint.",
     )
+    sandbox_initialization_ca_file: str | None = Field(
+        default=None,
+        alias="COGNITION_SANDBOX_INITIALIZATION_CA_FILE",
+        description="Optional PEM trust anchor for the deployment-owned HTTPS initialization endpoint.",
+    )
 
     @field_validator("sandbox_initialization_url")
     @classmethod

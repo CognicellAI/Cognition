@@ -691,6 +691,7 @@ async def create_cognition_agent(params: CognitionAgentParams) -> CognitionAgent
             image_arn=sandbox_profile_config.image_arn,
             image_version=sandbox_profile_config.image_version,
             maximum_duration_seconds=sandbox_profile_config.maximum_duration_seconds,
+            ca_file=settings.sandbox_initialization_ca_file,
         )
 
     construct_sandbox = partial(_create_sandbox,
