@@ -1,6 +1,7 @@
 """Retention protects live contexts and retries dependent-store failures."""
 
 import os
+import re
 from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock
 
@@ -177,7 +178,8 @@ def test_retention_cli_rejects_unscoped_timestamp_and_invalid_scope():
     runner = CliRunner()
     help_result = runner.invoke(app, ["retention", "--help"])
     assert help_result.exit_code == 0
-    assert "--apply" in help_result.output
+    plain_help = re.sub(r"\x1b\[[0-9;]*m", "", help_result.output)
+    assert "--apply" in plain_help
     for args in (
         ["--before", "2026-01-01T00:00:00"],
         ["--before", cutoff(), "--scope-json", '["project"]'],
