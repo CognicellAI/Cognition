@@ -340,7 +340,10 @@ class K8sSandbox(BaseSandbox):
         """Read exact provider resources with bounded requests; only 404 is absence."""
         from kubernetes.client.exceptions import ApiException
 
-        helper = self._sandbox.k8s_helper
+        sandbox = self._sandbox
+        if sandbox is None:
+            raise RuntimeError("Kubernetes sandbox is unavailable")
+        helper = sandbox.k8s_helper
         try:
             if kind == "pods":
                 return helper.core_v1_api.read_namespaced_pod(

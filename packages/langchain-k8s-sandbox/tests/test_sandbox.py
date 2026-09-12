@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Generator
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -156,7 +157,7 @@ class TestK8sSandboxExecute:
 
 class TestK8sSandboxTerminate:
     @pytest.fixture(autouse=True)
-    def absent_resources(self):
+    def absent_resources(self) -> Generator[None, None, None]:
         with patch.object(K8sSandbox, "_read_resource", return_value=None):
             yield
 
