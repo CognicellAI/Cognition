@@ -9,6 +9,34 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.16.0] — 2026-09-13
+
+### Added
+
+- Optional definition-driven publication policy that enforces the current exact
+  scope and bounded deployment limits before a sandbox file can become an A2A
+  deliverable.
+- Generic deployment-owned HTTPS sandbox initialization with bounded transient
+  material, including Lambda MicroVM support.
+- Optional, scope-aware inactive runtime-record maintenance with preview,
+  cursor, retry, and active-dependency protection.
+- Idle-only, non-destructive sandbox release observations that preserve session
+  history and distinguish confirmed, pending, and untracked provider teardown.
+- File-body and descriptor classification for operator-managed S3 Lifecycle
+  policies, plus unavailable-content behavior when expired bytes are retrieved.
+
+### Fixed
+
+- Task cancellation interrupts silent async graph steps and closes the selected
+  A2A execution stream, including when another replica receives cancellation.
+  Already-dispatched remote commands may finish within their timeout.
+- Sandbox registration no longer races pending teardown, and Kubernetes
+  termination failures retain handles for observation and retry.
+- Resumed Lambda executions revalidate their current sandbox profile before
+  acquisition, and explicit null Agent sandbox overrides are honored.
+- Legacy task response identity and history remain intact when the stored final
+  response body has expired.
+
 ## [0.15.0] — 2026-09-08
 
 ### Added
