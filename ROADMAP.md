@@ -110,6 +110,7 @@ See AGENTS.md for category definitions, DoD requirements, and precedence rules.
 
 | Date | Description | Issue | Layer | Status |
 |------|-------------|-------|-------|--------|
+| 2026-09-13 | Correct optional OpenTelemetry fallback typing so strict mypy remains valid with both minimal and full dependency sets. | v0.16.0 release validation | 1/7 | Implemented on `codex/release-mypy-cleanup`; validation pending |
 | 2026-09-02 | Normalize persisted pre-v0.14 Agent definitions by removing retired inline capability fields, updating revision identity, and preserving exact-scope and historical run boundaries. | [#209](https://github.com/CognicellAI/Cognition/issues/209), [Kennel #63](https://github.com/CognicellAI/Kennel/issues/63#issuecomment-5515261183) | 2/4 | Implemented on `main`; v0.14.1 release validation pending |
 | 2026-09-08 | Serialize lazy Lambda MicroVM wrapper initialization so parallel first tool calls share one SDK instance and launch lock. | S3 Files live demo; concurrent-operation regression | 3 | Verified: regression and live WayPost parallel reads launch one VM |
 | 2026-09-08 | Explicit null `response_format` is silently ignored by the Agent PATCH API; use definition replacement until null clearing is supported. | S3 Files demo configuration | 6 | Reproduced; implementation pending |
