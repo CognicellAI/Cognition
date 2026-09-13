@@ -33,6 +33,7 @@ class _FakeAgentService:
     def __init__(self, store: StorageBackend) -> None:
         self._store = store
         self.started = asyncio.Event()
+        self.stopped = asyncio.Event()
         self.release = asyncio.Event()
         self.calls: list[dict] = []
 
@@ -45,7 +46,10 @@ class _FakeAgentService:
         message_id = messages[-1].id
         if message_id.startswith("slow-message"):
             self.started.set()
-            await self.release.wait()
+            try:
+                await self.release.wait()
+            finally:
+                self.stopped.set()
         if message_id.startswith("slow-a2ui-output"):
             self.started.set()
             await self.release.wait()
@@ -1426,3 +1430,33 @@ async def test_input_required_continues_same_task_with_new_attempt_and_can_cance
             },
         )
         assert cancel.json()["error"]["code"] == -32002
+
+
+async def test_cancel_on_another_replica_closes_silent_execution(
+    setup_storage_backend: StorageBackend, tmp_path,
+) -> None:
+    owner = _FakeSessionAgentManager(setup_storage_backend)
+    other = _FakeSessionAgentManager(setup_storage_backend)
+    client = await _build_client(setup_storage_backend, tmp_path, owner)
+    replica = await _build_client(setup_storage_backend, tmp_path, other)
+    request = _send_request("slow-message-cancel-replica")
+    async with client, replica:
+        execution = asyncio.create_task(client.post("/a2a/researcher", json=request))
+        try:
+            await asyncio.wait_for(owner.service.started.wait(), 5)
+            duplicate = await client.post("/a2a/researcher", json=request)
+            task_id = duplicate.json()["result"]["task"]["id"]
+            cancellation = {"jsonrpc": "2.0", "id": "cancel", "method": "CancelTask",
+                            "params": {"id": task_id}}
+            denied = await replica.post("/a2a/researcher", json=cancellation,
+                                        headers={"X-Cognition-Scope-Account": "other"})
+            assert "error" in denied.json()
+            assert not owner.service.stopped.is_set()
+            canceled = await replica.post("/a2a/researcher", json=cancellation)
+            assert canceled.json()["result"]["status"]["state"] == "TASK_STATE_CANCELED"
+            await asyncio.wait_for(owner.service.stopped.wait(), 5)
+            await asyncio.wait_for(execution, 5)
+            assert not owner.service.release.is_set()
+        finally:
+            owner.service.release.set()
+            await asyncio.gather(execution, return_exceptions=True)

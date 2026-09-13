@@ -1,5 +1,21 @@
 # Cognition Roadmap
 
+## Active task cancellation repair
+
+- Category: bug fix; generic runtime and A2A execution lifecycle.
+- Reproduced: abort acknowledged during a silent graph step permits that step's
+  side effect before the next event; A2A flush ticks skip persisted cancellation.
+- Branch `codex/task-cancel-interruption`: cancel pending async graph advancement
+  and inspect scoped durable task status on flush ticks.
+- Validation: 49 A2A/runtime regressions pass, including cancellation through a
+  second server instance during silent execution and foreign-scope denial. Seven
+  task-runtime tests also pass. Full release validation remains pending.
+- Scope: close the selected task execution stream and prevent further graph steps.
+  Already-dispatched remote commands may finish within their timeout; immediate
+  MicroVM command termination is explicitly deferred. No provider billing cutoff
+  or rollback of completed effects is promised.
+- Release admission remains pending this repair; no final merge authorized.
+
 ## Offline artifact backend migration (2026-09-09)
 
 - Generic operator maintenance for existing PostgreSQL inline artifacts when enabling S3, preserving exact scope, version, content and run ownership.

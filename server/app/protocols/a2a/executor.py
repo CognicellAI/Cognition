@@ -197,6 +197,7 @@ class CognitionA2AExecutor(AgentExecutor):
         execution: TaskExecution | None = None
         active_metric = False
         run_span_context: Any | None = None
+        event_stream: Any | None = None
         run_span: Any | None = None
         execution_started = time.monotonic()
 
@@ -416,11 +417,8 @@ class CognitionA2AExecutor(AgentExecutor):
                 run_id=execution.run.id,
                 trace_parent_span=run_span,
             )
-            async for event in _with_flush_ticks(source, self._stream_flush_interval):
-                if event is _FLUSH_TICK:
-                    await flush_text_chunk(last_chunk=False)
-                    has_artifact = has_artifact or streamed_chunk
-                    continue
+            event_stream = _with_flush_ticks(source, self._stream_flush_interval)
+            async for event in event_stream:
                 current = await self._runtime.get(
                     GetTask(execution.task.id, self._agent_name, scope)
                 )
@@ -429,14 +427,15 @@ class CognitionA2AExecutor(AgentExecutor):
                 if current.status == TaskStatus.CANCELED:
                     if run_span is not None:
                         run_span.add_event("cognition.run.canceled")
-                    await self._agent_manager.abort_session(
-                        execution.session.id,
-                        execution.session.thread_id,
-                    )
                     await event_queue.enqueue_event(
                         _status_event(execution, TaskState.TASK_STATE_CANCELED, "Canceled")
                     )
                     return
+
+                if event is _FLUSH_TICK:
+                    await flush_text_chunk(last_chunk=False)
+                    has_artifact = has_artifact or streamed_chunk
+                    continue
 
                 if isinstance(event, DirectMessageEvent):
                     if run_span is not None:
@@ -722,6 +721,8 @@ class CognitionA2AExecutor(AgentExecutor):
                 return
             raise
         finally:
+            if event_stream is not None:
+                await event_stream.aclose()
             if run_span_context is not None:
                 run_span_context.__exit__(None, None, None)
             if active_metric:
@@ -768,7 +769,6 @@ class CognitionA2AExecutor(AgentExecutor):
         try:
             task = await self._runtime.cancel(
                 CancelTask(context.task_id, self._agent_name, scope),
-                abort_execution=self._agent_manager.abort_session,
             )
         except RuntimeTaskNotFoundError as exc:
             raise TaskNotFoundError from exc
