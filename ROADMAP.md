@@ -30,7 +30,7 @@
 - Acceptance: definition round trips; scope isolation; deployment ceilings; disable/limit changes during resumed execution; unavailable/deleted configuration denial; bounded inactive-scope cleanup, retries and live-dependency protection; independent runtime tests and documentation.
 - Dependencies: existing config registry, publication middleware, runtime storage and lifecycle ports. Inspect storage coverage before finalizing maintenance API. Existing persistent data must not be deleted by default.
 - Compatibility: additive configuration; omitted publication policy retains deployment behavior. No A2A envelope changes or product-specific schema. Document any storage/interface migration before implementation.
-- Status: scoped publication implemented on isolated feature branch. Publication/API/manifest suite: 116 passed; runtime regressions: 49 passed; final policy/capability checks: 25 passed. Targeted Ruff and mypy passed. Complete runtime retention and local integration remain pending; no main/release merge authorized.
+- Status: implemented and merged to `main` at `550c211`; the `release/v0.16.0` candidate is pending exact-commit pre-release images, full A2A TCK review, and final release approval.
 
 ## A2UI candidate release hardening (2026-09-08)
 
