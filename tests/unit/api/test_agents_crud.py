@@ -965,3 +965,53 @@ class TestDeleteAgent:
     def test_delete_missing_agent_returns_404(self):
         response = client.delete("/agents/no-such-agent-delete")
         assert response.status_code == 404
+
+
+def test_publication_policy_create_update_clear_and_scope_isolation(monkeypatch):
+    monkeypatch.setattr(get_settings(), "scope_keys", ["project"])
+    monkeypatch.setattr(get_settings(), "scoping_enabled", False)
+    headers = {"X-Cognition-Scope-project": "publication-a"}
+    policy = {"enabled": True, "max_bytes": 1024, "delivery_mode": "url"}
+    created = client.post("/agents", headers=headers, json={
+        "name": "publisher", "system_prompt": "Work", "publication": policy,
+    })
+    assert created.status_code == 201, created.text
+    assert created.json()["publication"] == policy
+    changed = client.patch("/agents/publisher", headers=headers, json={
+        "publication": {"enabled": False},
+    })
+    assert changed.status_code == 200, changed.text
+    assert changed.json()["publication"]["enabled"] is False
+    assert client.get("/agents/publisher", headers={
+        "X-Cognition-Scope-project": "publication-b",
+    }).status_code == 404
+    cleared = client.patch("/agents/publisher", headers=headers, json={"publication": None})
+    assert cleared.status_code == 200, cleared.text
+    assert cleared.json()["publication"] is None
+
+
+@pytest.mark.parametrize("field", ["sandbox_profile", "sandbox_execution_role_arn"])
+def test_patch_explicit_null_clears_only_selected_sandbox_override(field):
+    name = f"clear-{field.replace('_', '-')}"
+    values = {
+        "sandbox_profile": "synthetic-runtime",
+        "sandbox_execution_role_arn": "arn:aws:iam::123456789012:role/synthetic",
+    }
+    created = client.post("/agents", json={"name": name, "system_prompt": "Synthetic test", **values})
+    assert created.status_code == 201, created.text
+    unchanged = client.patch(
+        f"/agents/{name}", json={"description": "unrelated update"},
+        headers={"If-Match": created.headers["etag"]},
+    )
+    assert unchanged.status_code == 200
+    for key, value in values.items():
+        assert unchanged.json()["config"][key] == value
+    cleared = client.patch(
+        f"/agents/{name}", json={field: None},
+        headers={"If-Match": unchanged.headers["etag"]},
+    )
+    assert cleared.status_code == 200
+    for key, value in values.items():
+        assert cleared.json()["config"][key] == (None if key == field else value)
+    persisted = client.get(f"/agents/{name}").json()["config"]
+    assert persisted[field] is None

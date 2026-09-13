@@ -18,6 +18,7 @@ from server.app.agent.definition import (
     ContextPolicy,
     FilesystemPermissionConfig,
     HumanInTheLoopConfig,
+    PublicationPolicy,
 )
 from server.app.models import Session as CoreSession
 from server.app.models import SessionConfig
@@ -738,6 +739,7 @@ class SandboxProfileCreate(BaseModel):
     logging: LambdaMicroVmLogging | None = None
     quota: LambdaMicroVmQuota | None = None
     run_hook_payload: str | None = None
+    runtime_initialization_required: bool = False
     maximum_duration_seconds: int = Field(default=3600, gt=0, le=28800)
     port: int = Field(default=8080, ge=1, le=65535)
     token_expiration_minutes: int = Field(default=30, gt=0)
@@ -759,6 +761,7 @@ class SandboxProfileUpdate(BaseModel):
     logging: LambdaMicroVmLogging | None = None
     quota: LambdaMicroVmQuota | None = None
     run_hook_payload: str | None = None
+    runtime_initialization_required: bool | None = None
     maximum_duration_seconds: int | None = Field(default=None, gt=0, le=28800)
     port: int | None = Field(default=None, ge=1, le=65535)
     token_expiration_minutes: int | None = Field(default=None, gt=0)
@@ -781,6 +784,7 @@ class SandboxProfileResponse(BaseModel):
     logging: LambdaMicroVmLogging | None = None
     quota: LambdaMicroVmQuota | None = None
     run_hook_payload: str | None = None
+    runtime_initialization_required: bool = False
     maximum_duration_seconds: int
     port: int
     token_expiration_minutes: int
@@ -870,6 +874,7 @@ class AgentResponse(BaseModel):
     config: AgentConfigResponse | None = Field(
         None, description="Full runtime config for this agent"
     )
+    publication: PublicationPolicy | None = None
     response_format: str | None = Field(None, description="Structured output schema path")
     interrupt_on: dict[str, dict[str, Any]] = Field(
         default_factory=dict,
@@ -1214,6 +1219,7 @@ class AgentCreate(BaseModel):
     memory: list[str] = Field(default_factory=list)
     interrupt_on: dict[str, HumanInTheLoopConfig] = Field(default_factory=dict)
     permissions: list[FilesystemPermissionConfig] = Field(default_factory=list)
+    publication: PublicationPolicy | None = None
     response_format: str | None = Field(
         default=None, description="Dotted path to structured output schema"
     )
@@ -1266,6 +1272,7 @@ class AgentUpdate(BaseModel):
     permissions: list[FilesystemPermissionConfig] | None = None
     subagents: list[dict[str, Any]] | None = None
     async_subagents: list[AsyncSubagentConfig] | None = None
+    publication: PublicationPolicy | None = None
     response_format: str | None = None
     model: str | None = None
     temperature: float | None = None

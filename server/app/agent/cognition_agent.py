@@ -38,6 +38,7 @@ from deepagents import create_deep_agent as _create_deep_agent
 
 logger = structlog.get_logger(__name__)
 
+from server.app.agent.definition import PublicationPolicy  # noqa: E402
 from server.app.agent.mcp_client import McpServerConfig, load_mcp_tools_per_server  # noqa: E402
 from server.app.agent.middleware import (  # noqa: E402
     CognitionObservabilityMiddleware,
@@ -49,6 +50,7 @@ from server.app.agent.middleware import (  # noqa: E402
 )
 from server.app.agent.prompts import SYSTEM_PROMPT  # noqa: E402
 from server.app.agent.sandbox_backend import create_sandbox_backend  # noqa: E402
+from server.app.execution.initialization import bind_runtime_initializer  # noqa: E402
 from server.app.observability import (  # noqa: E402
     RUNTIME_CACHE_EVICTIONS_TOTAL,
     RUNTIME_CACHE_LOOKUPS_TOTAL,
@@ -86,6 +88,7 @@ class CognitionContext:
 
     effective_scope: dict[str, str] = field(default_factory=dict)
     session_id: str | None = None
+    run_id: str | None = None
     thread_id: str | None = None
     agent_name: str | None = None
     metadata: dict[str, str] = field(default_factory=dict)
@@ -100,6 +103,7 @@ class CognitionContext:
         scope: dict[str, str] | None,
         *,
         session_id: str | None = None,
+        run_id: str | None = None,
         thread_id: str | None = None,
         agent_name: str | None = None,
         metadata: dict[str, str] | None = None,
@@ -109,6 +113,7 @@ class CognitionContext:
         return cls(
             effective_scope=dict(scope or {}),
             session_id=session_id,
+            run_id=run_id,
             thread_id=thread_id,
             agent_name=agent_name,
             metadata=dict(metadata or {}),
@@ -469,6 +474,9 @@ class CognitionAgentParams:
     mcp_readiness_repository: Any | None = None
     scope: dict[str, str] | None = None
     config_store: ConfigStore | None = None
+    publication_policy: PublicationPolicy | None = None
+    publication_agent_name: str | None = None
+    publication_agent_source: str | None = None
     sandbox_profile: str | None = None
     sandbox_execution_role_arn: str | None = None
     model_cache_key: str | None = None
@@ -489,6 +497,7 @@ def _create_sandbox(
     sandbox_execution_role_arn: str | None = None,
     sandbox_profile_config: SandboxProfile | None = None,
     acquirer: Callable[[str, Callable[[], Any]], Any] | None = None,
+    runtime_initializer: Callable[[str], dict[str, Any]] | None = None,
 ) -> Any:
     if acquirer is not None:
         construction_settings = {
@@ -507,6 +516,7 @@ def _create_sandbox(
         return acquirer(identity, lambda: _create_sandbox(
             project_path, sandbox_id, settings, k8s_labels, sandbox_profile,
             sandbox_execution_role_arn, sandbox_profile_config,
+            runtime_initializer=runtime_initializer,
         ))
     start = time.monotonic()
     outcome = "success"
@@ -547,6 +557,7 @@ def _create_sandbox(
             aws_lambda_microvm_profile=resolved_profile,
             aws_lambda_microvm_execution_role_arn=sandbox_execution_role_arn,
             aws_lambda_microvm_profile_config=sandbox_profile_config,
+            runtime_initializer=runtime_initializer,
         )
     except Exception:
         outcome = "failure"
@@ -650,13 +661,37 @@ async def create_cognition_agent(params: CognitionAgentParams) -> CognitionAgent
             config_store = None
 
     resolved_sandbox_profile = params.sandbox_profile or settings.aws_lambda_microvm_default_profile
+    current_profile = await _resolve_sandbox_profile_config(
+        settings=settings,
+        config_store=config_store,
+        profile_name=resolved_sandbox_profile,
+        scope=params.scope,
+    )
     sandbox_profile_config = params.pinned_sandbox_profile_config
-    if sandbox_profile_config is None:
-        sandbox_profile_config = await _resolve_sandbox_profile_config(
-            settings=settings,
-            config_store=config_store,
+    if sandbox_profile_config is not None and settings.sandbox_backend == "aws_lambda_microvm":
+        if (
+            current_profile is None
+            or sandbox_profile_config.model_dump() != current_profile.model_dump()
+        ):
+            raise RuntimeError(
+                "Pinned sandbox profile no longer matches current authorized configuration"
+            )
+    else:
+        sandbox_profile_config = current_profile
+
+    runtime_initializer = None
+    if sandbox_profile_config is not None and sandbox_profile_config.runtime_initialization_required:
+        if settings.sandbox_initialization_url is None or settings.sandbox_initialization_token is None:
+            raise RuntimeError("Required sandbox initialization authority is not configured")
+        runtime_initializer = bind_runtime_initializer(
+            url=str(settings.sandbox_initialization_url),
+            token=settings.sandbox_initialization_token,
+            scope=dict(params.scope or {}),
             profile_name=resolved_sandbox_profile,
-            scope=params.scope,
+            image_arn=sandbox_profile_config.image_arn,
+            image_version=sandbox_profile_config.image_version,
+            maximum_duration_seconds=sandbox_profile_config.maximum_duration_seconds,
+            ca_file=settings.sandbox_initialization_ca_file,
         )
 
     construct_sandbox = partial(_create_sandbox,
@@ -668,6 +703,7 @@ async def create_cognition_agent(params: CognitionAgentParams) -> CognitionAgent
         sandbox_execution_role_arn=params.sandbox_execution_role_arn,
         sandbox_profile_config=sandbox_profile_config,
         acquirer=params._sandbox_acquirer,
+        runtime_initializer=runtime_initializer,
     )
     sandbox_backend = (
         await asyncio.to_thread(construct_sandbox)
@@ -792,14 +828,47 @@ async def create_cognition_agent(params: CognitionAgentParams) -> CognitionAgent
     agent_middleware = list(params.middleware) if params.middleware else []
     if settings.artifact_publication_enabled:
         from server.app.agent.publication import PublicationMiddleware
+        from server.app.agent.publication_policy import CurrentPublicationPolicy, PublicationLimits
         from server.app.storage.artifact_store import S3ArtifactStore
 
-        publication_store = params.artifact_store
-        if not isinstance(publication_store, S3ArtifactStore) or not hasattr(sandbox_backend, "download_file_bounded"):
-            raise ValueError("Artifact publication requires S3 and a bounded-download sandbox")
-        agent_middleware.append(PublicationMiddleware(sandbox_backend, publication_store, params.scope or {},
+        limits = PublicationLimits(
+            enabled=True,
             inline_limit=settings.artifact_publication_inline_max_bytes,
-            max_bytes=settings.artifact_publication_max_bytes))
+            max_bytes=settings.artifact_publication_max_bytes,
+            require_agent_policy=settings.artifact_publication_require_agent_policy,
+        )
+        limits = limits.narrow(params.publication_policy) if params.publication_agent_name is None else limits
+        policy_resolver = None
+        if params.publication_agent_name is not None:
+            if config_store is None:
+                raise ValueError("Publication requires the current Agent configuration")
+            source = params.publication_agent_source
+            if source is None:
+                record = await config_store.get_agent_record(
+                    params.publication_agent_name, params.scope or {}
+                )
+                source = record.source if record is not None else "file"
+            if source not in {"api", "file"}:
+                raise ValueError("Invalid publication Agent source")
+            policy_resolver = CurrentPublicationPolicy(
+                config_store, params.publication_agent_name,
+                tuple(sorted((params.scope or {}).items())),
+                cast(Any, source), limits,
+            )
+            limits = await policy_resolver()
+        if limits.enabled:
+            publication_store = params.artifact_store
+            if not isinstance(publication_store, S3ArtifactStore) or not hasattr(
+                sandbox_backend, "download_file_bounded"
+            ):
+                raise ValueError("Artifact publication requires S3 and a bounded-download sandbox")
+            agent_middleware.append(PublicationMiddleware(
+                sandbox_backend, publication_store, params.scope or {},
+                inline_limit=limits.inline_limit,
+                max_bytes=limits.max_bytes,
+                policy_resolver=policy_resolver,
+                agent_name=params.publication_agent_name,
+            ))
 
     settings_blocked_tools = settings.blocked_tools if hasattr(settings, "blocked_tools") else []
     excluded_tools = sorted({*(str(tool) for tool in (params.excluded_tools or []))})

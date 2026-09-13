@@ -47,6 +47,7 @@ def _agent_to_response(
         hidden=agent.hidden,
         native=agent.native,
         a2a=agent.a2a,
+        publication=agent.publication,
         provider=agent.config.provider,
         model=agent.config.model,
         temperature=agent.config.temperature,
@@ -271,6 +272,7 @@ async def create_agent(
             ],
             "permissions": [p.model_dump() for p in body.permissions],
             "response_format": body.response_format,
+            "publication": body.publication.model_dump() if body.publication else None,
             "middleware": body.middleware,
             "config": {
                 "model": body.model,
@@ -363,6 +365,11 @@ async def update_agent(
         data, agent_scope = result
 
         updates = body.model_dump(exclude_none=True)
+        for field in ("sandbox_profile", "sandbox_execution_role_arn"):
+            if field in body.model_fields_set:
+                updates[field] = getattr(body, field)
+        if "publication" in body.model_fields_set:
+            updates["publication"] = body.publication.model_dump() if body.publication else None
         if "display_name" in body.model_fields_set:
             updates["display_name"] = body.display_name
         if "a2a" in body.model_fields_set:

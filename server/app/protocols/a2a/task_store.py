@@ -35,6 +35,7 @@ from a2a.types import (
 from google.protobuf.timestamp_pb2 import Timestamp  # type: ignore[import-untyped]
 
 from server.app.agent.task_runtime import AgentTaskRuntime, GetTask, ListTasks
+from server.app.exceptions import ArtifactContentNotFoundError
 from server.app.models import RuntimeTask, TaskStatus
 from server.app.storage.backend import StorageBackend
 
@@ -158,7 +159,6 @@ class CognitionTaskStore(TaskStore):
 
     async def resolve_part(self, part: dict[str, Any], scope: dict[str, str]) -> dict[str, Any]:
         """Resolve a durable publication reference at the authorized wire boundary."""
-        from server.app.exceptions import ArtifactContentNotFoundError
         from server.app.storage.artifact_store import S3ArtifactStore
         from server.app.storage.published_file import REFERENCE_PREFIX, resolve_download
 
@@ -255,10 +255,23 @@ class CognitionTaskStore(TaskStore):
                         )
                     artifacts.append(artifact)
         if not artifacts and self._artifact_store is not None:
-            stored_artifact = await self._artifact_store.get_artifact(
-                f"task-{task.id}-response",
-                task.effective_scope,
-            )
+            try:
+                stored_artifact = await self._artifact_store.get_artifact(
+                    f"task-{task.id}-response",
+                    task.effective_scope,
+                )
+            except ArtifactContentNotFoundError:
+                stored_artifact = None
+                unavailable = new_text_artifact(
+                    name="response",
+                    text="Response content is no longer available.",
+                    media_type="text/plain",
+                    artifact_id=f"task-{task.id}-response",
+                )
+                unavailable.parts[0].metadata.update({
+                    "cognition": {"contentAvailability": "unavailable", "originalKind": "text"}
+                })
+                artifacts.append(unavailable)
             if stored_artifact is not None:
                 artifacts.append(
                     new_text_artifact(

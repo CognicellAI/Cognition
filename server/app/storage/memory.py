@@ -6,6 +6,7 @@ and development purposes. Data is not persisted across restarts.
 
 from __future__ import annotations
 
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Literal
 
@@ -171,7 +172,7 @@ class MemoryStorageBackend:
     ) -> Session | None:
         """Update a session."""
         session = await self.get_session(session_id, effective_scope)
-        if not session:
+        if not session or session.status == SessionStatus.EXPIRED:
             return None
 
         if title is not None:
@@ -200,7 +201,7 @@ class MemoryStorageBackend:
     ) -> None:
         """Update the message count for a session."""
         session = await self.get_session(session_id, effective_scope)
-        if session:
+        if session and session.status != SessionStatus.EXPIRED:
             session.message_count = count
             session.updated_at = now_utc_iso()
 
@@ -217,7 +218,7 @@ class MemoryStorageBackend:
             self._tasks = {k: v for k, v in self._tasks.items() if v.session_id != session_id}
             self._runs = {k: v for k, v in self._runs.items() if v.session_id != session_id}
             self._events = {k: v for k, v in self._events.items() if v.session_id != session_id}
-            self._event_sequences.pop(session_id, None)
+            self._event_sequences.pop(f"{effective_scope_key(effective_scope)}:{session_id}", None)
             logger.info(
                 "Session deleted (memory)",
                 session_id=session_id,
@@ -225,6 +226,59 @@ class MemoryStorageBackend:
             )
             return True
         return False
+
+    async def scan_retention_sessions(
+        self, before: str, *, after_id: str = "", limit: int = 100
+    ) -> list[Session]:
+        """Scan old contexts in immutable ID order, independently of active scopes."""
+        from server.app.storage.retention import session_retention_eligible, validate_retention_scan
+
+        validate_retention_scan(before, limit)
+        return sorted((session for session in self._sessions.values()
+                       if session.id > after_id and session_retention_eligible(session, before)),
+                      key=lambda session: session.id)[:limit]
+
+    async def claim_retention_session(
+        self, session_id: str, scope: dict[str, str], before: str
+    ) -> Session | None:
+        """Expire without yielding between eligibility checks and the state change."""
+        from server.app.storage.retention import (
+            RETAINABLE_RUN_STATUSES,
+            RETAINABLE_TASK_STATUSES,
+            session_retention_eligible,
+        )
+
+        session = self._sessions.get(session_id)
+        if session is None or session.scopes != scope or not session_retention_eligible(session, before):
+            return None
+        if any(run.session_id == session_id and run.status not in RETAINABLE_RUN_STATUSES
+               for run in self._runs.values()):
+            return None
+        if any(task.session_id == session_id and task.status not in RETAINABLE_TASK_STATUSES
+               for task in self._tasks.values()):
+            return None
+        cutoff = datetime.fromisoformat(before)
+        if any(other.id != session.id and other.thread_id == session.thread_id
+               for other in self._sessions.values()):
+            return None
+        if any(message.session_id == session_id and message.created_at > cutoff
+               for message in self._messages.values()):
+            return None
+        if any(run.session_id == session_id and datetime.fromisoformat(run.updated_at) > cutoff
+               for run in self._runs.values()):
+            return None
+        if any(task.session_id == session_id and datetime.fromisoformat(task.updated_at) > cutoff
+               for task in self._tasks.values()):
+            return None
+        session.status = SessionStatus.EXPIRED
+        return session
+
+    async def purge_retention_session(self, session_id: str, scope: dict[str, str]) -> bool:
+        """Purge only a claimed context; retry after external cleanup failure."""
+        session = self._sessions.get(session_id)
+        if session is None or session.scopes != scope or session.status != SessionStatus.EXPIRED:
+            return False
+        return await self.delete_session(session_id, scope)
 
     # Message operations
     async def create_message(
@@ -257,6 +311,9 @@ class MemoryStorageBackend:
             metadata=metadata,
         )
 
+        parent = self._sessions.get(session_id)
+        if parent is None or parent.scopes != (effective_scope or {}) or parent.status == SessionStatus.EXPIRED:
+            raise ValueError("Session is unavailable for new work")
         self._messages[message_id] = message
 
         logger.debug(
@@ -341,15 +398,15 @@ class MemoryStorageBackend:
         """Rebuild API message projection from authoritative checkpoint messages."""
         del thread_id
 
-        if await self.get_session(session_id, effective_scope) is None:
+        session = await self.get_session(session_id, effective_scope)
+        if session is None or session.status == SessionStatus.EXPIRED:
             return 0
-        await self.delete_messages_for_session(session_id, effective_scope)
+        self._messages = {k: v for k, v in self._messages.items() if v.session_id != session_id}
 
         projected_messages = project_checkpoint_messages(session_id, checkpoint_messages)
         for message in projected_messages:
             self._messages[message.id] = message
 
-        session = await self.get_session(session_id, effective_scope)
         if session is not None:
             session.message_count = len(projected_messages)
             session.updated_at = now_utc_iso()
@@ -389,6 +446,9 @@ class MemoryStorageBackend:
             idempotency_key=idempotency_key,
             metadata=metadata,
         )
+        parent = self._sessions.get(session_id)
+        if parent is None or parent.scopes != (effective_scope or {}) or parent.status == SessionStatus.EXPIRED:
+            raise ValueError("Session is unavailable for new work")
         self._tasks[task_id] = task
         return task
 
@@ -559,6 +619,9 @@ class MemoryStorageBackend:
             last_activity_at=now,
             task_id=task_id,
         )
+        parent = self._sessions.get(session_id)
+        if parent is None or parent.scopes != (effective_scope or {}) or parent.status == SessionStatus.EXPIRED:
+            raise ValueError("Session is unavailable for new work")
         self._runs[run_id] = run
         return run
 
@@ -639,6 +702,10 @@ class MemoryStorageBackend:
         if run is None:
             return None
 
+        parent = self._sessions.get(run.session_id)
+        if parent is None or parent.status == SessionStatus.EXPIRED:
+            return None
+
         now = now_utc_iso()
         if status is not None:
             run.status = status if isinstance(status, RunStatus) else RunStatus(status)
@@ -681,6 +748,8 @@ class MemoryStorageBackend:
         run = await self.get_run(run_id, effective_scope)
         if run is None or await self.get_session(session_id, effective_scope) is None:
             raise ValueError("Run or session not found at exact event scope")
+        if self._sessions[session_id].status == SessionStatus.EXPIRED:
+            raise ValueError("Session is unavailable for new work")
         sequence_key = f"{effective_scope_key(effective_scope)}:{session_id}"
         sequence = self._event_sequences.get(sequence_key, 0) + 1
         self._event_sequences[sequence_key] = sequence

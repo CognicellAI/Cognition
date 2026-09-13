@@ -87,6 +87,8 @@ class LambdaMicroVmSandbox(BaseSandbox):
         idle_policy: Optional Lambda MicroVM idle policy dict.
         logging_config: Optional Lambda MicroVM logging union dict.
         run_hook_payload: Optional payload for the MicroVM /run lifecycle hook.
+        runtime_initializer: Optional trusted callback producing transient /run JSON
+            after allocation. Must bound its own I/O and derive authorization externally.
         maximum_duration_seconds: Maximum MicroVM lifetime.
         port: Command server port inside the MicroVM.
         token_expiration_minutes: Proxy auth token lifetime.
@@ -113,6 +115,7 @@ class LambdaMicroVmSandbox(BaseSandbox):
         idle_policy: dict[str, Any] | None = None,
         logging_config: dict[str, Any] | None = None,
         run_hook_payload: str | None = None,
+        runtime_initializer: Callable[[str], dict[str, Any]] | None = None,
         maximum_duration_seconds: int = 3600,
         port: int = 8080,
         token_expiration_minutes: int = 30,
@@ -135,6 +138,8 @@ class LambdaMicroVmSandbox(BaseSandbox):
         self._idle_policy = dict(idle_policy or {}) or None
         self._logging_config = dict(logging_config or {}) or None
         self._run_hook_payload = run_hook_payload
+        self._runtime_initializer = runtime_initializer
+        self._initialized = False
         self._maximum_duration_seconds = maximum_duration_seconds
         self._port = port
         self._token_expiration_minutes = token_expiration_minutes
@@ -484,6 +489,7 @@ class LambdaMicroVmSandbox(BaseSandbox):
                 )
 
             self._create_auth_headers()
+            self._initialize_runtime()
             self._healthcheck()
             self._ready = True
             logger.info(
@@ -493,6 +499,40 @@ class LambdaMicroVmSandbox(BaseSandbox):
                 self._resolved_image_version,
                 _role_fingerprint(self._execution_role_arn),
             )
+
+    def _initialize_runtime(self) -> None:
+        """Initialize once without retaining transient payloads in sandbox state."""
+        if self._runtime_initializer is None or self._initialized:
+            return
+        failed = False
+        try:
+            if self._microvm_id is None:
+                raise RuntimeError("Runtime initialization requires an allocated MicroVM")
+            payload = self._runtime_initializer(self._microvm_id)
+            if not isinstance(payload, dict):
+                raise ValueError("Runtime initialization requires a JSON object")
+            body = {
+                "microvmId": self._microvm_id,
+                "runHookPayload": json.dumps(payload, allow_nan=False),
+            }
+            if len(json.dumps(body).encode("utf-8")) > 16384:
+                raise ValueError("Runtime initialization exceeds payload limit")
+            self._runtime_request("POST", "/run", json_body=body, timeout=60)
+        except Exception:
+            # Delivery may have succeeded before a transport failure. Never retry
+            # with replacement launch material or admit commands on this allocation.
+            failed = True
+        if failed:
+            self._closed = True
+            self._ready = False
+            self._runtime_initializer = None
+            # Outside the exception handler so teardown logging cannot include
+            # an initializer exception containing sensitive launch material.
+            self._terminate_locked()
+            raise RuntimeError("Lambda MicroVM runtime initialization failed") from None
+        self._initialized = True
+        self._runtime_initializer = None
+        self._record_lifecycle_phase("runtime_initialized")
 
     def _exception_code(self, exc: Exception) -> str:
         response = getattr(exc, "response", None)

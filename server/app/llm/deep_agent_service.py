@@ -20,7 +20,7 @@ import time
 from collections import deque
 from collections.abc import AsyncGenerator, AsyncIterator, Callable, Mapping
 from dataclasses import dataclass, field
-from typing import Any, TypeVar, cast
+from typing import Any, Literal, TypeVar, cast
 
 import structlog
 from langchain_core.messages import HumanMessage, SystemMessage
@@ -704,6 +704,7 @@ class DeepAgentStreamingService:
             invocation_context = CognitionContext.from_scope(
                 effective_scope,
                 session_id=session.id if session else session_id,
+                run_id=run_id,
                 thread_id=session.thread_id if session else thread_id,
                 agent_name=session.agent_name if session else None,
                 metadata=session.metadata if session else None,
@@ -757,6 +758,12 @@ class DeepAgentStreamingService:
                 mcp_readiness_repository=self._mcp_readiness_repository,
                 scope=effective_scope,
                 config_store=self._get_config_store(),
+                publication_agent_name=session.agent_name if session else None,
+                publication_agent_source=(
+                    str(pinned_manifest["agent"]["source"])
+                    if pinned_manifest and isinstance(pinned_manifest.get("agent"), dict)
+                    and pinned_manifest["agent"].get("source") else None
+                ),
                 sandbox_profile=agent_cfg.sandbox_profile,
                 sandbox_execution_role_arn=agent_cfg.sandbox_execution_role_arn,
                 pinned_sandbox_profile_config=_pinned_sandbox_profile(pinned_manifest),
@@ -984,6 +991,7 @@ class DeepAgentStreamingService:
             invocation_context = CognitionContext.from_scope(
                 effective_scope,
                 session_id=session.id,
+                run_id=active_run.id,
                 thread_id=session.thread_id,
                 agent_name=session.agent_name,
                 metadata=session.metadata,
@@ -1035,6 +1043,12 @@ class DeepAgentStreamingService:
                 mcp_readiness_repository=self._mcp_readiness_repository,
                 scope=effective_scope,
                 config_store=self._get_config_store(),
+                publication_agent_name=session.agent_name,
+                publication_agent_source=(
+                    str(active_run.runtime_manifest["agent"]["source"])
+                    if isinstance(active_run.runtime_manifest.get("agent"), dict)
+                    and active_run.runtime_manifest["agent"].get("source") else None
+                ),
                 sandbox_profile=agent_cfg.sandbox_profile,
                 sandbox_execution_role_arn=agent_cfg.sandbox_execution_role_arn,
                 pinned_sandbox_profile_config=_pinned_sandbox_profile(active_run.runtime_manifest),
@@ -1395,8 +1409,14 @@ class SessionAgentManager:
 
     def register_runtime(self, session_id: str, runtime: Any) -> None:
         """Register an active runtime for abort tracking."""
-        runtimes = self._active_runtimes.setdefault(session_id, [])
-        runtimes.append(runtime)
+        with self._sandbox_ownership_lock:
+            if (
+                session_id in self._sandbox_releasing
+                or session_id in self._sandbox_teardown_inflight
+            ):
+                raise RuntimeError("Sandbox teardown is not confirmed; retry release first")
+            runtimes = self._active_runtimes.setdefault(session_id, [])
+            runtimes.append(runtime)
         logger.debug(
             "Runtime registered for abort tracking",
             session_id=session_id,
@@ -1764,18 +1784,32 @@ class SessionAgentManager:
         else:
             logger.info("Sandbox lifecycle event", phase=event.phase, **fields)
 
-    def release_sandbox_backend(self, session_id: str) -> None:
-        """Release resources, retaining ownership until teardown is confirmed."""
+    def release_sandbox_backend(
+        self, session_id: str, *, only_if_idle: bool = False
+    ) -> Literal["complete", "pending", "untracked", "busy"]:
+        """Release a tracked backend without deleting session history.
+
+        Returns:
+            ``busy`` when idle-only release finds a registered local runtime;
+            ``complete`` only after this attempt confirms tracked backend teardown;
+            ``pending`` while teardown is running or remains unconfirmed;
+            ``untracked`` when this process has no backend handle. Untracked is
+            not evidence that a provider resource or another replica has stopped.
+        """
         with self._sandbox_ownership_lock:
-            if (
-                session_id in self._sandbox_teardown_inflight
-                or session_id not in self._sandbox_backends
-            ):
-                return
+            if only_if_idle and self._active_runtimes.get(session_id):
+                return "busy"
+            if session_id in self._sandbox_teardown_inflight:
+                return "pending"
+            if session_id not in self._sandbox_backends:
+                return "untracked"
             self._sandbox_teardown_inflight.add(session_id)
             self._sandbox_releasing.add(session_id)
         try:
             self._release_sandbox_backend(session_id)
+            # Acquisition stays blocked until the finally clause clears inflight.
+            with self._sandbox_ownership_lock:
+                return "pending" if session_id in self._sandbox_backends else "complete"
         finally:
             with self._sandbox_ownership_lock:
                 self._sandbox_teardown_inflight.discard(session_id)

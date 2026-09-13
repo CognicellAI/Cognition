@@ -57,3 +57,5 @@ Set `ttl` to automatically delete the sandbox after N seconds. This is implement
 ## Design
 
 See [DESIGN.md](./DESIGN.md) for architecture, RBAC requirements, lifecycle details, and v1/v2 scope.
+
+Termination failures propagate to the caller and retain the SDK handle for retry. Each termination call performs one observation pass. The handle remains while the claim, Sandbox, or known Pod exists; runtime_metadata.teardown_status reports pending. Only observed absence of all three clears the handle and reports complete. Unknown Pod identity and API observation errors cannot confirm deletion. This is Kubernetes API evidence, not a guarantee against force-deleted Pods continuing on an unreachable node.

@@ -23,6 +23,7 @@ from typing import Any, Protocol, TypeVar, runtime_checkable
 
 import structlog
 
+from server.app.exceptions import ArtifactContentNotFoundError
 from server.app.storage.common import effective_scope_key
 from server.app.storage.config_models import ArtifactDefinition
 from server.app.storage.s3_object_store import S3ObjectStore
@@ -115,6 +116,11 @@ class ArtifactStore(Protocol):
     ) -> bool:
         """Delete all versions of an artifact. Returns True if any deleted."""
         ...
+
+    async def delete_artifact_version(self, expected: ArtifactDefinition) -> bool:
+        """Delete exactly the observed version, rejecting concurrent replacement."""
+        ...
+
 
     async def get_artifact_version(
         self, artifact_id: str, version: int, scope: dict[str, str] | None = None
@@ -252,6 +258,28 @@ class SqliteArtifactStore:
         )
         await self._db.commit()
         return bool(cursor.rowcount and cursor.rowcount > 0)
+
+    async def delete_artifact_version(self, expected: ArtifactDefinition) -> bool:
+        """Atomically compare and delete one inline artifact version."""
+        import aiosqlite
+
+        # A dedicated connection keeps the transaction independent of callers
+        # sharing this store's regular connection.
+        async with aiosqlite.connect(self._db_path) as db:
+            db.row_factory = aiosqlite.Row
+            await db.execute("BEGIN IMMEDIATE")
+            params = (expected.id, effective_scope_key(expected.scope),
+                      _scope_to_json(expected.scope), expected.version)
+            where = "id = ? AND scope_key = ? AND scope = ? AND version = ?"
+            async with db.execute("SELECT * FROM artifacts WHERE " + where, params) as cur:
+                row = await cur.fetchone()
+            if row is None or _row_to_artifact(dict(row)) != expected:
+                await db.rollback()
+                return False
+            await db.execute("DELETE FROM artifacts WHERE " + where, params)
+            await db.commit()
+            return True
+
 
     async def get_artifact_version(
         self, artifact_id: str, version: int, scope: dict[str, str] | None = None
@@ -447,6 +475,22 @@ class PostgresArtifactStore:
                 )
                 return cur.rowcount is not None and cur.rowcount > 0
 
+    async def delete_artifact_version(self, expected: ArtifactDefinition) -> bool:
+        """Lock and compare the observed version before deleting it."""
+        params = (expected.id, effective_scope_key(expected.scope),
+                  _scope_to_json(expected.scope), expected.version)
+        where = "id = %s AND scope_key = %s AND scope = %s AND version = %s"
+        async with self._pool.connection() as conn:
+            async with conn.transaction():
+                async with conn.cursor() as cur:
+                    await cur.execute("SELECT * FROM artifacts WHERE " + where + " FOR UPDATE", params)
+                    row = await cur.fetchone()
+                    if row is None or _row_to_artifact(dict(row)) != expected:
+                        return False
+                    await cur.execute("DELETE FROM artifacts WHERE " + where, params)
+                    return True
+
+
     async def get_artifact_version(
         self, artifact_id: str, version: int, scope: dict[str, str] | None = None
     ) -> ArtifactDefinition | None:
@@ -600,6 +644,16 @@ class MemoryArtifactStore:
         for key in to_delete:
             del self._store[key]
         return len(to_delete) > 0
+
+    async def delete_artifact_version(self, expected: ArtifactDefinition) -> bool:
+        """Compare and delete without yielding between observation and mutation."""
+        key = (expected.id, self._key(expected.id, expected.scope), expected.version)
+        row = self._store.get(key)
+        if row is None or _row_to_artifact(row) != expected:
+            return False
+        del self._store[key]
+        return True
+
 
     async def get_artifact_version(
         self, artifact_id: str, version: int, scope: dict[str, str] | None = None
@@ -762,6 +816,8 @@ class S3ArtifactStore:
         try:
             object_key = artifact.object_key
             body = await self._run_io(lambda objects: objects.get(object_key))
+        except ArtifactContentNotFoundError:
+            raise
         except Exception as exc:
             raise RuntimeError(
                 "Artifact body is unavailable from configured durable storage"
@@ -811,8 +867,18 @@ class S3ArtifactStore:
             lambda objects: objects.scoped_key(artifact.scope, self._path(artifact, checksum))
         )
 
+        # These classes describe stored bodies, not session retention or deletion intent.
+        content_class = (
+            "publication-descriptor"
+            if artifact.content_type == "application/vnd.cognition.published-file+json"
+            else "run-artifact" if artifact.run_id else None
+        )
+
         def write_and_verify(objects: S3ObjectStore) -> bytes:
-            objects.put(object_key, body)
+            if content_class is None:
+                objects.put(object_key, body)
+            else:
+                objects.put(object_key, body, tags={"cognition:content-class": content_class})
             return objects.get(object_key)
 
         try:
@@ -861,6 +927,16 @@ class S3ArtifactStore:
                     "Artifact body could not be deleted from configured durable storage"
                 ) from exc
         return await self._manifest_store.delete_artifact(artifact_id, scope)
+
+    async def list_retention_artifacts(self, scope: dict[str, str], run_id: str) -> list[ArtifactDefinition]:
+        """Read record ownership even after independently managed bytes expire."""
+        return await self._manifest_store.list_artifacts(scope, run_id=run_id)
+
+    async def delete_artifact_version(self, expected: ArtifactDefinition) -> bool:
+        """Remove only the observed manifest; storage lifecycle owns its bytes."""
+        return await self._manifest_store.delete_artifact_version(
+            expected.model_copy(update={"content": ""})
+        )
 
     async def get_artifact_version(
         self, artifact_id: str, version: int, scope: dict[str, str] | None = None

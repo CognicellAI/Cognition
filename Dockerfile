@@ -26,7 +26,7 @@ COPY packages/ ./packages/
 # --no-dev: skip dev-only deps (ruff, mypy, pre-commit)
 # --no-install-project: deps only — source code is copied in the next stage
 # --extra openai,bedrock,deploy,k8s: include all production extras
-RUN uv sync --frozen --no-dev --no-install-project --extra openai --extra bedrock --extra deploy --extra k8s
+RUN uv sync --frozen --no-dev --no-install-project --extra openai --extra bedrock --extra deploy --extra k8s --extra aws-lambda-microvms
 
 # Copy the project before the final sync so package entry points such as
 # `cognition db upgrade` are installed into the image virtual environment.
@@ -35,7 +35,7 @@ COPY client/ ./client/
 COPY shared/ ./shared/
 
 # Install the Cognition package itself without resolving dependencies again.
-RUN uv sync --frozen --no-dev --extra openai --extra bedrock --extra deploy --extra k8s
+RUN uv sync --frozen --no-dev --extra openai --extra bedrock --extra deploy --extra k8s --extra aws-lambda-microvms
 
 # Production stage
 FROM python:3.11-slim AS production

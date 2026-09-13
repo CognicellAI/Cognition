@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from copy import deepcopy
 from io import BytesIO
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -17,6 +18,7 @@ from server.app.models import RuntimeTask, TaskStatus
 from server.app.protocols.a2a.routes import _artifact_update_from_runtime_event
 from server.app.protocols.a2a.task_store import CognitionTaskStore
 from server.app.storage.artifact_store import MemoryArtifactStore, S3ArtifactStore
+from server.app.storage.config_models import ArtifactDefinition
 from server.app.storage.published_file import REFERENCE_PREFIX, publish_file, resolve_download
 from server.app.storage.s3_object_store import S3ObjectStore
 
@@ -69,7 +71,12 @@ def publication_store(monkeypatch):
     client.put_object.side_effect = lambda **kwargs: bodies.__setitem__(
         kwargs["Key"], kwargs["Body"]
     )
-    client.get_object.side_effect = lambda **kwargs: {"Body": BytesIO(bodies[kwargs["Key"]])}
+    def get(**kwargs):
+        if kwargs["Key"] not in bodies:
+            raise error("NoSuchKey", 404)
+        return {"Body": BytesIO(bodies[kwargs["Key"]])}
+
+    client.get_object.side_effect = get
 
     def head(**kwargs):
         if kwargs["Key"] not in bodies:
@@ -89,13 +96,14 @@ def publication_store(monkeypatch):
     return store, bodies, client
 
 
-async def test_scoped_history_survives_expiration_and_recovers_if_restored(publication_store):
+@pytest.mark.parametrize("expired_body", ["binary", "descriptor"])
+async def test_scoped_history_survives_expiration_and_recovers_if_restored(publication_store, expired_body):
     store, bodies, client = publication_store
     scope = {"tenant": "a", "conversation": "one"}
     published = await publish_file(store, scope, b"pdf-bytes", "report.pdf", "application/pdf", 0)
     binary_put, descriptor_put = client.put_object.call_args_list
     assert binary_put.kwargs["Tagging"] == "cognition%3Acontent-class=published-file"
-    assert "Tagging" not in descriptor_put.kwargs
+    assert descriptor_put.kwargs["Tagging"] == "cognition%3Acontent-class=publication-descriptor"
     original = {
         "kind": "url",
         "value": REFERENCE_PREFIX + published.id,
@@ -130,7 +138,8 @@ async def test_scoped_history_survives_expiration_and_recovers_if_restored(publi
     first = await projector.project(task)
     assert first.artifacts[0].parts[0].url == "https://example.test/first"
     assert first.artifacts[0].parts[0].filename == "report.pdf"
-    del bodies[published.object_key]
+    expired_key = published.object_key if expired_body == "binary" else descriptor_put.kwargs["Key"]
+    expired_bytes = bodies.pop(expired_key)
     missing = await projector.project(task)
     assert missing.status.state == TaskState.TASK_STATE_COMPLETED
     assert missing.artifacts[0].artifact_id == first.artifacts[0].artifact_id
@@ -156,7 +165,7 @@ async def test_scoped_history_survives_expiration_and_recovers_if_restored(publi
         await projector.resolve_part(original, {"tenant": "b", "conversation": "one"})
     assert client.head_object.call_count == before
 
-    bodies[published.object_key] = b"pdf-bytes"
+    bodies[expired_key] = expired_bytes
     restored = await projector.project(task)
     assert restored.artifacts[0].artifact_id == published.id
     assert restored.artifacts[0].parts[0].url == "https://example.test/refreshed"
@@ -284,3 +293,106 @@ async def test_stream_and_get_task_preserve_missing_attachment(
             },
         )
         assert "result" not in wrong.json()
+
+
+async def test_publication_records_trusted_run_ownership(publication_store):
+    store, _, _ = publication_store
+    scope = {"project": "owner"}
+    published = await publish_file(
+        store, scope, b"body", "report.txt", "text/plain", 0, run_id="trusted-run"
+    )
+    descriptor = await store.get_artifact("published-" + published.id, scope)
+    assert descriptor is not None
+    assert descriptor.run_id == "trusted-run"
+    assert descriptor.scope == scope
+    assert await store.get_artifact("published-" + published.id, {"project": "sibling"}) is None
+
+
+async def test_record_retention_does_not_read_or_delete_expired_s3_bytes(publication_store):
+    from server.app.storage.config_models import ArtifactDefinition
+
+    store, bodies, client = publication_store
+    scope = {"project": "owner"}
+    await store.upsert_artifact(ArtifactDefinition(
+        id="response", name="response", content="old response", scope=scope, run_id="run"
+    ))
+    bodies.clear()  # Storage lifecycle has already expired the body.
+    client.reset_mock()
+    records = await store.list_retention_artifacts(scope, "run")
+    assert len(records) == 1
+    assert await store.delete_artifact_version(records[0])
+    assert await store.list_retention_artifacts(scope, "run") == []
+    client.get_object.assert_not_called()
+    client.delete_object.assert_not_called()
+    client.put_object.assert_not_called()
+
+
+@pytest.mark.parametrize("code", ["404", "NotFound", "NoSuchKey"])
+def test_missing_body_read_requires_accessible_bucket(code):
+    client = MagicMock()
+    objects = S3ObjectStore(client, bucket="test", base_prefix="test", hmac_key="test")
+    client.get_object.side_effect = error(code, 404)
+    with pytest.raises(ArtifactContentNotFoundError):
+        objects.get("body")
+    client.head_bucket.assert_called_once_with(Bucket="test")
+
+
+@pytest.mark.parametrize("code,status", [("AccessDenied", 403), ("SlowDown", 503), ("NoSuchBucket", 404)])
+def test_body_read_failures_are_not_expiration(code, status):
+    client = MagicMock()
+    objects = S3ObjectStore(client, bucket="test", base_prefix="test", hmac_key="test")
+    failure = error(code, status)
+    client.get_object.side_effect = failure
+    with pytest.raises(ClientError) as caught:
+        objects.get("body")
+    assert caught.value is failure
+    client.head_bucket.assert_not_called()
+
+
+def test_body_read_generic_404_with_unavailable_bucket_is_not_expiration():
+    client = MagicMock()
+    objects = S3ObjectStore(client, bucket="test", base_prefix="test", hmac_key="test")
+    client.get_object.side_effect = error("404", 404)
+    client.head_bucket.side_effect = error("AccessDenied", 403)
+    with pytest.raises(ClientError):
+        objects.get("body")
+
+
+async def test_legacy_response_expiry_preserves_task_without_substituting_history(publication_store):
+    store, bodies, client = publication_store
+    scope = {"project": "one"}
+    await store.upsert_artifact(ArtifactDefinition(
+        id="task-legacy-response", name="response", artifact_type="artifact", path="response",
+        content="Final answer", run_id="run-one", scope=scope,
+    ))
+    backend = AsyncMock()
+    backend.list_messages_for_session.return_value = [
+        SimpleNamespace(id="unrelated", role="assistant", content="Other task answer",
+                        metadata={"task_id": "other"}),
+        SimpleNamespace(id="same-task", role="assistant", content="Earlier progress",
+                        metadata={"task_id": "legacy"}),
+    ]
+    projector = CognitionTaskStore(AsyncMock(), backend, agent_name="reporter", artifact_store=store)
+    task = RuntimeTask(
+        id="legacy", context_id="context", session_id="session", agent_name="reporter",
+        status=TaskStatus.COMPLETED, effective_scope=scope,
+        created_at="2026-09-08T00:00:00Z", updated_at="2026-09-08T00:01:00Z",
+    )
+    first = await projector.project(task)
+    assert first.artifacts[0].parts[0].text == "Final answer"
+    key = client.put_object.call_args.kwargs["Key"]
+    body = bodies.pop(key)
+    expired = await projector.project(task)
+    assert expired.status.state == TaskState.TASK_STATE_COMPLETED
+    assert expired.artifacts[0].artifact_id == "task-legacy-response"
+    assert expired.artifacts[0].parts[0].text == "Response content is no longer available."
+    assert expired.artifacts[0].parts[0].metadata["cognition"]["contentAvailability"] == "unavailable"
+    assert expired.history == first.history
+    assert len(expired.history) == 1
+    backend.list_messages_for_session.assert_awaited_with("session", scope)
+    bodies[key] = body
+    restored = await projector.project(task)
+    assert restored.artifacts == first.artifacts
+    client.get_object.side_effect = error("AccessDenied", 403)
+    with pytest.raises(RuntimeError, match="unavailable from configured durable storage"):
+        await projector.project(task)

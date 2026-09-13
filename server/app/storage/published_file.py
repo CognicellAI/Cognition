@@ -34,6 +34,8 @@ async def publish_file(
     filename: str,
     media_type: str,
     inline_limit: int,
+    *,
+    run_id: str | None = None,
 ) -> PublishedFile:
     """Verify a binary upload before activating its scoped manifest."""
     identity = str(uuid4())
@@ -72,6 +74,7 @@ async def publish_file(
                 content_type="application/vnd.cognition.published-file+json",
                 scope=scope,
                 source="api",
+                run_id=run_id,
             )
         )
     return result

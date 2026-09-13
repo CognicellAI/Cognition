@@ -534,6 +534,27 @@ async def update_session(
     return SessionResponse.from_core(session)
 
 
+@router.post("/{session_id}/sandbox/release")
+async def release_session_sandbox(
+    session_id: str,
+    scope: SessionScope = Depends(get_scope_dep),
+    agent_manager: SessionAgentManager = Depends(get_session_agent_manager_dep),
+    store: StorageBackend = Depends(get_storage_backend_dep),  # noqa: B008
+) -> dict[str, Literal["complete", "pending", "untracked", "busy"]]:
+    """Release idle local compute without deleting or aborting session history."""
+    session = await _get_scoped_session(session_id, store, scope)
+    if session.status not in {
+        SessionStatus.IDLE, SessionStatus.DONE, SessionStatus.FAILED,
+        SessionStatus.ABORTED, SessionStatus.EXPIRED,
+        SessionStatus.INACTIVE, SessionStatus.ERROR,
+    } or await store.get_active_run(session_id, session.scopes) is not None:
+        return {"status": "busy"}
+    observed = await asyncio.to_thread(
+        agent_manager.release_sandbox_backend, session_id, only_if_idle=True
+    )
+    return {"status": observed}
+
+
 @router.delete(
     "/{session_id}",
     status_code=status.HTTP_204_NO_CONTENT,

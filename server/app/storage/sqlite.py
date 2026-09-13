@@ -353,11 +353,13 @@ class SqliteStorageBackend:
         params.extend([session_id, effective_scope_key(effective_scope)])
 
         async with aiosqlite.connect(self.db_path) as db:
-            await db.execute(
-                f"UPDATE sessions SET {', '.join(updates)} WHERE id = ? AND scope_key = ?",
+            cursor = await db.execute(
+                f"UPDATE sessions SET {', '.join(updates)} WHERE id = ? AND scope_key = ? AND status != 'expired'",
                 params,
             )
             await db.commit()
+            if cursor.rowcount == 0:
+                return None
 
         return session
 
@@ -373,7 +375,7 @@ class SqliteStorageBackend:
             await db.execute(
                 """
                 UPDATE sessions SET message_count = ?, updated_at = ?
-                WHERE id = ? AND scope_key = ?
+                WHERE id = ? AND scope_key = ? AND status != 'expired'
                 """,
                 (count, now, session_id, effective_scope_key(effective_scope)),
             )
@@ -399,6 +401,75 @@ class SqliteStorageBackend:
                 )
                 return True
         return False
+
+    async def scan_retention_sessions(
+        self, before: str, *, after_id: str = "", limit: int = 100
+    ) -> list[Session]:
+        """Private bounded scan, including scopes with no current Agent definition."""
+        from server.app.storage.retention import validate_retention_scan
+
+        validate_retention_scan(before, limit)
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            rows = await (await db.execute(
+                "SELECT * FROM sessions WHERE julianday(updated_at) <= julianday(?) AND id > ? "
+                "AND status IN ('idle','done','failed','aborted','inactive','error','expired') "
+                "ORDER BY id LIMIT ?", (before, after_id, limit),
+            )).fetchall()
+        return [self._row_to_session(row) for row in rows]
+
+    async def claim_retention_session(
+        self, session_id: str, scope: dict[str, str], before: str
+    ) -> Session | None:
+        """Serialize expiry with task/run admission using the SQLite write lock."""
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            await db.execute("BEGIN IMMEDIATE")
+            row = await (await db.execute(
+                "UPDATE sessions SET status='expired' WHERE id=? AND scope_key=? "
+                "AND julianday(updated_at)<=julianday(?) "
+                "AND status IN ('idle','done','failed','aborted','inactive','error','expired') "
+                "AND NOT EXISTS (SELECT 1 FROM runtime_tasks WHERE session_id=sessions.id "
+                "AND (status NOT IN ('completed','failed','canceled','rejected') "
+                "OR julianday(updated_at)>julianday(?))) "
+                "AND NOT EXISTS (SELECT 1 FROM session_runs WHERE session_id=sessions.id "
+                "AND (status NOT IN ('done','failed','aborted','rejected') OR julianday(updated_at)>julianday(?))) "
+                "AND NOT EXISTS (SELECT 1 FROM messages WHERE session_id=sessions.id "
+                "AND julianday(created_at)>julianday(?)) "
+                "AND NOT EXISTS (SELECT 1 FROM sessions other WHERE other.thread_id=sessions.thread_id "
+                "AND other.id!=sessions.id) RETURNING *",
+                (session_id, effective_scope_key(scope), before, before, before, before),
+            )).fetchone()
+            await db.commit()
+        return self._row_to_session(row) if row is not None else None
+
+    async def purge_retention_session(self, session_id: str, scope: dict[str, str]) -> bool:
+        """Delete operational rows only after a successful retention claim."""
+        scope_key = effective_scope_key(scope)
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute("BEGIN IMMEDIATE")
+            row = await (await db.execute(
+                "SELECT id FROM sessions WHERE id=? AND scope_key=? AND status='expired'",
+                (session_id, scope_key),
+            )).fetchone()
+            if row is None:
+                return False
+            for table in ("session_events", "session_runs", "runtime_tasks"):
+                await db.execute(f"DELETE FROM {table} WHERE session_id=? AND scope_key=?",
+                                 (session_id, scope_key))
+            await db.execute("DELETE FROM messages WHERE session_id=?", (session_id,))
+            await db.execute("DELETE FROM sessions WHERE id=? AND scope_key=?", (session_id, scope_key))
+            await db.commit()
+        return True
+
+    @staticmethod
+    async def _assert_session_writable(db: Any, session_id: str, scope: dict[str, str] | None) -> None:
+        row = await (await db.execute(
+            "SELECT status FROM sessions WHERE id=? AND scope_key=?",
+            (session_id, effective_scope_key(scope)),
+        )).fetchone()
+        if row is None or row[0] == "expired":
+            raise ValueError("Session is unavailable for new work")
 
     # Message operations
     async def create_message(
@@ -433,6 +504,8 @@ class SqliteStorageBackend:
         now = message.created_at.isoformat()
 
         async with aiosqlite.connect(self.db_path) as db:
+            await db.execute("BEGIN IMMEDIATE")
+            await self._assert_session_writable(db, session_id, effective_scope)
             await db.execute(
                 """
                 INSERT INTO messages (id, session_id, role, content, parent_id, created_at, tool_calls, tool_call_id, token_count, model_used, metadata)
@@ -565,6 +638,11 @@ class SqliteStorageBackend:
         projected_messages = project_checkpoint_messages(session_id, checkpoint_messages)
 
         async with aiosqlite.connect(self.db_path) as db:
+            await db.execute("BEGIN IMMEDIATE")
+            try:
+                await self._assert_session_writable(db, session_id, effective_scope)
+            except ValueError:
+                return 0
             await db.execute("DELETE FROM messages WHERE session_id = ?", (session_id,))
             for message in projected_messages:
                 await db.execute(
@@ -659,6 +737,8 @@ class SqliteStorageBackend:
             metadata=metadata,
         )
         async with aiosqlite.connect(self.db_path) as db:
+            await db.execute("BEGIN IMMEDIATE")
+            await self._assert_session_writable(db, session_id, effective_scope)
             await db.execute(
                 """
                 INSERT INTO runtime_tasks (
@@ -889,6 +969,8 @@ class SqliteStorageBackend:
             task_id=task_id,
         )
         async with aiosqlite.connect(self.db_path) as db:
+            await db.execute("BEGIN IMMEDIATE")
+            await self._assert_session_writable(db, session_id, effective_scope)
             await db.execute(
                 """
                 INSERT INTO session_runs (
@@ -1074,6 +1156,11 @@ class SqliteStorageBackend:
         params.append(now)
         params.extend([run_id, effective_scope_key(effective_scope)])
         async with aiosqlite.connect(self.db_path) as db:
+            await db.execute("BEGIN IMMEDIATE")
+            try:
+                await self._assert_session_writable(db, run.session_id, effective_scope)
+            except ValueError:
+                return None
             await db.execute(
                 f"UPDATE session_runs SET {', '.join(updates)} WHERE id = ? AND scope_key = ?",
                 params,
@@ -1102,6 +1189,7 @@ class SqliteStorageBackend:
             raise ValueError("Run not found at exact event scope")
         async with aiosqlite.connect(self.db_path) as db:
             await db.execute("BEGIN IMMEDIATE")
+            await self._assert_session_writable(db, session_id, effective_scope)
             async with db.execute(
                 """
                 SELECT COALESCE(MAX(sequence), 0) + 1 FROM session_events

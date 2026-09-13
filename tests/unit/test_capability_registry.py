@@ -81,3 +81,19 @@ class TestCapabilityEndpoint:
         settings = Settings(sandbox_backend="local")
         result = await get_capabilities(settings)
         assert result.deployment["sandbox_backend"] == "local"
+
+
+@pytest.mark.asyncio
+async def test_publication_capability_reports_support_separately_from_enablement():
+    result = await get_capabilities(Settings(artifact_publication_enabled=False))
+    assert result.features["scoped_artifact_publication_policy"] is True
+    assert result.features["artifact_publication"] is False
+    assert result.deployment["artifact_publication"]["policy_enforcement"] == "current_agent_before_upload"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("require_policy", [False, True])
+async def test_publication_capability_reports_explicit_policy_requirement(require_policy):
+    settings = Settings(artifact_publication_require_agent_policy=require_policy)
+    result = await get_capabilities(settings)
+    assert result.deployment["artifact_publication"]["require_agent_policy"] is require_policy

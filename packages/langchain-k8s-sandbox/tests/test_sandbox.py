@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Generator
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -155,8 +156,14 @@ class TestK8sSandboxExecute:
 
 
 class TestK8sSandboxTerminate:
+    @pytest.fixture(autouse=True)
+    def absent_resources(self) -> Generator[None, None, None]:
+        with patch.object(K8sSandbox, "_read_resource", return_value=None):
+            yield
+
     def test_terminate_calls_sdk(self) -> None:
         sb = K8sSandbox()
+        sb._teardown_pod_name = "pod-1"
         mock_sandbox = MagicMock()
         sb._sandbox = mock_sandbox
 
@@ -167,25 +174,70 @@ class TestK8sSandboxTerminate:
 
     def test_terminate_idempotent(self) -> None:
         sb = K8sSandbox()
+        sb._teardown_pod_name = "pod-1"
         sb.terminate()
 
-    def test_terminate_failure_does_not_raise(self) -> None:
+    def test_terminate_failure_preserves_handle_for_retry(self) -> None:
         sb = K8sSandbox()
+        sb._teardown_pod_name = "pod-1"
         mock_sandbox = MagicMock()
         mock_sandbox.terminate.side_effect = RuntimeError("cleanup failed")
         sb._sandbox = mock_sandbox
 
+        client = MagicMock()
+        sb._client = client
+        with pytest.raises(RuntimeError, match="cleanup failed"):
+            sb.terminate()
+        assert sb._sandbox is mock_sandbox
+        assert sb._client is client
+
+        mock_sandbox.terminate.side_effect = None
         sb.terminate()
+        assert mock_sandbox.terminate.call_count == 2
         assert sb._sandbox is None
+        assert sb._client is None
 
     def test_execute_after_terminate_creates_new(self) -> None:
         sb = K8sSandbox()
+        sb._teardown_pod_name = "pod-1"
         mock_sandbox = MagicMock()
         sb._sandbox = mock_sandbox
 
         sb.terminate()
         assert sb._sandbox is None
 
+
+    def test_pending_pod_retains_handle_until_retry(self) -> None:
+        sb = K8sSandbox()
+        sb._teardown_pod_name = "pod-1"
+        sandbox = MagicMock()
+        sb._sandbox = sandbox
+        with patch.object(sb, "_read_resource", side_effect=[None, None, {}]):
+            sb.terminate()
+        assert sb.runtime_metadata["teardown_status"] == "pending"
+        assert sb._sandbox is sandbox
+        sb.terminate()
+        assert sb.runtime_metadata["teardown_status"] == "complete"
+        assert sb._sandbox is None
+
+    def test_unknown_pod_never_confirms_deletion(self) -> None:
+        sb = K8sSandbox()
+        sb._sandbox = MagicMock()
+        sb.terminate()
+        assert sb.runtime_metadata["teardown_status"] == "pending"
+        sb._sandbox.terminate.assert_not_called()
+
+    def test_observation_error_preserves_pending(self) -> None:
+        sb = K8sSandbox()
+        sb._sandbox = MagicMock()
+        sb._teardown_pod_name = "pod-1"
+        with (
+            patch.object(sb, "_read_resource", side_effect=TimeoutError),
+            pytest.raises(TimeoutError),
+        ):
+            sb.terminate()
+        assert sb._sandbox is not None
+        assert sb.runtime_metadata["teardown_status"] == "pending"
 
 class TestK8sSandboxUploadDownload:
     def test_upload_files_success(self) -> None:
@@ -250,3 +302,48 @@ class TestK8sSandboxUploadDownload:
         results = sb.download_files(["/nonexistent.py"])
         assert len(results) == 1
         assert results[0].error == "file_not_found"
+
+
+class TestK8sResourceObservation:
+    @pytest.mark.parametrize("kind", ["pods", "sandboxes", "sandboxclaims"])
+    def test_only_not_found_means_absent(self, kind: str) -> None:
+        exceptions = pytest.importorskip("kubernetes.client.exceptions")
+        sb = K8sSandbox(namespace="isolated")
+        sb._sandbox = MagicMock()
+        helper = sb._sandbox.k8s_helper
+        method = (
+            helper.core_v1_api.read_namespaced_pod if kind == "pods"
+            else helper.custom_objects_api.get_namespaced_custom_object
+        )
+        for status in (403, 429, 500):
+            method.side_effect = exceptions.ApiException(status=status)
+            with pytest.raises(exceptions.ApiException):
+                sb._read_resource(kind, "owned-resource")
+        method.side_effect = TimeoutError("unreachable")
+        with pytest.raises(TimeoutError):
+            sb._read_resource(kind, "owned-resource")
+        method.side_effect = exceptions.ApiException(status=404)
+        assert sb._read_resource(kind, "owned-resource") is None
+        arguments = method.call_args.kwargs
+        assert arguments["namespace"] == "isolated"
+        assert arguments["name"] == "owned-resource"
+        assert arguments["_request_timeout"] == (5, 10)
+        if kind != "pods":
+            assert arguments["plural"] == kind
+            assert arguments["group"] == (
+                "extensions.agents.x-k8s.io" if kind == "sandboxclaims"
+                else "agents.x-k8s.io"
+            )
+
+
+def test_acquisition_rechecks_pending_after_lock() -> None:
+    sb = K8sSandbox()
+    lock = MagicMock()
+
+    def teardown_started() -> None:
+        sb._teardown_status = "pending"
+
+    lock.__enter__.side_effect = teardown_started
+    sb._lock = lock
+    with pytest.raises(RuntimeError, match="teardown is pending"):
+        sb._ensure_sandbox()

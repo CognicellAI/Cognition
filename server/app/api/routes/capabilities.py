@@ -51,6 +51,8 @@ async def get_capabilities(
         "hitl": True,
         "permissions": True,
         "artifacts": True,
+        "artifact_publication": settings.artifact_publication_enabled,
+        "scoped_artifact_publication_policy": True,
         "context_policy": True,
         "context_controls": True,
         "tool_safety": True,
@@ -98,5 +100,12 @@ async def get_capabilities(
         scope_keys=list(settings.scope_keys),
         deployment={
             "sandbox_backend": settings.sandbox_backend,
+            "artifact_publication": {
+                "enabled": settings.artifact_publication_enabled,
+                "require_agent_policy": settings.artifact_publication_require_agent_policy,
+                "max_bytes": settings.artifact_publication_max_bytes,
+                "inline_max_bytes": settings.artifact_publication_inline_max_bytes,
+                "policy_enforcement": "current_agent_before_upload",
+            },
         },
     )

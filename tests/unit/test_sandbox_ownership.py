@@ -8,6 +8,8 @@ import pytest
 
 from server.app.agent.cognition_agent import CognitionAgentParams, create_cognition_agent
 from server.app.storage.config_models import LambdaMicroVmQuota
+from server.app.storage.config_registry import MemoryConfigRegistry
+from server.app.storage.config_store import DefaultConfigStore
 from tests.unit.test_cognition_agent_lambda_microvm_profile import _profile, _settings
 from tests.unit.test_sandbox_lifecycle_quotas import FakeSandboxBackend, _manager
 
@@ -108,6 +110,8 @@ def test_config_change_waits_for_confirmed_teardown(teardown):
 async def test_real_agent_factory_reuses_resolved_profile_and_replaces_changed_role(tmp_path):
     manager = _manager()
     profile = _profile()
+    store = DefaultConfigStore(MemoryConfigRegistry(), workspace_path=tmp_path)
+    await store.upsert_sandbox_profile(profile)
     params = CognitionAgentParams(
         project_path=tmp_path,
         model=MagicMock(),
@@ -116,6 +120,7 @@ async def test_real_agent_factory_reuses_resolved_profile_and_replaces_changed_r
         settings=_settings(tmp_path),
         scope={"tenant": "a"},
         pinned_sandbox_profile_config=profile,
+        config_store=store,
         _sandbox_acquirer=manager.sandbox_acquirer(
             "session",
             scope={"tenant": "a"},
@@ -178,12 +183,13 @@ def test_slow_teardown_does_not_block_unrelated_acquisition():
         release = pool.submit(manager.release_sandbox_backend, "one")
         assert started.wait(5)
         try:
+            assert manager.release_sandbox_backend("one") == "pending"
             acquire = manager.sandbox_acquirer("two", scope={}, agent_name="reporter", run_id="2")
             created = pool.submit(acquire, "config", lambda: FakeSandboxBackend(sandbox_id="two"))
             assert created.result(timeout=1).id == "two"
         finally:
             proceed.set()
-        release.result(timeout=5)
+        assert release.result(timeout=5) == "complete"
 
 
 async def test_session_delete_does_not_delete_history_until_teardown_confirmed(monkeypatch):
@@ -205,3 +211,64 @@ async def test_session_delete_does_not_delete_history_until_teardown_confirmed(m
     backend.teardown_status = "complete"
     await delete_session("session", manager.settings, manager, scope, store)
     store.delete_session.assert_awaited_once_with("session", {"tenant": "one"})
+
+
+def test_release_observation_distinguishes_untracked_from_confirmed():
+    manager = _manager()
+    assert manager.release_sandbox_backend("session") == "untracked"
+    backend = FakeSandboxBackend(sandbox_id="one", teardown_status="pending")
+    manager.register_sandbox_backend("session", backend, scope={"project": "one"})
+    assert manager.release_sandbox_backend("session") == "pending"
+    assert manager._sandbox_backends["session"] is backend
+    backend.teardown_status = "complete"
+    assert manager.release_sandbox_backend("session") == "complete"
+    # No durable receipt is retained: a later call must not invent confirmation.
+    assert manager.release_sandbox_backend("session") == "untracked"
+
+
+def test_failed_release_remains_pending_for_retry():
+    manager = _manager()
+    backend = FakeSandboxBackend(sandbox_id="one")
+    manager.register_sandbox_backend("session", backend, scope={})
+    with patch.object(backend, "terminate", side_effect=RuntimeError("provider unavailable")):
+        assert manager.release_sandbox_backend("session") == "pending"
+    assert manager.release_sandbox_backend("session") == "complete"
+
+
+def test_pending_teardown_rejects_new_runtime_registration():
+    manager = _manager()
+    backend = FakeSandboxBackend(sandbox_id="one", teardown_status="pending")
+    manager.register_sandbox_backend("session", backend, scope={})
+    assert manager.release_sandbox_backend("session") == "pending"
+    with pytest.raises(RuntimeError, match="teardown is not confirmed"):
+        manager.register_runtime("session", object())
+    assert manager.active_runtime_count("session") == 0
+    backend.teardown_status = "complete"
+    assert manager.release_sandbox_backend("session") == "complete"
+    runtime = object()
+    manager.register_runtime("session", runtime)
+    assert manager.get_runtime("session") is runtime
+
+
+def test_idle_only_release_preserves_active_work_then_releases_idle_backend():
+    manager = _manager()
+    backend = FakeSandboxBackend(sandbox_id="idle-only")
+    manager.register_sandbox_backend("session", backend, scope={"tenant": "one"})
+    runtime = object()
+    manager.register_runtime("session", runtime)
+    assert manager.release_sandbox_backend("session", only_if_idle=True) == "busy"
+    assert not backend.terminated
+    assert manager.get_runtime("session") is runtime
+    manager.unregister_runtime("session", runtime)
+    assert manager.release_sandbox_backend("session", only_if_idle=True) == "complete"
+    assert backend.terminated
+
+
+def test_idle_only_pending_release_blocks_new_runtime_registration():
+    manager = _manager()
+    backend = FakeSandboxBackend(sandbox_id="idle-pending", teardown_status="pending")
+    manager.register_sandbox_backend("session", backend, scope={"tenant": "one"})
+    assert manager.release_sandbox_backend("session", only_if_idle=True) == "pending"
+    with pytest.raises(RuntimeError, match="teardown"):
+        manager.register_runtime("session", object())
+    assert manager._sandbox_backends["session"] is backend

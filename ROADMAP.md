@@ -1,5 +1,21 @@
 # Cognition Roadmap
 
+## Offline artifact backend migration (2026-09-09)
+
+- Generic operator maintenance for existing PostgreSQL inline artifacts when enabling S3, preserving exact scope, version, content and run ownership.
+- Reuse existing S3 upload verification and manifest activation; bounded pages, preview by default, resumable failures, stopped writers and restorable backup required. No online migration or automatic deployment cutover.
+- Status: bounded migration implemented on integration branch. Six migration tests and twelve S3 store regressions pass. A real disposable PostgreSQL-to-S3-compatible-store rehearsal preserved exact scopes and bytes across one-row pages. Existing-data cutover remains operator-owned and has not run.
+
+## Scoped publication and runtime retention (2026-09-09)
+
+- Category: Feature / Enhancement; priority P1; layers 1, 2, 4 and 6; estimated effort 5–8 days.
+- Provide optional definition-driven publication policy bounded by deployment settings, with current exact-scope enforcement for cached/resumed execution. Preserve existing behavior when omitted; no builder product concepts.
+- Provide bounded runtime maintenance that discovers inactive scopes and protects active/resumable dependencies, with dry-run and truthful cleanup outcomes across runtime-owned stores.
+- Acceptance: definition round trips; scope isolation; deployment ceilings; disable/limit changes during resumed execution; unavailable/deleted configuration denial; bounded inactive-scope cleanup, retries and live-dependency protection; independent runtime tests and documentation.
+- Dependencies: existing config registry, publication middleware, runtime storage and lifecycle ports. Inspect storage coverage before finalizing maintenance API. Existing persistent data must not be deleted by default.
+- Compatibility: additive configuration; omitted publication policy retains deployment behavior. No A2A envelope changes or product-specific schema. Document any storage/interface migration before implementation.
+- Status: scoped publication implemented on isolated feature branch. Publication/API/manifest suite: 116 passed; runtime regressions: 49 passed; final policy/capability checks: 25 passed. Targeted Ruff and mypy passed. Complete runtime retention and local integration remain pending; no main/release merge authorized.
+
 ## A2UI candidate release hardening (2026-09-08)
 
 - Category: security/bug fixes and architectural correction; layers 1, 4, 5, 6, 7; effort 2 days. Integrate current main on `release/v0.15.0`; A2UI is included as optional pinned Candidate support.
@@ -696,3 +712,80 @@ Per AGENTS.md requirements:
    - Security/Bug/Performance/Dependency: As part of PR
 
 **Last Updated**: 2026-05-25 (v0.10.0 final release validation complete — `0.10.0-rc1` app and sandbox image gate passed)
+
+
+## Integration branch: configurable session record retention
+
+Status: implemented and regression-tested on the isolated integration branch; deployment acceptance pending.
+Layers: foundation settings, persistence, runtime maintenance and private CLI.
+
+Provide deployment-wide enablement (default off), inactivity age, batch size and interval through a private maintenance worker. Claim eligible inactive contexts before deleting their messages, tasks, runs, checkpoint thread and exact observed artifact records. Preserve active/resumable dependencies and retry identity on failure. S3 Lifecycle independently expires published bytes; maintenance neither reads nor deletes S3 bodies. Legacy opportunistic task TTL and session retention are mutually exclusive. No product-specific schema or Agent override is introduced.
+
+Validation: 118 runtime/session/scope/artifact/publication tests passed, one existing skip, including disposable PostgreSQL and configured CLI preview/apply; source lint and ten-file type checks pass. Remaining admission: synthetic local deployment, provider storage lifecycle coverage for non-published S3 bodies, and review of complete lifecycle guarantees. No production scheduling or deletion policy is enabled by this branch.
+
+## Integration branch: explicit publication opt-in
+
+Category: feature enhancement; layers 1 and 4. Shared deployments may require explicit Agent publication policy using `COGNITION_ARTIFACT_PUBLICATION_REQUIRE_AGENT_POLICY`. Default false preserves v0.15 inheritance. With the setting enabled, omitted or removed policy denies publication, while explicit policy remains bounded by deployment enablement and limits. No builder-specific scope or product policy is introduced.
+
+Acceptance: omitted policy is denied, explicit opt-in cannot widen deployment limits, and current-policy removal revokes subsequent publication. Publication/policy/settings regressions: 97 passed, two existing skips. Source lint and type checks pass. All 13 capability reporting checks pass. Local deployment remains pending; no release admission is implied.
+
+
+## Local development publication reads
+
+Feature enhancement, execution layer: add bounded regular-file reads to the local development sandbox so the existing publication middleware can be exercised without a remote provider. Reject traversal, out-of-workspace paths, symlinks at every path component, nonregular files and oversized bodies. The local shell remains unisolated; this is not production sandbox admission. Implemented with documentation; 32 bounded-read/publication-policy/local-sandbox tests pass, targeted Ruff and source mypy pass. Local integration and remote-provider acceptance remain separate.
+
+### Explicit sandbox release observations (integration branch)
+
+- Category: Enhancement; layers 4 (runtime lifecycle) and 3 (execution).
+- General use case: embedding applications need to distinguish completed backend teardown from a pending attempt or a sandbox not tracked by this process, without deleting session history.
+- Contract: the existing internal release method returns `complete`, `pending`, or `untracked`. Only a tracked backend removed after confirmed teardown returns `complete`; concurrent teardown returns `pending`; absent process-local ownership returns `untracked`.
+- Compatibility: existing callers may ignore the additive return value. No public API, persistent receipt, distributed ownership, storage deletion or new authorization boundary is introduced.
+- Acceptance: completed, pending/retry, concurrent and untracked releases are independently tested; lifecycle events and quota retention remain intact.
+- Effort: small. Dependencies: existing SessionAgentManager ownership tracking and backend teardown metadata.
+- Status: internal result implemented; 24 ownership/quota tests and Ruff pass. A scoped public release/cutover contract remains separate work.
+
+- Runtime lifecycle bug fix: reject new runtime registration while a session sandbox is releasing or has unconfirmed teardown. The ownership lock makes registration and the teardown marker mutually exclusive. Regression reproduces registration against a pending backend before the fix. This does not provide distributed admission or revoke future runs after teardown completes.
+
+### S3 artifact lifecycle classification
+
+- Enhancement; layer 2 (persistence); small; depends on existing S3 object tagging.
+- General use case: distinguish run-associated artifact bodies and publication descriptors from long-lived artifacts for operator-managed lifecycle rules.
+- Acceptance: new run bodies use `run-artifact`, publication descriptors use `publication-descriptor`, and artifacts without either association remain untagged; publication bytes retain `published-file`. Classification does not enable deletion, change record retention, or retag historical objects.
+- Compatibility: publishing these tagged objects requires S3 PutObjectTagging permission. Operators must review tag-based rules before adoption. Existing untagged objects retain their current policy.
+- Status: classification implemented; 72 storage/publication tests and Ruff pass. Mypy reports an unused-ignore in unchanged checkpoint telemetry. Expired descriptor/text retrieval behavior and final lifecycle policy admission remain separate requirements.
+
+- Persistence bug fix: missing S3 descriptor/body reads propagate ArtifactContentNotFoundError only after bucket accessibility is confirmed. A2A publication projection can retain completed task/artifact identity for an expired descriptor, while authorization and provider failures remain errors. Tests cover binary/descriptor expiry and restoration plus GET error classification. Text-only legacy task fallback remains a separate integration check.
+
+- A2A projection bug fix: expired legacy response artifact bodies preserve completed task state and stable response identity with an unavailable-content notice. Existing task-scoped message history is unchanged; earlier assistant progress is not substituted for the expired final response. Twenty-five retention tests and Ruff pass. Storage outages still propagate as errors.
+
+- Bug fix (Layer 3, Kubernetes sandbox): propagate SDK termination failures and preserve handles for retry instead of reporting successful cleanup. Regression test covers failure followed by retry; provider Pod deletion confirmation remains separate.
+
+- Bug fix (Layer 3): Kubernetes teardown now retains pending handles until claim, Sandbox and known Pod absence are observed. Backend unit tests cover pending Pod, retry, unknown identity and observation errors. Live Kubernetes acceptance remains pending.
+
+## Integration branch: live sandbox-profile admission
+
+Category: Security fix / runtime hardening. Layer4 Agent Runtime → Layer3 Execution. Status: in progress. General use case: an administrative profile deletion or change must not be bypassed by a pinned run manifest. Before constructing or reusing a Lambda sandbox, resolve the profile under current trusted scope and reject missing or changed pinned configuration. Preserve session history and active execution; this is not provider teardown or distributed fencing. Acceptance: unchanged scoped pins work; missing, foreign-scope and changed profiles fail before backend acquisition; existing ownership tests pass. Dependencies: existing ConfigStore profile resolution and pinned manifests. Compatibility: resuming a run whose sandbox profile was deleted or changed now fails admission rather than reviving historical infrastructure configuration. Effort: small factory/verification slice; scoped release API remains separate work.
+
+## Bug fix: clear Agent sandbox overrides through PATCH
+
+Layer 6 API: explicit null for sandbox_profile or sandbox_execution_role_arn clears that override; omission preserves it. Generic use case: return an Agent to deployment defaults without replacing unrelated configuration. Existing non-null updates and ETag conditions are unchanged. Explicit null previously acted as no-op, so clients relying on that bug must omit the field instead. Independent parameterized CRUD regression reproduces both failures and checks persistence and omission semantics. This changes configuration only, not existing sandbox teardown.
+
+## Generic idle-only sandbox release admission
+
+Layer 5 orchestration; small enhancement using existing manager ownership lock. Add opt-in only_if_idle release behavior for operators reclaiming idle compute while preserving active work and history. Acceptance: active runtime returns busy without teardown; idle release uses existing confirmed/pending/untracked evidence and prevents concurrent local registration. Existing callers retain default release behavior. Dependencies: existing sandbox ownership registration guard. Process-local guarantee only; no distributed fencing or provider recovery claim. Scoped HTTP exposure remains a separate incomplete integration step.
+
+## Scoped non-destructive sandbox release endpoint
+
+Layer 6 API enhancement, small effort. POST /sessions/{session_id}/sandbox/release uses exact session scope, protects persisted active/resumable work and invokes idle-only manager release. Acceptance: foreign scope404, active/approval sessions busy, manager observations preserved, history unchanged. Depends on idle-only release admission. Existing APIs unchanged; process-local observations are not distributed fencing or proof of absence after restart.
+
+## Optional transient MicroVM initialization
+
+Layer 3 execution enhancement; small effort; depends on existing authenticated command-server transport. General use case: embedding applications initialize custom runtime images after allocation with short-lived launch material that must not be stored in AWS launch metadata or Agent profiles. Add an optional SDK callback receiving the provider VM identity and returning a JSON object for direct /run initialization before healthcheck/commands. Builder retains authorization and payload ownership. Acceptance: callback executes once per allocation, no payload in provider request/metadata/logging, initialization failure prevents commands and requests teardown, ordinary launches unchanged. Additive constructor contract; no migration, credential resolver, product vocabulary or HTTP configuration surface. Server-level trusted-scope wiring remains separate work.
+
+Status: SDK callback implemented;22 MicroVM adapter tests and targeted Ruff pass. Tests cover pre-command ordering, one-time initialization across readiness retries, unchanged ordinary launches, rejected oversized material, callback/transport failures, teardown retry and secret-safe error reporting even when teardown fails. External provider smoke using a custom image also passed; this does not establish declarative server integration or credential policy.
+
+## Scoped runtime initialization callback transport
+
+Enhancement; layers1 settings,3 execution and4 Agent construction; medium effort. Deployment-owned HTTPS callback URL and bearer token, per-profile required-initialization flag defaultfalse. Bind trusted effective scope and resolved profile/image/lifetime before lazy allocation; send VM identity only after allocation. Enforce bounded request/response, no redirects/proxy inheritance, redacted failures and SDK pre-command failure closure. General use case: externally authorized transient initialization for custom images. No credential policy, secret registry, Agent-controlled callback URL or persistent payload. Additive settings/profile fields, existing launches unchanged. Acceptance: scoped request propagation, missing config fails before allocation, foreign profile admission unchanged, network failures/oversize rejected, bearer/payload redaction, wrapper-to-SDK wiring. Dependencies:4623b3b SDK callback.
+
+Status: callback transport, current-scope Agent factory and SDK wrapper wiring implemented. Profile create/get/patch exposes the additive default-off flag and preserves omission.47 focused tests plus51 ownership/quota/settings regressions pass (2settings skips); targeted Ruff and transport mypy pass. No deployment or live credential-authority integration yet.

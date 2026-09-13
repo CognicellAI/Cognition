@@ -434,11 +434,13 @@ class PostgresStorageBackend:
         params.append(effective_scope_key(effective_scope))
 
         async with self._pool.acquire() as conn:
-            await conn.execute(
+            result = await conn.execute(
                 f"UPDATE sessions SET {', '.join(updates)} "
-                f"WHERE id = ${param_idx - 1} AND scope_key = ${param_idx}",
+                f"WHERE id = ${param_idx - 1} AND scope_key = ${param_idx} AND status != 'expired'",
                 *params,
             )
+            if result == "UPDATE 0":
+                return None
 
         session.updated_at = now.isoformat()
         return session
@@ -456,7 +458,7 @@ class PostgresStorageBackend:
                 """
                 UPDATE sessions 
                 SET message_count = $1, updated_at = $2 
-                WHERE id = $3 AND scope_key = $4
+                WHERE id = $3 AND scope_key = $4 AND status != 'expired'
                 """,
                 count,
                 now,
@@ -486,6 +488,73 @@ class PostgresStorageBackend:
                 )
                 return True
         return False
+
+    async def scan_retention_sessions(
+        self, before: str, *, after_id: str = "", limit: int = 100
+    ) -> list[Session]:
+        """Private bounded scan across inactive namespaces."""
+        from server.app.storage.retention import validate_retention_scan
+
+        validate_retention_scan(before, limit)
+        async with self._pool.acquire() as conn:
+            rows = await conn.fetch(
+                "SELECT * FROM sessions WHERE updated_at <= $1 AND id > $2 "
+                "AND status IN ('idle','done','failed','aborted','inactive','error','expired') "
+                "ORDER BY id LIMIT $3", datetime.fromisoformat(before), after_id, limit,
+            )
+        return [self._row_to_session(row) for row in rows]
+
+    async def claim_retention_session(
+        self, session_id: str, scope: dict[str, str], before: str
+    ) -> Session | None:
+        """Lock the parent row before checking children to serialize with admission."""
+        async with self._pool.acquire() as conn, conn.transaction():
+            row = await conn.fetchrow(
+                "SELECT * FROM sessions WHERE id=$1 AND scope_key=$2 FOR UPDATE",
+                session_id, effective_scope_key(scope),
+            )
+            if row is None:
+                return None
+            claimed = await conn.fetchrow(
+                "UPDATE sessions SET status='expired' WHERE id=$1 AND scope_key=$2 "
+                "AND updated_at <= $3 "
+                "AND status IN ('idle','done','failed','aborted','inactive','error','expired') "
+                "AND NOT EXISTS (SELECT 1 FROM runtime_tasks WHERE session_id=sessions.id "
+                "AND (status NOT IN ('completed','failed','canceled','rejected') OR updated_at>$3)) "
+                "AND NOT EXISTS (SELECT 1 FROM session_runs WHERE session_id=sessions.id "
+                "AND (status NOT IN ('done','failed','aborted','rejected') OR updated_at>$3)) "
+                "AND NOT EXISTS (SELECT 1 FROM messages WHERE session_id=sessions.id AND created_at>$3) "
+                "AND NOT EXISTS (SELECT 1 FROM sessions other WHERE other.thread_id=sessions.thread_id "
+                "AND other.id!=sessions.id) RETURNING *",
+                session_id, effective_scope_key(scope), datetime.fromisoformat(before),
+            )
+        return self._row_to_session(claimed) if claimed is not None else None
+
+    async def purge_retention_session(self, session_id: str, scope: dict[str, str]) -> bool:
+        """Remove expired runtime rows after content/checkpoint cleanup."""
+        key = effective_scope_key(scope)
+        async with self._pool.acquire() as conn, conn.transaction():
+            row = await conn.fetchrow(
+                "SELECT id FROM sessions WHERE id=$1 AND scope_key=$2 AND status='expired' FOR UPDATE",
+                session_id, key,
+            )
+            if row is None:
+                return False
+            for table in ("session_events", "session_runs", "runtime_tasks"):
+                await conn.execute(f"DELETE FROM {table} WHERE session_id=$1 AND scope_key=$2",
+                                   session_id, key)
+            await conn.execute("DELETE FROM messages WHERE session_id=$1", session_id)
+            await conn.execute("DELETE FROM sessions WHERE id=$1 AND scope_key=$2", session_id, key)
+        return True
+
+    @staticmethod
+    async def _assert_session_writable(conn: Any, session_id: str, scope: dict[str, str] | None) -> None:
+        row = await conn.fetchrow(
+            "SELECT status FROM sessions WHERE id=$1 AND scope_key=$2 FOR UPDATE",
+            session_id, effective_scope_key(scope),
+        )
+        if row is None or row["status"] == "expired":
+            raise ValueError("Session is unavailable for new work")
 
     # Message operations
     async def create_message(
@@ -521,7 +590,8 @@ class PostgresStorageBackend:
             metadata=metadata,
         )
 
-        async with self._pool.acquire() as conn:
+        async with self._pool.acquire() as conn, conn.transaction():
+            await self._assert_session_writable(conn, session_id, effective_scope)
             await conn.execute(
                 """
                 INSERT INTO messages (id, session_id, role, content, parent_id, created_at, tool_calls, tool_call_id, token_count, model_used, metadata)
@@ -566,6 +636,10 @@ class PostgresStorageBackend:
 
         async with self._pool.acquire() as conn:
             async with conn.transaction():
+                try:
+                    await self._assert_session_writable(conn, session_id, effective_scope)
+                except ValueError:
+                    return 0
                 await conn.execute("DELETE FROM messages WHERE session_id = $1", session_id)
                 for message in projected_messages:
                     await conn.execute(
@@ -728,7 +802,8 @@ class PostgresStorageBackend:
             idempotency_key=idempotency_key,
             metadata=metadata,
         )
-        async with self._pool.acquire() as conn:
+        async with self._pool.acquire() as conn, conn.transaction():
+            await self._assert_session_writable(conn, session_id, effective_scope)
             await conn.execute(
                 """
                 INSERT INTO runtime_tasks (
@@ -970,7 +1045,8 @@ class PostgresStorageBackend:
             updated_at=now.isoformat(),
             task_id=task_id,
         )
-        async with self._pool.acquire() as conn:
+        async with self._pool.acquire() as conn, conn.transaction():
+            await self._assert_session_writable(conn, session_id, effective_scope)
             await conn.execute(
                 """
                 INSERT INTO session_runs (
@@ -1159,7 +1235,11 @@ class PostgresStorageBackend:
         params.append(run_id)
         param_idx += 1
         params.append(effective_scope_key(effective_scope))
-        async with self._pool.acquire() as conn:
+        async with self._pool.acquire() as conn, conn.transaction():
+            try:
+                await self._assert_session_writable(conn, run.session_id, effective_scope)
+            except ValueError:
+                return None
             await conn.execute(
                 f"UPDATE session_runs SET {', '.join(updates)} "
                 f"WHERE id = ${param_idx - 1} AND scope_key = ${param_idx}",
@@ -1188,6 +1268,7 @@ class PostgresStorageBackend:
             raise ValueError("Run not found at exact event scope")
         async with self._pool.acquire() as conn:
             async with conn.transaction():
+                await self._assert_session_writable(conn, session_id, effective_scope)
                 scope_lock = f"{effective_scope_key(effective_scope)}:{session_id}"
                 await conn.execute("SELECT pg_advisory_xact_lock(hashtext($1))", scope_lock)
                 sequence = await conn.fetchval(

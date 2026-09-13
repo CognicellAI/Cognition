@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import json
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -509,3 +510,96 @@ class TestCognitionAwsLambdaMicroVmSandboxBackend:
             assert "SandboxProfile 'missing-profile' was not resolved" in str(exc)
         else:
             raise AssertionError("expected missing SandboxProfile error")
+
+
+def test_transient_initializer_precedes_commands_and_is_not_provider_metadata(caplog):
+    client = FakeLambdaMicroVmsClient()
+    http = FakeHttpClient()
+    initializer = MagicMock(return_value={"bootstrap": "transient-canary"})
+    sandbox = LambdaMicroVmSandbox(
+        image_identifier=IMAGE_ARN, client=client, http_client=http,
+        run_hook_payload='{"mode":"waiting"}', runtime_initializer=initializer,
+    )
+    original_request = http.request
+
+    def request(method, url, **kwargs):
+        if url.endswith("/run"):
+            http.requests.append({"method": method, "url": url, **kwargs})
+            return FakeHttpResponse({"status": "ok"})
+        return original_request(method, url, **kwargs)
+
+    with patch.object(http, "request", side_effect=request):
+        sandbox.execute("true")
+        sandbox.execute("true")
+    initializer.assert_called_once_with(sandbox.id)
+    assert [r["url"].rsplit("/", 1)[-1] for r in http.requests] == [
+        "run", "healthz", "execute", "execute",
+    ]
+    assert json.loads(http.requests[0]["json"]["runHookPayload"]) == {
+        "bootstrap": "transient-canary",
+    }
+    assert "transient-canary" not in repr(client.run_kwargs)
+    assert "transient-canary" not in repr(sandbox.runtime_metadata)
+    assert "transient-canary" not in caplog.text
+    assert sandbox._runtime_initializer is None
+
+
+@pytest.mark.parametrize("failure", ["callback", "oversized", "transport"])
+def test_initialization_failure_closes_allocation_and_redacts_payload(failure, caplog):
+    client = FakeLambdaMicroVmsClient()
+    http = FakeHttpClient()
+    initializer = MagicMock(return_value={"bootstrap": "transient-canary"})
+    if failure == "callback":
+        initializer.side_effect = RuntimeError("transient-canary")
+    elif failure == "oversized":
+        initializer.return_value = {"bootstrap": "transient-canary" * 2000}
+    sandbox = LambdaMicroVmSandbox(
+        image_identifier=IMAGE_ARN, client=client, http_client=http,
+        runtime_initializer=initializer,
+    )
+    with patch.object(http, "request", side_effect=RuntimeError("transient-canary")) as request:
+        with pytest.raises(RuntimeError, match="runtime initialization failed") as error:
+            sandbox.execute("true")
+        assert "transient-canary" not in str(error.value)
+        with pytest.raises(RuntimeError, match="released"):
+            sandbox.execute("true")
+        assert request.call_count == int(failure == "transport")
+    initializer.assert_called_once()
+    assert client.terminated == [sandbox.id]
+    assert sandbox.runtime_metadata["teardown_status"] == "complete"
+    assert "transient-canary" not in repr(sandbox.runtime_metadata)
+    assert "transient-canary" not in caplog.text
+
+
+def test_initializer_error_does_not_leak_when_teardown_also_fails(caplog):
+    client = FakeLambdaMicroVmsClient()
+    client.terminate_error = RuntimeError("provider unavailable")
+    sandbox = LambdaMicroVmSandbox(
+        image_identifier=IMAGE_ARN, client=client, http_client=FakeHttpClient(),
+        runtime_initializer=MagicMock(side_effect=RuntimeError("transient-canary")),
+    )
+    with pytest.raises(RuntimeError, match="runtime initialization failed"):
+        sandbox.execute("true")
+    assert "transient-canary" not in caplog.text
+    assert sandbox.runtime_metadata["teardown_status"] == "failed"
+    client.terminate_error = None
+    sandbox.terminate()
+    assert sandbox.runtime_metadata["teardown_status"] == "complete"
+
+
+def test_successful_initialization_is_not_repeated_after_readiness_timeout():
+    client = FakeLambdaMicroVmsClient()
+    initializer = MagicMock(return_value={"setup": "one-time"})
+    sandbox = LambdaMicroVmSandbox(
+        image_identifier=IMAGE_ARN, client=client, http_client=FakeHttpClient(),
+        runtime_initializer=initializer,
+    )
+    with (
+        patch.object(sandbox, "_runtime_request", return_value={"exit_code": 0}) as request,
+        patch.object(sandbox, "_healthcheck", side_effect=[TimeoutError("not ready"), None]),
+    ):
+        with pytest.raises(TimeoutError):
+            sandbox.execute("true")
+        sandbox.execute("true")
+    initializer.assert_called_once()
+    assert [call.args[1] for call in request.call_args_list] == ["/run", "/execute"]

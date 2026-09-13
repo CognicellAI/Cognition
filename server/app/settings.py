@@ -10,6 +10,7 @@ from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
+    HttpUrl,
     SecretStr,
     field_validator,
     model_validator,
@@ -340,6 +341,11 @@ class Settings(BaseSettings):
         default="local",
         alias="COGNITION_DURABLE_FILE_BACKEND",
     )
+    artifact_publication_require_agent_policy: bool = Field(
+        default=False,
+        alias="COGNITION_ARTIFACT_PUBLICATION_REQUIRE_AGENT_POLICY",
+        description="Require explicit Agent publication policy instead of inheriting deployment enablement.",
+    )
     artifact_publication_enabled: bool = Field(
         default=False, alias="COGNITION_ARTIFACT_PUBLICATION_ENABLED",
     )
@@ -471,6 +477,30 @@ class Settings(BaseSettings):
         description="Default SandboxProfile name for the AWS Lambda MicroVM backend.",
     )
 
+    sandbox_initialization_url: HttpUrl | None = Field(
+        default=None, alias="COGNITION_SANDBOX_INITIALIZATION_URL",
+        description="Deployment-owned HTTPS endpoint for transient sandbox initialization.",
+    )
+    sandbox_initialization_token: SecretStr | None = Field(
+        default=None, min_length=1, alias="COGNITION_SANDBOX_INITIALIZATION_TOKEN",
+        description="Bearer token for the deployment-owned initialization endpoint.",
+    )
+    sandbox_initialization_ca_file: str | None = Field(
+        default=None,
+        alias="COGNITION_SANDBOX_INITIALIZATION_CA_FILE",
+        description="Optional PEM trust anchor for the deployment-owned HTTPS initialization endpoint.",
+    )
+
+    @field_validator("sandbox_initialization_url")
+    @classmethod
+    def validate_initialization_url(cls, value: HttpUrl | None) -> HttpUrl | None:
+        """Require TLS without embedded credentials or fragment routing."""
+        if value is not None and (
+            value.scheme != "https" or value.username or value.password or value.fragment
+        ):
+            raise ValueError("Sandbox initialization URL requires HTTPS without credentials or fragment")
+        return value
+
     blocked_tools: list[str] = Field(
         default=[],
         alias="COGNITION_BLOCKED_TOOLS",
@@ -596,6 +626,20 @@ class Settings(BaseSettings):
         alias="COGNITION_A2A_CLEANUP_GRACE_SECONDS",
     )
 
+    session_retention_enabled: bool = Field(
+        default=False, alias="COGNITION_SESSION_RETENTION_ENABLED",
+        description="Enable deployment-wide inactive session record cleanup.",
+    )
+    session_retention_days: int = Field(
+        default=30, ge=1, alias="COGNITION_SESSION_RETENTION_DAYS",
+    )
+    session_retention_batch_size: int = Field(
+        default=100, ge=1, le=1000, alias="COGNITION_SESSION_RETENTION_BATCH_SIZE",
+    )
+    session_retention_interval_seconds: float = Field(
+        default=3600.0, gt=0, alias="COGNITION_SESSION_RETENTION_INTERVAL_SECONDS",
+    )
+
     # SSE (Server-Sent Events) settings
     sse_heartbeat_interval_seconds: float = Field(
         default=15.0,
@@ -647,6 +691,16 @@ class Settings(BaseSettings):
     def s3_enabled(self) -> bool:
         """Return whether durable file data is configured for S3-compatible storage."""
         return self.durable_file_backend == "s3"
+
+    @model_validator(mode="after")
+    def validate_session_retention_policy(self) -> Settings:
+        """Prevent task cleanup from discarding session cleanup dependencies."""
+        if self.session_retention_enabled and self.a2a_terminal_task_ttl_seconds > 0:
+            raise ValueError(
+                "Session retention requires COGNITION_A2A_TERMINAL_TASK_TTL_SECONDS=0; "
+                "the legacy task cleaner removes run ownership and artifact bytes"
+            )
+        return self
 
     def validate_deployment_storage_policy(self) -> None:
         """Validate the builder-selected storage backend without classifying it."""

@@ -129,6 +129,35 @@ Kubernetes and MicroVM adapters implement explicit termination. The current
 Docker wrapper does not expose `terminate()`, so its container lifecycle is not
 closed through the same manager path.
 
+### Integration branch: explicit release observations
+
+The internal `SessionAgentManager.release_sandbox_backend` returns `complete`
+only when its tracked backend has been removed after teardown confirmation.
+It returns `pending` for an in-flight or unconfirmed attempt, including provider
+failures that retain a retryable handle. It returns `untracked` when this process
+has no handle. Existing callers may ignore this additive result.
+
+This operation does not delete session history. The result is an observation of
+one process-local attempt, not a durable receipt: a repeat after completion can
+return `untracked`, as can a call to another replica or after a restart. Callers
+must not interpret `untracked` as provider termination or permission to erase
+storage. This change does not expose a public release endpoint or revoke future
+session execution; a scoped cutover contract remains implementation work.
+
+### Integration branch: pinned profile admission
+
+Lambda sandbox construction now resolves the selected profile from the live
+registry under the current trusted scope even when a run carries a pinned profile.
+A missing or changed profile rejects construction before backend acquisition.
+Unchanged pins retain their behavior. This prevents historical manifests from
+silently restoring deleted or modified infrastructure configuration. Existing
+sessions and history are retained; affected resumes fail admission.
+
+This is admission at Agent construction, not immediate revocation of an already
+running VM or distributed fencing. Scoped release and complete cutover remain
+separate work. Unit tests cover deleted, changed and foreign-scope profiles and
+unchanged pinned-profile backend reuse.
+
 ## Security properties and limits
 
 | Property | Local | Docker | Kubernetes | Lambda MicroVM |
@@ -169,3 +198,9 @@ apply it to `exec_run`. This is a known operational constraint.
 - [Agent runtime components](04-agent-runtime-components.md)
 - [Runtime flows](07-runtime-flows.md)
 - [Deployment and operations](08-deployment-and-operations.md)
+
+### Idle-only release admission
+
+The session manager supports `release_sandbox_backend(session_id, only_if_idle=True)` for compute reclamation without aborting registered local runtime work. Its existing ownership lock checks activity and admits teardown atomically against local runtime registration. Active work returns `busy`; idle work follows the existing `complete`, `pending`, or `untracked` observations. The default remains unchanged for explicit abort/deletion callers. This internal primitive neither deletes history nor establishes cross-replica idleness; scoped HTTP admission and persisted session/run checks remain necessary before an administrative endpoint can use it.
+
+The scoped `POST /sessions/{session_id}/sandbox/release` endpoint now applies exact session lookup and persisted session/run activity checks before idle-only manager release. Its observation is limited to the tracked backend on the serving process. It does not prove all replicas or all mounts for a storage binding are gone, and an untracked retry remains uncertain.

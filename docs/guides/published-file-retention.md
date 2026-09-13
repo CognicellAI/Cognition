@@ -5,6 +5,35 @@ Cognition's task history. Cognition does not install a retention rule or choose 
 retention period. Workspace retention, task history and client caches have separate
 owners.
 
+## Stored-body classes (integration branch)
+
+New S3 writes use `cognition:content-class` to distinguish:
+
+| Value | Stored bytes |
+| --- | --- |
+| `published-file` | Published binary snapshot |
+| `publication-descriptor` | JSON descriptor pointing to a published snapshot |
+| `run-artifact` | Other artifact body carrying a run identity, including textual final responses |
+| Untagged | Artifact body without these associations, potentially long-lived configuration or memory |
+
+A descriptor is classified before its run association. These tags are storage
+classification, not a signal that a run or session has expired. Use a small set
+of operator-managed class rules; Cognition does not create per-object lifecycle
+policies or install expiration rules. Tagged uploads require `s3:PutObjectTagging`
+in addition to existing write permissions. Review existing tag-based policies
+before deploying the change. Existing objects are not retagged.
+
+Do not expire the entire Cognition prefix: it can include active policies,
+memories and other persistent artifact content. Missing publication descriptors now produce the same unavailable-content
+projection as missing binary snapshots, preserving task and artifact identities.
+Authorization failures and inaccessible buckets remain storage failures.
+Legacy response-artifact expiry likewise preserves the completed task and stable
+response identity with an unavailable notice, without substituting earlier
+assistant history for the missing final response. Retention durations and local
+integration acceptance still require admission; classification alone does not
+make expiration policies ready to enable. Session record cleanup remains independent and cannot prove
+that the associated S3 objects were erased.
+
 ## Delivery policy
 
 For deployments where S3 should own generated-file retention, configure:
@@ -19,6 +48,59 @@ remains 256 KiB and the publication maximum remains 10 MiB. This setting does no
 change text/data output, incoming raw Parts, prior publications or downloaded
 copies. Previously persisted raw Parts may still contain base64 file bytes in
 task records, events and checkpoints after their S3 copy expires.
+
+## Scoped publication policy
+
+For deployments that require explicit opt-in, set
+`COGNITION_ARTIFACT_PUBLICATION_REQUIRE_AGENT_POLICY=true`. An omitted Agent
+publication policy then denies publication even when the deployment capability
+is enabled. Explicit Agent policy may enable publication within the deployment
+limits. Removing that policy denies subsequent publication, including resumed
+work. The setting defaults false to preserve v0.15 inheritance behavior. It does
+not change Agent definitions, text output, task retrieval or existing files.
+
+Builders may supply optional `publication` in an Agent definition or the Agent
+create/update API. Omission (or an explicit null reset) follows the deployment
+policy, including its explicit-opt-in requirement when configured. For example:
+
+```yaml
+publication:
+  enabled: true
+  max_bytes: 1048576
+  delivery_mode: url
+```
+
+`enabled` is a boolean, `max_bytes` is an optional integer from one byte through
+10 MiB, and `delivery_mode` is `auto` (deployment inline threshold) or `url`
+(zero inline threshold). The effective byte maximum is the smaller of the Agent
+and deployment limits. An Agent cannot override deployment disablement or raise
+a deployment ceiling. These are runtime
+controls; the builder owns authorization to change them and any product policy
+that supplies their values.
+
+The managed execution path resolves the current exact-scoped Agent policy at
+graph construction and again before file reading and immediately before upload.
+This policy is intentionally live even when the rest of a run definition is
+pinned. API-owned Agents do not fall back to another scope or a shared file Agent
+after deletion. Missing, invalid or unavailable current configuration denies
+publication. A disabled policy omits the publication tool from newly constructed
+graphs; previously constructed or interrupted graphs still check current policy
+when their tool executes. Embedded graph callers may supply a static policy;
+live registry enforcement requires the current Agent identity and config store.
+
+An upload admitted by the final policy check may finish after a concurrent policy
+update. A policy update does not cancel an already admitted upload or erase
+existing publications. The observed revision returned by the Agent API proves
+configuration persistence, not completion of every in-flight upload. Deployments
+must account for this boundary when reporting disable convergence. Existing
+artifact retrieval and signed URL lifetime remain independent of publication
+permission.
+
+`GET /capabilities` reports `scoped_artifact_publication_policy` support and the
+deployment publication ceilings and `require_agent_policy`. Agent responses expose the configured policy
+and existing revision/digest fields. No publication setting is added to public
+Agent Cards. Definitions without a publication policy keep their previous
+serialized shape and digest, including persisted pre-policy run manifests.
 
 ## Select only published bytes
 
@@ -115,6 +197,16 @@ between them. Clients should retrieve the task again after a failed stale link
 and show the resulting notice or error. This is a client responsibility; the
 change does not add automatic refresh or cache eviction to WayPost.
 
+## Local development sandbox
+
+The local sandbox supports bounded publication reads beneath its concrete
+`workspace_root`. Use that root when creating a file; it is not necessarily
+`/workspace`. The reader rejects path traversal, symlink components, nonregular
+files and content beyond the byte limit, including growth after the size check.
+This does not isolate local shell execution or make the development backend a
+production tenant boundary. Lambda MicroVM and other remote backends require
+their own supported bounded-read adapter and provider-backed acceptance.
+
 ## Deploy and verify
 
 Set `COGNITION_ARTIFACT_PUBLICATION_INLINE_MAX_BYTES=0` in the operator-managed
@@ -148,3 +240,88 @@ Keep descriptors and task records as long as historical attribution is wanted.
 Apply separate policies to PostgreSQL history/backups, old raw payloads, builder
 workspaces and client caches. S3 Lifecycle alone is not deletion of every copy.
 Cognition does not install an AWS expiration policy automatically.
+
+## Inactive-context maintenance (integration branch)
+
+The private `cognition retention` command provides a bounded maintenance pass for
+inactive runtime contexts. It is not enabled on a schedule automatically. Run it
+with the same storage configuration as the runtime. Deployment-wide settings are
+`COGNITION_SESSION_RETENTION_ENABLED` (false),
+`COGNITION_SESSION_RETENTION_DAYS` (30), and
+`COGNITION_SESSION_RETENTION_BATCH_SIZE` (100, maximum 1000).
+The command uses the configured inactivity age and batch size by default;
+`--before` and `--limit` can override them for a maintenance pass. Explicit cutoffs
+must include a timezone. Applying cleanup requires the enablement setting.
+When session retention is enabled, `COGNITION_A2A_TERMINAL_TASK_TTL_SECONDS`
+must remain zero. The older task cleaner removes run ownership and can delete
+artifact bytes; settings validation rejects running both policies together.
+`COGNITION_SESSION_RETENTION_INTERVAL_SECONDS` (3600) controls the private worker:
+run `cognition retention --watch --apply` with enablement set to true. It processes
+one bounded page per interval, cycles back after the last page, and retries
+transient failures without exposing provider errors. It uses a fresh age cutoff
+for each page; `--watch` rejects `--before`. Cancellation stops the worker.
+Deploy this command as an operator-owned maintenance workload; the API server
+does not start it automatically. No per-Agent override is provided. The command
+opens only record storage, without initializing the S3 transport.
+
+```sh
+cognition retention --before 2026-08-01T00:00:00Z --limit 100
+COGNITION_SESSION_RETENTION_ENABLED=true cognition retention --before 2026-08-01T00:00:00Z --limit 100 --apply
+```
+
+The default previews candidates without deleting content. `--scope-json` selects
+one exact scope; omitting it scans all scopes, including scopes with no current
+Agent definition. Follow the returned `next_cursor` with `--cursor` until it is
+null. Start subsequent sweeps from the beginning so failed candidates are retried.
+The preview is advisory: application rechecks eligibility atomically and can
+protect a candidate that received new activity after scanning.
+
+An eligible context is marked expired before cleanup. New runtime work cannot be
+admitted to that context. Cleanup removes run-owned artifact records,
+checkpoints, and runtime messages/events/tasks/runs before removing the session.
+It neither reads nor deletes S3 bodies. Published-file expiration belongs to the
+storage lifecycle policy. S3-backed text artifact bodies and descriptor bodies
+also need a separately admitted storage policy; deleting their database records
+does not expire those objects, and the published-file tag does not select them.
+A dependent-store failure retains the expired session and run identities for
+retry, reports a failure count, and exits nonzero. A timeout or failed provider
+operation is not reported as completed deletion. Live tasks, active or resumable
+runs, and shared checkpoint threads prevent reclamation.
+
+Coverage is context-based: this command does not impose a maximum age on individual
+tasks inside a continuing context. It does not delete Agent definitions,
+cross-thread memory, externally mounted workspaces, noncurrent object versions,
+or backups. Those require their respective owners' retention policies. New
+published descriptors carry their trusted run identity. Legacy descriptors lacking
+that identity and historical orphaned data require separate inventory and migration;
+this pass must not be presented as evidence of their erasure.
+
+This maintenance slice is still under integration review, particularly concurrent
+artifact-version ownership and interaction with the older opportunistic A2A task
+retention path. Do not enable production scheduling on the strength of unit tests
+alone. Published-body lifecycle expiration remains independent of context cleanup.
+
+### Moving existing inline artifacts to S3
+
+Changing `COGNITION_DURABLE_FILE_BACKEND` does not migrate existing artifact
+bodies. The experimental offline maintenance module can move PostgreSQL inline
+artifacts into the configured S3 destination while preserving their scoped
+identities and versions. Keep the previous runtime configuration and a tested,
+restorable database backup. Stop runtime and administration writers before apply;
+this command does not coordinate an online cutover.
+
+With the destination's normal S3 and PostgreSQL settings supplied securely:
+
+```sh
+python -m server.app.storage.migrate_artifacts --limit 100
+python -m server.app.storage.migrate_artifacts --limit 100 --apply --writers-stopped
+```
+
+Preview reports the pending row count without initializing or writing S3. Apply
+moves at most the requested page and verifies uploaded bytes through the existing
+artifact store before activating its manifest. Failed rows are counted without
+printing provider errors or content. Inspect failures before repeating; do not
+interpret zero pending rows as sufficient evidence if a page reported failures.
+Confirm scoped historical retrieval and content before restarting writers with
+the new backend. Retain the backup until that acceptance succeeds. The command
+is under validation and is not yet admitted for unattended production migration.

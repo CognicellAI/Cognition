@@ -16,7 +16,10 @@ import base64
 import hashlib
 import os
 import shlex
+import stat
 import threading
+from collections.abc import Callable
+from contextlib import ExitStack
 from pathlib import Path, PurePosixPath
 from typing import Any, cast
 
@@ -94,6 +97,43 @@ class CognitionLocalSandboxBackend(LocalShellBackend, SandboxBackendProtocol):
     def skills_root(self) -> str:
         """Return the conventional native Deep Agents Skills source path."""
         return str(self.cwd / "skills")
+
+    def download_file_bounded(self, path: str, max_bytes: int) -> bytes:
+        """Read a regular workspace file without following symlinks or over-reading.
+
+        This supports publication in the development backend. Local shell execution
+        remains intentionally unisolated; this operation adds no sandbox guarantee.
+        """
+        if isinstance(max_bytes, bool) or not isinstance(max_bytes, int) or max_bytes < 0:
+            raise ValueError("Invalid download byte limit")
+        target = PurePosixPath(path)
+        root = Path(self.workspace_root).resolve()
+        if not target.is_absolute() or ".." in target.parts:
+            raise ValueError("Publication requires an absolute workspace path")
+        try:
+            parts = target.relative_to(root).parts
+        except ValueError as exc:
+            raise ValueError("Publication path is outside workspace") from exc
+        if not parts:
+            raise ValueError("Publication requires a file")
+        with ExitStack() as opened:
+            directory = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+            opened.callback(os.close, directory)
+            for component in parts[:-1]:
+                directory = os.open(component, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=directory)
+                opened.callback(os.close, directory)
+            descriptor = os.open(parts[-1], os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=directory)
+            opened.callback(os.close, descriptor)
+            info = os.fstat(descriptor)
+            if not stat.S_ISREG(info.st_mode):
+                raise ValueError("Publication requires a regular file")
+            if info.st_size > max_bytes:
+                raise ValueError("Publication file exceeds byte limit")
+            with os.fdopen(os.dup(descriptor), "rb") as stream:
+                body = stream.read(max_bytes + 1)
+            if len(body) > max_bytes:
+                raise ValueError("Publication file exceeds byte limit")
+            return body
 
     def _is_protected_path(self, path: str) -> bool:
         """Check if a path is protected.
@@ -564,8 +604,10 @@ class CognitionAwsLambdaMicroVmSandboxBackend(SandboxBackendProtocol):
         profile_config: SandboxProfile | None = None,
         protected_paths: list[str] | None = None,
         workspace_root: str = "/workspace",
+        runtime_initializer: Callable[[str], dict[str, Any]] | None = None,
     ) -> None:
         self._root_dir = Path(root_dir).resolve()
+        self._runtime_initializer = runtime_initializer
         self._id = sandbox_id or f"cognition-aws-lambda-microvm-{id(self)}"
         self._profile = profile
         self._execution_role_arn = execution_role_arn
@@ -751,6 +793,7 @@ class CognitionAwsLambdaMicroVmSandboxBackend(SandboxBackendProtocol):
             idle_policy=idle_policy,
             logging_config=logging_config,
             run_hook_payload=run_hook_payload,
+            runtime_initializer=self._runtime_initializer,
             maximum_duration_seconds=profile.maximum_duration_seconds,
             port=profile.port,
             token_expiration_minutes=profile.token_expiration_minutes,
@@ -1309,6 +1352,7 @@ def create_sandbox_backend(
     aws_lambda_microvm_profile: str = "default",
     aws_lambda_microvm_execution_role_arn: str | None = None,
     aws_lambda_microvm_profile_config: SandboxProfile | None = None,
+    runtime_initializer: Callable[[str], dict[str, Any]] | None = None,
 ) -> (
     FilesystemBackend | CognitionKubernetesSandboxBackend | CognitionAwsLambdaMicroVmSandboxBackend
 ):
@@ -1380,6 +1424,7 @@ def create_sandbox_backend(
             profile=aws_lambda_microvm_profile,
             execution_role_arn=aws_lambda_microvm_execution_role_arn,
             profile_config=aws_lambda_microvm_profile_config,
+            runtime_initializer=runtime_initializer,
             workspace_root=sandbox_workspace_root,
         )
     else:

@@ -422,6 +422,30 @@ sandbox_profiles:
 For private egress, set `egress_mode: vpc` and provide explicit
 `egress_network_connector_arns`.
 
+For custom images that require transient initialization after allocation, set
+`runtime_initialization_required: true` on the scoped profile (default `false`).
+Configure the deployment-only `COGNITION_SANDBOX_INITIALIZATION_URL` (HTTPS,
+without embedded credentials or fragment) and
+`COGNITION_SANDBOX_INITIALIZATION_TOKEN` (bearer secret). Missing deployment
+configuration rejects a required profile before allocation. Agent profiles cannot
+choose callback URLs or store returned payloads.
+
+Cognition POSTs `effective_scope`, `profile_name`, `image_arn`, `image_version`,
+`maximum_duration_seconds` and `microvm_id` to that fixed endpoint. The authority
+must authenticate Cognition, validate canonical binding eligibility and return
+HTTP200 with the transient JSON object for the custom image. It must not trust a
+VM ID alone as authorization. The response is limited to16KiB; the SDK also bounds
+the final `/run` envelope to16KiB. Requests use a10-second HTTP timeout, no automatic
+retries, redirects or environment proxy inheritance. For a private CA, set `COGNITION_SANDBOX_INITIALIZATION_CA_FILE` to a mounted PEM
+trust anchor. TLS verification stays enabled and the trust setting is deployment-only. Payloads are not persisted in profiles or metadata.
+The image must accept its ordinary provider hook while awaiting initialization.
+
+Initialization failure blocks commands and requests teardown. The hook runs once
+per allocation, not on every command or resume. It supplies no expiry revocation,
+credential renewal or exclusive-writer guarantee. The external authority owns
+policy and credentials. This mechanism is separate from completion callbacks and
+does not send A2A messages or artifacts to the initialization authority.
+
 Cost-sensitive Lambda MicroVM profile keys:
 
 | Key | Cost impact |
