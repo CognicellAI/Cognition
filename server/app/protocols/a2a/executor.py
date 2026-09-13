@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import time
-from collections.abc import AsyncIterator
+from collections.abc import AsyncGenerator, AsyncIterator
 from typing import TYPE_CHECKING, Any, cast
 
 import structlog
@@ -903,7 +903,7 @@ def _artifact_size(kind: str, value: Any) -> int:
     return len(str(value).encode("utf-8"))
 
 
-async def _with_flush_ticks(source: AsyncIterator[Any], interval: float) -> AsyncIterator[Any]:
+async def _with_flush_ticks(source: AsyncIterator[Any], interval: float) -> AsyncGenerator[Any, None]:
     """Yield source events plus periodic ticks without cancelling the producer."""
     done_marker = object()
     queue: asyncio.Queue[Any] = asyncio.Queue()
