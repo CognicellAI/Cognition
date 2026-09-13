@@ -27,6 +27,9 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- Task cancellation interrupts silent async graph steps and closes the selected
+  A2A execution stream, including when another replica receives cancellation.
+  Already-dispatched remote commands may finish within their timeout.
 - Sandbox registration no longer races pending teardown, and Kubernetes
   termination failures retain handles for observation and retry.
 - Resumed Lambda executions revalidate their current sandbox profile before
