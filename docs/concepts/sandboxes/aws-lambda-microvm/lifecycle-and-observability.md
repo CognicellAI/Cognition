@@ -42,9 +42,11 @@ before replacement. Model or prompt changes alone do not invalidate the sandbox.
 Acquisition remains lazy. Reuse emits a `reused` lifecycle event and does not
 consume another sandbox-start quota reservation. Readiness retries continue on
 the existing allocation rather than launching a second VM. AWS idle/resume
-behavior remains governed by the builder's profile. An expired or terminal VM
-must be released before a fresh backend can replace it; this change does not add
-automatic recovery from every provider-side failure.
+behavior remains governed by the builder's profile. A proxy endpoint error marks
+the lease `sandbox_suspect`; Cognition retains its provider identity and asks AWS
+for the current state before taking replacement action. Only a provider terminal
+state or confirmed not-found response permits replacement, preventing a second
+writer for the same external workspace during a transient proxy failure.
 
 ## Cleanup Triggers
 
@@ -73,16 +75,23 @@ logs unconfirmed resources, but cannot guarantee cleanup after process death.
 Production operators still need durable ownership/reconciliation across replicas
 and a mechanism that prevents an obsolete sandbox from writing the builder's
 workspace. Session affinity alone does not solve crash recovery. Do not treat
-this reuse fix as distributed writer fencing or automatic VM adoption after a
-restart. S3 Files mount and workspace authorization remain builder-owned.
+this process-local lease as distributed writer fencing or automatic VM adoption
+after a restart. S3 Files mount and workspace authorization remain builder-owned.
 
 ## Lifecycle Events
 
 The backend emits `sandbox_lifecycle` events. Lambda MicroVM phases are:
 
 - `launch_started`
+- `launch_backoff`
 - `launch_running`
 - `auth_token_created`
+- `sandbox_suspect`
+- `sandbox_lost`
+- `replacement_requested`
+- `resume_started`
+- `resume_running`
+- `runtime_initialized`
 - `runtime_healthcheck_started`
 - `runtime_healthcheck_passed`
 - `runtime_snapshot`
@@ -133,6 +142,24 @@ metrics. Use both:
 
 - Cognition events to correlate agent/session/run behavior
 - AWS metrics and logs to inspect service-side runtime cost and failures
+
+## Session lifecycle optimization
+
+The logical Cognition session is separate from the provider MicroVM lease. A
+compatible running lease is reused. When the configured idle policy suspends a
+MicroVM, the adapter resumes it and reruns the generic initialization callback;
+the KennelAMS image uses that callback to refresh credentials on an existing
+workspace mount before readiness is reported. If AWS confirms that a lease no
+longer exists, Cognition invalidates only that physical lease and acquires a
+replacement lazily from the same trusted profile and effective scope. It does
+not replay a command whose dispatch may have succeeded; the caller receives a
+recoverable interruption and may resume from the persisted logical checkpoint.
+
+AWS regional memory quota counts both running and suspended MicroVMs. Cognition
+surfaces quota rejection and bounds throttled launch retries with jitter; it
+does not evict suspended resources automatically. Operators remain responsible
+for scoped inventory and termination. Suspended resources avoid compute charges
+but still incur snapshot storage charges.
 
 ## Related
 

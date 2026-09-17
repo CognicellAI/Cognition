@@ -10,9 +10,10 @@ from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 from unittest.mock import MagicMock, patch
 
+import httpx
 import pytest
 
-from langchain_aws_lambda_microvms import LambdaMicroVmSandbox
+from langchain_aws_lambda_microvms import LambdaMicroVmSandbox, MicroVmQuotaExceededError
 from server.app.agent.sandbox_backend import (
     CognitionAwsLambdaMicroVmSandboxBackend,
     create_sandbox_backend,
@@ -112,6 +113,7 @@ class FakeLambdaMicroVmsClient:
         self.auth_kwargs: dict[str, Any] | None = None
         self.terminated: list[str] = []
         self.get_states: list[str] = []
+        self.get_error: Exception | None = None
         self.terminate_error: Exception | None = None
 
     def run_microvm(self, **kwargs: Any) -> dict[str, Any]:
@@ -128,6 +130,8 @@ class FakeLambdaMicroVmsClient:
 
     def get_microvm(self, **kwargs: Any) -> dict[str, Any]:
         microvm_identifier = str(kwargs["microvmIdentifier"])
+        if self.get_error is not None:
+            raise self.get_error
         if self.get_states:
             state = self.get_states.pop(0)
         elif microvm_identifier in self.terminated:
@@ -157,6 +161,12 @@ class FakeLambdaMicroVmsClient:
         self.terminated.append(str(kwargs["microvmIdentifier"]))
 
 
+class FakeAwsError(Exception):
+    def __init__(self, code: str) -> None:
+        super().__init__(code)
+        self.response = {"Error": {"Code": code}}
+
+
 class FakeHttpResponse:
     def __init__(self, payload: dict[str, Any]) -> None:
         self._payload = payload
@@ -179,6 +189,8 @@ class FakeHttpClient:
         path = url.removeprefix("https://mv-123.lambda-url.aws")
         if path == "/healthz":
             return FakeHttpResponse({"status": "ok", "workspace_root": "/workspace"})
+        if path == "/run":
+            return FakeHttpResponse({"status": "ok"})
         if path == "/execute":
             body = kwargs["json"]
             return FakeHttpResponse(
@@ -237,6 +249,47 @@ def _profile(
 
 
 class TestLambdaMicroVmSandboxAdapter:
+    def test_throttled_launch_retries_with_backoff(self) -> None:
+        client = FakeLambdaMicroVmsClient()
+        original = client.run_microvm
+        attempts = 0
+
+        def throttled_once(**kwargs):
+            nonlocal attempts
+            attempts += 1
+            if attempts == 1:
+                raise FakeAwsError("ThrottlingException")
+            return original(**kwargs)
+
+        client.run_microvm = MagicMock(side_effect=throttled_once)
+        sandbox = LambdaMicroVmSandbox(
+            image_identifier=IMAGE_ARN,
+            client=client,
+            http_client=FakeHttpClient(),
+        )
+
+        with patch("langchain_aws_lambda_microvms.sandbox.time.sleep") as sleep:
+            assert sandbox.execute("true").exit_code == 0
+
+        assert client.run_microvm.call_count == 2
+        sleep.assert_called_once()
+        assert "launch_backoff" in sandbox.runtime_metadata["lifecycle_phases"]
+
+    def test_quota_rejection_is_typed_and_not_retried(self) -> None:
+        client = FakeLambdaMicroVmsClient()
+        client.run_microvm = MagicMock(side_effect=FakeAwsError("ServiceQuotaExceededException"))
+        sandbox = LambdaMicroVmSandbox(
+            image_identifier=IMAGE_ARN,
+            client=client,
+            http_client=FakeHttpClient(),
+        )
+
+        with pytest.raises(MicroVmQuotaExceededError):
+            sandbox.execute("true")
+
+        assert client.run_microvm.call_count == 1
+        assert "launch_quota_rejected" in sandbox.runtime_metadata["lifecycle_phases"]
+
     def test_execute_launches_microvm_and_calls_runtime_command_server(self) -> None:
         client = FakeLambdaMicroVmsClient()
         http_client = FakeHttpClient()
@@ -541,7 +594,7 @@ def test_transient_initializer_precedes_commands_and_is_not_provider_metadata(ca
     assert "transient-canary" not in repr(client.run_kwargs)
     assert "transient-canary" not in repr(sandbox.runtime_metadata)
     assert "transient-canary" not in caplog.text
-    assert sandbox._runtime_initializer is None
+    assert sandbox._runtime_initializer is not None
 
 
 @pytest.mark.parametrize("failure", ["callback", "oversized", "transport"])
@@ -603,3 +656,81 @@ def test_successful_initialization_is_not_repeated_after_readiness_timeout():
         sandbox.execute("true")
     initializer.assert_called_once()
     assert [call.args[1] for call in request.call_args_list] == ["/run", "/execute"]
+
+
+def test_lost_endpoint_keeps_live_lease_and_does_not_duplicate_workspace_writer():
+    client = FakeLambdaMicroVmsClient()
+    http = FakeHttpClient()
+    sandbox = LambdaMicroVmSandbox(image_identifier=IMAGE_ARN, client=client, http_client=http)
+    original_request = http.request
+    failed = False
+
+    def request(method, url, **kwargs):
+        nonlocal failed
+        if url.endswith("/execute") and not failed:
+            failed = True
+            response = httpx.Response(502, request=httpx.Request(method, url))
+            raise httpx.HTTPStatusError("stale endpoint", request=response.request, response=response)
+        return original_request(method, url, **kwargs)
+
+    with patch.object(http, "request", side_effect=request), patch.object(
+        client, "run_microvm", wraps=client.run_microvm
+    ) as launch:
+        first = sandbox.execute("true")
+        second = sandbox.execute("true")
+
+    assert first.exit_code == -1
+    assert second.exit_code == 0
+    assert launch.call_count == 1
+    assert sandbox.runtime_metadata["recovery_generation"] == 0
+    assert "sandbox_suspect" in sandbox.runtime_metadata["lifecycle_phases"]
+
+
+def test_lost_endpoint_replaces_only_after_provider_confirms_absence():
+    client = FakeLambdaMicroVmsClient()
+    http = FakeHttpClient()
+    sandbox = LambdaMicroVmSandbox(image_identifier=IMAGE_ARN, client=client, http_client=http)
+    original_request = http.request
+    failed = False
+
+    def request(method, url, **kwargs):
+        nonlocal failed
+        if url.endswith("/execute") and not failed:
+            failed = True
+            response = httpx.Response(502, request=httpx.Request(method, url))
+            raise httpx.HTTPStatusError("stale endpoint", request=response.request, response=response)
+        return original_request(method, url, **kwargs)
+
+    with patch.object(http, "request", side_effect=request), patch.object(
+        client, "run_microvm", wraps=client.run_microvm
+    ) as launch:
+        first = sandbox.execute("true")
+        client.get_error = FakeAwsError("ResourceNotFoundException")
+        second = sandbox.execute("true")
+
+    assert first.exit_code == -1
+    assert second.exit_code == 0
+    assert launch.call_count == 2
+    assert sandbox.runtime_metadata["recovery_generation"] == 1
+    assert "sandbox_lost" in sandbox.runtime_metadata["lifecycle_phases"]
+
+
+def test_resume_reinitializes_external_runtime_credentials():
+    client = FakeLambdaMicroVmsClient()
+    http = FakeHttpClient()
+    initializer = MagicMock(return_value={"credential": "fresh"})
+    sandbox = LambdaMicroVmSandbox(
+        image_identifier=IMAGE_ARN,
+        client=client,
+        http_client=http,
+        runtime_initializer=initializer,
+    )
+    sandbox.execute("true")
+    sandbox._state = "SUSPENDED"
+    sandbox._ready = False
+
+    sandbox.execute("true")
+
+    assert initializer.call_count == 2
+    assert "resume_started" in sandbox.runtime_metadata["lifecycle_phases"]
+    assert "resume_running" in sandbox.runtime_metadata["lifecycle_phases"]

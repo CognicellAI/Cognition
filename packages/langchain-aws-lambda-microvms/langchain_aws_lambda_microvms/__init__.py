@@ -2,6 +2,6 @@
 
 from __future__ import annotations
 
-from langchain_aws_lambda_microvms.sandbox import LambdaMicroVmSandbox
+from langchain_aws_lambda_microvms.sandbox import LambdaMicroVmSandbox, MicroVmQuotaExceededError
 
-__all__ = ["LambdaMicroVmSandbox"]
+__all__ = ["LambdaMicroVmSandbox", "MicroVmQuotaExceededError"]
