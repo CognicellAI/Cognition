@@ -9,13 +9,13 @@ from __future__ import annotations
 import time
 from collections.abc import Iterator
 from contextlib import contextmanager, suppress
-from typing import Any
+from typing import Any, cast
 
 try:
     from opentelemetry import metrics, trace
     from opentelemetry.trace import StatusCode
 except ImportError:  # The SDK remains usable without the optional otel extra.
-    metrics = trace = None
+    metrics = trace = cast(Any, None)
 
 
 @contextmanager
