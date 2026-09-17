@@ -15,7 +15,7 @@ try:
     from opentelemetry import metrics, trace
     from opentelemetry.trace import StatusCode
 except ImportError:  # The SDK remains usable without the optional otel extra.
-    metrics = trace = None  # type: ignore[assignment]
+    metrics = trace = None
 
 
 @contextmanager

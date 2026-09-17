@@ -261,33 +261,37 @@ class TestLambdaMicroVmSandboxAdapter:
                 raise FakeAwsError("ThrottlingException")
             return original(**kwargs)
 
-        client.run_microvm = MagicMock(side_effect=throttled_once)
-        sandbox = LambdaMicroVmSandbox(
-            image_identifier=IMAGE_ARN,
-            client=client,
-            http_client=FakeHttpClient(),
-        )
+        with patch.object(client, "run_microvm", side_effect=throttled_once) as run_microvm:
+            sandbox = LambdaMicroVmSandbox(
+                image_identifier=IMAGE_ARN,
+                client=client,
+                http_client=FakeHttpClient(),
+            )
 
-        with patch("langchain_aws_lambda_microvms.sandbox.time.sleep") as sleep:
-            assert sandbox.execute("true").exit_code == 0
+            with patch("langchain_aws_lambda_microvms.sandbox.time.sleep") as sleep:
+                assert sandbox.execute("true").exit_code == 0
 
-        assert client.run_microvm.call_count == 2
+        assert run_microvm.call_count == 2
         sleep.assert_called_once()
         assert "launch_backoff" in sandbox.runtime_metadata["lifecycle_phases"]
 
     def test_quota_rejection_is_typed_and_not_retried(self) -> None:
         client = FakeLambdaMicroVmsClient()
-        client.run_microvm = MagicMock(side_effect=FakeAwsError("ServiceQuotaExceededException"))
-        sandbox = LambdaMicroVmSandbox(
-            image_identifier=IMAGE_ARN,
-            client=client,
-            http_client=FakeHttpClient(),
-        )
+        with patch.object(
+            client,
+            "run_microvm",
+            side_effect=FakeAwsError("ServiceQuotaExceededException"),
+        ) as run_microvm:
+            sandbox = LambdaMicroVmSandbox(
+                image_identifier=IMAGE_ARN,
+                client=client,
+                http_client=FakeHttpClient(),
+            )
 
-        with pytest.raises(MicroVmQuotaExceededError):
-            sandbox.execute("true")
+            with pytest.raises(MicroVmQuotaExceededError):
+                sandbox.execute("true")
 
-        assert client.run_microvm.call_count == 1
+        assert run_microvm.call_count == 1
         assert "launch_quota_rejected" in sandbox.runtime_metadata["lifecycle_phases"]
 
     def test_execute_launches_microvm_and_calls_runtime_command_server(self) -> None:
