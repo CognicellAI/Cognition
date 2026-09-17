@@ -178,6 +178,23 @@ def test_release_sandbox_backend_frees_concurrent_quota_and_is_idempotent() -> N
     assert second.terminated is False
 
 
+def test_provider_confirmed_teardown_clears_stale_concurrent_quota() -> None:
+    manager = _manager()
+    quota = LambdaMicroVmQuota(max_concurrent_sessions=1)
+    first = FakeSandboxBackend(sandbox_id="microvm-1", quota=quota)
+
+    manager.register_sandbox_backend("session-1", first, scope={"tenant": "acme"})
+    # Simulate provider/runtime teardown that completed before the manager's
+    # normal release path ran (for example, failed initialization).
+    first.terminate()
+
+    second = FakeSandboxBackend(sandbox_id="microvm-2", quota=quota)
+    manager.register_sandbox_backend("session-2", second, scope={"tenant": "acme"})
+
+    assert second.terminated is False
+    assert "session-1" not in manager._sandbox_correlations
+
+
 def test_release_sandbox_backend_pending_teardown_retains_concurrent_quota() -> None:
     manager = _manager()
     quota = LambdaMicroVmQuota(max_concurrent_sessions=1)

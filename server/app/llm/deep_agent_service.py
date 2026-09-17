@@ -1625,6 +1625,21 @@ class SessionAgentManager:
         }
 
     def _enforce_sandbox_quota(self, *, session_id: str, quota_key: str, quota: Any) -> None:
+        # A provider can terminate a sandbox during a failed initialization or
+        # an out-of-band expiry.  In that case the backend may still be cached
+        # locally even though it no longer consumes a concurrent slot.  Drop
+        # only backends whose own lifecycle metadata confirms teardown; an
+        # ambiguous or failed teardown remains quota-consuming by design.
+        for stale_session_id, stale_backend in list(self._sandbox_backends.items()):
+            if stale_session_id == session_id or not self._sandbox_teardown_confirmed(stale_backend):
+                continue
+            self._sandbox_backends.pop(stale_session_id, None)
+            self._sandbox_bindings.pop(stale_session_id, None)
+            self._sandbox_scopes.pop(stale_session_id, None)
+            self._sandbox_correlations.pop(stale_session_id, None)
+            self._sandbox_emitted_lifecycle_phases.pop(stale_session_id, None)
+            self._sandbox_releasing.discard(stale_session_id)
+
         max_concurrent = getattr(quota, "max_concurrent_sessions", None)
         if max_concurrent is not None:
             active = sum(
@@ -1653,6 +1668,17 @@ class SessionAgentManager:
                 f"max_session_starts_per_minute={max_starts} for {quota_key}"
             )
         history.append(now)
+
+    @staticmethod
+    def _sandbox_teardown_confirmed(backend: Any) -> bool:
+        """Return true only when a backend reports provider-confirmed teardown."""
+        try:
+            metadata = getattr(backend, "runtime_metadata", {})
+        except Exception:
+            return False
+        if not isinstance(metadata, Mapping):
+            return False
+        return metadata.get("teardown_status") in {"complete", "skipped"}
 
     def _sandbox_runtime_metadata(
         self,
