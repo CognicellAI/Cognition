@@ -9,6 +9,27 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.16.1] — 2026-09-23
+
+### Fixed
+
+- Recover a lost Lambda MicroVM lease on subsequent use only after the provider
+  confirms termination or absence. Preserve the logical session and trusted
+  profile/scope while acquiring replacement compute through existing initialization.
+- Refresh generic runtime initialization on resume and retain ownership when
+  provider state or command dispatch is ambiguous. Commands that may have begun
+  are not automatically replayed.
+- Release process-local sandbox quota reservations after confirmed teardown.
+  Add typed provider quota failures and bounded launch throttling retries.
+- Preserve Python 3.11/3.12 telemetry typing compatibility.
+
+### Limitations
+
+- Sandbox ownership and quota accounting remain process-local and scope-specific.
+  This release does not provide distributed quotas, automatic eviction, or
+  exclusive workspace writers. Previously dispatched remote commands may finish
+  after cancellation; completed side effects are not rolled back.
+
 ## [0.16.0] — 2026-09-13
 
 ### Added
