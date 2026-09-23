@@ -11,6 +11,7 @@ import base64
 import hashlib
 import json
 import logging
+import random
 import shlex
 import threading
 import time
@@ -35,6 +36,8 @@ DEFAULT_COMMAND_TIMEOUT_SECONDS = 300
 DEFAULT_HEALTHCHECK_TIMEOUT_SECONDS = 60
 DEFAULT_TEARDOWN_TIMEOUT_SECONDS = 5.0
 DEFAULT_TEARDOWN_POLL_INTERVAL_SECONDS = 1.0
+DEFAULT_LAUNCH_RETRIES = 3
+DEFAULT_LAUNCH_BACKOFF_SECONDS = 0.25
 RUNNING_STATE = "RUNNING"
 SUSPENDED_STATE = "SUSPENDED"
 TERMINATED_STATE = "TERMINATED"
@@ -47,6 +50,10 @@ FileTransferError = Literal[
     "is_directory",
     "invalid_path",
 ]
+
+
+class MicroVmQuotaExceededError(RuntimeError):
+    """Raised when AWS refuses a MicroVM launch because regional quota is full."""
 
 
 def _role_fingerprint(role_arn: str | None) -> str | None:
@@ -172,6 +179,11 @@ class LambdaMicroVmSandbox(BaseSandbox):
         self._teardown_error_code: str | None = None
         self._teardown_error_message: str | None = None
         self._lifecycle_phases: list[str] = []
+        self._recovery_generation = 0
+        # An endpoint failure makes the lease suspect, but does not prove that
+        # AWS terminated it.  Keep the provider identity until GetMicroVM
+        # confirms a terminal or missing resource.
+        self._suspect_lease = False
 
     @property
     def id(self) -> str:
@@ -197,6 +209,8 @@ class LambdaMicroVmSandbox(BaseSandbox):
             "egress_network_connector_count": len(self._egress_network_connector_arns),
             "logging_mode": self._logging_mode(),
             "lifecycle_phases": list(self._lifecycle_phases),
+            "recovery_generation": self._recovery_generation,
+            "lease_suspect": self._suspect_lease,
         }
         optional = {
             "launch_duration_ms": self._launch_duration_ms,
@@ -445,53 +459,64 @@ class LambdaMicroVmSandbox(BaseSandbox):
                 stack.enter_context(self._lock)
             if self._closed:
                 raise RuntimeError("Lambda MicroVM sandbox has been released")
-            if self._microvm_id and self._state == RUNNING_STATE and self._auth_headers and self._ready:
+            if (
+                self._microvm_id
+                and self._state == RUNNING_STATE
+                and self._auth_headers
+                and self._ready
+                and not self._suspect_lease
+            ):
                 return
 
             client = self._get_client()
+            resumed = False
+
+            if self._microvm_id and self._suspect_lease:
+                confirmed_dead = self._confirm_provider_termination()
+                if confirmed_dead:
+                    self._invalidate_lost_lease("provider_confirmed_absence")
+                elif self._state == RUNNING_STATE:
+                    # AWS still owns the VM.  Re-probe the endpoint, retaining
+                    # the same lease and workspace if it has recovered.
+                    self._suspect_lease = False
+                    self._ready = False
+                elif self._state != SUSPENDED_STATE:
+                    # A transient provider read failure is ambiguous.  Do not
+                    # launch a second VM against the same workspace.
+                    raise RuntimeError("Lambda MicroVM lease is temporarily unavailable")
 
             if self._microvm_id and self._state == SUSPENDED_STATE:
+                self._record_lifecycle_phase("resume_started")
                 with operation("lambda_microvm.resume"):
                     client.resume_microvm(microvmIdentifier=self._microvm_id)
-                self._wait_for_running()
+                resumed = True
+                try:
+                    self._wait_for_running()
+                except Exception as exc:
+                    if not self._provider_resource_missing(exc):
+                        raise
+                    self._invalidate_lost_lease("provider_not_found_on_resume")
+                else:
+                    self._record_lifecycle_phase("resume_running")
             elif self._microvm_id:
                 if self._state in TERMINAL_STATES:
-                    raise RuntimeError("Lambda MicroVM is terminal; release its owned backend")
-                # Retry readiness/launch polling for the existing allocation.
-                self._wait_for_running()
-            else:
-                launch_started = time.monotonic()
-                self._record_lifecycle_phase("launch_started")
-                logger.info(
-                    "Lambda MicroVM launch started sandbox_id=%s image=%s "
-                    "image_version=%s region=%s role_fingerprint=%s",
-                    self._sandbox_id,
-                    self._image_identifier,
-                    self._image_version,
-                    self._region_name,
-                    _role_fingerprint(self._execution_role_arn),
-                )
-                with operation("lambda_microvm.launch"):
-                    response = client.run_microvm(**self._run_request())
-                self._update_state_from_response(response)
-                self._wait_for_running()
-                self._launch_duration_ms = (time.monotonic() - launch_started) * 1000
-                self._record_lifecycle_phase("launch_running")
-                logger.info(
-                    "Lambda MicroVM launch running microvm_id=%s image=%s "
-                    "image_version=%s region=%s aws_state=%s duration_ms=%.2f",
-                    self._microvm_id,
-                    self._image_arn or self._image_identifier,
-                    self._resolved_image_version,
-                    self._region_name,
-                    self._state,
-                    self._launch_duration_ms,
-                )
+                    self._invalidate_lost_lease("provider_terminal_state")
+                else:
+                    try:
+                        self._wait_for_running()
+                    except Exception as exc:
+                        if not self._provider_resource_missing(exc):
+                            raise
+                        self._invalidate_lost_lease("provider_not_found_on_poll")
+
+            if self._microvm_id is None:
+                self._launch_new_microvm()
 
             self._create_auth_headers()
-            self._initialize_runtime()
+            self._initialize_runtime(force=resumed)
             self._healthcheck()
             self._ready = True
+            self._suspect_lease = False
             logger.info(
                 "Lambda MicroVM sandbox ready microvm_id=%s image=%s image_version=%s role_fingerprint=%s",
                 self._microvm_id,
@@ -500,9 +525,9 @@ class LambdaMicroVmSandbox(BaseSandbox):
                 _role_fingerprint(self._execution_role_arn),
             )
 
-    def _initialize_runtime(self) -> None:
-        """Initialize once without retaining transient payloads in sandbox state."""
-        if self._runtime_initializer is None or self._initialized:
+    def _initialize_runtime(self, *, force: bool = False) -> None:
+        """Initialize or reinitialize without retaining transient payloads."""
+        if self._runtime_initializer is None or (self._initialized and not force):
             return
         failed = False
         try:
@@ -531,7 +556,6 @@ class LambdaMicroVmSandbox(BaseSandbox):
             self._terminate_locked()
             raise RuntimeError("Lambda MicroVM runtime initialization failed") from None
         self._initialized = True
-        self._runtime_initializer = None
         self._record_lifecycle_phase("runtime_initialized")
 
     def _exception_code(self, exc: Exception) -> str:
@@ -543,6 +567,82 @@ class LambdaMicroVmSandbox(BaseSandbox):
                 if code:
                     return str(code)
         return exc.__class__.__name__
+
+    def _provider_resource_missing(self, exc: Exception) -> bool:
+        """Return whether AWS reported that the current lease no longer exists."""
+        code = self._exception_code(exc).lower()
+        return "notfound" in code or "resource_not_found" in code
+
+    def _confirm_provider_termination(self) -> bool:
+        """Return true only when AWS proves the cached lease is gone."""
+        if not self._microvm_id:
+            return True
+        try:
+            response = self._get_client().get_microvm(microvmIdentifier=self._microvm_id)
+        except Exception as exc:
+            return bool(self._provider_resource_missing(exc))
+        self._update_state_from_response(response)
+        return self._state in TERMINAL_STATES
+
+    def _runtime_endpoint_lost(self, exc: Exception) -> bool:
+        """Classify endpoint failures that make the cached lease unsafe to reuse."""
+        return isinstance(exc, httpx.HTTPStatusError) and exc.response.status_code in {
+            404,
+            410,
+            502,
+            503,
+            504,
+        }
+
+    def _invalidate_lost_lease(self, reason: str) -> None:
+        """Forget the physical lease while preserving profile and workspace state."""
+        old_id = self._microvm_id
+        self._recovery_generation += 1
+        self._record_lifecycle_phase("sandbox_lost")
+        self._record_lifecycle_phase("replacement_requested")
+        logger.warning(
+            "Lambda MicroVM lease invalidated; replacement will be acquired lazily "
+            "microvm_id=%s reason=%s generation=%s",
+            old_id,
+            reason,
+            self._recovery_generation,
+        )
+        self._microvm_id = None
+        self._endpoint = None
+        self._state = None
+        self._auth_headers = None
+        self._ready = False
+        self._initialized = False
+        self._created_client_token = None
+        self._suspect_lease = False
+
+    def _launch_new_microvm(self) -> None:
+        launch_started = time.monotonic()
+        self._record_lifecycle_phase("launch_started")
+        client = self._get_client()
+        response: Mapping[str, Any] | None = None
+        for attempt in range(DEFAULT_LAUNCH_RETRIES):
+            try:
+                with operation("lambda_microvm.launch"):
+                    response = client.run_microvm(**self._run_request())
+                break
+            except Exception as exc:
+                code = self._exception_code(exc).lower()
+                if "servicequotaexceeded" in code or "quota" in code:
+                    self._record_lifecycle_phase("launch_quota_rejected")
+                    raise MicroVmQuotaExceededError(
+                        "Lambda MicroVM regional quota rejected the launch"
+                    ) from exc
+                if "throttl" not in code or attempt == DEFAULT_LAUNCH_RETRIES - 1:
+                    raise
+                self._record_lifecycle_phase("launch_backoff")
+                time.sleep(DEFAULT_LAUNCH_BACKOFF_SECONDS * (2**attempt) + random.random() * 0.1)
+        if response is None:
+            raise RuntimeError("Lambda MicroVM launch did not return a response")
+        self._update_state_from_response(response)
+        self._wait_for_running()
+        self._launch_duration_ms = (time.monotonic() - launch_started) * 1000
+        self._record_lifecycle_phase("launch_running")
 
     def execute(self, command: str, *, timeout: int | None = None) -> ExecuteResponse:
         """Execute a shell command through the MicroVM command server."""
@@ -560,6 +660,21 @@ class LambdaMicroVmSandbox(BaseSandbox):
                 timeout=effective_timeout + 5,
             )
         except Exception as e:
+            if self._runtime_endpoint_lost(e):
+                self._suspect_lease = True
+                self._record_lifecycle_phase("sandbox_suspect")
+                # A proxy error is ambiguous: the command may have started.
+                # Do not invalidate or replay it until AWS confirms absence.
+                logger.error("Lambda MicroVM execute endpoint became unavailable", exc_info=True)
+                return ExecuteResponse(
+                    output=(
+                        "Error: sandbox endpoint became unavailable; command outcome is "
+                        "unknown and may have started. Do not retry automatically; "
+                        "resume the session after sandbox recovery."
+                    ),
+                    exit_code=-1,
+                    truncated=False,
+                )
             logger.error("Lambda MicroVM execute failed", exc_info=True)
             return ExecuteResponse(output=f"Error: {e}", exit_code=-1, truncated=False)
 

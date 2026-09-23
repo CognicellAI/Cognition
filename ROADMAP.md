@@ -1,5 +1,13 @@
 # Cognition Roadmap
 
+## Sandbox session lifecycle and optimization (2026-09-17)
+
+- Category: Feature / architectural change; priority P1; layers 2, 3, 4, 6 and 7; estimated effort 5–8 days.
+- Keep logical sessions/checkpoints separate from disposable sandbox leases. Reuse running compatible leases, support typed Lambda MicroVM idle suspension/resume, refresh builder initialization on resume, and lazily replace provider-confirmed lost leases without replaying ambiguous commands.
+- Surface typed regional quota rejection, bound throttled launches with jittered retries, preserve active/suspended leases, and leave eviction and capacity decisions to operators. Do not add provider-specific or KennelAMS-specific concepts to Cognition.
+- Acceptance: lease-generation and scope/profile identity tests; idle-policy round trip; suspend/resume hook and credential-refresh tests; provider-not-found replacement; ambiguous-command no-replay; cancellation precedence; quota rejection/backoff; redacted lifecycle events; staging evidence for resume latency, replacement, quota and snapshot cost.
+- Dependencies: existing process-local session ownership repair, Lambda MicroVM adapter, image lifecycle hooks, persisted session checkpoints, and builder initialization callback. Cross-process durable ownership and writer fencing remain follow-up hardening.
+- Status: conservative lease recovery and confirmed-teardown quota repair implemented on `codex/sandbox-session-lifecycle`; release 0.16.1 admission authorized. Broader optimization, regional quota handling, and distributed accounting remain follow-up work.
 ## Active task cancellation repair
 
 - Category: bug fix; generic runtime and A2A execution lifecycle.
