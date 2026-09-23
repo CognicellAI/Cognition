@@ -18,6 +18,7 @@ Architecture:
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncIterator, Mapping
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -808,6 +809,7 @@ class DeepAgentRuntime:
         self._thread_id = thread_id
         self._recursion_limit = recursion_limit
         self._aborted: set[str] = set()
+        self._pending_steps: dict[str, asyncio.Task[Any]] = {}
         self._context = context
         self._trace_parent_span = trace_parent_span
 
@@ -963,15 +965,34 @@ class DeepAgentRuntime:
                 with agent_run_trace_context(
                     trace_parent_span or self._trace_parent_span
                 ):
-                    async for graph_chunk in self._agent.astream(
+                    source = self._agent.astream(
                         agent_input,
                         config=config,
                         context=self._context,
                         stream_mode=["messages", "updates", "custom"],
                         subgraphs=True,
                         version="v2",
-                    ):
-                        yield cast(dict[str, Any], graph_chunk)
+                    )
+                    try:
+                        while True:
+                            pending = asyncio.create_task(anext(source))
+                            self._pending_steps[tid] = pending
+                            try:
+                                graph_chunk = await pending
+                            except StopAsyncIteration:
+                                return
+                            except asyncio.CancelledError:
+                                if tid not in self._aborted:
+                                    raise
+                                # Wake the outer adapter so it emits ABORTED.
+                                yield {}
+                                return
+                            finally:
+                                if self._pending_steps.get(tid) is pending:
+                                    self._pending_steps.pop(tid, None)
+                            yield cast(dict[str, Any], graph_chunk)
+                    finally:
+                        await source.aclose()
 
             async for chunk in graph_chunks():
                 # Check if aborted mid-stream
@@ -1387,6 +1408,9 @@ class DeepAgentRuntime:
         """
         tid = thread_id or self._thread_id or "default"
         self._aborted.add(tid)
+        pending = self._pending_steps.get(tid)
+        if pending is not None:
+            pending.cancel()
         return True
 
     async def get_checkpointer(self) -> BaseCheckpointSaver:

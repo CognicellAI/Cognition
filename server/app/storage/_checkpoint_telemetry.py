@@ -34,5 +34,6 @@ def observe_checkpointer(saver: Saver) -> Saver:
         ("aput_writes", "cognition.checkpoint.write_pending"),
     ):
         setattr(saver, method, _timed(getattr(saver, method), name))
-    vars(saver)["_cognition_timed"] = True
+    marker = "_cognition_timed"
+    setattr(saver, marker, True)
     return saver

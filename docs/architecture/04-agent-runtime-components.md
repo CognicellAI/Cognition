@@ -197,3 +197,19 @@ immutable after creation.
 - [State and configuration](05-state-and-configuration.md)
 - [Execution and sandboxes](06-execution-and-sandboxes.md)
 - [Runtime flows](07-runtime-flows.md)
+
+
+## Task cancellation
+
+A2A cancellation persists the exact scoped task status. The executing replica
+checks it on stream events and heartbeat ticks, including while the model or a
+tool is silent. On cancellation it closes and cancels that task's stream producer.
+It does not select the latest runtime registered for the conversation, which
+could belong to sibling work. Direct runtime abort interrupts pending async graph
+advancement instead of waiting for another model token.
+
+This stops consumption of the active model stream and further graph steps. A
+provider may already have generated or billed tokens when the connection closes.
+Already-dispatched remote commands may finish within their timeout; cancellation
+does not undo workspace writes, published artifacts, or other completed effects.
+Immediate MicroVM command termination is outside this contract.

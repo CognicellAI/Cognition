@@ -284,7 +284,6 @@ class _ScopedRequestHandler(DefaultRequestHandler):
         try:
             task = await self._runtime.cancel(
                 CancelTask(params.id, self._agent_name, scope),
-                abort_execution=self._agent_manager.abort_session,
             )
         except RuntimeTaskNotFoundError as exc:
             raise TaskNotFoundError from exc

@@ -7,7 +7,22 @@
 - Surface typed regional quota rejection, bound throttled launches with jittered retries, preserve active/suspended leases, and leave eviction and capacity decisions to operators. Do not add provider-specific or KennelAMS-specific concepts to Cognition.
 - Acceptance: lease-generation and scope/profile identity tests; idle-policy round trip; suspend/resume hook and credential-refresh tests; provider-not-found replacement; ambiguous-command no-replay; cancellation precedence; quota rejection/backoff; redacted lifecycle events; staging evidence for resume latency, replacement, quota and snapshot cost.
 - Dependencies: existing process-local session ownership repair, Lambda MicroVM adapter, image lifecycle hooks, persisted session checkpoints, and builder initialization callback. Cross-process durable ownership and writer fencing remain follow-up hardening.
-- Status: implementation in progress on `codex/scoped-storage-runtime`; no main/release merge authorized.
+- Status: conservative lease recovery and confirmed-teardown quota repair implemented on `codex/sandbox-session-lifecycle`; release 0.16.1 admission authorized. Broader optimization, regional quota handling, and distributed accounting remain follow-up work.
+## Active task cancellation repair
+
+- Category: bug fix; generic runtime and A2A execution lifecycle.
+- Reproduced: abort acknowledged during a silent graph step permits that step's
+  side effect before the next event; A2A flush ticks skip persisted cancellation.
+- Branch `codex/task-cancel-interruption`: cancel pending async graph advancement
+  and inspect scoped durable task status on flush ticks.
+- Validation: 49 A2A/runtime regressions pass, including cancellation through a
+  second server instance during silent execution and foreign-scope denial. Seven
+  task-runtime tests also pass. Full release validation remains pending.
+- Scope: close the selected task execution stream and prevent further graph steps.
+  Already-dispatched remote commands may finish within their timeout; immediate
+  MicroVM command termination is explicitly deferred. No provider billing cutoff
+  or rollback of completed effects is promised.
+- Release admission remains pending this repair; no final merge authorized.
 
 ## Offline artifact backend migration (2026-09-09)
 
@@ -23,7 +38,7 @@
 - Acceptance: definition round trips; scope isolation; deployment ceilings; disable/limit changes during resumed execution; unavailable/deleted configuration denial; bounded inactive-scope cleanup, retries and live-dependency protection; independent runtime tests and documentation.
 - Dependencies: existing config registry, publication middleware, runtime storage and lifecycle ports. Inspect storage coverage before finalizing maintenance API. Existing persistent data must not be deleted by default.
 - Compatibility: additive configuration; omitted publication policy retains deployment behavior. No A2A envelope changes or product-specific schema. Document any storage/interface migration before implementation.
-- Status: scoped publication implemented on isolated feature branch. Publication/API/manifest suite: 116 passed; runtime regressions: 49 passed; final policy/capability checks: 25 passed. Targeted Ruff and mypy passed. Complete runtime retention and local integration remain pending; no main/release merge authorized.
+- Status: implemented and merged to `main` at `550c211`; the `release/v0.16.0` candidate is pending exact-commit pre-release images, full A2A TCK review, and final release approval.
 
 ## A2UI candidate release hardening (2026-09-08)
 
@@ -119,6 +134,7 @@ See AGENTS.md for category definitions, DoD requirements, and precedence rules.
 
 | Date | Description | Issue | Layer | Status |
 |------|-------------|-------|-------|--------|
+| 2026-09-13 | Correct optional OpenTelemetry fallback typing so strict mypy remains valid with both minimal and full dependency sets. | v0.16.0 release validation | 1/7 | Implemented on `codex/release-mypy-cleanup`; validation pending |
 | 2026-09-02 | Normalize persisted pre-v0.14 Agent definitions by removing retired inline capability fields, updating revision identity, and preserving exact-scope and historical run boundaries. | [#209](https://github.com/CognicellAI/Cognition/issues/209), [Kennel #63](https://github.com/CognicellAI/Kennel/issues/63#issuecomment-5515261183) | 2/4 | Implemented on `main`; v0.14.1 release validation pending |
 | 2026-09-08 | Serialize lazy Lambda MicroVM wrapper initialization so parallel first tool calls share one SDK instance and launch lock. | S3 Files live demo; concurrent-operation regression | 3 | Verified: regression and live WayPost parallel reads launch one VM |
 | 2026-09-08 | Explicit null `response_format` is silently ignored by the Agent PATCH API; use definition replacement until null clearing is supported. | S3 Files demo configuration | 6 | Reproduced; implementation pending |
