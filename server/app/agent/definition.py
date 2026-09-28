@@ -313,6 +313,10 @@ class AgentMcpServerConfig(BaseModel):
     url: str = Field(..., min_length=1)
     transport: Literal["streamable_http"] = Field(default="streamable_http")
     required: bool = Field(default=True)
+    server_notification_stream: bool = Field(
+        default=True,
+        description="Whether to open the optional Streamable HTTP GET notification stream.",
+    )
     auth: McpAuthConfig = Field(default_factory=McpNoAuthConfig)
 
     @field_validator("url")

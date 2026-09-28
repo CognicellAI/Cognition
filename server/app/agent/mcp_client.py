@@ -45,6 +45,7 @@ from server.app.agent.mcp_auth import (
     resolve_workload_client_secret,
     trusted_context_headers,
 )
+from server.app.agent.mcp_transport import install_server_notification_stream_compatibility
 from server.app.settings import McpWorkloadTokenExchangeProfile, Settings
 from server.app.storage.mcp_oauth import McpOAuthStateRepository
 from server.app.storage.mcp_readiness import (
@@ -93,6 +94,10 @@ class McpServerConfig(BaseModel):
     transport: Literal["streamable_http"] = Field(
         default="streamable_http", description="MCP transport protocol"
     )
+    server_notification_stream: bool = Field(
+        default=True,
+        description="Whether to open the optional Streamable HTTP GET notification stream.",
+    )
     auth: McpAuthConfig = Field(default_factory=McpNoAuthConfig)
     agent_name: str = Field(default="", exclude=True)
     agent_revision: int = Field(default=1, ge=1, exclude=True)
@@ -123,6 +128,7 @@ class McpServerConfig(BaseModel):
             url=_canonical_server_uri(config.url),
             required=config.required,
             transport=config.transport,
+            server_notification_stream=config.server_notification_stream,
             auth=config.auth,
             agent_name=agent_name,
             agent_revision=agent_revision,
@@ -181,13 +187,19 @@ class McpToolInfo(BaseModel):
     task_support: str | None = None
 
 
+install_server_notification_stream_compatibility()
+
+
 def mcp_config_to_connection(
     config: McpServerConfig,
     settings: Settings,
     oauth_repository: McpOAuthStateRepository | None = None,
 ) -> StreamableHttpConnection:
+    transport_options: dict[str, Any] = {
+        "server_notification_stream": config.server_notification_stream,
+    }
     if isinstance(config.auth, McpNoAuthConfig):
-        return {"transport": "streamable_http", "url": config.url}
+        return {"transport": "streamable_http", "url": config.url, **transport_options}
     if isinstance(config.auth, McpStaticBearerAuthConfig):
         try:
             static_auth = StaticBearerAuth.from_environment(config.auth.env)
@@ -197,6 +209,7 @@ def mcp_config_to_connection(
             "transport": "streamable_http",
             "url": config.url,
             "auth": static_auth,
+            **transport_options,
         }
     if isinstance(config.auth, McpWorkloadTokenExchangeAuthConfig):
         profile = config.workload_profile
@@ -218,6 +231,7 @@ def mcp_config_to_connection(
             "url": config.url,
             "headers": headers,
             "auth": workload_auth,
+            **transport_options,
         }
     if isinstance(config.auth, McpOAuthConfig):
         try:
@@ -234,6 +248,7 @@ def mcp_config_to_connection(
             "transport": "streamable_http",
             "url": config.url,
             "auth": oauth_auth,
+            **transport_options,
         }
     raise McpTransportAuthenticationError(config.name, "auth_invalid")
 
