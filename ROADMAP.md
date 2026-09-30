@@ -9,8 +9,8 @@
 - Acceptance: real SDK/adapter HTTP protocol tests cover initialization, discovery,
   tool calls, authentication, POST-response SSE, default GET behavior, concurrent
   connection isolation, cancellation, and session cleanup.
-- Status: implemented on `codex/mcp-optional-notification-stream`; upstream review
-  and exact-commit release admission remain pending. The compatibility shim uses
+- Status: merged through PR #224; v0.16.2 release candidate validation is pending.
+  The compatibility shim uses
   private adapter/SDK interfaces and must be checked during dependency upgrades.
 
 ## Sandbox session lifecycle and optimization (2026-09-17)
