@@ -9,6 +9,12 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- Allow Agent-owned Streamable HTTP MCP servers to disable the optional standalone
+  GET notification stream with `server_notification_stream: false`. Preserve the
+  existing default, authentication, POST-response SSE, and session cleanup.
+
 ## [0.16.1] — 2026-09-23
 
 ### Fixed

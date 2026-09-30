@@ -459,3 +459,32 @@ def test_stale_readiness_is_unknown_not_authorization_truth() -> None:
     )
 
     assert observation.public_status(now) == "unknown"
+
+
+def test_agent_mcp_config_can_disable_optional_server_notification_stream() -> None:
+    agent = AgentDefinition.model_validate(
+        {
+            "name": "post-only-mcp-agent",
+            "system_prompt": "Use configured tools.",
+            "mcp": {
+                "servers": {
+                    "remote": {
+                        "url": "https://mcp.example.test/mcp",
+                        "server_notification_stream": False,
+                    }
+                }
+            },
+        }
+    )
+
+    config = McpServerConfig.from_agent_config(
+        "remote",
+        agent.mcp.servers["remote"],
+        Settings(),
+        agent_name=agent.name,
+        agent_revision=1,
+        effective_scope={"tenant": "acme"},
+    )
+
+    assert config.server_notification_stream is False
+    assert mcp_config_to_connection(config, Settings())["server_notification_stream"] is False
