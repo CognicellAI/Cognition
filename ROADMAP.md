@@ -1,5 +1,18 @@
 # Cognition Roadmap
 
+## POST-only MCP compatibility
+
+- Category: compatibility fix; Agent MCP definition and transport layers.
+- Add per-server `server_notification_stream`, defaulting to true, for remote
+  servers requiring request/response-only operation. No product-specific policy,
+  persistence changes, or migration is introduced.
+- Acceptance: real SDK/adapter HTTP protocol tests cover initialization, discovery,
+  tool calls, authentication, POST-response SSE, default GET behavior, concurrent
+  connection isolation, cancellation, and session cleanup.
+- Status: implemented on `codex/mcp-optional-notification-stream`; upstream review
+  and exact-commit release admission remain pending. The compatibility shim uses
+  private adapter/SDK interfaces and must be checked during dependency upgrades.
+
 ## Sandbox session lifecycle and optimization (2026-09-17)
 
 - Category: Feature / architectural change; priority P1; layers 2, 3, 4, 6 and 7; estimated effort 5–8 days.

@@ -323,6 +323,27 @@ servers available. Duplicate canonical tool identities
 
 ### How It Works
 
+For a Streamable HTTP server that does not provide a standalone notification
+stream, set `server_notification_stream: false` on that server's Agent definition:
+
+```yaml
+mcp:
+  servers:
+    request-response-tools:
+      url: https://tools.example.com/mcp
+      transport: streamable_http
+      server_notification_stream: false
+```
+
+The default is `true`, preserving the adapter's normal GET notification stream.
+Setting it to `false` suppresses only that standalone GET; initialization, tool
+discovery, calls, authentication, POST-response SSE, and normal session cleanup
+continue. Unsolicited messages delivered through the standalone stream will not
+be received. This is an explicit compatibility setting, not automatic stateful
+versus stateless detection. It does not disable session IDs or session termination.
+Choose it only for a server whose required functionality works through POST
+responses. Existing Agent definitions require no migration.
+
 Cognition uses [`langchain-mcp-adapters`](https://github.com/langchain-ai/langchain-mcp-adapters) to connect to MCP servers. The adapter:
 
 1. Connects to each declared remote server using Streamable HTTP transport
