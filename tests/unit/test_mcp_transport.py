@@ -7,6 +7,7 @@ from typing import Any
 import httpx
 import pytest
 from langchain_mcp_adapters import sessions
+from mcp.types import TextContent
 
 from server.app.agent.mcp_transport import (
     install_server_notification_stream_compatibility,
@@ -107,6 +108,7 @@ async def test_protocol_calls_auth_and_cleanup(enabled: bool | None) -> None:
         tools = await session.list_tools()
         assert tools.tools[0].name == "echo"
         result = await session.call_tool("echo", {})
+        assert isinstance(result.content[0], TextContent)
         assert result.content[0].text == "session-a"
         if enabled is not False:
             await asyncio.wait_for(server.get_seen.wait(), timeout=2)
@@ -127,6 +129,7 @@ async def test_concurrent_modes_keep_sessions_separate() -> None:
         async with sessions.create_session(server.connection(enabled)) as session:
             await session.initialize()
             result = await session.call_tool("echo", {})
+            assert isinstance(result.content[0], TextContent)
             assert result.content[0].text == server.identity
 
     await asyncio.gather(call(servers[0], False), call(servers[1], True))
@@ -167,6 +170,7 @@ async def test_post_response_sse_and_explicit_session_retention() -> None:
     async with sessions.create_session(connection) as session:
         await session.initialize()
         result = await session.call_tool("echo", {})
+        assert isinstance(result.content[0], TextContent)
         assert result.content[0].text == "retained"
     assert all(request.method == "POST" for request in server.requests)
     assert all(client.is_closed for client in server.clients)

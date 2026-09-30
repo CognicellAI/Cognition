@@ -190,16 +190,23 @@ class McpToolInfo(BaseModel):
 install_server_notification_stream_compatibility()
 
 
+class CognitionStreamableHttpConnection(StreamableHttpConnection):
+    """Adapter connection with the runtime-owned notification-stream option."""
+
+    server_notification_stream: bool
+
+
 def mcp_config_to_connection(
     config: McpServerConfig,
     settings: Settings,
     oauth_repository: McpOAuthStateRepository | None = None,
-) -> StreamableHttpConnection:
-    transport_options: dict[str, Any] = {
-        "server_notification_stream": config.server_notification_stream,
-    }
+) -> CognitionStreamableHttpConnection:
     if isinstance(config.auth, McpNoAuthConfig):
-        return {"transport": "streamable_http", "url": config.url, **transport_options}
+        return {
+            "transport": "streamable_http",
+            "url": config.url,
+            "server_notification_stream": config.server_notification_stream,
+        }
     if isinstance(config.auth, McpStaticBearerAuthConfig):
         try:
             static_auth = StaticBearerAuth.from_environment(config.auth.env)
@@ -209,7 +216,7 @@ def mcp_config_to_connection(
             "transport": "streamable_http",
             "url": config.url,
             "auth": static_auth,
-            **transport_options,
+            "server_notification_stream": config.server_notification_stream,
         }
     if isinstance(config.auth, McpWorkloadTokenExchangeAuthConfig):
         profile = config.workload_profile
@@ -231,7 +238,7 @@ def mcp_config_to_connection(
             "url": config.url,
             "headers": headers,
             "auth": workload_auth,
-            **transport_options,
+            "server_notification_stream": config.server_notification_stream,
         }
     if isinstance(config.auth, McpOAuthConfig):
         try:
@@ -248,7 +255,7 @@ def mcp_config_to_connection(
             "transport": "streamable_http",
             "url": config.url,
             "auth": oauth_auth,
-            **transport_options,
+            "server_notification_stream": config.server_notification_stream,
         }
     raise McpTransportAuthenticationError(config.name, "auth_invalid")
 
