@@ -57,6 +57,7 @@ def test_none_connection_adds_no_authentication_or_context_headers() -> None:
     assert connection == {
         "transport": "streamable_http",
         "url": "https://mcp.example.test/docs",
+        "server_notification_stream": True,
     }
 
 
