@@ -9,6 +9,8 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.16.2] — 2026-09-30
+
 ### Fixed
 
 - Allow Agent-owned Streamable HTTP MCP servers to disable the optional standalone
