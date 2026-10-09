@@ -12,8 +12,9 @@
   remain unchanged; active runs continue to verify their already pinned value.
 - Acceptance: regression coverage for stale/sparse persisted digest metadata,
   pinned execution validation, migration reruns, and exact-scope isolation.
-- Status: implemented on `codex/prepare-v0.16.2`; 32 focused tests, Ruff, and
-  format checks pass. Independent full Cognition release validation pending.
+- Status: implemented on `codex/pinned-agent-manifest-digest`; 1,257 unit tests
+  pass with four skipped, plus Ruff and format checks. Hosted release admission
+  remains pending.
 
 ## POST-only MCP compatibility
 

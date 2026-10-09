@@ -1,7 +1,7 @@
 # C4 Level 3: State and Configuration
 
 **Status:** Current code-derived model  
-**Code baseline:** `codex/prepare-v0.16.2` (`388bf83` plus local digest fix)
+**Code baseline:** `codex/pinned-agent-manifest-digest` (`417e290` plus documentation update)
 **Last verified:** 2026-10-09
 
 Cognition separates authoritative LangGraph state, durable runtime lifecycle,
