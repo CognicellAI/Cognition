@@ -9,6 +9,15 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.16.3] — 2026-10-09
+
+### Fixed
+
+- Pin the digest of the validated Agent definition stored in each new run
+  manifest. Older scoped Agent records with sparse definition JSON no longer
+  fail pinned runtime verification when validation supplies default fields.
+  Existing definitions and run manifests remain unchanged.
+
 ## [0.16.2] — 2026-09-30
 
 ### Fixed
