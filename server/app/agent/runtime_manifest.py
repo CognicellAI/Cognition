@@ -47,11 +47,10 @@ async def resolve_runtime_manifest(
 
     validated_definition = definition.model_dump(mode="json")
     agent_revision = record.revision if record is not None else 1
-    agent_digest = (
-        record.definition_digest
-        if record is not None
-        else canonical_json_digest(validated_definition)
-    )
+    # Pin the canonical validated representation that execution will verify.
+    # Older persisted rows can have a digest over sparse JSON while the pinned
+    # snapshot includes Pydantic defaults; those hashes are not interchangeable.
+    agent_digest = canonical_json_digest(validated_definition)
 
     resolver = RuntimeResolver(config_store, settings)
     try:
