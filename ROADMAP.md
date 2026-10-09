@@ -1,5 +1,21 @@
 # Cognition Roadmap
 
+## Canonical digest for pinned Agent definitions
+
+- Category: bug fix; generic Agent persistence and runtime-manifest integrity.
+- Resolve a definition once, validate it, and pin the digest of the exact
+  normalized representation stored in the run manifest. This keeps execution
+  verification stable when older database rows contain sparse JSON or legacy
+  digest metadata; it does not rewrite historical rows or relax validation.
+- Compatibility: runtime manifests created after this change use the normalized
+  `AgentDefinition` digest. Existing stored definitions and prior run manifests
+  remain unchanged; active runs continue to verify their already pinned value.
+- Acceptance: regression coverage for stale/sparse persisted digest metadata,
+  pinned execution validation, migration reruns, and exact-scope isolation.
+- Status: implemented on `codex/pinned-agent-manifest-digest`; 1,257 unit tests
+  pass with four skipped, plus Ruff and format checks. Hosted release admission
+  remains pending.
+
 ## POST-only MCP compatibility
 
 - Category: compatibility fix; Agent MCP definition and transport layers.

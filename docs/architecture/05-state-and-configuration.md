@@ -1,8 +1,8 @@
 # C4 Level 3: State and Configuration
 
 **Status:** Current code-derived model  
-**Code baseline:** `release/v0.13.0` (`890e1ad`)  
-**Last verified:** 2026-07-25
+**Code baseline:** `codex/pinned-agent-manifest-digest` (`417e290` plus documentation update)
+**Last verified:** 2026-10-09
 
 Cognition separates authoritative LangGraph state, durable runtime lifecycle,
 read projections, versioned artifacts, and hot-reloadable configuration. These
@@ -193,6 +193,10 @@ runtime isolation:
   boundary. Wrong-scope identifiers return not-found.
 - Runs persist a redacted manifest and manifest digest so later Agent/config
   updates affect future runs only.
+- A new run hashes the canonical validated `AgentDefinition` snapshot stored in
+  its manifest. It does not reuse a legacy row digest when that digest covers a
+  different sparse JSON representation; historical run manifests remain
+  immutable and continue to verify as stored.
 
 ## Schema evolution
 

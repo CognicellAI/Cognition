@@ -4,10 +4,13 @@ from __future__ import annotations
 
 import pytest
 
+from server.app.agent.definition import AgentDefinition
 from server.app.agent.resolver import RuntimeResolver
+from server.app.agent.runtime_manifest import resolve_runtime_manifest
 from server.app.agent.task_runtime import AgentTaskRuntime, SubmitTask
 from server.app.llm.deep_agent_service import DeepAgentStreamingService
 from server.app.settings import Settings
+from server.app.storage.common import canonical_json_digest
 from server.app.storage.config_models import ProviderConfig
 from server.app.storage.config_registry import MemoryConfigRegistry
 from server.app.storage.config_store import DefaultConfigStore
@@ -99,6 +102,70 @@ async def test_active_run_keeps_agent_and_skill_snapshot_while_next_run_advances
         second.run.runtime_manifest["agent"]["definition"]["system_prompt"] == "Agent revision two."
     )
 
+    await storage.close()
+
+
+@pytest.mark.asyncio
+async def test_runtime_manifest_hashes_normalized_agent_definition(tmp_path) -> None:
+    """Sparse persisted Agent rows pin the validated execution representation."""
+    scope = {"tenant": "legacy-manifest-tenant"}
+    registry = MemoryConfigRegistry()
+    config_store = DefaultConfigStore(registry, workspace_path=tmp_path)
+    definition = {"name": "legacy-manifest-agent", "system_prompt": "Legacy agent."}
+    record = await config_store.upsert_agent("legacy-manifest-agent", scope, definition)
+
+    # Existing rows can lack a field added by current validation. The stored
+    # digest remains valid for the sparse JSON, as observed for a scoped Agent.
+    key = registry._key("agent", "legacy-manifest-agent", scope)
+    sparse_definition = dict(record.definition)
+    sparse_definition.pop("mcp")
+    registry._store[key] = sparse_definition
+    registry._records[key] = record.model_copy(
+        update={
+            "definition": sparse_definition,
+            "definition_digest": canonical_json_digest(sparse_definition),
+        }
+    )
+    assert registry._records[key].definition_digest != canonical_json_digest(
+        AgentDefinition.model_validate(sparse_definition).model_dump(mode="json")
+    )
+    settings = Settings()
+    manifest = await resolve_runtime_manifest(
+        config_store=config_store,
+        settings=settings,
+        agent_name="legacy-manifest-agent",
+        effective_scope=scope,
+    )
+
+    pinned_agent = manifest.manifest["agent"]
+    assert pinned_agent["definition"] == AgentDefinition.model_validate(definition).model_dump(
+        mode="json"
+    )
+    assert pinned_agent["definition_digest"] == canonical_json_digest(pinned_agent["definition"])
+
+    storage = MemoryStorageBackend(str(tmp_path))
+    await storage.initialize()
+    runtime = AgentTaskRuntime(
+        storage,
+        default_workspace_path=str(tmp_path),
+        config_store=config_store,
+    )
+    task = await runtime.submit(
+        SubmitTask(
+            context_id="legacy-manifest-context",
+            agent_name="legacy-manifest-agent",
+            effective_scope=scope,
+            content="Verify pinned execution.",
+        )
+    )
+    service = DeepAgentStreamingService(settings, config_store=config_store)
+    resolved, _ = await service._resolve_agent_config(
+        session=task.session,
+        project_path=str(tmp_path),
+        scope=scope,
+        runtime_manifest=task.run.runtime_manifest,
+    )
+    assert resolved.system_prompt == "Legacy agent."
     await storage.close()
 
 
