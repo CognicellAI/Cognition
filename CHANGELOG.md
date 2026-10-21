@@ -9,6 +9,18 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.16.4] — 2026-10-21
+
+### Fixed
+
+- Contain transient MCP transport failures, including nested SDK task-group
+  exceptions, as redacted tool errors instead of aborting the entire task.
+  Failed tool calls are never automatically replayed because their side effects
+  may already have occurred. Authorization, protocol, mixed-group, cancellation
+  and programming errors retain their existing failure behavior.
+- Retry MCP initialization/tool discovery once after a transient transport
+  failure. Required-server discovery still fails if the bounded retry fails.
+
 ## [0.16.3] — 2026-10-09
 
 ### Fixed
