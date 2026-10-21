@@ -533,3 +533,20 @@ The file watcher (`server/app/file_watcher.py`) monitors `.cognition/middleware/
 2. Agent cache is invalidated so the next session uses the updated definition.
 
 No server restart required. Changes typically take effect within 1 second.
+
+### MCP transport failures
+
+Remote MCP discovery retries a transient transport failure once after a short
+backoff. This covers initialization and tool listing, not tool execution.
+Required-server discovery still fails the run if that retry fails. Optional
+servers retain their existing unavailable-readiness behavior.
+
+A transient transport error during a tool call becomes a redacted tool error so
+the Agent can report the unavailable result or continue with other work. It does
+not prove the provider did not execute the operation. Cognition never
+transparently repeats that call; do not retry a potentially mutating operation
+without checking its outcome or using provider-supported idempotency.
+Authorization/protocol errors, mixed exception groups, cancellation and
+programming errors are not converted into transient successes. Provider URLs,
+response bodies, credentials and raw exception messages are excluded from the
+fallback tool error.
