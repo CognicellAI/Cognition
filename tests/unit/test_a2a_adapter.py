@@ -27,6 +27,35 @@ from server.app.protocols.a2a.routes import _task_signature
 
 
 class TestA2AConfig:
+    def test_discovery_metadata_is_public_and_coexists_with_a2ui(self):
+        uri = "https://example.org/extensions/languages/v1"
+        config = A2AConfig.model_validate(
+            {
+                "a2ui": {},
+                "discovery_extensions": [{"uri": uri, "params": {"languages": ["en", "fr"]}}],
+            }
+        )
+        agent = AgentDefinition(name="guide", system_prompt="private", a2a=config)
+        card = build_agent_card_for_agent(agent, "https://example.org", "1")
+        metadata, interactive = card.capabilities.extensions
+        assert metadata.uri == uri and not metadata.required
+        assert list(metadata.params["languages"]) == ["en", "fr"]
+        assert interactive.uri != metadata.uri
+        assert "discovery_extensions" not in A2AConfig().model_dump()
+
+    @pytest.mark.parametrize(
+        "entries",
+        [
+            [{"uri": "relative"}],
+            [{"uri": "https://example.org", "required": True}],
+            [{"uri": "https://example.org"}] * 2,
+            [{"uri": "https://a2ui.org/a2a-extension/a2ui/v1.0"}],
+        ],
+    )
+    def test_invalid_discovery_declarations(self, entries):
+        with pytest.raises(ValueError):
+            A2AConfig.model_validate({"discovery_extensions": entries})
+
     def test_default_a2a_exposure_is_false(self):
         agent = AgentDefinition(name="test", system_prompt="test prompt")
         assert agent.a2a.exposed is False

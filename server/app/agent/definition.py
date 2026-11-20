@@ -23,9 +23,12 @@ from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
+    JsonValue,
     field_validator,
     model_serializer,
 )
+
+from server.app.a2ui import A2UI_EXTENSION_URI
 
 logger = structlog.get_logger(__name__)
 
@@ -144,6 +147,16 @@ class A2UIConfig(BaseModel):
         )
 
 
+class A2ADiscoveryExtension(BaseModel):
+    """Public, optional Agent Card metadata supplied by the builder."""
+
+    model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
+
+    uri: A2APublicInterfaceUrl
+    description: str = ""
+    params: dict[str, JsonValue] = Field(default_factory=dict)
+
+
 class A2AConfig(BaseModel):
     """Builder-controlled A2A exposure and public Agent Card presentation."""
 
@@ -160,6 +173,19 @@ class A2AConfig(BaseModel):
         min_length=1,
     )
     skills: list[A2APublicSkill] = Field(default_factory=list)
+    discovery_extensions: list[A2ADiscoveryExtension] = Field(default_factory=list)
+
+    @field_validator("discovery_extensions")
+    @classmethod
+    def validate_discovery_uris(
+        cls, values: list[A2ADiscoveryExtension]
+    ) -> list[A2ADiscoveryExtension]:
+        """Reserve runtime-owned extension URIs and reject ambiguous declarations."""
+        uris = [item.uri for item in values]
+        if A2UI_EXTENSION_URI in uris or len(uris) != len(set(uris)):
+            raise ValueError("Discovery extension URI is reserved or duplicated")
+        return values
+
     a2ui: A2UIConfig | None = Field(default=None)
 
     @field_validator("default_input_modes", "default_output_modes")
@@ -181,6 +207,8 @@ class A2AConfig(BaseModel):
     def serialize_without_disabled_a2ui(self, handler: Any) -> dict[str, Any]:
         """Omit disabled A2UI without changing legacy nullable A2A fields."""
         data = cast(dict[str, Any], handler(self))
+        if not self.discovery_extensions:
+            data.pop("discovery_extensions", None)
         if self.a2ui is None:
             data.pop("a2ui", None)
         return data
@@ -484,9 +512,7 @@ class AgentDefinition(BaseModel):
     hidden: bool = Field(default=False)
     native: bool = Field(
         default=False,
-        description=(
-            "Legacy compatibility flag; Cognition does not create native Agents"
-        ),
+        description=("Legacy compatibility flag; Cognition does not create native Agents"),
     )
     a2a: A2AConfig = Field(default_factory=A2AConfig)
 
@@ -644,8 +670,7 @@ class AgentDefinition(BaseModel):
             from deepagents.middleware.filesystem import FilesystemPermission
 
             spec["permissions"] = [
-                FilesystemPermission(**permission.model_dump())
-                for permission in self.permissions
+                FilesystemPermission(**permission.model_dump()) for permission in self.permissions
             ]
 
         return spec

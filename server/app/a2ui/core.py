@@ -12,9 +12,9 @@ from jsonschema import Draft202012Validator, FormatChecker
 from pydantic import BaseModel, Field, ValidationError, field_validator
 from referencing import Registry, Resource
 
+from server.app.a2ui import A2UI_EXTENSION_URI as A2UI_EXTENSION_URI
 from server.app.a2ui.telemetry import record_validation
 
-A2UI_EXTENSION_URI = "https://a2ui.org/a2a-extension/a2ui/v1.0"
 A2UI_MEDIA_TYPE = "application/a2ui+json"
 A2UI_VERSION = "v1.0"
 BASIC_CATALOG_ID = "https://a2ui.org/specification/v1_0/catalogs/basic/catalog.json"

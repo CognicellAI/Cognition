@@ -1,5 +1,12 @@
 # Cognition Roadmap
 
+## Public discovery extensions
+
+Layer 6 feature, small effort. Builders can declare optional data-only extensions
+using the existing per-agent A2A configuration. Acceptance covers independent
+card rendering, reserved URI handling, and unchanged legacy definition digests.
+Depends on the existing A2A 1.0 AgentExtension type.
+
 ## Canonical digest for pinned Agent definitions
 
 - Category: bug fix; generic Agent persistence and runtime-manifest integrity.

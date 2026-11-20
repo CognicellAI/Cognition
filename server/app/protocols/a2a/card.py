@@ -67,9 +67,7 @@ def build_agent_card_for_agent(
                 description=skill.description,
                 tags=skill.tags,
                 examples=skill.examples,
-                input_modes=_with_a2ui_mode(skill.input_modes, agent)
-                if skill.input_modes
-                else [],
+                input_modes=_with_a2ui_mode(skill.input_modes, agent) if skill.input_modes else [],
                 output_modes=_with_a2ui_mode(skill.output_modes, agent)
                 if skill.output_modes
                 else [],
@@ -89,7 +87,12 @@ def build_agent_card_for_agent(
             )
         ]
 
-    extensions = []
+    extensions = [
+        AgentExtension(
+            uri=item.uri, description=item.description, required=False, params=item.params
+        )
+        for item in agent.a2a.discovery_extensions
+    ]
     if agent.a2a.a2ui is not None:
         extensions.append(
             AgentExtension(
