@@ -242,3 +242,23 @@ and `COGNITION-EXPLANATION.md`. Cognition's optional SendMessage idempotency
 extension remains enabled and independently tested in production code; only
 the deterministic TCK fixture disables it because official scenarios reuse
 message IDs as test data.
+
+## Optional discovery metadata
+
+Use `a2a.discovery_extensions` on a builder-managed agent to publish data on its
+Agent Card. For example:
+
+```yaml
+a2a:
+  exposed: true
+  discovery_extensions:
+    - uri: https://example.org/extensions/languages/v1
+      params:
+        languages: [en, fr]
+```
+
+Use a unique absolute HTTP(S) identifier for each extension and public JSON
+values for its parameters. Cognition advertises each as optional. Reading the
+card requires no extension negotiation. Request handlers and authentication
+retain their existing behavior. Omit the list or pass an empty list to remove
+these declarations when replacing the agent's A2A configuration.
