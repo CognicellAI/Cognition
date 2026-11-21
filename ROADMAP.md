@@ -7,6 +7,17 @@ using the existing per-agent A2A configuration. Acceptance covers independent
 card rendering, reserved URI handling, and unchanged legacy definition digests.
 Depends on the existing A2A 1.0 AgentExtension type.
 
+## MCP transport resilience
+
+- Category: bug fix, Layer 4 Agent runtime.
+- Retry transient MCP discovery once; never automatically replay tool calls.
+- Convert transport-only tool failures, including nested SDK exception groups,
+  into redacted tool errors with an explicit unknown-outcome warning.
+- Preserve required-server failure, authorization denial, cancellation, and
+  programmer errors. No builder-specific policy or API changes.
+- Validation: 63 MCP configuration, authentication, transport and resilience
+  regressions pass; focused strict typing passes. Deployment admission is separate.
+
 ## Canonical digest for pinned Agent definitions
 
 - Category: bug fix; generic Agent persistence and runtime-manifest integrity.
