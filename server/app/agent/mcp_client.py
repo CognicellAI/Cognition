@@ -10,6 +10,7 @@ Security stance:
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 from collections.abc import Mapping, Sequence
@@ -44,6 +45,10 @@ from server.app.agent.mcp_auth import (
     create_mcp_oauth_auth,
     resolve_workload_client_secret,
     trusted_context_headers,
+)
+from server.app.agent.mcp_resilience import (
+    handle_mcp_transport_failure,
+    is_transient_transport_failure,
 )
 from server.app.agent.mcp_transport import install_server_notification_stream_compatibility
 from server.app.settings import McpWorkloadTokenExchangeProfile, Settings
@@ -276,7 +281,7 @@ def create_mcp_client(
         for config in configs
         if isinstance(config.auth, McpWorkloadTokenExchangeAuthConfig)
     }
-    interceptors = list(tool_interceptors or [])
+    interceptors = [handle_mcp_transport_failure, *(tool_interceptors or [])]
     if workload_contexts:
         # Security projection is innermost so earlier interceptors cannot add or
         # retain arbitrary per-call headers after this default-deny overwrite.
@@ -313,7 +318,16 @@ async def load_mcp_tools_per_server(
             if oauth_repository is not None:
                 client_kwargs["oauth_repository"] = oauth_repository
             client = create_mcp_client([config], settings, **client_kwargs)
-            server_tools = await client.get_tools(server_name=config.name)
+            try:
+                server_tools = await client.get_tools(server_name=config.name)
+            except Exception as error:
+                if not is_transient_transport_failure(error):
+                    raise
+                # Only discovery is replayed: initialize/tools/list have no tool
+                # side effects. One bounded retry tolerates a transient failure.
+                logger.info("mcp_discovery_retry", error_type=type(error).__name__)
+                await asyncio.sleep(0.2)
+                server_tools = await client.get_tools(server_name=config.name)
         except Exception as exc:
             category = (
                 exc.category
