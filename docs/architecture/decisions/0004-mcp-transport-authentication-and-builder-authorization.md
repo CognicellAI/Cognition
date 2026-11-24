@@ -152,3 +152,5 @@ isolation must assign separate workload identities at that execution boundary.
 - `docs/concepts/security.md`
 - `docs/guides/configuration.md`
 - `docs/guides/extending-agents.md`
+
+Managed MCP calls prefer the durable invocation run ID in the trusted runtime context for `X-Cognition-Run-ID`. An explicitly configured run ID is the fallback. Thread-only executions omit the header. Multiple runs can share one thread.

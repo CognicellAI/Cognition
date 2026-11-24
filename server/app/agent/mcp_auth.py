@@ -350,10 +350,11 @@ def _runtime_context_values(runtime: object | None) -> dict[str, Any]:
             return context.get(name)
         return getattr(context, name, None) if context is not None else None
 
-    thread_id = context_value("thread_id") or configurable.get("thread_id")
     return {
         "session_id": context_value("session_id") or configurable.get("session_id"),
-        "run_id": config_dict.get("run_id") or configurable.get("run_id") or thread_id,
+        "run_id": context_value("run_id")
+        or config_dict.get("run_id")
+        or configurable.get("run_id"),
         "request_deadline": context_value("request_deadline"),
     }
 
