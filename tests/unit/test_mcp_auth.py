@@ -515,20 +515,19 @@ def test_workload_transport_fails_when_ambient_identity_is_unavailable() -> None
 def test_mcp_context_distinguishes_two_runs_in_the_same_thread() -> None:
     from types import SimpleNamespace
 
-    options = dict(
-        agent_name="agent",
-        agent_revision=1,
-        effective_scope={},
-        server_alias="gateway",
-        canonical_server_uri="https://example.org/mcp",
-    )
-
     def headers(run_id: str | None) -> dict[str, str]:
         runtime = SimpleNamespace(
             context={"thread_id": "shared", "run_id": run_id},
             config={"configurable": {"thread_id": "shared"}},
         )
-        return trusted_context_headers(runtime=runtime, **options)
+        return trusted_context_headers(
+            runtime=runtime,
+            agent_name="agent",
+            agent_revision=1,
+            effective_scope={},
+            server_alias="gateway",
+            canonical_server_uri="https://example.org/mcp",
+        )
 
     assert headers("run-a")["X-Cognition-Run-ID"] == "run-a"
     assert headers("run-b")["X-Cognition-Run-ID"] == "run-b"
