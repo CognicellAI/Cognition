@@ -1,8 +1,8 @@
 # C4 Level 3: Server Composition
 
 **Status:** Current code-derived model  
-**Code baseline:** `release/v0.13.0` (`890e1ad`)  
-**Last verified:** 2026-07-25
+**Code baseline:** `origin/main` (`f5a3901`)
+**Last reviewed:** 2026-11-25
 
 The FastAPI process is Cognition's composition root and primary delivery
 container. REST, Server-Sent Events (SSE), and Agent-to-Agent (A2A) routes adapt
@@ -58,7 +58,7 @@ C4Component
 1. Create and initialize the selected `StorageBackend`.
 2. Create the matching `ConfigRegistry` and initialize its schema.
 3. Wrap it in `DefaultConfigStore` and register FastAPI dependencies.
-4. Load workspace YAML and seed providers, sandbox profiles, skills, tools, and
+4. Load workspace YAML and seed model providers, sandbox profiles, and
    Agent definitions.
 5. Create the matching `ArtifactStore`.
 6. Create `RuntimeResolver`, config-change dispatcher, session manager, and
@@ -66,7 +66,8 @@ C4Component
 7. Mount the A2A adapter when enabled.
 8. Create `ModelCatalog`, validate Kubernetes sandbox settings, and start file
    watchers.
-9. Start tracing, metrics, MLflow integration, and rate limiting.
+9. Initialize tracing, metrics, and rate limiting. Trace pipelines can route
+   OTLP to an external collector and onward to MLflow.
 
 Shutdown reverses process-owned resources: watcher, rate limiter, dispatcher,
 and storage connections.

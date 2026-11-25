@@ -1,72 +1,9 @@
 # Cognition Documentation
 
-Cognition is a **headless agent orchestration backend**. Define your agent — get REST API, streaming, persistence, sandboxing, and observability automatically.
+The [documentation home](index.md) organizes concepts, guides, and blueprints.
+The published site is available at [cognition.cognicellai.com/docs](https://cognition.cognicellai.com/docs/).
 
-Start with the [code-derived architecture](./architecture/index.md) for C4
-diagrams, runtime flows, deployment topology, known constraints, and decision
-tracking. **Proposals** describe release-independent designs that are not yet
-implemented. **Concepts** explain individual subsystems; **Guides** are
-task-oriented.
-
----
-
-## Architecture
-
-| Document | Description |
-|---|---|
-| [Architecture](./architecture/index.md) | Code-derived C4 views, runtime flows, deployment topology, risks, and decisions |
-| [Architecture Decisions](./architecture/decisions/index.md) | ADRs for durable architecture choices and compatibility rules |
-
----
-
-## Concepts
-
-| Document | Description |
-|---|---|
-| [Sessions & Messages](./concepts/sessions-and-messages.md) | Session lifecycle, message persistence, SSE streaming, and reconnection |
-| [Agent Runtime](./concepts/agent-runtime.md) | AgentRuntime protocol, AgentDefinition model, A2A exposure, and the multi-agent registry |
-| [Storage & Execution](./concepts/storage-and-execution.md) | StorageBackend and ExecutionBackend protocols and their implementations |
-| [Sandboxes](./concepts/sandboxes/index.md) | Local, Docker, Kubernetes, and AWS Lambda MicroVM execution backends |
-| [Kubernetes Sandbox](./concepts/sandboxes/kubernetes/index.md) | K8s-native sandbox isolation using the agent-sandbox CRD and controller |
-| [AWS Lambda MicroVM Sandbox](./concepts/sandboxes/aws-lambda-microvm/index.md) | AWS-native MicroVM sandbox isolation, profiles, IAM roles, networking, and runtime protocol |
-| [Observability](./concepts/observability.md) | OpenTelemetry traces, Prometheus metrics, and MLflow experiment tracking |
-| [Security](./concepts/security.md) | Session scoping, sandbox isolation, tool security, MCP policy, A2A boundaries, rate limiting, and CORS |
-
----
-
-## Guides
-
-| Document | Description |
-|---|---|
-| [Getting Started](./guides/getting-started.md) | Install, configure, and send your first message |
-| [S3 Files and A2A Deliverability](./guides/s3-files-a2a-deliverability.md) | Whitepaper describing an optional, tested builder integration |
-| [Core vs App Layer](./guides/core-vs-app-layer.md) | Builder responsibilities: what belongs in Cognition versus your product |
-| [Configuration](./guides/configuration.md) | Complete reference for all YAML keys and environment variables |
-| [Extending Agents](./guides/extending-agents.md) | Add memory, skills, tools, subagents, middleware, MCP servers, A2A exposure, and custom LLM providers |
-| [AWS Lambda MicroVM Setup](./concepts/sandboxes/aws-lambda-microvm/setup.md) | Configure the `aws_lambda_microvm` backend, profiles, per-agent roles, and AWS prerequisites |
-| [Deployment](./guides/deployment.md) | Docker Compose stack, PostgreSQL, Alembic migrations, and production hardening |
-| [API Reference](./guides/api-reference.md) | Every REST endpoint, SSE event type, MCP servers, artifacts, A2A protocol, capabilities, and scoping headers |
-| [Release Checklist](./guides/release-checklist.md) | Standard release process for Cognition versions |
-
----
-
-## Proposals
-
-| Document | Description |
-|---|---|
-| [Sandboxed Skill Package Registry](./proposals/sandboxed-skill-registry.md) | Release-independent design for scope-aware skill packages, configurable storage, immutable revisions, and sandbox-only execution |
-| [Curated OpenTelemetry Agent Tracing](./proposals/curated-opentelemetry-tracing.md) | Draft design for bounded Agent-run traces, automatic framework instrumentation, canonical OTLP delivery, and provider-authoritative Usage Events |
-
----
-
-## Blueprints
-
-Reference architectures showing what you can build on Cognition:
-
-| Blueprint | Domain |
-|---|---|
-| [Cognition CLI](./blueprints/cognition-cli.md) | Terminal assistant — a thin client over the Cognition API |
-| [BreachLens](./blueprints/cyber-investigation.md) | Cybersecurity SOC investigation and triage |
-| [GeneSmith](./blueprints/genesmith.md) | Secure biological foundry for protein design |
-| [DataLens](./blueprints/data-analyst.md) | Headless data science on sensitive datasets |
-| [StarKeep](./blueprints/starkeep.md) | SpaceOps administrator for satellite repair |
+- [Architecture overview](architecture/index.md) for system boundaries, runtime flows, and deployment.
+- [Architecture decisions](architecture/decisions/index.md) for ownership and compatibility rules.
+- [Getting started](guides/getting-started.md) for your first Agent.
+- [Release checklist](guides/release-checklist.md) for maintainer release validation.

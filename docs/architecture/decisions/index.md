@@ -1,7 +1,7 @@
 # Architecture Decision Records
 
 **Status:** Active index  
-**Last updated:** 2026-08-03
+**Last reviewed:** 2026-11-25
 
 Architecture Decision Records (ADRs) capture decisions that should survive the
 implementation that first introduced them. Use an ADR when changing:
@@ -32,7 +32,7 @@ Files use `NNNN-short-decision-title.md`.
 
 ## Lifecycle
 
-1. **Proposed:** The trade-off and migration are under review.
+1. **Proposed:** The trade-off and any migration are under review.
 2. **Accepted:** The decision governs implementation.
 3. **Superseded:** A newer ADR explicitly replaces it.
 4. **Rejected:** The option was considered and deliberately not selected.

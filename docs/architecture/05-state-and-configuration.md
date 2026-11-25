@@ -1,8 +1,8 @@
 # C4 Level 3: State and Configuration
 
 **Status:** Current code-derived model  
-**Code baseline:** `codex/pinned-agent-manifest-digest` (`417e290` plus documentation update)
-**Last verified:** 2026-10-09
+**Code baseline:** `origin/main` (`f5a3901`)
+**Last reviewed:** 2026-11-25
 
 Cognition separates authoritative LangGraph state, durable runtime lifecycle,
 read projections, versioned artifacts, and hot-reloadable configuration. These
@@ -21,7 +21,7 @@ C4Component
         Component(storage_port, "StorageBackend", "Protocol", "Sessions, messages, tasks, runs, events, checkpointer, and Store")
         Component(message_projection, "Message projection", "Projection adapter", "REST-oriented messages rebuilt from checkpoints")
         Component(config_store, "DefaultConfigStore", "Configuration facade", "Combines native, file, and registry definitions")
-        Component(config_registry, "ConfigRegistry", "Scoped configuration store", "Providers, tools, Agents, profiles, and defaults")
+        Component(config_registry, "ConfigRegistry", "Scoped configuration store", "Providers, Agents, profiles, and defaults")
         Component(dispatcher, "ConfigChangeDispatcher", "Invalidation bus", "In-process or PostgreSQL LISTEN/NOTIFY delivery")
         Component(artifact_port, "ArtifactStore", "Versioned content store", "Exact-scope artifact CRUD")
         Component(schema, "Schema and migration tooling", "SQLAlchemy + Alembic", "Declares Cognition tables and explicit upgrades")
@@ -31,7 +31,7 @@ C4Component
     ContainerDb(graph_db, "LangGraph tables", "SQLite/PostgreSQL", "Checkpoints, writes, and cross-thread Store")
     ContainerDb(config_db, "Configuration tables", "SQLite/PostgreSQL", "config_entities and config_changes")
     ContainerDb(artifact_db, "Artifact table", "SQLite/PostgreSQL", "Versioned scoped content")
-    Container(workspace, "Workspace definitions", "YAML/Markdown/Python", "Bootstrap Agents, tools, middleware, and defaults")
+    Container(workspace, "Workspace definitions", "YAML/Markdown/Python", "Bootstrap Agents, middleware, and defaults")
 
     Rel(task_service, storage_port, "Creates and queries lifecycle state")
     Rel(task_service, runtime_projection, "Requests transitions")
@@ -61,12 +61,16 @@ C4Component
 | Ordered runtime evidence | Append-only `session_events` | SSE/A2A transport projections |
 | Conversation container | `sessions` | Message count, active/latest run, latest event metadata |
 | Dynamic definitions | `config_entities` plus native/file sources | In-process `DefaultConfigStore` entries |
-| Agent-produced content | Versioned `artifacts` | Virtual filesystem routes and task artifact descriptors |
+| Agent-produced content | Scoped artifact manifests and versioned bodies in the configured backend | Virtual filesystem routes and task artifact descriptors |
 | Cross-thread memory | LangGraph Store | Scope is available through `CognitionContext`; these components do not enforce a scoped Store wrapper |
 
 The `messages` table is explicitly rebuildable from checkpoint messages. It is
 optimized for pagination, timestamps, threading, tool metadata, token counts,
 and model attribution; it is not the graph's source of truth.
+
+With S3-compatible artifact storage, the database manifest owns scoped
+publication state and the object store holds file bodies. See
+[ADR-0005](decisions/0005-durable-state-placement-and-backend-composition.md).
 
 ## Logical data model
 
@@ -154,7 +158,7 @@ multiple server replicas.
 
 ## Dynamic configuration
 
-`ConfigRegistry` stores providers, tools, Agents, sandbox profiles, and
+`ConfigRegistry` stores providers, Agents, sandbox profiles, and
 global defaults as `(entity_type, name, scope, definition, source)` rows. MCP
 servers exist only inside immutable Agent definitions.
 

@@ -61,6 +61,11 @@ For v0.13, Cognition adopts an exact-scope Agent runtime boundary:
 10. OTLP trace export requests are bounded by encoded byte size so long runs do
     not exceed common collector limits.
 
+Later decisions update the execution and storage details of this v0.13
+record. [ADR-0003](0003-agent-owned-capability-revisions.md) governs Agent-owned
+capabilities. [ADR-0005](0005-durable-state-placement-and-backend-composition.md)
+governs builder-selected storage and backend placement.
+
 ## Alternatives considered
 
 ### Keep defaults and inheritance with stricter checks

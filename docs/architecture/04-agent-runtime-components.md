@@ -1,8 +1,8 @@
 # C4 Level 3: Agent Runtime Components
 
 **Status:** Current code-derived model  
-**Code baseline:** `release/v0.13.0` (`890e1ad`)  
-**Last verified:** 2026-07-25
+**Code baseline:** `origin/main` (`f5a3901`)
+**Last reviewed:** 2026-11-25
 
 The runtime turns a scoped `AgentDefinition` into a Deep Agents graph, executes
 it against one LangGraph thread, and translates upstream stream chunks into
@@ -26,7 +26,7 @@ C4Component
         Component(projection, "RuntimeProjectionService", "Durable lifecycle projector", "Keeps run, task, session, and event state coherent")
     }
 
-    ContainerDb(config_store, "ConfigStore", "Agent/provider/tool/skill/MCP/sandbox definitions")
+    ContainerDb(config_store, "ConfigStore", "Agent, provider and sandbox definitions")
     ContainerDb(state, "StorageBackend", "Tasks, sessions, runs, messages, events, checkpoints, Store")
     Container(sandbox, "Sandbox backend", "Deep Agents sandbox protocol", "Filesystem and command execution")
     System_Ext(model, "Model provider", "Chat model inference")
@@ -53,14 +53,13 @@ C4Component
 ## Runtime contract
 
 `AgentDefinition` is the behavioral input. It contains the stable Agent name,
-prompt, selected tools and skills, memory sources, middleware, permissions,
+prompt, Agent-owned MCP servers, memory sources, middleware, permissions,
 subagents, structured-output path, context policy, model overrides, sandbox
 selection, visibility, and optional A2A presentation.
 
 `RuntimeResolver` bridges stored definitions to live Python objects:
 
 - Resolves an Agent through `ConfigStore`
-- Loads API/file tool registrations or supplied tools
 - Resolves provider selection and builds a LangChain `BaseChatModel`
 - Produces a secret-free model cache identity
 
@@ -73,9 +72,8 @@ Unknown or unusable provider configurations fail explicitly through
 Depending on the definition and deployment it supplies:
 
 - A resolved model and system prompt
-- Host-provided tools only when explicitly enabled, plus registry,
-  programmatic, and remote MCP tools
-- Registry-backed skills and memory instructions
+- Native Deep Agents capabilities and tools discovered from the Agent’s remote MCP servers
+- Builder-mounted sandbox Skills and configured memory instructions
 - Filesystem permissions and tool-safety middleware
 - Observability, streaming, context, retry, call-limit, PII, human approval,
   and other declarative middleware
@@ -147,13 +145,18 @@ without a Cognition scope-enforcing wrapper; Store namespace isolation is not
 established by these components alone. API/session code treats session scope as
 immutable after creation.
 
+Workload-authenticated MCP sends a reserved scope and correlation envelope to
+the builder gateway. Session and run identify different things because multiple
+invocations can share one LangGraph thread. The gateway authorizes the Agent
+before releasing provider access. See [ADR-0004](decisions/0004-mcp-transport-authentication-and-builder-authorization.md).
+
 ## Extension points
 
 | Extension | Boundary |
 | --- | --- |
 | Agent definition | Pydantic `AgentDefinition` persisted or loaded from workspace |
-| Tools | LangChain tools, registry source/path, programmatic tools, remote MCP |
-| Skills | Registry-backed `SKILL.md` content exposed through Deep Agents skills backend |
+| Tools | Agent-owned remote MCP and native Deep Agents capabilities |
+| Skills | Builder-mounted `skills/` directory in the selected sandbox workspace |
 | Middleware | Deep Agents middleware instances or supported declarative specifications |
 | Subagents | Other scope-visible Agent definitions are currently translated into synchronous subagents; the current Agent can also declare experimental remote async subagents |
 | Model providers | Provider configuration resolved by `RuntimeResolver` and LangChain |
@@ -169,9 +172,6 @@ immutable after creation.
 - Every run pins an Agent/dependency manifest and manifest digest before model
   execution starts. Active runs do not observe later Agent or dependency
   updates.
-- Registry Python tool source and host-provided tools are not available in
-  strict production mode unless explicitly enabled as unsafe development or
-  host-tool settings.
 - The streaming path constructs synchronous delegation from scope-authorized
   subagent definitions. General subagents inherit the parent run manifest;
   explicit subagents receive their declared authorized subset.

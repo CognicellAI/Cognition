@@ -168,7 +168,7 @@ See [Extending Agents](./docs/guides/extending-agents.md) for code examples and 
 
 ## Blueprints
 
-The CLI is one example of what you can build on Cognition. See the [Blueprints](./docs/README.md#blueprints) for reference architectures across domains:
+The CLI is one example of what you can build on Cognition. See the [Blueprints](./docs/index.md#blueprints) for reference architectures across domains:
 
 *   **[Cognition CLI](./docs/blueprints/cognition-cli.md)**: A high-fidelity terminal assistant.
 *   **[BreachLens](./docs/blueprints/cyber-investigation.md)**: Security analysis for cybersecurity investigations.

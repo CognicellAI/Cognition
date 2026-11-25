@@ -72,8 +72,6 @@ nav:
       - Execution & Sandboxes: architecture/06-execution-and-sandboxes.md
       - Runtime Flows: architecture/07-runtime-flows.md
       - Deployment & Operations: architecture/08-deployment-and-operations.md
-      - A2A Deliverability Validation: architecture/a2a-deliverability-validation.md
-      - Published-file Retention: guides/published-file-retention.md
       - Governance & Evolution: architecture/09-governance-and-evolution.md
       - Code-Derived Risks: architecture/10-code-derived-risks.md
       - Decisions:
@@ -81,10 +79,10 @@ nav:
           - ADR Template: architecture/decisions/0000-template.md
           - ADR-0001 Exact-Scope Agent Runtime Boundary: architecture/decisions/0001-v013-exact-scope-agent-runtime-boundary.md
           - ADR-0002 Curated OpenTelemetry Agent Tracing: architecture/decisions/0002-curated-opentelemetry-agent-tracing.md
-  - Proposals:
-      - Overview: proposals/index.md
-      - Sandboxed Skill Package Registry: proposals/sandboxed-skill-registry.md
-      - Curated OpenTelemetry Agent Tracing: proposals/curated-opentelemetry-tracing.md
+          - ADR-0003 Agent-Owned Capability Revisions: architecture/decisions/0003-agent-owned-capability-revisions.md
+          - ADR-0004 MCP Transport Authentication: architecture/decisions/0004-mcp-transport-authentication-and-builder-authorization.md
+          - ADR-0005 Durable State Placement: architecture/decisions/0005-durable-state-placement-and-backend-composition.md
+      - Historical Proposals: proposals/index.md
   - Concepts:
       - Sessions & Messages: concepts/sessions-and-messages.md
       - Agent Runtime: concepts/agent-runtime.md
@@ -119,6 +117,7 @@ nav:
       - Extending Agents: guides/extending-agents.md
       - A2A Builder Guide: guides/a2a.md
       - S3 Files Integration Whitepaper: guides/s3-files-a2a-deliverability.md
+      - Published-file Retention: guides/published-file-retention.md
       - Deployment: guides/deployment.md
       - API Reference: guides/api-reference.md
       - Release Checklist: guides/release-checklist.md

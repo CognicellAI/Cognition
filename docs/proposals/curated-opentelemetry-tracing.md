@@ -1,9 +1,8 @@
 # Curated OpenTelemetry Agent Tracing
 
-**Status:** Implemented on the v0.13 branch; release validation pending  
+**Status:** Historical design implemented in v0.13
 **Audience:** Cognition maintainers, deployment operators, and builders  
 **Date:** 2026-07-26  
-**Implementation state:** Accepted and implemented for v0.13 branch work. Local observability smoke has passed; final release validation remains a gate.  
 **Related decision:** [ADR-0002](../architecture/decisions/0002-curated-opentelemetry-agent-tracing.md)
 
 ## Summary
