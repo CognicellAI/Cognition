@@ -150,6 +150,7 @@ See AGENTS.md for category definitions, DoD requirements, and precedence rules.
 
 | Date | Description | Severity | Layer | Status |
 |------|-------------|----------|-------|--------|
+| 2026-11-25 | Upgrade 17 packages in `uv.lock` to resolve the 11 Critical and 88 High Dependabot alerts in the November 25 baseline. Verify all resolved registry versions against GitHub advisories. | Critical / High | 1 | In review |
 | 2026-08-03 | Resolve High-and-above dependency advisories before the v0.14.0 pre-release image: upgrade `mcp`, `GitPython`, `Pillow`, `pyasn1`, Click, and `langgraph-checkpoint` to patched versions and audit the installed release environment. | High | 1 | In Review |
 | 2026-07-23 | Default per-message completion callbacks to denied and require operator-approved HTTPS origins so scoped callers cannot select arbitrary destinations from the shared Cognition runtime. | High | 1/6 | Implemented on `release/v0.13.0`; release validation pending |
 | 2026-06-26 | Resolve open Dependabot alerts in `uv.lock` by upgrading `pydantic-settings`, `langsmith`, `langchain`, `langchain-anthropic`, `starlette`, `cryptography`, `aiohttp`, `python-multipart`, and `pyjwt` to patched versions | High | 1 | Completed |
@@ -426,6 +427,7 @@ The following fallback patterns exist and are tracked for removal. They produce 
 
 | Package | From | To | Breaking Changes | Status |
 |---------|------|-----|------------------|--------|
+| Security dependency refresh | See the previous lockfile | Patched versions recorded in `uv.lock`, including `cryptography` 50.0.0, `mlflow` 3.17.2, `mcp` 1.30.0, `Pillow` 13.0.0 and `virtualenv` 21.14.13 | Raises the minimum versions of the direct `cryptography` and optional `mlflow` dependencies. | In review |
 | `click` | 8.3.2 | 8.4.2 | None intentional; fixes command injection in `click.edit()` before the v0.14.0 pre-release image. | In Review |
 | `langgraph-checkpoint` | 4.1.0 | 4.1.1 | None intentional; narrows unsafe checkpoint JSON object revival before the v0.14.0 pre-release image. | In Review |
 | `mcp` | 1.27.0 | 1.29.0 | None intentional; security patch refresh for High Dependabot alerts before v0.14.0 pre-release image. | In Review |
