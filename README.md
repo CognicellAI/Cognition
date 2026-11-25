@@ -1,225 +1,108 @@
 # Cognition
 
-> A batteries-included backend for building production AI agent platforms. Define your agent; get REST API, streaming, persistence, sandboxing, and observability automatically.
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/)
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/release/python-3110/)
+Cognition is a headless runtime for building agent applications. Define an Agent,
+connect a model provider, and invoke it through REST with Server-Sent Events or
+expose it through Agent-to-Agent (A2A) 1.0. Cognition uses
+[Deep Agents](https://github.com/langchain-ai/deepagents) and
+[LangGraph](https://github.com/langchain-ai/langgraph) for agent execution and
+checkpointing.
 
-Cognition is a headless backend that handles the hard infrastructure problems of production AI agents: sandboxed execution, durable session state, and full observability. Built on [Deep Agents](https://github.com/langchain-ai/deepagents) and [LangGraph](https://langchain-ai.github.io/langgraph/), it provides a declarative model where you define agents and tools, and Cognition provides the runtime, API, and operational infrastructure.
+- **Agent definitions and runs** — Provision Agents through the API or workspace
+  files. Each run pins the resolved definition and dependencies. Sessions,
+  tasks, run events, checkpoints, and artifacts have distinct storage roles.
+- **Tools and execution** — Configure remote MCP servers per Agent, mount Skills
+  in its sandbox workspace, and extend behavior through middleware and
+  subagents. Execution backends include local development, Docker, Kubernetes,
+  and AWS Lambda MicroVM.
+- **Storage and operations** — Use SQLite for local persistence or PostgreSQL
+  for shared runtime state. Configure OpenTelemetry traces, Prometheus metrics,
+  and structured logs for operation and investigation.
 
-## The Problem Cognition Solves
+Your application owns caller identity, authorization, tenancy, and the product
+experience. Cognition enforces exact scope on runtime resources using trusted
+context supplied by your gateway or embedding service. See the
+[architecture overview](docs/architecture/index.md) and
+[builder boundary guide](docs/guides/core-vs-app-layer.md).
 
-Building a production AI agent platform requires solving infrastructure problems that have nothing to do with the model itself:
+## Quick start
 
-- **Isolation:** How do you let an agent run code or shell commands without endangering your infrastructure?
-- **State:** How do you ensure a workflow survives server restarts and remains resumable across days?
-- **Auditability:** How do you prove to an auditor exactly what the agent accessed and what logic it used?
+This example uses [uv](https://docs.astral.sh/uv/), Python 3.11 or newer,
+`curl`, `jq`, and an OpenAI API key. Run it in a fresh clone on a trusted
+development machine. The example enables host-local execution and binds the
+server to loopback.
 
-Cognition solves these three problems so you don't have to.
-
-## Quick Start
-
-### Option A — Docker Compose (fastest, no install required)
-
-```bash
-# Clone and start
+```sh
 git clone https://github.com/CognicellAI/Cognition.git
 cd Cognition
-
-# Copy environment config and add your API key
-cp .env.example .env
-# Edit .env to add: OPENAI_API_KEY=sk-...
-
-# Start the server
-docker-compose up -d
-
-# Verify it's running
-curl -s http://localhost:8000/health | jq .
-
-# Create a session
-SESSION=$(curl -s -X POST http://localhost:8000/sessions \
-  -H "Content-Type: application/json" \
-  -d '{"title": "My first session"}' | jq -r .id)
-
-# Send a message (streams via Server-Sent Events)
-curl -N -X POST "http://localhost:8000/sessions/$SESSION/messages" \
-  -H "Content-Type: application/json" \
-  -d '{"content": "List the files in the workspace."}'
+mkdir -p .cognition
+cat > .cognition/config.yaml <<'YAML'
+llm:
+  provider: openai
+  model: gpt-4o-mini
+  api_key_env: OPENAI_API_KEY
+YAML
 ```
 
-### Option B — pip install (embed in an existing project)
+Set `OPENAI_API_KEY` in your shell. Start the server with:
 
-```bash
-# Install from GitHub
-pip install "git+https://github.com/CognicellAI/Cognition.git#egg=cognition[openai]"
-
-# Set your API key
-export OPENAI_API_KEY="sk-..."
-
-# Start the server
-cognition-server
+```sh
+COGNITION_ALLOW_UNSAFE_LOCAL_EXECUTION=true \
+  uv run --locked --no-dev --extra openai --extra deploy cognition serve --host 127.0.0.1 --port 8000
 ```
 
-## What Cognition Provides
+In another terminal, provision an Agent, create a session for it, and stream a
+message:
 
-- **Sandboxed Execution** — Pluggable backends: local subprocess or Docker container. No `shell=True`; commands parsed with `shlex` for safety.
-- **Durable Sessions** — StorageBackend protocol: SQLite (dev) or PostgreSQL (prod). Every agent step checkpointed; survives crashes and restarts.
-- **Full Observability** — OpenTelemetry traces, Prometheus metrics, MLflow experiments. Toggle independently; zero-config when disabled.
-- **Builder-Defined Scope Isolation** — Exact runtime isolation via trusted `X-Cognition-Scope-*` headers, suitable for embedding in multi-tenant applications without moving IAM into Cognition. Rate limiting, CORS, and circuit breaker built in.
-- **Multi-Agent Registry** — Built-in agents (`default`, `readonly`) plus user-defined agents in `.cognition/agents/`. Session-agent binding via `agent_name`.
+```sh
+curl -fsS http://127.0.0.1:8000/ready
 
-## Model And Provider Configuration
+curl -fsS http://127.0.0.1:8000/agents \
+  -H 'Content-Type: application/json' \
+  -d '{"name":"hello","mode":"primary","system_prompt":"Answer briefly."}'
 
-Cognition resolves provider configuration once, builds a concrete LangChain chat model, and hands that model to Deep Agents. The runtime does not silently guess across providers.
+session_id=$(curl -fsS http://127.0.0.1:8000/sessions \
+  -H 'Content-Type: application/json' \
+  -d '{"title":"First session","agent_name":"hello"}' | jq -er '.id')
 
-Recommended flow:
-
-1. Create provider configs with `POST /models/providers` or bootstrap them from `.cognition/config.yaml`.
-2. Bind sessions with `config.provider_id` whenever possible.
-3. Use `config.provider` + `config.model` only for direct overrides.
-4. Use `config.model` alone only when it maps to exactly one enabled provider type.
-
-Important rules:
-
-- `openai_compatible` providers must include `base_url`
-- `bedrock` providers must include `region`
-- `role_arn` is only valid for `bedrock`
-- ambiguous model-only session updates return `422` instead of silently picking a provider
-
-See [API Reference](./docs/guides/api-reference.md) and [Configuration Reference](./docs/guides/configuration.md) for the exact request shapes and precedence rules.
-
-## Architecture
-
-Cognition follows a strict 7-layer architecture. Define your agent; get everything else automatically.
-
-```mermaid
-graph TD
-    subgraph "Your Application"
-        UI[Custom Dashboard / IDE / CLI]
-        API_GW[Your API Gateway]
-    end
-
-    subgraph "Cognition Engine"
-        API[REST API / SSE Stream]
-        
-        subgraph "Agent Runtime"
-            Router[AgentRuntime Protocol]
-            Circuit[Circuit Breaker]
-            Scope[Session Scoping]
-        end
-        
-        subgraph "Storage & Execution"
-            Storage[StorageBackend Protocol]
-            Exec[ExecutionBackend Protocol]
-        end
-        
-        subgraph "Observability"
-            OTel[OpenTelemetry Traces]
-            MLflow[MLflow Experiments]
-            Prom[Prometheus Metrics]
-        end
-    end
-
-    UI --> API_GW
-    API_GW --> API
-    API --> Scope
-    Scope --> Router
-    Router --> Circuit
-    Circuit --> Storage
-    Router --> Exec
-    Router --> OTel
-    Router --> MLflow
-    Router --> Prom
+curl -fsSN "http://127.0.0.1:8000/sessions/$session_id/messages" \
+  -H 'Content-Type: application/json' \
+  -H 'Accept: text/event-stream' \
+  -d '{"content":"Say hello in one sentence."}'
 ```
 
-See [Architecture](./docs/architecture/index.md) for the code-derived C4 model,
-runtime flows, deployment topology, decision records, and risk register.
-
-## Extend Your Agent
-
-Cognition uses a convention-over-configuration model. Most customizations require zero code.
-
-| Level | Mechanism | Effort | Example |
-|---|---|---|---|
-| **Memory** | `AGENTS.md` | No Code | Project-specific rules & style |
-| **Skills** | Agent-owned bundles | No Code | Reusable runbooks pinned with the Agent revision |
-| **Agents** | `.cognition/agents/` | Config | Delegated specialists (e.g., "security-expert") |
-| **Tools** | Python Functions | Code | Proprietary API integrations |
-| **Middleware** | Python Classes | Code | Approval gates, custom telemetry |
-
-See [Extending Agents](./docs/guides/extending-agents.md) for code examples and the full extension model.
-
-## Production Features
-
-| Feature | Description |
-|---------|-------------|
-| **Message Persistence** | SQLite/PostgreSQL message storage with pagination |
-| **Session Scoping** | Exact builder-authorized runtime isolation via HTTP headers |
-| **Rate Limiting** | Token bucket with scope-aware keys |
-| **Abort** | Cancel streaming tasks gracefully |
-| **Observability** | Toggle OTel/MLflow independently |
-| **StorageBackend** | Unified protocol: SQLite ↔ PostgreSQL |
-| **Docker Sandbox** | Container-per-session with resource limits |
-| **Alembic Migrations** | Database schema versioning |
-| **Model Catalog** | Browse 3,870+ models via models.dev integration |
-| **CORS** | Cross-origin web app support |
-| **MLflow Evaluation** | Offline evaluation pipeline with 3 built-in scorers |
-| **Multi-Agent Registry** | Built-in + user-defined agents; `GET /agents` endpoint |
-
-## Blueprints
-
-The CLI is one example of what you can build on Cognition. See the [Blueprints](./docs/index.md#blueprints) for reference architectures across domains:
-
-*   **[Cognition CLI](./docs/blueprints/cognition-cli.md)**: A high-fidelity terminal assistant.
-*   **[BreachLens](./docs/blueprints/cyber-investigation.md)**: Security analysis for cybersecurity investigations.
-*   **[GeneSmith](./docs/blueprints/genesmith.md)**: Secure biological foundry for protein design.
-*   **[DataLens](./docs/blueprints/data-analyst.md)**: Headless data science for sensitive datasets.
-*   **[StarKeep](./docs/blueprints/starkeep.md)**: SpaceOps administrator for satellite repair.
+For other model providers, see [configuration](docs/guides/configuration.md).
+For shared deployments, see [deployment and operations](docs/architecture/08-deployment-and-operations.md)
+and [security and scoping](docs/concepts/security.md).
 
 ## Documentation
 
-| | |
-|---|---|
-| [Documentation Index](./docs/README.md) | All concepts and guides |
-| [Getting Started](./docs/guides/getting-started.md) | Install, configure, and send your first message |
-| [Core vs App Layer](./docs/guides/core-vs-app-layer.md) | Builder boundaries: what Cognition owns versus what your app owns |
-| [Architecture](./docs/architecture/index.md) | Code-derived C4 views, runtime flows, deployment topology, risks, and decisions |
-| [Extending Agents](./docs/guides/extending-agents.md) | Memory, skills, tools, subagents, middleware, and per-agent tool policy |
-| [Configuration Reference](./docs/guides/configuration.md) | All YAML keys and environment variables |
-| [Examples](./examples/README.md) | Exhaustive `.cognition` examples, `.env` examples, and API payload samples |
-| [Deployment Guide](./docs/guides/deployment.md) | Docker Compose, PostgreSQL, and production hardening |
-| [API Reference](./docs/guides/api-reference.md) | Every REST endpoint, SSE event type, and agent tool policy field |
+| Topic | Guide |
+| --- | --- |
+| System boundaries, runtime flows, and decisions | [Architecture](docs/architecture/index.md) |
+| Expose an Agent and invoke it over A2A 1.0 | [A2A builder guide](docs/guides/a2a.md) |
+| Add remote MCP tools, Skills, middleware, or subagents | [Extending Agents](docs/guides/extending-agents.md) |
+| Choose an execution backend | [Sandboxes](docs/concepts/sandboxes/index.md) |
+| Work with sessions, messages, and streamed events | [API reference](docs/guides/api-reference.md) |
+| Use the terminal client or explore reference applications | [Cognition CLI](docs/blueprints/cognition-cli.md) · [Blueprints](docs/index.md#blueprints) |
+| Configure a deployment or Agent from an example | [Examples](examples/README.md) |
 
-Preview the documentation site locally:
-
-```bash
-uv run --extra docs mkdocs serve
-```
-
-Build the static site for deployment under `/docs`:
-
-```bash
-uv run --extra docs mkdocs build --strict
-```
-
-The docs site is configured for Vercel in `vercel.json`. Connect the repository
-to Vercel, set the production branch to `main`, and add
-`cognition.cognicellai.com` as the project domain. Vercel builds `site/`, while
-MkDocs writes the documentation under `site/docs` so the public URL can be
-`https://cognition.cognicellai.com/docs/`. The `Docs / Build MkDocs site`
-GitHub Actions check should be required before merge.
-
-## Testing
-
-```bash
-uv run pytest tests/unit/ -v    # unit tests
-uv run pytest tests/e2e/ -v     # end-to-end scenarios
-```
+Browse the [documentation site](https://cognition.cognicellai.com/docs/) or
+[repository documentation](docs/index.md).
 
 ## Contributing
 
-Bug reports, questions, and pull requests are welcome. Open an issue before submitting large changes.
+Bug reports and pull requests are welcome. Open an issue before submitting
+large changes. See [AGENTS.md](AGENTS.md) for the development workflow and the
+[release checklist](docs/guides/release-checklist.md) for release validation.
+
+```sh
+uv run --locked --all-extras python -m pytest tests/unit
+uv run --locked --extra docs mkdocs build --strict
+```
 
 ## License
 
-MIT © [CognicellAI](LICENSE)
+[MIT](LICENSE) © CognicellAI
