@@ -32,7 +32,7 @@ dependencies = [
     "python-multipart>=0.0.12",
     "sqlalchemy[asyncio]>=2.0.0",
     "alembic>=1.14.0",
-    "cryptography>=48.0.1",
+    "cryptography>=50.0.0",
     # Client
     "httpx>=0.27.0",
     "prompt-toolkit>=3.0.43",
@@ -98,7 +98,7 @@ docs = [
 
 # Deployment (MLflow tracing + Docker sandbox)
 deploy = [
-    "mlflow[genai]>=2.19.0",
+    "mlflow[genai]>=3.17.2",
     "docker>=7.0.0",
     "psycopg[binary,pool]>=3.1.0",
     "asyncpg>=0.30.0",
