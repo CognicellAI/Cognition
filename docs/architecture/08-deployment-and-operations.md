@@ -1,8 +1,8 @@
 # C4 Deployment View: Deployment and Operations
 
 **Status:** Current code-derived model  
-**Code baseline:** `release/v0.13.0` (`890e1ad`)  
-**Last verified:** 2026-07-25
+**Code baseline:** `origin/main` (`f5a3901`)
+**Last reviewed:** 2026-11-25
 
 Cognition can run as one local process or as replicated server containers backed
 by PostgreSQL. The chosen sandbox changes the strongest isolation boundary and
@@ -107,7 +107,7 @@ The Helm chart supplies:
 The chart does not deploy PostgreSQL. It expects an external service; a
 CloudNativePG example is present under `deploy/cnpg/`.
 
-When file-managed Agents, tools, or middleware matter, replicas require
+When file-managed Agents or middleware matter, replicas require
 identical immutable workspace content or a correctly shared volume. An
 `emptyDir` workspace is per pod and can diverge.
 
@@ -150,17 +150,17 @@ more portable because they read durable task/run/event state.
 | Surface | Current behavior |
 | --- | --- |
 | `/health` | Returns version and active-session count by listing stored sessions |
-| `/ready` | Returns `ready=true` after startup; no active dependency checks |
-| Metrics port | Separate embedded Prometheus HTTP server, started with telemetry setup |
+| `/ready` | Probes the selected runtime and artifact stores. Returns HTTP 503 when a probe fails. |
+| Metrics port | Separate Prometheus HTTP server with independent metrics configuration |
 | Tracing | Optional FastAPI/LangChain instrumentation and custom OTLP spans |
 | Logging | Structlog console or JSON output |
 | MLflow | Optional tracking URI/experiment setup |
 | Durable runtime evidence | Session run/event APIs plus task/A2A polling and subscription |
 | Container health | Docker and Helm probe FastAPI health/readiness routes |
 
-Prometheus request labels currently use concrete request paths, so dynamic
-resource IDs can create high-cardinality series. `/health` work grows with the
-number of sessions. These are tracked operational constraints.
+Prometheus request labels use the matched route template or `unmatched`.
+`/health` work grows with the number of sessions. See the
+[code-derived risk register](10-code-derived-risks.md#operability-and-delivery).
 
 ## Schema and release operations
 

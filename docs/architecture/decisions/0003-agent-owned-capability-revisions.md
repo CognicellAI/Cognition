@@ -93,8 +93,9 @@ its scope, persistence, and security boundaries.
   through the selected sandbox backend.
 - Only the selected Agent's MCP declarations contribute tools; no global
   registry or endpoint remains reachable.
-- Focused Agent-owned MCP and skill-bundle tests pass alongside the full
-  runtime regression suite.
+- `tests/unit/test_agent_mcp_config.py` covers the Agent-owned declarations.
+  `tests/unit/test_runtime_manifest.py` covers pinned definitions and dependency
+  selection.
 
 ## Architecture model updates
 

@@ -1,12 +1,12 @@
 # C4 Level 3: Execution and Sandboxes
 
 **Status:** Current code-derived model  
-**Code baseline:** `release/v0.13.0` (`890e1ad`)  
-**Last verified:** 2026-07-25
+**Code baseline:** `origin/main` (`f5a3901`)
+**Last reviewed:** 2026-11-25
 
 Deep Agents receives one backend interface even though commands and files can
 be served by several systems. Cognition selects a default sandbox for ordinary
-workspace paths and overlays virtual registry/artifact routes through a
+workspace paths and overlays virtual artifact routes through a
 composite backend.
 
 ## Execution component diagram
@@ -170,10 +170,11 @@ unchanged pinned-profile backend reuse.
 | Protected direct-write paths | Yes | Host filesystem policy differs | Yes | Yes |
 | Appropriate for untrusted commands | No | Depends on host hardening | Depends on sandbox platform | Depends on profile/platform |
 
-Protected-path checks apply to direct backend write/edit methods; they do not
-make arbitrary shell commands safe. API-registered Python tools are loaded in
-the Cognition server process, so their trust boundary is the protected builder
-administrative API—not the command sandbox.
+Protected-path checks govern direct backend writes and edits. For untrusted
+commands, the builder selects an isolated sandbox and configures its network
+policy. Remote MCP tool execution at the provider follows the transport and
+builder-authorization boundary in
+[ADR-0004](decisions/0004-mcp-transport-authentication-and-builder-authorization.md).
 
 Current Docker `execute(timeout=...)` accepts a timeout argument but does not
 apply it to `exec_run`. This is a known operational constraint.

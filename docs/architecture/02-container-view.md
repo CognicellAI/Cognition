@@ -1,8 +1,8 @@
 # C4 Level 2: Container View
 
 **Status:** Current code-derived model  
-**Code baseline:** `release/v0.13.0` (`890e1ad`)  
-**Last verified:** 2026-07-25
+**Code baseline:** `origin/main` (`f5a3901`)
+**Last reviewed:** 2026-11-25
 
 The principal deployable is one asynchronous Python server. Persistence,
 workspace files, and sandbox placement vary by environment. The CLI is a
@@ -29,7 +29,7 @@ C4Container
         Container(cli, "Cognition CLI", "Python, Typer, HTTPX", "Interactive shell and session client")
         Container(server, "Cognition server", "Python, FastAPI, Deep Agents, LangGraph", "REST, SSE, A2A, runtime composition, lifecycle, and telemetry")
         ContainerDb(database, "Runtime database", "SQLite, PostgreSQL, or memory", "Sessions, messages, tasks, runs, events, checkpoints, Store, config, and artifacts")
-        Container(workspace, "Workspace", "Filesystem/PVC", "AGENTS.md, config, file-managed Agents, tools, middleware, and local sandbox roots")
+        Container(workspace, "Workspace", "Filesystem/PVC", "AGENTS.md, config, file-managed Agents, middleware, and local sandbox roots")
         Container(sandbox, "Provisioned sandbox", "Local process, Docker container, Kubernetes Sandbox, or Lambda MicroVM", "Agent-visible filesystem and command execution")
     }
 
@@ -86,12 +86,12 @@ Supported placements are:
 
 ### Workspace
 
-The workspace is not the authoritative store for API-created runtime state. It
-provides startup and extension inputs such as `.cognition/config.yaml`,
-file-managed Agents, tools, middleware, and `AGENTS.md`. Skill bundles are part
-of Agent definitions rather than independent workspace or registry state. The server
-creates watched tool/middleware directories during startup. Kubernetes may
-mount the workspace from a persistent volume claim or use an ephemeral volume.
+The server workspace supplies `.cognition/config.yaml`, shared file Agents,
+builder middleware, and `AGENTS.md`. The startup watcher monitors the
+middleware directory. Builders mount Skill files under `skills/` in the selected
+sandbox workspace. MCP server declarations live in the Agent definition.
+Kubernetes can mount the server workspace from a persistent volume claim or an
+ephemeral volume.
 
 ### Provisioned sandbox
 

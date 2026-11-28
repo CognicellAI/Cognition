@@ -2,7 +2,8 @@
 
 **Status:** Current audit register  
 **Audit baseline:** `release/v0.13.0` architecture, verified against commit `890e1ad`  
-**Last verified:** 2026-07-26
+**Original audit:** 2026-07-26
+**MCP transport and readiness reviewed:** 2026-11-25
 
 This register records architectural constraints observed directly in code. It is
 not a substitute for issues or `ROADMAP.md`; it ensures future architecture work
@@ -48,7 +49,7 @@ inputs to future roadmap work.
 | AR-015 | Resolved — v0.14 | Empty Agent tool allow-list loads every enabled visible registry tool | Cognition no longer loads ConfigRegistry Python tool records or exposes `AgentDefinition.tools` | `agent/resolver.py`; `llm/deep_agent_service.py`; ROADMAP architectural change 2026-08-04 |
 | AR-016 | Resolved — v0.14 | Registry Python tool source is compiled/executed in the server process | Cognition no longer exposes `/tools` or loads API/file Python tool records at runtime | `api/routes`; `agent/resolver.py`; `tests/e2e/test_scenarios/p3_security/test_ast_security_scanning.py` |
 | AR-017 | Open | Runtime delegation is built from other visible Agents, including hidden/mode variants; explicit Agent subagent fields are not the sole selection source | Delegation surface can exceed the definition a builder expects | `llm/deep_agent_service.py::_resolve_agent_config` |
-| AR-018 | Open | MCP trusted-scope interceptor fills absent keys but does not overwrite conflicts | Model-supplied conflicting scope arguments may survive | `agent/mcp_client.py` interceptor construction |
+| AR-018 | Resolved — ADR-0004 | The former argument interceptor preserved conflicting caller values | Workload transport replaces incoming headers with a trusted envelope. The gateway derives authority from that envelope and its live authorization check. | `server/app/agent/mcp_auth.py`; `tests/unit/test_mcp_auth.py`; [ADR-0004](decisions/0004-mcp-transport-authentication-and-builder-authorization.md) |
 
 ## Replica, streaming, and lifecycle
 
@@ -73,7 +74,7 @@ inputs to future roadmap work.
 
 | ID | Status | Observation | Consequence | Primary evidence |
 | --- | --- | --- | --- | --- |
-| AR-028 | Open | `/ready` always reports true; `/health` lists every session | Readiness does not prove dependencies and health cost grows with data | `main.py::ready_check`, `health_check` |
+| AR-028 | Open — health cost | `/ready` probes the selected runtime and artifact stores. `/health` still lists every session. | Readiness reports storage failures. Health probe cost grows with the session count. | `server/app/main.py::ready_check`, `health_check` |
 | AR-029 | Resolved — v0.13 | HTTP metric endpoint label used concrete URL paths | Metrics now use the matched route template or `unmatched` and status class labels, avoiding resource-ID cardinality | `api/middleware.py::ObservabilityMiddleware`; `tests/unit/test_observability_cardinality.py` |
 | AR-030 | Resolved — v0.13 | Metrics startup was coupled to the OpenTelemetry enabled flag | `COGNITION_METRICS_ENABLED` controls Prometheus startup independently from trace export | `main.py::lifespan`; `settings.py`; `tests/unit/test_observability_config.py` |
 | AR-031 | Resolved — v0.13 | Cognition startup carried an obsolete MLflow tracing shim while semantic traces already flowed through canonical OTLP and the Collector | Removed the MLflow startup shim; MLflow is now only a Collector destination with the experiment id configured by the operator-owned pipeline | `observability/__init__.py`; `docker/otel-collector-config.yml`; `tests/unit/test_observability_config.py` |

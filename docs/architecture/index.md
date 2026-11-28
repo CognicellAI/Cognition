@@ -2,12 +2,11 @@
 
 **Status:** Current code-derived model  
 **Audience:** Maintainers, platform engineers, and builders embedding Cognition  
-**Code baseline:** `release/v0.13.0` (`890e1ad`)  
-**Last verified:** 2026-07-25
+**Last reviewed:** 2026-11-25
 
-This section explains Cognition as it is implemented. It is derived from Python
-entry points, protocols, persistence schemas, package manifests, deployment
-templates, and tests. Earlier architecture prose was not used as a source.
+Use the baseline on each page to identify the code revision it describes.
+[Architecture decisions](decisions/index.md) govern the durable boundaries.
+[Historical proposals](../proposals/index.md) record how those boundaries evolved.
 
 ## Architecture map
 
@@ -21,10 +20,12 @@ templates, and tests. Earlier architecture prose was not used as a source.
 | [Execution and sandboxes](06-execution-and-sandboxes.md) | How are filesystem and command operations routed across local, Docker, Kubernetes, and Lambda MicroVM backends? |
 | [Runtime flows](07-runtime-flows.md) | What happens during startup, native streaming, A2A execution, approval, and cancellation? |
 | [Deployment and operations](08-deployment-and-operations.md) | How do local, Compose, and Kubernetes deployments place and connect the containers? |
-| [A2A deliverability validation](a2a-deliverability-validation.md) | Which results support publication, retention and sandbox reuse, and where is the archived lab? |
 | [Governance and evolution](09-governance-and-evolution.md) | How is this model kept current and how are architectural changes tracked? |
 | [Code-derived risks](10-code-derived-risks.md) | Which verified implementation constraints require acceptance, correction, or release tracking? |
 | [Architecture decisions](decisions/index.md) | Which durable choices govern boundaries and future implementation? |
+
+The [A2A deliverability validation record](a2a-deliverability-validation.md)
+preserves the original lab results for publication, retention, and sandbox reuse.
 
 ## C4 coverage
 

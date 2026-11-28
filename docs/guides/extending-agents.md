@@ -364,9 +364,8 @@ callbacks are invalid Agent configuration. Only workload token exchange sends a
 fixed trusted-runtime envelope; it is constructed from the pinned Agent and run
 context and cannot be altered by the model.
 
-Only HTTP/HTTPS URLs are accepted — stdio-based MCP servers and raw configured
-headers are deliberately unsupported. The complete v0.14 contract is in
-[the MCP runtime proposal](../proposals/v0.14.0-mcp-runtime-contract.md).
+Configure a remote HTTP or HTTPS server. For the security boundary and
+authorization responsibilities, see [ADR-0004](../architecture/decisions/0004-mcp-transport-authentication-and-builder-authorization.md).
 
 ---
 

@@ -1,8 +1,8 @@
 # Dynamic View: Runtime Flows
 
 **Status:** Current code-derived model  
-**Code baseline:** `release/v0.13.0` (`890e1ad`)  
-**Last verified:** 2026-07-25
+**Code baseline:** `origin/main` (`f5a3901`)
+**Last reviewed:** 2026-11-25
 
 Static C4 diagrams show ownership; these sequences show when state becomes
 durable and where process-local behavior remains.
@@ -33,7 +33,7 @@ sequenceDiagram
     FastAPI->>Storage: create + initialize
     Note over Storage: create_all and backend compatibility checks<br/>do not run Alembic upgrade
     FastAPI->>Registry: create registry and schema
-    FastAPI->>Registry: seed provider/profile/skill/tool/Agent sources
+    FastAPI->>Registry: seed provider, sandbox profile, and Agent definitions
     FastAPI->>Artifact: create + initialize
     FastAPI->>Runtime: create resolver, session manager, Agent manager
     FastAPI->>Optional: start config dispatcher
@@ -87,7 +87,7 @@ sequenceDiagram
 
     Messages->>Manager: obtain/register service
     Manager->>Service: stream_response
-    Service->>Resolver: resolve scoped Agent, tools, MCP, model
+    Service->>Resolver: resolve scoped Agent, model, and Agent-owned MCP
     Service->>Store: obtain checkpointer and Store
     Service->>Factory: assemble or reuse graph + create sandbox handle
     Factory-->>Service: DeepAgentRuntime

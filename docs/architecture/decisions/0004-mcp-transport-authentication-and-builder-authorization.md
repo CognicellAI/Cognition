@@ -50,10 +50,11 @@ deployment policy owned by the builder.
    not ban an authentication type based on such a classifier. Builders own
    endpoint admission, authentication-mode policy, identity infrastructure,
    egress policy, and workload-isolation topology.
-8. Credentials, authentication headers, OAuth payloads, raw scope values, tool
-   arguments, and tool results never enter model context, Agent configuration,
-   API responses, durable state, logs, traces, metrics, or readiness
-   projections.
+8. The transport keeps credentials and authentication headers out of Agent
+   configuration, model-visible tool inputs, and public readiness projections.
+   OAuth token persistence follows the encrypted, exact-scope rule above.
+   Transport and readiness diagnostics use redacted error categories. Tool
+   arguments and results follow the Agent runtime's data and retention policies.
 9. Cognition's mandatory MCP transport factory applies authentication to
    discovery, readiness observation, and invocation. It overwrites reserved
    runtime-context fields and prevents model-controlled transport selection.
@@ -62,6 +63,10 @@ deployment policy owned by the builder.
     with a typed, redacted error; optional-server failure preserves healthy
     tools. Readiness is a freshness-qualified observation, not authorization
     truth.
+11. Discovery may retry a transient transport-only failure once with bounded
+    backoff. A transport-only failure during invocation returns a redacted tool
+    error with an unknown execution outcome. The transport never automatically
+    replays that tool call.
 
 ## Alternatives considered
 
@@ -143,6 +148,9 @@ isolation must assign separate workload identities at that execution boundary.
 - Required/optional failures, duplicate canonical identities, readiness
   freshness, telemetry redaction, and metric-cardinality constraints are
   tested.
+- `tests/unit/test_mcp_auth.py` covers trusted header replacement and scope
+  separation. `tests/unit/test_mcp_resilience.py` covers discovery retry and
+  invocation failure without replay.
 
 ## Architecture model updates
 

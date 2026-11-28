@@ -4,8 +4,10 @@
 
 **Scope:** Official A2UI v1.0 A2A extension and the A2A 1.0 protocol
 
-**Status warning:** A2UI v1.0 is still a **release candidate** and a living
-specification. The current production A2UI release is v0.9.1. This note pins
+**Status:** Historical research. On the research date, A2UI v1.0 was a
+release candidate and the upstream production release was v0.9.1. See
+[Cognition's A2UI guide](../concepts/a2a/a2ui.md) for the supported configuration.
+This note pins
 its A2UI findings to commit
 [`44a420b`](https://github.com/a2ui-project/a2ui/tree/44a420b67957fafc0b02d55a153fdaf72e32ffb5)
 and its A2A findings to commit

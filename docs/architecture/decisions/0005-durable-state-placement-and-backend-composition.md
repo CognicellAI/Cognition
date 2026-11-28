@@ -101,8 +101,9 @@ Database manifests remain authoritative.
 
 ## Verification
 
-- Garage-backed S3 integration tests cover upload, read, list, versioning,
-  checksum verification, and exact-scope isolation.
+- `tests/e2e/test_s3_garage_e2e.py` covers Garage-backed storage.
+  `tests/unit/test_s3_artifact_store.py` and
+  `tests/unit/test_s3_artifact_async.py` cover manifest-backed storage contracts.
 - Backend-selection tests prove that configured database/S3, SQLite, in-memory,
   and local filesystem routes are honored without an environment classifier.
 - Failure of a selected backend is explicit and never causes an implicit local
